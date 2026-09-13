@@ -49,6 +49,8 @@ mod gl;
 mod gl_api;
 mod gl_validation;
 mod image;
+mod pixel_image;
+mod pixels;
 mod publication;
 mod query;
 mod resource;

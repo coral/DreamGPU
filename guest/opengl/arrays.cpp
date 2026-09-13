@@ -88,6 +88,11 @@ static void Enable(GLenum cap, BOOL enabled) {
     GLint index;
     if (!JglReady())
         return;
+    // These unsupported arrays cannot leave their initial disabled state.
+    // Disabling one is nevertheless a valid operation (InterleavedArrays
+    // specifies exactly this); enabling still rejects explicitly below.
+    if (!enabled && (cap == 0x8077 || cap == 0x8079))
+        return;
     index = Attribute(cap);
     if (index < 0) {
         JglSetError(GL_INVALID_ENUM);
@@ -106,6 +111,11 @@ void APIENTRY glGetPointerv(GLenum pname, void **output) {
     if (!JglReady() || !output)
         return;
     switch (pname) {
+        case 0x8091: // GL_INDEX_ARRAY_POINTER
+        case 0x8093: // GL_EDGE_FLAG_ARRAY_POINTER
+            // Their setters/enables remain unsupported; pointers stay null.
+            *output = NULL;
+            return;
         case GL_VERTEX_ARRAY_POINTER:
             index = 0;
             break;
@@ -145,6 +155,21 @@ BOOL JglArrayQuery(GLenum pname, GLint *value) {
         *value = state->Attribute[index].field;                                                    \
         return TRUE
     switch (pname) {
+        case 0x8077:    // GL_INDEX_ARRAY
+        case 0x8079:    // GL_EDGE_FLAG_ARRAY
+        case 0x8086:    // GL_INDEX_ARRAY_STRIDE
+        case 0x808c:    // GL_EDGE_FLAG_ARRAY_STRIDE
+            *value = 0; // Rejected mutation leaves these default states intact.
+            return TRUE;
+        case 0x8085: // GL_INDEX_ARRAY_TYPE
+            *value = GL_FLOAT;
+            return TRUE;
+        case GL_CLIENT_ATTRIB_STACK_DEPTH:
+            *value = state->ClientDepth;
+            return TRUE;
+        case GL_MAX_CLIENT_ATTRIB_STACK_DEPTH:
+            *value = 16;
+            return TRUE;
         case GL_ATTRIB_STACK_DEPTH:
             *value = state->ServerDepth;
             return TRUE;
@@ -193,21 +218,15 @@ static GLfloat Component(const BYTE *p, GLenum type, ULONG normalized) {
         }
         case GL_BYTE: {
             LOAD(signed char);
-            return normalized == 1 ? (2.0f * v + 1.0f) / 255.0f
-                   : normalized    ? (v == -128 ? -1.0f : v / 127.0f)
-                                   : v;
+            return normalized ? (2.0f * v + 1.0f) / 255.0f : v;
         }
         case GL_SHORT: {
             LOAD(short);
-            return normalized == 1 ? (2.0f * v + 1.0f) / 65535.0f
-                   : normalized    ? (v == -32768 ? -1.0f : v / 32767.0f)
-                                   : v;
+            return normalized ? (2.0f * v + 1.0f) / 65535.0f : v;
         }
         case GL_INT: {
             LOAD(GLint);
-            return normalized == 1 ? (GLfloat)((2.0 * v + 1.0) / 4294967295.0)
-                   : normalized    ? (GLfloat)((double)v / 2147483647.0)
-                                   : (GLfloat)v;
+            return normalized ? (GLfloat)((2.0 * v + 1.0) / 4294967295.0) : (GLfloat)v;
         }
         case GL_UNSIGNED_BYTE: {
             LOAD(GLubyte);
@@ -245,6 +264,114 @@ static ULONG Index(const BYTE *indices, ULONG bytes, ULONG first, ULONG offset) 
 GLfloat JglColorComponent(const BYTE *value, GLenum type) {
     return Component(value, type, 1);
 }
+/* GL1.1 sections2.8 and6.1.11: local client pointers are never host state.
+ * https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf
+ * Index/edge arrays cannot currently be enabled: Enable rejects those tokens.
+ * Their mandatory setters/rendering remain explicit ICD coverage gaps. */
+static BOOL ArrayRange(const JGL_ARRAY *a, ULONG index) {
+    ULONG size = TypeBytes(a->Type) * a->Size;
+    unsigned long long end =
+        (unsigned long long)index * (a->Stride ? (ULONG)a->Stride : size) + size;
+    return a->Pointer && end <= ~(ULONG_PTR)0 && (ULONG_PTR)a->Pointer <= ~(ULONG_PTR)0 - end;
+}
+void JglArrayElement(GLint index) {
+    // ArrayElement is legal inside Begin/End; JglReady intentionally is not.
+    JGL_ARRAY_STATE *state = JglArrays();
+    if (!state)
+        return;
+    if (index < 0) {
+        JglSetError(GL_INVALID_VALUE);
+        return;
+    }
+    GLfloat values[5][4] = {};
+    // Validate and snapshot every enabled client range before any scalar can
+    // flush the transport. An invalid later range must not partially set state.
+    for (ULONG i = 0; i < 5; ++i) {
+        const JGL_ARRAY *a = &state->Attribute[i];
+        if (!a->Enabled)
+            continue;
+        if (!ArrayRange(a, (ULONG)index)) {
+            JglSetError(GL_INVALID_VALUE);
+            return;
+        }
+    }
+    for (ULONG i = 0; i < 5; ++i) {
+        const JGL_ARRAY *a = &state->Attribute[i];
+        if (!a->Enabled)
+            continue;
+        ULONG unit = TypeBytes(a->Type);
+        ULONG stride = a->Stride ? (ULONG)a->Stride : unit * a->Size;
+        const BYTE *p = (const BYTE *)a->Pointer + (ULONG_PTR)(ULONG)index * stride;
+        values[i][3] = 1.0f;
+        for (GLint n = 0; n < a->Size; ++n)
+            values[i][n] = Component(p + n * unit, a->Type, i == 1 || i == 2 || i == 4);
+    }
+    const ULONG functions[5] = {FEnum_glVertex4f, FEnum_glColor4f, FEnum_glNormal3f,
+                                FEnum_glTexCoord4f, FEnum_glSecondaryColor3f};
+    // Vertex last: the preceding setters establish this vertex's attributes.
+    for (ULONG n = 1; n <= 5; ++n) {
+        ULONG i = n % 5;
+        if (state->Attribute[i].Enabled)
+            JglScalarVector(functions[i], i == 2 || i == 4 ? 3 : 4, values[i]);
+    }
+}
+void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
+    if (!JglReady())
+        return;
+    if (stride < 0) {
+        JglSetError(GL_INVALID_VALUE);
+        return;
+    }
+    // Table2.5; float=4, ubyte=1, c=4 on this explicitly32-bit GL ABI.
+    static_assert(sizeof(GLfloat) == 4 && sizeof(GLubyte) == 1);
+    struct Layout {
+        BYTE texture, color, normal, vertex, color_offset, normal_offset, vertex_offset, bytes;
+        GLenum color_type;
+    };
+    static const Layout layouts[] = {{0, 0, 0, 2, 0, 0, 0, 8, 0},  // GL_V2F
+                                     {0, 0, 0, 3, 0, 0, 0, 12, 0}, // GL_V3F
+                                     {0, 4, 0, 2, 0, 0, 4, 12, GL_UNSIGNED_BYTE},
+                                     {0, 4, 0, 3, 0, 0, 4, 16, GL_UNSIGNED_BYTE},
+                                     {0, 3, 0, 3, 0, 0, 12, 24, GL_FLOAT},
+                                     {0, 0, 3, 3, 0, 0, 12, 24, 0},
+                                     {0, 4, 3, 3, 0, 16, 28, 40, GL_FLOAT},
+                                     {2, 0, 0, 3, 0, 0, 8, 20, 0},
+                                     {4, 0, 0, 4, 0, 0, 16, 32, 0},
+                                     {2, 4, 0, 3, 8, 0, 12, 24, GL_UNSIGNED_BYTE},
+                                     {2, 3, 0, 3, 8, 0, 20, 32, GL_FLOAT},
+                                     {2, 0, 3, 3, 0, 8, 20, 32, 0},
+                                     {2, 4, 3, 3, 8, 24, 36, 48, GL_FLOAT},
+                                     {4, 4, 3, 4, 16, 32, 44, 60, GL_FLOAT}};
+    // GL_V2F..GL_T4F_C4F_N3F_V4F are contiguous tokens0x2A20..0x2A2D.
+    if (format < 0x2a20 || format > 0x2a2d) {
+        JglSetError(GL_INVALID_ENUM);
+        return;
+    }
+    const Layout &layout = layouts[format - 0x2a20];
+    if ((ULONG_PTR)pointer > ~(ULONG_PTR)0 - layout.vertex_offset) {
+        JglSetError(GL_INVALID_VALUE);
+        return;
+    }
+    JGL_ARRAY_STATE *state = JglArrays();
+    JGL_ARRAY next[5];
+    CopyMemory(next, state->Attribute, sizeof(next));
+    const GLint sizes[4] = {layout.vertex, layout.color, layout.normal, layout.texture};
+    const ULONG offsets[4] = {layout.vertex_offset, layout.color_offset, layout.normal_offset, 0};
+    for (ULONG i = 0; i < 4; ++i) {
+        next[i].Enabled = sizes[i] != 0;
+        // Disabled descriptors retain their original pointer/type/stride.
+        if (!next[i].Enabled)
+            continue;
+        next[i].Size = sizes[i];
+        next[i].Type = i == 1 ? layout.color_type : GL_FLOAT;
+        next[i].Stride = stride ? stride : layout.bytes;
+        next[i].Pointer = (const void *)((ULONG_PTR)pointer + offsets[i]);
+    }
+    // Edge/index enables are already false and cannot be enabled. Secondary
+    // color is an independent EXT array and is not changed by this GL1.1 call.
+    CopyMemory(state->Attribute, next, sizeof(next));
+}
+
 static void Vertex(JGL_ARRAY_STATE *state, ULONG vertex, BYTE *out, ULONG bytes) {
     static const ULONG offsets[5] = {0, 16, 32, 44, DG_GL_VERTEX_SECONDARY};
     ULONG i, component;
@@ -324,10 +451,7 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     for (i = 0; i < 5; ++i)
         if (state->Attribute[i].Enabled) {
             const JGL_ARRAY *a = &state->Attribute[i];
-            ULONG size = TypeBytes(a->Type) * a->Size;
-            unsigned long long end =
-                (unsigned long long)max_index * (a->Stride ? (ULONG)a->Stride : size) + size;
-            if (!a->Pointer || end > ~(ULONG_PTR)0 || (ULONG_PTR)a->Pointer > ~(ULONG_PTR)0 - end) {
+            if (!ArrayRange(a, max_index)) {
                 JglSetError(GL_INVALID_VALUE);
                 return;
             }

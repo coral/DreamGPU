@@ -502,3 +502,417 @@ New captures record duration, warmup, snapshot, probe mode and setup hash. Legac
 missing fields are reported explicitly, without manufacturing equivalence. All
 28 benchmark accounting/comparison tests pass, including mixed-instrumentation
 and incomplete-capture regressions.
+
+
+## Follow-through after the source release
+
+- DreamGPU now publishes on `master`; the initial public history is the single
+  `release` commit. The canonical Framework checkout uses the same branch and
+  QEMU gitlink. Local private-data ignore additions remain user-owned.
+- Cargo's full Mac/native plus Linux guest-builder sequence passes after SPDX,
+  copied-source provenance and package-notice changes (31.77 seconds). Both
+  OS package manifests verify every payload and include the central attribution
+  ledger and original notice bytes. The six application DLLs match across OS
+  packages. Native Linux and the current Mac Juke consumer also build.
+- The current OpenGL frontend, OpenGLide and WineD3D DLL hashes differ from the
+  previously deployed package; the three remaining Wine DLLs are unchanged.
+  Runtime acceptance of the new bytes is in progress using clean stopped source
+  disks and independent successors. Earlier passing results are retained.
+- The C++23 Unreal source conversion is present. The build audit found that its
+  helper-specific PE-version, imported-API and scalar-instruction checks were
+  lost during build-system migration; restoring those checks is required before
+  closing that follow-through gate.
+
+Current run evidence lives under `target/follow-through/`; builds and acceptance
+remain distinct, and runtime measurements run only after build activity ends.
+
+
+### Current acceptance and newly expanded installation goal
+
+- Linux current application packages pass 20 public probes and four Unreal
+  activity/provider/lifetime checks across NT and Win98. Both fixtures are paused.
+  Saved scene artifacts preserve a visible D3D limitation; these checks are not
+  a universal visual-correctness oracle. Mac NT passes ten public probes; the
+  user's captured partial-client rendering is open. Mac Glide's next attempt
+  aborted before game launch because the helper observed held Shift input.
+- Real Linux Half-Life sampling now validates the control protocol, including two
+  QMP endpoints and perf's NUL-terminated acknowledgement variant. The single
+  actual timedemo captured 1,263 events. It is an instrumented diagnostic, not a
+  comparable FPS baseline. Exact engine-frame boundaries remain unknown.
+- Relocated fixture QEMU can now use an explicit firmware directory and per-file
+  SHA256 manifest. Preparation and startup reject missing, changed or symlinked
+  firmware before launch; 25 fixture tests pass.
+- The user expanded the product goal to a single guest-run `dreamgpu.exe` that
+  detects 98 versus 2000/XP and installs system-wide graphics. The plan now tracks
+  ICD, Direct3D system integration, installer lifecycle and normal-loader tests
+  independently of historical app-local package acceptance. Driver/API discovery
+  work is required; wrapping the old package in an executable is insufficient.
+
+### Unified installer and normal-loader foundation
+
+Cargo now sequences construction of a PE4 C++23 `dreamgpu.exe` embedding both
+audited guest payloads. The first foundation artifact is 14,381,522 bytes, SHA256
+`bee26d192b1b94804b20e2604c1c0afcc4478045686935f46991a1662248a2b6`.
+OS/device preflight, integrity checks and owned diagnostic staging are present;
+the default command exits with `provider_not_ready` before writes. This is not
+a completed system installation. Persistent file/registry lifecycle work and
+actual system provider activation remain open. Evidence is under
+`target/follow-through/installer-foundation/`.
+
+The diagnostic ICD's typed 336-slot adapter builds and passes actual-source
+sanitizer checks, but 150 operations remain explicitly unsupported. A new
+`DGSYSGL.EXE` probe exercises the actual system OpenGL/GDI loading path, requires
+the system-directory DreamGPU ICD, rejects game-local API providers and checks
+8,192 exact pixels. GCC16.1.1 legacy-target compilation with `-fanalyzer -Werror`
+passed. The fixed serial `sysgl` route uses the existing strict probe-result
+parser; all 23 controller tests pass. Its first isolated Windows loader run is
+pending and no full OpenGL conformance or installed-driver success is claimed.
+
+### Unreal clipping diagnosis and candidate
+
+The native trace establishes correct 640×480 export/final viewport dimensions.
+Wine's backbuffer offscreen mode first rendered a 1024×768 desktop primary into
+the smaller physical drawable, truncating the image before the final translated
+blit. The checked second Wine patch routes oversized offscreen blits through the
+existing framebuffer-to-texture fallback, preserving the required coordinates.
+The actual-source sanitizer oracle verifies 1,048,576 primary texels, including
+the full offset 640×480 copy and unchanged surrounding pixels. This is source
+verification; the corrected game's runtime acceptance is still pending.
+
+Both guest packages build with the new Wine and the strengthened D3D7 far-edge
+pixel probe. The clean aggregate build initially exposed an omitted diagnostic
+ICD dependency; Cargo's explicit `dreamgpu-guest` target now includes every
+installed diagnostic on both OS families. The actual MinGW build also caught
+and resolved a `D3DRECT` union-initializer warning in the new probe. Final build
+passes in 6.17s. Frozen payloads and a hash-verified receipt live under
+`target/follow-through/backbuffer-candidate-v1/`. Both contain Wine SHA256
+`e6a4126fa9608317975a56ecf8fd2ba2a86047e62ec37902339b02e94f2f8f0a`
+and D3D7 probe SHA256
+`4888d8253957a47156c0142179fc47fbc6cc8054a620fd53bb9fac54b7028ee2`.
+
+Current script automation: 173 tests pass in 2.999s. Strict workspace/all-target
+Clippy passes in 1.12s. The canonical Linux Juke release now builds against the
+current DreamGPU dependency (27.45s, SHA256
+`b254677216ba2524868245b48f9646f9dc52ff3da36b7965cec138e84ab4c269`);
+this build does not relabel earlier frozen-executable runtime evidence.
+
+### Bounds fix accepted on both hosts
+
+The same frozen Wine/probe candidate now passes the real D3D7 test on Mac and
+Linux: 1,280 exact render-target pixels plus 1,280 exact desktop-visible pixels,
+including distinct right, bottom and corner colors. One corrected UT D3D run per
+host fills the entire 640×480 client. Mac records 626 GPU receipts; Linux records
+3,902; both have zero native rejections. The prior Linux right/bottom edge bands
+are absent. These are correctness results, not matched FPS comparisons (window
+positions differ from earlier captures). Geometry tracing was disabled.
+
+Receipts and full-client images:
+`target/follow-through/mac-wine-backbuffer-acceptance-v1/` and
+`target/follow-through/linux-wine-backbuffer-acceptance-v1/`. The Linux fixture is
+paused with networking disabled. The owned Mac diagnostic process groups were
+subsequently stopped for quiet desktop/idle measurements; their guest disks and
+evidence are preserved and are not clean-shutdown source fixtures. Reusable
+trace instructions and the bounded collection limit are documented in
+[geometry-diagnostics.md](geometry-diagnostics.md).
+
+### Matched desktop evidence and sampled fill optimization
+
+The Mac pair uses the same cold disk (SHA256
+`b8e9a29ed2884f05429e5b2056a5dbbf8eb883a3029daeb00611afb6803196f1`),
+fixed desktop probe, firmware, display placement and verified 240 Hz. Every
+desktop scenario has 16 acknowledged/submitted batches and zero dropped trace
+records. Copy mean latency is roughly unchanged, but fill/scroll/repaint means
+are higher in the current native pair; parity is not claimed. Idle total CPU is
+36.86 versus 35.02 percent of one core; most belongs to the running Windows guest.
+All reports, comparison-condition checks and stage joins are retained under
+`target/follow-through/matched-desktop-v1/`. Both Juke and QEMU binary identities
+differ in that pair, so it does not isolate a QEMU regression. The baseline's
+48 Rust host source hashes match preserved commit `c892b86`, confirming that
+it already contains the completed host ownership port despite its pre-commit
+QEMU revision string.
+
+A separate candidate CPU diagnostic sampled both QEMU and Juke during the same
+fill replay. Both tools completed inside the replay, but heavy sampling caused
+an acknowledgement mismatch; the harness correctly rejected latency acceptance.
+The stacks still identify the fill callback as a useful current hotspot. The
+old callback's 47 ARM64 instructions are identical in both compared binaries,
+so its cost is not evidence that the port introduced the observed difference.
+Stacks and bounded scope are in `target/follow-through/desktop-fill-sampled-v1/`.
+
+The host fill callback now splits validated 16-bit and 32-bit cases outside the
+loop, allowing constant-stride vectorization while retaining unaligned
+little-endian writes, exact work budgets and dirty-region marking. The rebuilt
+Mac binary uses 64-byte vector stores; expanded actual-QEMU tests pass 39
+pixel-format/width cases, including vector tails, row padding and guard bytes.
+Native build passes in 5.95s. The frozen candidate SHA256 is
+`0a0592c6871358ac7da46ca03020b7fbd69c599d1a5cbab0ea0d7df1cfd3a49a`.
+Linux native build and all 39 boundary cases also pass. The corresponding Linux
+QEMU is `44833ea492810bc7471445c34934472542be93550d619ffa7b8550d526d6ee58`;
+the corrected receipt is `linux-constant-fill-verification-v2.json`. An earlier
+incorrect source-copy attempt is retained as invalid evidence.
+
+One changed-candidate Mac capture uses the same Juke, guest, probe and display;
+only the native binary changes. Mean fill-batch latency improves from 26.14 to
+10.61 ms and CPU from 22.04 to 14.75 percent of one core. Copy/scroll/repaint means
+are 13.17/12.56/15.90 ms, versus 10.71/13.36/16.84 before; those mixed distributions
+do not establish universal parity. All 16 batches per scenario are acknowledged
+and submitted, with zero dropped records. Idle CPU is 35.97 versus 35.02 percent.
+Reports are in `target/follow-through/matched-desktop-vectorized-v1/`; no unchanged
+baseline was rerun.
+
+### Real Windows loader and installer lifecycle milestones
+
+The first diagnostic ICD now passes the actual Microsoft Windows 2000 system
+OpenGL loader: GDI enumerates hardware format 1 and loads system `dgpuicd.dll`;
+8,192 exact pixels and two user-ICD swaps pass. Its discovery request needs a
+532-byte response with the driver name at offset 8. The implementation accepts
+both this observed layout and the 520-byte ReactOS layout, zeroing the complete
+output. Evidence is in `target/follow-through/system-icd-probe-v4/`. The resulting
+independent fixture was shut down cleanly and checked before reuse; its disk
+SHA256 is `c3550c96147783ab7c2c5186123f2aa3acc53a51c4957eb5981d41e73fc854de`.
+This basic loader result does not prove full GL1.1 coverage or production setup.
+
+The installer now has bounded checksummed journaling, durable intent-before-write
+records, immutable original backups, interrupted-write reconciliation and owned
+file/registry rollback. Actual Win32 adapter tests cover 108 syscall failure
+boundaries. A single independent Windows 2000 run checks default refusal (exit
+30), diagnostic staging (10) and rollback (12), preserving 12 global DLL hashes
+and four ICD registry values. Installer SHA256:
+`38bdc9b5107057f389adedaf26ff07c91affa8d7649aa749d76369d1bf218563`.
+The helper's final PASS prefix differed from the host parser contract; the
+original rejected run is retained, with a separate verdict based on its exact
+observed records. The helper prefix is corrected for future builds; installation
+actions were not repeated. See `target/follow-through/installer-lifecycle-runtime/`.
+Activation, reboot completion, real driver binding rollback and NT5 global
+Direct3D integration remain open; default setup still refuses incomplete providers.
+
+### Seventy additional OpenGL operations
+
+The diagnostic dispatch now includes 39 numeric color/normal/rectangle variants,
+seven fixed-state aliases and all 24 raster-position variants. Actual frontend
+sanitizer tests verify legacy integer normalization, payloads, Begin/End errors,
+rectangle order and context state. Raster commands preserve double precision
+through typed host calls; the native oracle checks transformed and clipped raster
+positions, associated state, bounded queries and malformed commands. All 73 host
+Rust tests, strict Clippy and all 27 native GPU tests pass; the native suite passes
+on both Mac and Linux. The first distance assertion was corrected to respect the
+specification's permitted eye-axis approximation; its failed log is preserved.
+
+The pinned GCC16.1.1 diagnostic DLL build and clang-tidy pass. Its SHA256 is
+`279f648da6eb09e98e41b056cabf9abf0e81008f3ac48b23e9ebe96479836142`.
+Coverage is 146 direct functions, 110 adapters and 80 explicit unsupported slots;
+the development version and production registration gate are unchanged. The
+normal-loader result above belongs to its earlier frozen candidate. New source
+checks do not relabel that runtime evidence. Exact source/binary hashes and logs
+are in `target/follow-through/raster-acceptance.json` and
+`target/follow-through/system-icd-evidence/`.
+
+### Normal system Glide loading and combined build
+
+The first normal system Glide run passes on an independent Windows 2000 fixture:
+`DGSYSGR.EXE` launches from `C:\\` with no neighboring providers, verifies actual
+`C:\\WINNT\\system32\\glide2x.dll` and `dgpugl.dll`, checks 2,304 exact GPU pixels,
+eight swaps and same-window reinitialization/cleanup. The original clean ICD
+fixture stays unchanged; the new fixture is paused with networking disabled.
+Evidence is in `target/follow-through/system-glide-runtime-v1/`. Offline staging
+establishes provider loading, not automatic installer activation or removal.
+
+The combined `DREAMGPU_BUILD=all` Cargo release build passes in 51.51s, producing
+native QEMU, both OS payloads and `dreamgpu.exe` SHA256
+`71b0ce63c263c4accfae3f23b65d5afe6f1892141e44f200a0cb948950aa8190`.
+All-feature/all-target workspace Clippy passes with warnings denied; build-crate
+tests pass (13 run, two explicitly ignored). Source formatting passes for 206
+maintained files after correcting three formatting-only differences. The build
+receipt records exact manifests under `target/follow-through/combined-build-receipt.json`.
+Subsequent client/pixel/Win98-discovery changes require their own build checks;
+this receipt is not silently updated to cover them.
+
+### Windows 98 installer loading and rollback
+
+The fixed lifecycle helper now selects 98/2000/XP and checks fourteen global
+graphics files, including the Win98 driver pair, plus the OS-specific ICD values.
+Its first Win98 attempt failed before installer startup with loader error 31.
+An import audit against DLLs read from the stopped original guest identifies the
+single missing export: MinGW resolved `CM_Get_Device_IDA` from SetupAPI, whereas
+this Windows 98 image exports it from CfgMgr32. All other imports exist. The
+source link order now resolves CfgMgr32 first, and Cargo rejects a wrong or absent
+module/function pairing. The focused regression test passes.
+
+With the same embedded packages, corrected installer SHA256
+`6228037c97974a9748a5e200ad244be973b8fb79835091931e70193e54c6fff9`
+passes one fresh Win98 lifecycle run: default refusal leaves no private state,
+staging records six original-file identities, and rollback preserves fourteen
+graphics files and the Win98 ICD value. Original guest bytes remain unchanged;
+both diagnostic fixtures are paused with networking disabled. The first failure
+and corrected result are retained under `target/follow-through/win98-setup-runtime-v1/`
+and `win98-setup-runtime-v2/`. Private actual-OS DLLs and the import receipt remain
+ignored under `win98-setup-import-audit/`; they are not redistributable payloads.
+Legacy-target helper compilation and clang-tidy pass. This closes loader/staging
+mechanics on Win98, not system-provider activation or XP runtime acceptance.
+
+### Client state, pixel state and Win98 discovery
+
+The next guest batch adds all fourteen interleaved array layouts, a bounded
+per-context client stack preserving borrowed pointers and pixel-store state, nine
+pixel-transfer/map APIs, and CopyPixels. Actual-source tests cover failed-address
+validation, legacy integer normals, stack masks/limits/context isolation, original
+typed map values and publication: only color copies to FRONT publish immediately.
+Pinned guest compilation and target clang-tidy pass. Coverage has 146 direct
+entries, 124 adapters and 66 explicit rejections; ArrayElement, Linux integer
+pixel transfer and CopyPixels depth/stencil retain explicit partial-validation
+notes. The diagnostic version and production installation gate stay unchanged.
+
+Mac passes 77 host Rust tests and 28 native GPU tests. The Linux suite passes its
+other 27 tests but exposes Mesa's INT_MAX INDEX_OFFSET rounding through float;
+the typed transport preserves the value, while the native driver returns INT_MIN.
+A separate pixel oracle with an exactly representable offset passes the remaining
+transfer/map/export/zero-initialization/color-copy/scissor checks. The original
+failure is retained and full-range conformance is not claimed. Native transfer
+state is neutralized only for internal zero initialization, with scoped restoration
+and no use of guest attribute-stack capacity. Evidence is in
+`target/follow-through/pixels-copy-acceptance.json`.
+
+Win98 diagnostic ICD discovery also builds through a separate prepared source
+and object tree. The actual Watcom compiler verifies the donor's 270-byte Win16
+ANSI descriptor, far-pointer width and name offset; this is distinct from NT's
+532-byte wide-character request. The checked patch reports DGPUICD and reuses the
+exact production VxD. Actual-source boundary tests and preparation checks pass;
+guest registration/loading is still open. See `target/follow-through/win98-icd-discovery/`.
+
+The combined native/guest/installer Cargo build for this checkpoint passes in
+18.34s and strict all-feature/all-target Clippy passes. The later Win16 provenance
+comment update does not change code semantics. Bitmap and DrawPixels now have a
+coordinated implementation task for bounded immutable image assembly; they must
+draw once at commit, preserving fractional raster/zoom semantics and releasing
+staging budgets on errors, context loss and reset.
+
+### XP lifecycle acceptance and tighter controller diagnosis
+
+The same corrected installer and helper used on Win98 now pass the first actual
+XP lifecycle attempt: default refusal, six-entry staging and rollback preserve
+fourteen graphics files and four ICD values. The independent XP fixture reaches
+the expected controller identity automatically in 12.13s and is paused afterward.
+Evidence is in `target/follow-through/xp-setup-runtime-v3/`.
+
+Two earlier startup attempts never executed the installer. Offline diagnosis
+found `CreateFileCOM1` access denied: XP was launching its older controller from
+the All Users Startup directory, while only the root copy had been updated.
+The fixture's explicit file manifest now replaces the actual startup executable;
+no GUI bootstrap is needed. Both failed starts and their logs remain retained.
+Readiness timeout diagnostics now include the last observed identity instead of
+discarding it; a Unix-socket protocol regression test covers the stale-controller
+case. The original clean XP disk remains unchanged.
+
+### Recovery dispatch and bounded pixel-image assembly
+
+Installer continuation now authenticates the existing journal before selecting
+the recovery operation. An owned rollback or removal can resume while new GPU
+providers remain unavailable; a new installation or upgrade still cannot begin.
+Tests invoke the production runtime gateway and Win32 store under ASan/UBSan on
+both OS-family paths, including 68 injected recovery syscall failures, corrupt
+receipts and blocked installation paths with zero mutations. Provider readiness
+has not changed, and this source-level recovery gate does not replace an actual
+installed-driver reboot/upgrade/uninstall test.
+
+Bitmap and DrawPixels now assemble a bounded immutable image before issuing one
+native draw. Stream IDs, offset/order checks, cancellation, context teardown and
+a shared 64 MiB staging budget prevent partial-image replay or unbounded memory.
+An inactive stream returns cheaply before crossing the Rust image guard on
+ordinary rendering commands. Guest sanitizer and host state-machine tests cover
+malformed chunks, failed publication, allocation failures and context isolation.
+
+Native acceptance exposed two Linux provider issues. Fractional negative
+PixelZoom loses or miscolors pixels in a direct EGL reproduction without any
+DreamGPU code; the same exact oracle passes on Mac. DrawPixels with packed stencil
+bits also hangs the Linux driver. The latter is being addressed by expanding
+packed bits into exact 0/1 bytes inside the original bounded allocation before
+one native submission, with guest preflight charging the expanded byte count.
+The correction passes the packing, transfer, typed pixel, depth and stencil
+assertions on both hosts. Mac passes all 29 native GPU tests. Linux's changed
+image test completes in 0.29s and fails only the retained three-pixel fractional
+zoom assertion; its other 28 tests passed before this correction. The direct EGL
+reproduction and original driver failure remain recorded. Neither issue is hidden
+by weakening pixel expectations or claiming complete GL1.1 coverage.
+
+All 55 native source hashes match across hosts in
+`target/follow-through/pixel-image-acceptance.json`. Host Rust tests now total 88
+passing tests, including 11 stream adversarial cases; strict Clippy passes.
+The combined Cargo native/both-guest/installer build passes in 17.20s, followed by
+workspace all-feature/all-target Clippy and maintained C/C++ formatting checks.
+Its exact outputs are recorded in `combined-build-v3-receipt.json`. The installer
+still refuses production activation while the remaining provider contracts are
+incomplete; these successful builds do not change that status.
+
+### Texture completion and controller provenance
+
+The next four guest adapters implement real texture residency/priority and 1D
+image copies. Residency stages results until the full call succeeds and leaves
+the caller array unchanged when all textures are resident. Subimage validation
+queries the actual level extent and border, including legal negative border
+offsets. Full GL1.1 base/sized 1D formats use conservative eight-byte-per-texel
+accounting; the existing 2D format policy remains unchanged. Guest sanitizer,
+legacy GCC and compile-database clang-tidy checks pass. Coverage now has 130
+adapters, 60 explicit gaps and five documented partial operations.
+
+Host Rust tests total 94 passing tests with strict Clippy. Mac's focused native
+1D border/RGBA16/subcopy/priority/residency oracle passes, as does the existing
+2D signed/padded-copy check. Linux passes borderless copies and real
+priority/residency, but its driver strips requested legacy borders: width 6 and
+border 1 become width 4 and border 0 without a native error. A direct EGL
+reproduction confirms the same result without DreamGPU. Resource metadata now
+queries the actual native extent/border before publication, preserving accurate
+ownership and accounting. Both 1D copy entries retain this explicit partial
+coverage; no fake texture dimensions are reported.
+
+The exact cross-host source and native results are recorded in
+`target/follow-through/texture-control-acceptance.json`. The final combined Cargo
+build passes in 10.41s, followed by strict workspace Clippy and maintained C/C++
+formatting. `combined-build-v5-receipt.json` records the native, both guest package
+and combined installer identities. The preceding combined build caught the
+updated system probe's missing freestanding memory-helper link; adding the
+existing CMake MEMORY support fixes it without introducing a guest CRT dependency.
+
+Fixture receipts now record separate preparation/startup hashes for the four
+core controller modules. A controller correction no longer needs to be inferred
+from native/guest binary identities, and preparation provenance is retained.
+The existing 26 fixture tests pass after this metadata change.
+
+### Windows 98 normal system OpenGL loader
+
+The first actual Win98 system-loader proof now passes: Microsoft
+`C:\WINDOWS\SYSTEM\OPENGL32.DLL` loads the registered
+`C:\WINDOWS\SYSTEM\DGPUICD.DLL`, selects accelerated GDI format flags `0x25`,
+renders all 8,192 expected pixels and completes two swaps. The single serial
+request completes in 0.115s; it is a correctness test, not an FPS comparison.
+Its raw log SHA256 is
+`0448ab0664ab045f44d8eec014c300c8025426bd5664ed12ed083d4ce4c02fe7`.
+
+Two earlier attempts remain explicitly failed: an older controller omitted the
+copied QEMU binary's firmware path before guest execution, then the bootstrap
+refused registration when ordinary Win32 Escape returned no descriptor. A
+read-only diagnostic isolated the correct Win32 thunk: ExtEscape returns version
+2, driver 1 and the expected ANSI name with a 270-byte output. The Win16 driver
+needed no change. A fixed registration-only helper then reused the already-ready
+fixture without spawning another serial controller or rebooting.
+
+The helper preserves the exact previous registry record before mutation and
+refuses deleting a parent containing unrelated values or subkeys. Its sanitizer
+tests cover restoration, foreign entries, conflicts and corrupt backups. A
+separate `/restore` invocation on the same guest also passes: the original absent
+ICD value is restored under the existing parent, the disabling marker persists,
+and the original checksummed backup stays byte-identical. The fixture is paused
+with networking disabled. Raw registration, pixel and restoration receipts are
+recorded in `target/follow-through/win98-system-icd-v1/acceptance.json`.
+This closes Win98's basic system loader and diagnostic registry restoration
+gates; production provider readiness, full GL1.1 compatibility and complete
+installed-driver lifecycle remain open.
+
+Final compile-database clang-tidy passes for the normal bootstrap, read-only
+inspection variant and system OpenGL probe. The inspection variant now logs its
+active-driver result explicitly instead of leaving it unused; this diagnostic
+logging change does not repeat or replace the accepted runtime proof. The final
+combined Cargo rebuild passes in 9.23s, with exact outputs in
+`target/follow-through/combined-build-v6-receipt.json`. Native bytes are unchanged
+from the preceding checkpoint; the combined installer is rebuilt with the final
+guest tools. Existing strict Clippy and full formatting results are retained,
+and the changed helper passes its targeted formatting check.

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Cross compilation and OS-specific guest packages.
+#[path = "unreal_audit.rs"]
+mod unreal_audit;
 use crate::{capture, copy_tree, digest, jobs, run, write_json};
 use anyhow::{Context, Result};
 use serde_json::{json, Value};
@@ -108,6 +110,7 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
     let prepared = if valid_cache {
         crate::prepare::Prepared {
             vmdisp: source_work.join("vmdisp9x"),
+            vmdisp_icd: source_work.join("vmdisp9x-icd"),
             wine: source_work.join("wine9x"),
             glide: source_work.join("openglide"),
             patches: cached.unwrap()["patches"].clone(),
@@ -145,6 +148,10 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
             .arg(format!(
                 "-DDREAMGPU_VMDISP_SOURCE={}",
                 prepared.vmdisp.display()
+            ))
+            .arg(format!(
+                "-DDREAMGPU_VMDISP_ICD_SOURCE={}",
+                prepared.vmdisp_icd.display()
             ))
             .arg(format!(
                 "-DDREAMGPU_WINE_SOURCE={}",
@@ -189,6 +196,7 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
         }
         fs::rename(temporary, destination)?;
     }
+    crate::installer::build(root, output, &prefix)?;
     Ok(())
 }
 fn source(root: &Path, name: &str, pin: &Value) -> Result<()> {
@@ -370,6 +378,15 @@ fn remote(root: &Path, output: &Path, host: &str) -> Result<()> {
             quote(&format!("{destination}/target/guest/packages"))
         ))
         .arg(output.join("packages")))?;
+    for name in ["dreamgpu.exe", "installer-manifest.json"] {
+        run(Command::new("rsync")
+            .arg("-a")
+            .arg(format!(
+                "{host}:{}",
+                quote(&format!("{destination}/target/guest/{name}"))
+            ))
+            .arg(output.join(name)))?;
+    }
     Ok(())
 }
 fn quote(value: &str) -> String {
@@ -495,7 +512,17 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
                 );
             }
         }
-        evidence.insert(relative, json!({"format":"PE32","imports":libraries}));
+        let mut result = json!({"format":"PE32","imports":libraries});
+        if unreal_audit::applies(&name) {
+            let assembly = capture(
+                Command::new(format!("{prefix}objdump"))
+                    .args(["-d", "-M", "att"])
+                    .arg(&path),
+            )?;
+            result["unreal_contract"] = unreal_audit::audit(&data, &details, &assembly)
+                .with_context(|| format!("Unreal helper audit: {relative}"))?;
+        }
+        evidence.insert(relative, result);
     }
     Ok(Value::Object(evidence))
 }

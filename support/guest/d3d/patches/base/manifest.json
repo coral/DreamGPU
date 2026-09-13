@@ -7,6 +7,10 @@
     {
       "file": "0001-dreamgpu-wined3d.patch",
       "sha256": "e219337f3fcb53fc10421319deec5d7542f2b89b72472fb344e87092e09579ec"
+    },
+    {
+      "file": "0002-backbuffer-blit-bounds.patch",
+      "sha256": "9266cb009081aea1ec8a0c094965a72aebb2e445b1e2dd30c3a29a9da8756c2b"
     }
   ],
   "files": {
@@ -28,7 +32,7 @@
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "9279a63e8ca80f6af73ad5b23f83f581bc4d1d33ab2b2da1b3ecfdc9eabd6549"
+      "after_sha256": "fd8c73522577cbdd4f5d2b3b47026081b541034d83b08011623374bf7238008c"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",

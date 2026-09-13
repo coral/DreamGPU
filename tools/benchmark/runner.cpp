@@ -509,6 +509,9 @@ typedef struct {
     DWORD timeout;
 } PROBE_SPEC;
 static const PROBE_SPEC Probes[] = {
+    {"sysgl", "C:\\DGSYSGL.EXE", "C:\\DGSYSGL.LOG", "", 30000},
+    {"sysglide", "C:\\DGSYSGR.EXE", "C:\\DGSYSGR.LOG", "", 30000},
+    {"setupcheck", "C:\\DGSETTST.EXE", "C:\\DGSETTST.LOG", "", 120000},
     {"hldebug", "C:\\SIERRA\\Half-Life\\DGHLDBG.EXE", "C:\\DGHLDBG.LOG", "", 40000},
     {"win9xinstall", "E:\\DG9INST.EXE", "C:\\DG9INST.LOG", "", 120000},
     {"win9xdiag", "C:\\SIERRA\\Half-Life\\DG9AUDIT.EXE", "C:\\DG9AUDIT.LOG", "", 30000},
@@ -671,8 +674,12 @@ static const char *Probe(const char *id, const PROBE_SPEC *spec) {
             ResetEvent(minimized);
         phase_count = 2;
     }
+    const char *working_directory = (Equal(spec->name, "sysgl") || Equal(spec->name, "sysglide") ||
+                                     Equal(spec->name, "setupcheck"))
+                                        ? "C:\\"
+                                        : Game;
     if (!CreateProcessA(path, command, NULL, NULL, FALSE, foreground ? CREATE_SUSPENDED : 0, NULL,
-                        Game, &startup, &process)) {
+                        working_directory, &startup, &process)) {
         const char *launch_error = ProcessLaunchFailure("launch-failed");
         if (timed) {
             CloseHandle(phases[1]);

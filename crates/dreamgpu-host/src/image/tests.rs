@@ -87,6 +87,7 @@ fn native_image_partial_allocation_rolls_back_each_stage_and_clears_owner_before
         let m = Memory {
             api: core::ptr::null(),
             bytes: null_mut(),
+            image_bytes: core::ptr::null_mut(),
             count: null_mut(),
             opaque: (&mut c as *mut Check).cast(),
             allocate,
@@ -126,6 +127,7 @@ fn native_image_limits_and_allocation_failure_do_not_run_platform_create() {
     let m = Memory {
         api: core::ptr::null(),
         bytes: null_mut(),
+        image_bytes: core::ptr::null_mut(),
         count: null_mut(),
         opaque: (&mut c as *mut Check).cast(),
         allocate,

@@ -29,7 +29,17 @@ endif()
 if(DREAMGPU_BUILD_TOOLS)
   include("${DREAMGPU_CMAKE}/tools.cmake")
 endif()
-add_custom_target(dreamgpu-guest ALL DEPENDS ${DREAMGPU_RUNTIME_TARGETS} ${DREAMGPU_TOOL_TARGETS})
+# Every installed diagnostic must be built by Cargo's explicit aggregate target,
+# including on a clean build tree that has never built an ICD target manually.
+set(DREAMGPU_DIAGNOSTIC_TARGETS dgpuicd)
+if(TARGET dgpudisp_icd)
+  list(APPEND DREAMGPU_DIAGNOSTIC_TARGETS dgpudisp_icd)
+endif()
+if(TARGET dreamgpu-win98-icd-driver)
+  list(APPEND DREAMGPU_DIAGNOSTIC_TARGETS dreamgpu-win98-icd-driver)
+endif()
+add_custom_target(dreamgpu-guest ALL DEPENDS ${DREAMGPU_RUNTIME_TARGETS}
+  ${DREAMGPU_DIAGNOSTIC_TARGETS} ${DREAMGPU_TOOL_TARGETS})
 install(FILES "${DREAMGPU_ROOT}/LICENSE" DESTINATION licenses RENAME DREAMGPU.txt COMPONENT ${DREAMGPU_GUEST_OS})
 install(DIRECTORY "${DREAMGPU_ROOT}/LICENSES/" DESTINATION licenses COMPONENT ${DREAMGPU_GUEST_OS})
 install(FILES "${DREAMGPU_ROOT}/ATTRIBUTION.md" DESTINATION licenses COMPONENT ${DREAMGPU_GUEST_OS})

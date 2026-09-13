@@ -44,6 +44,10 @@ Outputs:
   corresponding license notices and separately grouped tools.
 - `target/guest/packages/windows2000-xp/`: NT5 display drivers and the same API
   implementations, with tools kept separate from runtime drivers.
+- `target/guest/dreamgpu.exe`: combined guest installer, with an adjacent
+  `installer-manifest.json` recording payload identities. System-wide activation
+  is under development; the current installer refuses incomplete providers.
+  See [installer status](tools/setup/README.md) and the [remaining plan](docs/plan.md).
 
 ## Licensing
 

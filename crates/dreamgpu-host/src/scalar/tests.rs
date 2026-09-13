@@ -121,3 +121,66 @@ fn generated_gl_abi_preserves_bits_and_enforces_begin() {
     assert_eq!(state, 0);
     assert_eq!(take(), [200, FEnum_glBegin as u64]);
 }
+
+unsafe extern "C" fn raster(x: f64, y: f64, z: f64, w: f64) {
+    note(&[x.to_bits(), y.to_bits(), z.to_bits(), w.to_bits()]);
+}
+#[test]
+fn raster_double_wire_bounds_and_begin_rejection() {
+    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    api.dg_glRasterPos4d = Some(raster);
+    let bits = [
+        1.0000000000000002f64.to_bits(),
+        (-0.0f64).to_bits(),
+        0,
+        2f64.to_bits(),
+    ];
+    let args: Vec<u32> = bits
+        .iter()
+        .flat_map(|b| [*b as u32, (*b >> 32) as u32])
+        .collect();
+    let mut state = 0;
+    for n in 0..8 {
+        assert_eq!(
+            run(&api, &mut state, FEnum_glRasterPos4d, &args[..n]),
+            Err(1)
+        );
+        assert!(take().is_empty());
+    }
+    run(&api, &mut state, FEnum_glRasterPos4d, &args).unwrap();
+    assert_eq!(take(), bits);
+    state = 1;
+    assert_eq!(run(&api, &mut state, FEnum_glRasterPos4d, &args), Err(4));
+    assert_eq!(state, 1);
+    assert!(take().is_empty());
+}
+
+unsafe extern "C" fn copy_pixels(x: i32, y: i32, w: i32, h: i32, kind: u32) {
+    note(&[
+        x as u32 as u64,
+        y as u32 as u64,
+        w as u64,
+        h as u64,
+        kind as u64,
+    ]);
+}
+#[test]
+fn copy_pixels_signed_coordinates_bounds_and_begin_guard() {
+    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    api.dg_glCopyPixels = Some(copy_pixels);
+    let mut state = 0;
+    let args = [u32::MAX, 0x8000_0000, 2, 3, GL_COLOR];
+    for n in 0..5 {
+        assert_eq!(
+            run(&api, &mut state, FEnum_glCopyPixels, &args[..n]),
+            Err(1)
+        );
+        assert!(take().is_empty());
+    }
+    run(&api, &mut state, FEnum_glCopyPixels, &args).unwrap();
+    assert_eq!(take(), args.map(u64::from));
+    state = 1;
+    assert_eq!(run(&api, &mut state, FEnum_glCopyPixels, &args), Err(4));
+    assert_eq!(state, 1);
+    assert!(take().is_empty());
+}

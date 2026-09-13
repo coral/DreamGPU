@@ -114,6 +114,8 @@ typedef uint16_t GLushort;
 #define GL_UNPACK_SKIP_ROWS 0x0CF3
 #define GL_VENDOR 0x1F00
 #define GL_VERSION 0x1F02
+#define GL_CLIENT_ATTRIB_STACK_DEPTH 0x0BB1
+#define GL_MAX_CLIENT_ATTRIB_STACK_DEPTH 0x0D3B
 #define GL_ATTRIB_STACK_DEPTH 0x0BB0
 #define GL_MAX_ATTRIB_STACK_DEPTH 0x0D35
 #define GL_TEXTURE_1D 0x0DE0
@@ -122,3 +124,8 @@ typedef uint16_t GLushort;
 }
 #endif
 #endif
+
+#define GL_COLOR 0x1800
+
+#define GL_DEPTH_COMPONENT 0x1902
+#define GL_STENCIL_INDEX 0x1901

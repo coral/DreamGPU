@@ -29,6 +29,16 @@ fresh log and exit status. The first Mac gate is retained in
 `benchmarks/retro-gpu/glide-acceptance.json`. This does not establish real-game
 compatibility, every texture/LFB format, or Windows98/XP support.
 
+The shared C++23 probe source also builds `DGSYSGR.EXE` for system-provider
+installation checks. Run it as `C:\DGSYSGR.EXE` with working directory `C:\`
+and no neighboring `glide2x.dll` or `dgpugl.dll`. It uses normal
+`LoadLibraryA("glide2x.dll")` search, then requires the actual Glide module and
+its already-loaded DreamGPU OpenGL dependency to reside in `GetSystemDirectoryA`.
+It runs the same 2304-pixel oracle and writes `C:\DGSYSGR.LOG`; the app-local
+`DGGLIDE.EXE` remains a separate diagnostic mode. Building either tool proves
+neither global installation nor a runtime pass. The fixed `sysglide` runner route
+must be installed before invoking it through automation.
+
 The original LGPL OpenGLide and SGI Free Software B headers remain in the
 pinned/generated source. Distribution must retain their license notices and
 provide corresponding source as required. Game media stays outside Git.

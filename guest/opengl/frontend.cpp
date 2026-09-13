@@ -41,7 +41,7 @@ typedef struct {
 #include "names.h"
 #include "state.h"
 typedef struct {
-    ULONG Id, Used, Records, Binding, Width, Height, Capabilities;
+    ULONG Id, Used, Records, Binding, Width, Height, Capabilities, ImageId;
     volatile LONG Owner;
     HDC DC;
     HWND Window;
@@ -220,6 +220,7 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
         if ((c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
              c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK) &&
             (function == FEnum_glBegin ||
+             (function == FEnum_glCopyPixels && ((const ULONG *)arguments)[4] == GL_COLOR) ||
              (function == FEnum_glClear && (*(const ULONG *)arguments & GL_COLOR_BUFFER_BIT))))
             c->FrontDirty = TRUE;
     }
@@ -314,6 +315,17 @@ static void FreeContext(JGL_CONTEXT *c) {
     HeapFree(Heap, 0, c);
 }
 
+ULONG JglNextImageId(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c || !JglReady())
+        return 0;
+    if (c->ImageId == 0xffffffffUL) {
+        Error(c, GL_OUT_OF_MEMORY);
+        return 0;
+    }
+    return ++c->ImageId;
+}
+
 ULONG JglMaxDataBytes(ULONG words) {
     return words <= MaxWords - 10 ? (MaxWords - 10 - words) * 4 : 0;
 }
@@ -344,8 +356,14 @@ BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *pa
         record[2 + words + bytes / 4] = 0;
     if (bytes)
         CopyMemory(record + 2 + words, payload, bytes);
-    if ((function == FEnum_glDrawArrays || function == FEnum_glDrawElements) &&
-        (c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_AND_BACK))
+    if ((function == FEnum_glDrawArrays || function == FEnum_glDrawElements ||
+         (words == 8 &&
+          (function == FEnum_glBitmap ||
+           (function == FEnum_glDrawPixels && arguments[2] != GL_DEPTH_COMPONENT &&
+            arguments[2] != GL_STENCIL_INDEX)) &&
+          (arguments[6] & 2))) &&
+        (c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT || c->DrawBuffer == GL_LEFT ||
+         c->DrawBuffer == GL_FRONT_AND_BACK))
         c->FrontDirty = TRUE;
     return TRUE;
 }

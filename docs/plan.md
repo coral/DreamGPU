@@ -69,12 +69,13 @@ the SDK, native QEMU artifacts and guest-package manifest to the same checkout.
   fragments, preserving exact provenance.
 - Replace fragile source-string substitutions with explicit patches/fork commits.
 - Preserve current QEMU performance and compatibility fixes.
-- Commit directly on DreamGPU `main` and the shared QEMU fork's `master`; Juke
+- Commit directly on DreamGPU `master` and the shared QEMU fork's `master`; Juke
   stays on `master`. Do not create separate integration/development branches.
   Pin published QEMU commits in DreamGPU's submodule.
 - Keep audio in Juke. The shared QEMU fork may retain its existing `juke` audio
   backend; DreamGPU owns graphics, not the consuming application's audio backend.
-- Preserve per-component licenses and SPDX notices; no umbrella license is needed.
+- Independently authored code uses GPL-2.0-or-later. Preserve upstream licenses,
+  SPDX notices and copied-file provenance; see ATTRIBUTION.md.
   Resolve identified Glide SDK-header provenance before publishing affected copies.
 - Never commit credentials, product keys, Windows images, game media or generated
   guest binaries. Keep 86Box and unrelated Juke assets outside DreamGPU.
@@ -158,6 +159,260 @@ cleanup and return to desktop. Exclusive-fullscreen game support needs its own
 evidence. Record native rejections/errors, readbacks, transfers, waits and cleanup.
 Additional titles enter the compatibility list only after exact automated tests;
 public D3D8/9 probes do not prove arbitrary D3D8/9 game compatibility.
+
+## System-wide installation (new required product goal)
+
+The user clarified that the deliverable is one **`dreamgpu.exe` installer run
+inside the Windows guest**, automatically detecting Windows 98 versus Windows
+2000/XP. Cargo builds the two internal OS payloads and the combined executable.
+Separate `dreamgpu-9x.exe` / `dreamgpu-nt.exe` may be diagnostic build artifacts;
+the normal user flow is install, reboot when required, then launch a game.
+
+The installed DreamGPU device supplies ordinary desktop acceleration plus
+OpenGL, Glide and Direct3D through the system interfaces applications normally
+load. No game-directory DLL copying, renamed private renderer, patched game
+import table, custom `-gldrv` argument, or per-title setup is required for the
+normal path. This supersedes the earlier app-local-only deployment policy;
+existing app-local artifacts and results remain historical validation evidence.
+Automatic API discovery does not imply support for every game's requirements.
+
+This requires driver integration as well as installer packaging. The current
+frontend is a private WGL/OpenGL library, not yet a complete Windows OpenGL ICD.
+The NT display driver's empty DirectDraw callback tables are not a Direct3D HAL.
+WineD3D global switchers must preserve ordinary native 2D behavior, and replacing
+NT protected runtime files is not treated as a completed driver integration.
+Choose the precise supported route after auditing the pinned sources and native
+Windows interfaces; document any remaining architectural limitation explicitly.
+
+- [ ] Finish the OS-specific system-loading design: OpenGL ICD/pixel-format
+  integration, global Glide discovery, DirectDraw and Direct3D entry points.
+- [ ] Implement the required system driver/API integration with the current
+  bounded graphics transport and host acceleration.
+- [ ] Build one legacy-compatible installer with two OS payloads directly through
+  Cargo/Rust orchestration and CMake; no Python build recipes.
+- [ ] Detect the supported Windows version and DreamGPU PCI device; validate
+  payloads and prerequisites before modifying the installation.
+- [ ] Implement driver activation, reboot completion, upgrade/repair, failure
+  rollback and uninstall with explicit ownership of files and registry entries.
+- [ ] Preserve existing desktop performance, normal DirectDraw behavior and
+  unrelated system components. Restore previously owned installation state on
+  failed upgrades or uninstall.
+- [ ] Test unattended installation, reboot, upgrade, rollback and removal on
+  independent 98/2000/XP fixtures; use machine-readable completion receipts.
+- [ ] Launch normal OpenGL/Glide/Direct3D programs from clean application
+  directories containing no DreamGPU/Wine replacement DLLs. Verify actual loaded
+  provider identities and pixels, not merely activity or successful loading.
+- [x] Resolve the reported Unreal partial-client rendering/black margins and
+  validate the former texture bands on both hosts with the corrected Wine path.
+- [ ] Verify relevant APIs and representative games on both Mac and Linux hosts,
+  including normal desktop use before/after games and no idle busy looping.
+
+### System installer work breakdown (in progress)
+
+**OpenGL and driver integration**
+
+The diagnostic ICD has 336 typed non-NULL slots: 146 existing functions,
+130 adapters and 60 explicitly unsupported operations. ArrayElement remains
+partial because edge/index arrays are incomplete. Windows 2000
+normal system loading passes the basic pixel/swap gate. This is not a complete
+GL1.1 implementation; production registration remains gated on the missing work.
+
+- [x] Implement 39 numeric color/normal/rectangle variants and seven fixed-state
+  aliases, with actual frontend sanitizer tests and legacy-target compilation.
+- [x] Implement all 24 raster-position variants with typed native execution and
+  raster-state queries. Both hosts pass the actual transform/clip/state oracle
+  and the 27-test native GPU suite recorded for that batch.
+- [x] Implement interleaved arrays and a bounded per-context client stack,
+  preserving borrowed pointers and pack/unpack state. Actual-source tests cover
+  all 14 interleaved layouts, stack limits and context isolation.
+- [ ] Finish ArrayElement's edge/index-array dependencies. Existing representable
+  arrays execute with validated addresses and vertex-last ordering; coverage
+  explicitly labels this entry partial while missing array enables reject.
+- [x] Implement nine pixel transfer/map operations with typed bounded payloads
+  and exact native state queries. Neutralize guest transfer state only around
+  internal texture zero initialization, restoring it without borrowing guest
+  attribute-stack capacity. Guest transfers retain their intended behavior.
+- [x] Complete CopyPixels native/guest integration and both-host color-copy GPU
+  gates, preserving signed coordinates, read/draw surfaces, transfer/scissor state
+  and FRONT publication. Independent depth/stencil pixel oracles now also pass
+  on both hosts, alongside no-color-publication tests.
+- [ ] Resolve the Linux Mesa extreme integer INDEX_OFFSET precision failure.
+  The typed transport preserves INT_MAX, but Mesa converts it through float
+  internally and returns INT_MIN. Preserve the failed oracle and do not invent
+  shadow query state that disagrees with drawing. Remaining pixel checks pass
+  using an exactly representable offset; full-range conformance stays open.
+- [x] Implement and validate Bitmap/DrawPixels bounded immutable image assembly
+  with a single committed draw. Guest/host implementation and adversarial tests
+  now cover ordering, cancellation, context loss and the shared 64 MiB staging
+  limit. Packed DrawPixels expands bits to native byte values within that same
+  budget to avoid a reproduced Linux driver hang; this changes packing, not
+  rendering. Mac passes all 29 native GPU tests; Linux completes the new typed,
+  packing, transfer and depth/stencil assertions but retains the separate native
+  fractional-zoom failure below. The 64 KiB packet limit does not split draws.
+- [ ] Resolve Linux fractional negative PixelZoom coverage. A direct native EGL
+  reproduction without DreamGPU produces the same missing/wrong pixels under
+  Mesa 26.1.8; preserve the exact failing oracle and distinguish this provider
+  failure from transport acceptance. Mac passes the corresponding pixel check.
+- [x] Implement texture residency/priority and 1D image-copy operations. Guest
+  adapters pass legacy compilation, sanitizer and clang-tidy checks. Mac and
+  Linux pass borderless copy, real priority/residency and existing 2D-copy GPU
+  checks. Residency publishes caller output atomically. Native texture metadata
+  uses queried dimensions/borders after allocation, with conservative accounting.
+- [ ] Resolve Linux legacy 1D texture borders. Direct EGL reproduces Mesa
+  accepting width 6/border 1 but reporting width 4/border 0 without an error.
+  Mac passes exact border pixels; retain Linux's failed border assertion and
+  mark both 1D copy operations partial rather than fabricating border state.
+- [ ] Complete pixel I/O/state, display lists, evaluators, selection/feedback,
+  index/edge/stipple/accumulation/logic and remaining texture operations. Track
+  exact unsupported slots in `guest/opengl/icd-coverage.json`; catalog names alone
+  do not establish native implementation.
+
+- [ ] Implement the Windows `Drv*` ICD entry points and the exact 336-slot GL1.1
+  dispatch ABI. Inventory the roughly 190 public names absent from the current
+  frontend; implement required behavior and valid aliases, with no NULL dispatch
+  slots, silent success stubs or inflated capability claims.
+- [ ] Validate the ICD adapter's pixel-format/context/thread/sharing/swap behavior
+  against actual frontend code. Keep the diagnostic ICD unregistered by default
+  until the required contract passes; this is an implementation gate, not a
+  permanent alternative user installation path.
+- [ ] Complete NT pixel-format/display DDIs and Win98 `OPENGL_GETINFO` integration,
+  then verify native `opengl32.dll`/GDI loading on each supported Windows version.
+- [x] Build checked Win98 diagnostic discovery in an independent source/object
+  tree. Actual Watcom compilation verifies the 270-byte Win16 ANSI response and
+  far-pointer boundary; reuse the exact production VxD. Real Win98 system-loader
+  execution remains separate from this build/ABI gate.
+- [x] Complete the automated Win98 normal-system ICD proof with frozen inputs
+  and an independent disk. The diagnostic bootstrap verifies the active Win16
+  discovery interface, preserves the exact prior registry value, supports
+  restoration and refuses foreign provider/key contents. Its actual-source
+  sanitizer tests pass. The actual Microsoft system loader now loads the system
+  ICD and passes 8,192 exact pixels/two swaps. Win32 ExtEscape with a 270-byte
+  ANSI output succeeds; ordinary Escape did not reach the expected thunk. Keep
+  this diagnostic registration separate from production installer readiness.
+- [x] Verify actual Win98 diagnostic registry restoration and bootstrap disabling
+  after the accepted normal-loader run, retaining the exact original value/key
+  identity and unrelated entries. One restoration invocation verifies the original
+  absent ICD value under the existing key, a durable disabling marker and the
+  byte-identical original backup. This does not constitute full driver removal.
+- [x] Add a fixed `sysgl` automation route and a normal-loader probe using system
+  `opengl32.dll`, GDI pixel-format/swap calls, system `dgpuicd.dll` identity and
+  8,192 exact red/green pixel checks. The probe rejects neighboring API DLLs;
+  legacy-target compilation passes. Windows 2000 now passes the real system
+  loading test: native GDI format 1, system `opengl32.dll`/`dgpuicd.dll`, 8,192
+  exact pixels and two swaps. Its actual `OPENGL_GETINFO` request is 532 bytes
+  with the name at offset 8; callback evidence confirms user-ICD swaps. This
+  closes the basic loader gate, not full GL1.1 coverage or production activation.
+- [ ] Register only verified system providers; ordinary applications must require
+  no `-gldrv` flag or special loader name.
+
+**DirectDraw, Direct3D and Glide**
+
+- [ ] Harden the Win98 switcher's initialization/publication and native-library
+  loading; validate routing with ordinary unknown 2D clients, not only registered
+  game names or immediate-caller heuristics.
+- [ ] Implement and verify the Win98 system installation transaction using the
+  preserved native runtime/registration contract identified in the donor source.
+- [ ] Resolve NT5's system Direct3D architecture. The existing donor installation
+  replaces Windows File Protection-managed runtime files and cache copies; a
+  durable install must address this explicitly. Native Direct3D HAL integration
+  is substantive new driver work, not an existing feature of the current driver.
+- [ ] Test native DirectDraw coexistence, adapter discovery and Direct3D6/7/8/9
+  normal-loader paths with no private providers beside the executable.
+- [ ] Install the supported Glide2 provider globally with collision/ownership
+  checks. Inventory Glide1/Glide3 requirements separately; current Glide2 results
+  do not establish those APIs.
+- [x] Build shared C++23 Glide probe code for the existing diagnostic and a normal
+  system-loader `DGSYSGR.EXE` test; require clean executable/current directories
+  and verified actual system Glide/OpenGL dependency paths. Legacy-target builds
+  and actual loader-policy sanitizer tests pass. One independent Windows 2000
+  run also passes normal system loading and exact pixels, with no neighboring
+  providers; installer-driven registration/removal and other OS gates remain open.
+
+**Build and installer implementation**
+
+- [x] Add a PE4 C++23 bootstrap, built by Cargo/Rust/CMake, embedding both audited
+  OS packages. Detect Windows 98 versus 32-bit 2000/XP and PCI `1234:1113`.
+  The foundation artifact builds and audits successfully; default installation
+  reports `provider_not_ready` before writes. Diagnostic staging is not activation.
+- [ ] Add bounded payload parsing and integrity checks, owned file/registry state,
+  transaction journal, activation/reboot continuation and machine-readable receipts.
+- [x] Implement bounded, checksummed file/registry journaling, immutable originals,
+  interrupted-write reconciliation and conflict detection. Actual Win32 adapter
+  tests cover 108 injected syscall failure boundaries. One Windows 2000 staging
+  and rollback run preserves 12 global DLL hashes and four ICD registry values;
+  this validates lifecycle mechanics, not driver activation.
+- [x] Extend the fixed lifecycle probe to all three supported OS versions and
+  the Win98 driver pair. Actual Windows 98 execution caught an unavailable
+  SetupAPI import before startup; resolve it from CfgMgr32 and enforce that
+  module/function pairing in the Cargo audit. The corrected single Win98 run
+  passes default refusal, staging and rollback with 14 global files and the
+  OS-specific ICD registry value unchanged. The same corrected installer/helper
+  also passes XP: 14 files and four ICD values unchanged. Its actual All Users
+  Startup controller copy is now updated by the fixture manifest; replacing only
+  the root copy had left an older process holding COM1. Activation/reboot/upgrade
+  and uninstall acceptance remain open on all three OS versions.
+- [ ] Complete repair, upgrade, interrupted-install recovery and uninstall;
+  retain original unrelated files and restore owned prior state correctly.
+- [x] Correct recovery dispatch so an owned rollback/removal can resume even
+  while new providers are unready. Authenticate/load the journal before routing
+  continuation; keep installation and upgrade gated. Actual Win32 gateway tests
+  cover both OS families and 68 injected recovery syscall failures, including
+  blocked installation paths with zero mutations and corrupt-receipt refusal.
+- [ ] Keep incomplete provider descriptors from reporting a successful GPU
+  installation. An executable that only stages files does not close this task.
+- [ ] Test install/boot/normal games/desktop/uninstall on independent fixtures,
+  including wrong OS/device, missing files, corrupt payloads and interrupted writes.
+
+**Outstanding rendering and verification**
+
+- [x] Fix the traced Unreal client-area clipping: Wine's `ORM_BACKBUFFER`
+  fallback draws a desktop-sized 1024×768 intermediate into a physical 640×480
+  backbuffer, truncating it before the correctly translated final 640×480 blit.
+  Native export dimensions and final viewport are correct. Provide correctly
+  sized offscreen storage; preserve required screen/client translation. Require
+  a full-client pixel/geometry check after the fix. The first trace exceeded the
+  harness artifact limit and establishes diagnosis, not benchmark acceptance.
+  The checked Wine patch now routes oversized offscreen blits through the existing
+  framebuffer-to-texture copy. Actual-source sanitizer tests verify 1,048,576
+  primary texels, and both OS packages build. A new D3D7 probe checks distinct
+  far-edge colors in both render-target and GDI front-buffer pixels. On Mac and
+  Linux it passes all 2,560 pixel checks; one corrected UT run per host fills the
+  full 640×480 client with zero native GL rejections. No matched FPS claim.
+- [x] Reassess the recorded D3D edge bands with the coordinate fix. The corrected
+  Linux UT image has no prior right/bottom bands; distinct-color front-buffer
+  edge checks pass. Both hosts retain full-client screenshots.
+- [ ] Finish current Mac application-package acceptance: NT ten probes passed;
+  corrected D3D client bounds now pass; Glide aborted before launch on held Shift
+  input; Mac Win98 has not yet run. Linux ten probes and both Unreal paths passed
+  on each OS; a separate corrected NT D3D run closes the observed bounds issue.
+- [x] Rebuild the canonical Linux Juke executable with the current DreamGPU
+  dependency after measurement. Release build passes in 27.45s and reports the
+  correct QEMU path; SHA256 is recorded in the build receipt. Earlier runtime
+  results still identify the frozen executable actually used for each test.
+- [x] Collect matched desktop/idle captures from the same clean guest bytes,
+  workload, probe, host display and instrumentation. Use the accepted post-port
+  native runtime as baseline; do not recreate cancelled pre-extraction baselines.
+  Both runs have 16 acknowledged batches per desktop scenario, zero dropped
+  trace records and verified 240 Hz. Current fill/scroll/repaint means are higher;
+  this is evidence to investigate, not a desktop performance acceptance.
+- [ ] Resolve the desktop performance signal before claiming parity. Candidate
+  QEMU/Juke CPU stack captures complete; sampling perturbed acknowledgement counts,
+  so their timings are not performance evidence. The existing scalar fill loop is
+  a concrete hotspot, but its instructions match the accepted baseline and do not
+  establish the cause of the earlier delta. Split validated pixel-size cases into
+  constant-stride loops; Mac assembly now uses vector stores and all 39 QEMU fill
+  boundary cases pass. The changed candidate reduces mean fill-batch latency
+  from 26.14 to 10.61 ms, with all acknowledgements and no drops. Other desktop
+  distributions remain mixed; no universal parity claim. Linux native build and
+  all 39 boundary cases also pass. Preserve saved measurements; do not repeat them.
+- [ ] Rebuild and run final relevant formatting, Clippy, target-aware native/guest
+  checks after these changes settle. Carry exact payload hashes into acceptance;
+  do not relabel older results as evidence for rebuilt binaries.
+
+Installer acceptance is independent of the earlier extracted-package acceptance.
+The reported Unreal clipping is now closed by the corrected candidate's explicit
+client-edge checks on both hosts. Older whole-attempt activity oracles remain
+historical evidence and do not independently establish visual correctness.
 
 ## DreamGPU naming and public identity
 
@@ -246,11 +501,13 @@ Use subagents with explicit file ownership and one controller per runtime fixtur
 The extraction gates above preserve their recorded results. The broad completed
 checklist did not close these more specific gaps; track them independently:
 
-- [ ] Compile the maintained Unreal setup/control tools as C++23 with scoped
-  resource ownership and legacy OS import/ISA gates.
-- [ ] Arm sampling before guest process execution and stop at the observed result;
+- [x] Compile the maintained Unreal setup/control tools as C++23 with scoped
+  resource ownership and legacy OS import/ISA gates. Restored final PE4/API/scalar
+  checks in Rust; all five existing helper binaries and actual-source tests pass.
+- [x] Arm sampling before guest process execution and stop at the observed result;
   record actual event times and distinguish process lifetime from an unavailable
-  exact engine timing interval.
+  exact engine timing interval. One real Linux capture verifies profiler ACK order
+  and 1,263 event timestamps; two preflight failures aborted while suspended.
 - [ ] Deploy the final packaged frontend to Win98/Win2000 application directories,
   preserving original DLLs/hashes without reinstalling game assets; run targeted
   acceptance of those exact bytes on Mac and Linux.
@@ -291,6 +548,7 @@ presents and physical display latency are different metrics.
 Completion requires independent DreamGPU builds, Juke local consumption, relevant
 acceptance for replaced paths and removal of duplicate production implementations.
 Use Win2000 as initial reference; resume preserved Win98 instead of reinstalling.
-XP runtime requires an installed fixture and remains unverified until it passes.
+Installed XP has recorded extraction/runtime acceptance; the new system ICD and
+complete installer lifecycle still require their own XP-specific acceptance.
 Carry incomplete compatibility/performance work forward with its actual evidence;
 extraction and compilation do not complete missing runtime acceptance.

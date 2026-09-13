@@ -9,6 +9,7 @@ use std::{
     process::{Command, Stdio},
 };
 pub mod guest;
+pub mod installer;
 pub mod native;
 pub mod package_metadata;
 pub mod prepare;

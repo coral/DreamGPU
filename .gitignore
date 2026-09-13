@@ -93,3 +93,5 @@ CMakeUserPresets.json
 .vscode
 # Local editor configuration (may contain absolute workstation paths).
 /.vscode/settings.json
+private/*
+/private/

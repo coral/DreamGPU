@@ -306,7 +306,13 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     args: *const u8,
 ) -> u32 {
     let a = unsafe { &*api };
-    if !matches!(function, FEnum_glCopyTexImage2D | FEnum_glCopyTexSubImage2D) {
+    if !matches!(
+        function,
+        FEnum_glCopyTexImage2D
+            | FEnum_glCopyTexSubImage2D
+            | FEnum_glCopyTexImage1D
+            | FEnum_glCopyTexSubImage1D
+    ) {
         return DG_GL_ERROR_UNSUPPORTED;
     }
     let e = unsafe { crate::gl_validation::dreamgpu_gl_call_validate(function, args) };
@@ -314,21 +320,36 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
         return e;
     }
     let mut words = [0u32; 8];
-    for (i, w) in words.iter_mut().enumerate() {
+    let one = matches!(function, FEnum_glCopyTexImage1D | FEnum_glCopyTexSubImage1D);
+    let image = matches!(function, FEnum_glCopyTexImage1D | FEnum_glCopyTexImage2D);
+    for (i, w) in words.iter_mut().enumerate().take(if one {
+        if image {
+            7
+        } else {
+            6
+        }
+    } else {
+        8
+    }) {
         *w = u32::from_le(unsafe { args.add(i * 4).cast::<u32>().read_unaligned() });
     }
-    let image = function == FEnum_glCopyTexImage2D;
     let level = words[1] as usize;
-    let x = words[if image { 3 } else { 4 }] as i32;
-    let y = words[if image { 4 } else { 5 }] as i32;
-    let w = words[if image { 5 } else { 6 }];
-    let h = words[if image { 6 } else { 7 }];
-    let allocation = u64::from(w) * u64::from(h) * 4;
+    let x = words[if image || one { 3 } else { 4 }] as i32;
+    let y = words[if image || one { 4 } else { 5 }] as i32;
+    let w = words[if image || one { 5 } else { 6 }];
+    let h = if one {
+        1
+    } else {
+        words[if image { 6 } else { 7 }]
+    };
+    // Full GL1.1 CopyImage1D formats include RGBA16: conservatively charge eight bytes.
+    let allocation = u64::from(w) * u64::from(h) * if one { 8 } else { 4 };
     if has_drawable == 0 {
         return DG_GL_ERROR_TEXTURE;
     }
     let next = unsafe {
         if !image
+            && !one
             && (words[2] > (*t).widths[level]
                 || words[3] > (*t).heights[level]
                 || w > (*t).widths[level] - words[2]
@@ -354,7 +375,45 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
             return e;
         }
     }
-    if image {
+    if one && !image {
+        let mut border = 0;
+        gl!(
+            a,
+            dg_glGetTexLevelParameteriv(
+                GL_TEXTURE_1D,
+                level as i32,
+                GL_TEXTURE_BORDER,
+                &mut border
+            )
+        );
+        let offset = i64::from(words[2] as i32);
+        let width = i64::from(unsafe { (*t).widths[level] });
+        if !(0..=1).contains(&border)
+            || offset < -i64::from(border)
+            || offset + i64::from(w) > width - i64::from(border)
+        {
+            return DG_GL_ERROR_TEXTURE;
+        }
+    }
+    if one && image {
+        gl!(
+            a,
+            dg_glCopyTexImage1D(
+                words[0],
+                level as i32,
+                words[2],
+                x,
+                y,
+                w as i32,
+                words[6] as i32
+            )
+        );
+    } else if one {
+        gl!(
+            a,
+            dg_glCopyTexSubImage1D(words[0], level as i32, words[2] as i32, x, y, w as i32)
+        );
+    } else if image {
         gl!(
             a,
             dg_glCopyTexImage2D(
@@ -388,12 +447,54 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
         unsafe { query::store(errors, e) };
         return DG_GL_ERROR_TEXTURE;
     }
+    let mut defined_width = w;
+    let mut defined_allocation = allocation;
+    let mut defined_total = next;
+    if one && image {
+        let mut native_width = 0;
+        let mut native_border = 0;
+        gl!(
+            a,
+            dg_glGetTexLevelParameteriv(
+                GL_TEXTURE_1D,
+                level as i32,
+                GL_TEXTURE_WIDTH,
+                &mut native_width
+            )
+        );
+        gl!(
+            a,
+            dg_glGetTexLevelParameteriv(
+                GL_TEXTURE_1D,
+                level as i32,
+                GL_TEXTURE_BORDER,
+                &mut native_border
+            )
+        );
+        let error = gl!(a, dg_glGetError());
+        if error != 0 {
+            unsafe { query::store(errors, error) };
+            return DG_GL_ERROR_TEXTURE;
+        }
+        if native_width < 0
+            || native_width as u32 > w
+            || !(0..=1).contains(&native_border)
+            || native_width < 2 * native_border
+        {
+            return DG_GL_ERROR_HOST;
+        }
+        // Some native providers discard legacy border texels. Keep exact native
+        // dimensions; do not publish requested dimensions the object lacks.
+        defined_width = native_width as u32;
+        defined_allocation = u64::from(defined_width) * 8;
+        defined_total = next - allocation + defined_allocation;
+    }
     unsafe {
         dreamgpu_texture_written(api, t, serial);
         if image {
-            *total = next;
-            (*t).levels[level] = allocation;
-            (*t).widths[level] = w;
+            *total = defined_total;
+            (*t).levels[level] = defined_allocation;
+            (*t).widths[level] = defined_width;
             (*t).heights[level] = h;
             (*t).undefined_levels &= !(1 << level);
         }
@@ -488,6 +589,10 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         return GL_INVALID_VALUE;
     }
     if unsafe { (*t).target } == GL_TEXTURE_1D {
+        let _transfer = match unsafe { crate::pixels::Neutral::new(a) } {
+            Ok(v) => v,
+            Err(_) => return GL_INVALID_OPERATION,
+        };
         let Some(zero) = (unsafe { OwnedBytes::zeroed(m, w as usize * 4) }) else {
             return GL_OUT_OF_MEMORY;
         };
@@ -561,6 +666,10 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
             return e;
         }
     }
+    let _transfer = match unsafe { crate::pixels::Neutral::new(a) } {
+        Ok(v) => v,
+        Err(_) => return GL_INVALID_OPERATION,
+    };
     // Legacy non-renderable internal formats use a <=64 KiB zero tile. This is
     // allocation initialization only, never CPU rendering or presentation.
     let row = w as usize * 4;

@@ -1,4 +1,12 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
+/* The SPDX tag covers the original test harness. Its reference function below
+ * is copied with modifications (renaming) from float32_to_floatx80:
+ * Source: vendor/qemu/fpu/softfloat.c
+ *         @ 04c0f383f3f402a7a081b1169e2af69307fd2f07
+ * Upstream: https://gitlab.com/qemu-project/qemu
+ * The reference retains the upstream QEMU/SoftFloat licensing notices in the
+ * production source included below; it is not relicensed by the harness tag.
+ */
 /* Compile the production translation unit; retain its pre-fast-path algorithm
  * as an independent reference using the real canonicalization routines. */
 #include "fpu/softfloat.c"

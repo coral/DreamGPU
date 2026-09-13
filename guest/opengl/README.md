@@ -159,3 +159,69 @@ Windows exports; see the current run manifest for runtime acceptance.
 Current build and evidence navigation: [guest runtime](../README.md),
 [guest tools](../../tools/README.md), and [execution evidence](../../docs/progress.md).
 Historical benchmark paths above belong to the original Juke evidence tree.
+
+## System-loader development adapter
+
+`dgpuicd.dll` is a separate diagnostic build of the same frontend core with the
+Windows ICD calling interface. It is staged under `diagnostics/icd`, never
+registered by the production installer while `icd-coverage.json` says
+`production_registration_ready: false`. The existing `dgpugl.dll` route and its
+protocol are unchanged. This separation is a temporary validation artifact,
+not a second shipping renderer.
+
+The checked-in `icd-slots.inc` follows the pinned ReactOS 336-slot OpenGL 1.1
+layout, with provenance in the file. [icd-coverage.json](icd-coverage.json) records
+the exact current supported, adapted, partial and explicitly unsupported entries.
+Adapters include numeric color/normal/rectangle variants, fixed-state aliases,
+double-precision raster positions, client arrays and pixel operations added after
+the first loader proof. Tests check that this inventory matches the actual table.
+
+Bitmap and DrawPixels assemble one immutable image before native drawing, with a
+shared 64 MiB staging budget, checked stream ordering and teardown on failure.
+Packed index pixels are expanded within that budget when needed by the native
+driver. Transfer/map state and depth/stencil copies have exact-pixel checks on
+both hosts. Known native Mesa extreme integer-transfer, fractional negative zoom
+and legacy texture-border failures remain recorded as partial coverage;
+successful transport tests do not hide those rendering limitations.
+Unsupported calls set `GL_INVALID_OPERATION`, report Windows
+`ERROR_CALL_NOT_IMPLEMENTED`, and record the slot through
+`DgIcdUnsupportedSlot`; every slot has the correct function type. The adapter
+continues to report `0.0 DreamGPU development`, not GL 1.1 conformance. Context
+copy and unadvertised layer planes also fail explicitly. No incomplete slot is a
+NULL pointer or successful no-op.
+
+The matching diagnostic NT display binary is built as `dgpudisp_icd`, with output
+`diagnostics/icd/drivers/nt5/dgpudisp.dll`. Only that binary enables the bounded
+`OPENGL_GETINFO` reply: 520 bytes for the pinned ReactOS layout or 532 bytes
+for the actual Windows 2000 loader, UTF-16 `DGPUICD` at offset 8, interface
+version 2 and driver version 1. Both accepted extents are completely initialized.
+The diagnostic driver also provides its actual RGBA8/D24S8 pixel-format DDIs;
+GDI supplies the window identity for ownership-checked swaps through the existing
+ordered presentation transport. Window tracking is created only under the
+`WNDOBJ_SETUP` escape's engine lock.
+
+A disposable Windows 2000 cold fixture passed the normal Microsoft loader path:
+system-directory `opengl32.dll`, GDI hardware format 1, registered system-directory
+`dgpuicd.dll`, 8,192 exact red/green pixels and two swaps. The diagnostic registry
+receipt uses a newly created `OpenGLDrivers\DGPUICD` subkey with `Dll`, `Version=2`,
+`DriverVersion=1`, and `Flags=1`. The first 520-byte-only implementation was
+rejected before DLL loading by Windows 2000; actual loader ABI inspection isolated
+the 532-byte request. This is a bounded loader/pixel proof, not permission to
+register the incomplete implementation on an existing installation. Win98's
+separate `Control` layout/registration is not enabled by this NT implementation.
+Its diagnostic display driver instead builds from a checked donor patch in an
+independent object tree, with a 270-byte Win16 ANSI descriptor verified by the
+actual Watcom compiler. A disposable Win98 fixture also passes normal Microsoft
+system loading, 8,192 exact pixels and two swaps. Its Win32 discovery probe uses
+ExtEscape with the ANSI output size; ordinary Escape did not return the driver
+descriptor. The fixed diagnostic bootstrap preserves the prior registration and
+does not enable production installation.
+
+`tests/guest/opengl/test_icd.py` compiles the actual adapter under ASan/UBSan,
+checks the ABI order against the pinned donor, exercises real aliases and checks
+context/callback/error transitions. `tests/guest/nt/test_icd_info.py` checks the
+actual loader reply's size, bounds, zeroed string tail and overlapping input.
+Normal-loader rendering must be tested with `DGSYSGL.EXE`, linked through the
+system APIs and run without private API DLLs beside it. A pass proves the tested
+pixel operations only; remaining slots and complete visual/game correctness
+are separate requirements.

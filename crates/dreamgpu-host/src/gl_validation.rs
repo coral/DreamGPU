@@ -70,7 +70,8 @@ pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
         | GL_TEXTURE_WRAP_S
         | GL_TEXTURE_WRAP_T
         | GL_TEXTURE_BASE_LEVEL
-        | GL_TEXTURE_MAX_LEVEL => 1,
+        | GL_TEXTURE_MAX_LEVEL
+        | GL_TEXTURE_PRIORITY => 1,
         _ => 0,
     }
 }
@@ -109,12 +110,15 @@ pub(crate) fn index_bytes(kind: u32) -> u32 {
 }
 
 pub(crate) fn query_state_count(pname: u32) -> u32 {
-    if query_cap(pname) {
+    if query_cap(pname) || crate::pixels::state_name(pname) {
         return 1;
     }
     match pname {
         GL_MODELVIEW_MATRIX | GL_PROJECTION_MATRIX | GL_TEXTURE_MATRIX => 16,
-        GL_CURRENT_COLOR
+        GL_CURRENT_RASTER_COLOR
+        | GL_CURRENT_RASTER_TEXTURE_COORDS
+        | GL_CURRENT_RASTER_POSITION
+        | GL_CURRENT_COLOR
         | GL_CURRENT_SECONDARY_COLOR
         | GL_CURRENT_TEXTURE_COORDS
         | GL_VIEWPORT
@@ -131,7 +135,10 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_ALIASED_POINT_SIZE_RANGE
         | GL_ALIASED_LINE_WIDTH_RANGE
         | GL_LINE_WIDTH_RANGE => 2,
-        GL_PACK_SWAP_BYTES
+        GL_CURRENT_RASTER_INDEX
+        | GL_CURRENT_RASTER_POSITION_VALID
+        | GL_CURRENT_RASTER_DISTANCE
+        | GL_PACK_SWAP_BYTES
         | GL_PACK_LSB_FIRST
         | GL_PACK_ROW_LENGTH
         | GL_PACK_SKIP_ROWS
@@ -217,6 +224,19 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
 
 pub(crate) fn function_words(function: u32) -> u32 {
     match function {
+        FEnum_glBitmap | FEnum_glDrawPixels => DG_GL_FUNCTION_INLINE_DATA | 8,
+        FEnum_glPrioritizeTextures => DG_GL_FUNCTION_INLINE_DATA | 1,
+        FEnum_glAreTexturesResident => DG_GL_FUNCTION_QUERY | 3,
+        FEnum_glCopyTexImage1D => 7,
+        FEnum_glCopyTexSubImage1D => 6,
+        FEnum_glCopyPixels => 5,
+        FEnum_glGetPixelMapfv | FEnum_glGetPixelMapuiv | FEnum_glGetPixelMapusv => {
+            DG_GL_FUNCTION_QUERY | 2
+        }
+        FEnum_glPixelMapfv | FEnum_glPixelMapuiv | FEnum_glPixelMapusv => {
+            DG_GL_FUNCTION_INLINE_DATA | 2
+        }
+        FEnum_glPixelZoom | FEnum_glPixelTransferf | FEnum_glPixelTransferi => 2,
         FEnum_glGetError => DG_GL_FUNCTION_QUERY,
         FEnum_glGetBooleanv | FEnum_glGetIntegerv | FEnum_glGetFloatv | FEnum_glGetDoublev
         | FEnum_glGetString | FEnum_glIsEnabled | FEnum_glIsTexture | FEnum_glGetClipPlane => {
@@ -287,7 +307,7 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glClearColor | FEnum_glColor4f | FEnum_glViewport | FEnum_glScissor
         | FEnum_glRotatef | FEnum_glDepthRange | FEnum_glColorMask | FEnum_glVertex4f
         | FEnum_glTexCoord4f => 4,
-        FEnum_glCopyTexImage2D | FEnum_glCopyTexSubImage2D => 8,
+        FEnum_glRasterPos4d | FEnum_glCopyTexImage2D | FEnum_glCopyTexSubImage2D => 8,
         FEnum_glOrtho | FEnum_glFrustum => 12,
         FEnum_glLoadMatrixf | FEnum_glMultMatrixf => 16,
         FEnum_glLoadMatrixd | FEnum_glMultMatrixd => 32,
@@ -295,6 +315,9 @@ pub(crate) fn function_words(function: u32) -> u32 {
     }
 }
 
+fn copy_1d_internal_format(format: u32) -> bool {
+    matches!(format,GL_ALPHA|GL_LUMINANCE|GL_LUMINANCE_ALPHA|GL_INTENSITY|GL_RGB|GL_RGBA|GL_R3_G3_B2|0x803b..=0x8048|0x804a..=0x804d|0x804f..=0x805b)
+}
 fn texture_internal_format(format: u32) -> bool {
     matches!(
         format,
@@ -420,6 +443,26 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
             DG_GL_ERROR_UNSUPPORTED
         };
     }
+    if matches!(function, FEnum_glCopyTexImage1D | FEnum_glCopyTexSubImage1D) {
+        let image = function == FEnum_glCopyTexImage1D;
+        let width = a[5];
+        if a[0] != GL_TEXTURE_1D
+            || a[1] > DG_GL_MAX_TEXTURE_LEVEL
+            || width > DG_GL_MAX_TEXTURE_DIMENSION + 2
+        {
+            return DG_GL_ERROR_TEXTURE;
+        }
+        if image
+            && (a[6] > 1
+                || width < 2 * a[6]
+                || width - 2 * a[6] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
+                || a[2] <= 4
+                || !copy_1d_internal_format(a[2]))
+        {
+            return DG_GL_ERROR_TEXTURE;
+        }
+        return 0;
+    }
     let image = function == FEnum_glCopyTexImage2D;
     if !image && function != FEnum_glCopyTexSubImage2D {
         return 0;
@@ -487,6 +530,16 @@ fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     0
 }
 fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
+    if crate::pixel_image::image_function(function) {
+        return crate::pixel_image::validate(function, a, data);
+    }
+    if let Some(size) = crate::pixels::map_input(function) {
+        return if crate::pixels::map_count(a[0], a[1]) && data.len() == a[1] as usize * size {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     if vector_function(function) {
         let required = vector_bytes(function, a);
         return if required != 0 && data.len() == required as usize {
@@ -497,6 +550,13 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     }
     if matches!(function, FEnum_glDrawArrays | FEnum_glDrawElements) {
         return validate_arrays(function, a, data);
+    }
+    if function == FEnum_glPrioritizeTextures {
+        return if a[0] <= DG_GL_MAX_TEXTURES && data.len() as u64 == u64::from(a[0]) * 8 {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
     }
     if function == FEnum_glDeleteTextures {
         return if a[0] <= DG_GL_MAX_TEXTURES && data.len() as u64 == u64::from(a[0]) * 4 {
@@ -549,6 +609,18 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
     let [a, b, d] = a;
     let mut kind = DG_GL_RESULT_INT;
     let count = match function {
+        FEnum_glGetPixelMapfv | FEnum_glGetPixelMapuiv | FEnum_glGetPixelMapusv => {
+            kind = if function == FEnum_glGetPixelMapfv {
+                DG_GL_RESULT_FLOAT
+            } else {
+                DG_GL_RESULT_INT
+            };
+            if d == 0 && crate::pixels::map_count(a, b) {
+                b
+            } else {
+                0
+            }
+        }
         FEnum_glGetTexImage => {
             if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D)
                 && b & 0xffff <= DG_GL_MAX_TEXTURE_LEVEL
@@ -577,6 +649,10 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             } else {
                 0
             }
+        }
+        FEnum_glAreTexturesResident => {
+            kind = DG_GL_RESULT_BOOL;
+            5
         }
         FEnum_glGetError => u32::from(a == 0 && b == 0 && d == 0),
         FEnum_glIsTexture => {
@@ -615,7 +691,11 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 DG_GL_RESULT_INT
             };
             if d == 0 {
-                texture_params(a, b)
+                if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D) && b == GL_TEXTURE_RESIDENT {
+                    1
+                } else {
+                    texture_params(a, b)
+                }
             } else {
                 0
             }
@@ -779,6 +859,8 @@ pub unsafe extern "C" fn dreamgpu_gl_call_validate(function: u32, args: *const u
             | FEnum_glHint
             | FEnum_glCopyTexImage2D
             | FEnum_glCopyTexSubImage2D
+            | FEnum_glCopyTexImage1D
+            | FEnum_glCopyTexSubImage1D
     ) {
         return 0;
     }

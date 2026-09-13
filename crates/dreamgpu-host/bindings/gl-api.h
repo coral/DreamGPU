@@ -43,6 +43,23 @@
 #include "../../../vendor/qemu/include/standard-headers/dreamgpu/gpu.h"
 #include "../../../vendor/qemu/include/standard-headers/dreamgpu/cursor.h"
 typedef struct DreamGpuGlApi {
+    __typeof__(1 ? glAreTexturesResident : glAreTexturesResident) dg_glAreTexturesResident;
+    __typeof__(1 ? glPrioritizeTextures : glPrioritizeTextures) dg_glPrioritizeTextures;
+    __typeof__(1 ? glCopyTexImage1D : glCopyTexImage1D) dg_glCopyTexImage1D;
+    __typeof__(1 ? glCopyTexSubImage1D : glCopyTexSubImage1D) dg_glCopyTexSubImage1D;
+    __typeof__(1 ? glBitmap : glBitmap) dg_glBitmap;
+    __typeof__(1 ? glDrawPixels : glDrawPixels) dg_glDrawPixels;
+    __typeof__(1 ? glCopyPixels : glCopyPixels) dg_glCopyPixels;
+    __typeof__(1 ? glPixelZoom : glPixelZoom) dg_glPixelZoom;
+    __typeof__(1 ? glPixelTransferf : glPixelTransferf) dg_glPixelTransferf;
+    __typeof__(1 ? glPixelTransferi : glPixelTransferi) dg_glPixelTransferi;
+    __typeof__(1 ? glPixelMapfv : glPixelMapfv) dg_glPixelMapfv;
+    __typeof__(1 ? glPixelMapuiv : glPixelMapuiv) dg_glPixelMapuiv;
+    __typeof__(1 ? glPixelMapusv : glPixelMapusv) dg_glPixelMapusv;
+    __typeof__(1 ? glGetPixelMapfv : glGetPixelMapfv) dg_glGetPixelMapfv;
+    __typeof__(1 ? glGetPixelMapuiv : glGetPixelMapuiv) dg_glGetPixelMapuiv;
+    __typeof__(1 ? glGetPixelMapusv : glGetPixelMapusv) dg_glGetPixelMapusv;
+
     __typeof__(1 ? glAlphaFunc : glAlphaFunc) dg_glAlphaFunc;
     __typeof__(1 ? glBegin : glBegin) dg_glBegin;
     __typeof__(1 ? glBindTexture : glBindTexture) dg_glBindTexture;
@@ -169,6 +186,7 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glVertex2f : glVertex2f) dg_glVertex2f;
     __typeof__(1 ? glVertex3f : glVertex3f) dg_glVertex3f;
     __typeof__(1 ? glVertex4f : glVertex4f) dg_glVertex4f;
+    __typeof__(1 ? glRasterPos4d : glRasterPos4d) dg_glRasterPos4d;
     __typeof__(1 ? glVertexPointer : glVertexPointer) dg_glVertexPointer;
     __typeof__(1 ? glViewport : glViewport) dg_glViewport;
     __typeof__(1 ? glWaitSync : glWaitSync) dg_glWaitSync;
@@ -196,14 +214,17 @@ typedef struct DreamGpuGlApi {
     .dg_glClientWaitSync = glClientWaitSync, .dg_glClipPlane = glClipPlane,                        \
     .dg_glColor3f = glColor3f, .dg_glColor4f = glColor4f, .dg_glColor4fv = glColor4fv,             \
     .dg_glColorMask = glColorMask, .dg_glColorMaterial = glColorMaterial,                          \
-    .dg_glColorPointer = glColorPointer, .dg_glCopyTexImage2D = glCopyTexImage2D,                  \
-    .dg_glCopyTexSubImage2D = glCopyTexSubImage2D, .dg_glCullFace = glCullFace,                    \
-    .dg_glDeleteSync = glDeleteSync, .dg_glDeleteTextures = glDeleteTextures,                      \
-    .dg_glDepthFunc = glDepthFunc, .dg_glDepthMask = glDepthMask, .dg_glDepthRange = glDepthRange, \
-    .dg_glDisable = glDisable, .dg_glDisableClientState = glDisableClientState,                    \
-    .dg_glDrawArrays = glDrawArrays, .dg_glDrawBuffer = glDrawBuffer,                              \
-    .dg_glDrawBuffers = glDrawBuffers, .dg_glDrawElements = glDrawElements,                        \
-    .dg_glEnable = glEnable, .dg_glEnableClientState = glEnableClientState, .dg_glEnd = glEnd,     \
+    .dg_glAreTexturesResident = glAreTexturesResident,                                             \
+    .dg_glPrioritizeTextures = glPrioritizeTextures, .dg_glCopyTexImage1D = glCopyTexImage1D,      \
+    .dg_glCopyTexSubImage1D = glCopyTexSubImage1D, .dg_glColorPointer = glColorPointer,            \
+    .dg_glCopyTexImage2D = glCopyTexImage2D, .dg_glCopyTexSubImage2D = glCopyTexSubImage2D,        \
+    .dg_glCullFace = glCullFace, .dg_glDeleteSync = glDeleteSync,                                  \
+    .dg_glDeleteTextures = glDeleteTextures, .dg_glDepthFunc = glDepthFunc,                        \
+    .dg_glDepthMask = glDepthMask, .dg_glDepthRange = glDepthRange, .dg_glDisable = glDisable,     \
+    .dg_glDisableClientState = glDisableClientState, .dg_glDrawArrays = glDrawArrays,              \
+    .dg_glDrawBuffer = glDrawBuffer, .dg_glDrawBuffers = glDrawBuffers,                            \
+    .dg_glDrawElements = glDrawElements, .dg_glEnable = glEnable,                                  \
+    .dg_glEnableClientState = glEnableClientState, .dg_glEnd = glEnd,                              \
     .dg_glFenceSync = glFenceSync, .dg_glFinish = glFinish, .dg_glFlush = glFlush,                 \
     .dg_glFogf = glFogf, .dg_glFogfv = glFogfv, .dg_glFrontFace = glFrontFace,                     \
     .dg_glFrustum = glFrustum, .dg_glGenTextures = glGenTextures,                                  \
@@ -225,7 +246,12 @@ typedef struct DreamGpuGlApi {
     .dg_glMaterialfv = glMaterialfv, .dg_glMatrixMode = glMatrixMode,                              \
     .dg_glMultMatrixd = glMultMatrixd, .dg_glMultMatrixf = glMultMatrixf,                          \
     .dg_glNormal3f = glNormal3f, .dg_glNormal3fv = glNormal3fv,                                    \
-    .dg_glNormalPointer = glNormalPointer, .dg_glOrtho = glOrtho,                                  \
+    .dg_glNormalPointer = glNormalPointer, .dg_glOrtho = glOrtho, .dg_glPixelZoom = glPixelZoom,   \
+    .dg_glCopyPixels = glCopyPixels, .dg_glBitmap = glBitmap, .dg_glDrawPixels = glDrawPixels,     \
+    .dg_glPixelTransferf = glPixelTransferf, .dg_glPixelTransferi = glPixelTransferi,              \
+    .dg_glPixelMapfv = glPixelMapfv, .dg_glPixelMapuiv = glPixelMapuiv,                            \
+    .dg_glPixelMapusv = glPixelMapusv, .dg_glGetPixelMapfv = glGetPixelMapfv,                      \
+    .dg_glGetPixelMapuiv = glGetPixelMapuiv, .dg_glGetPixelMapusv = glGetPixelMapusv,              \
     .dg_glPixelStorei = glPixelStorei, .dg_glPointSize = glPointSize,                              \
     .dg_glPolygonMode = glPolygonMode, .dg_glPolygonOffset = glPolygonOffset,                      \
     .dg_glPopAttrib = glPopAttrib, .dg_glPopClientAttrib = glPopClientAttrib,                      \
@@ -246,9 +272,9 @@ typedef struct DreamGpuGlApi {
     .dg_glTexParameteri = glTexParameteri, .dg_glTexParameteriv = glTexParameteriv,                \
     .dg_glTexSubImage1D = glTexSubImage1D, .dg_glTexSubImage2D = glTexSubImage2D,                  \
     .dg_glTranslatef = glTranslatef, .dg_glVertex2f = glVertex2f, .dg_glVertex3f = glVertex3f,     \
-    .dg_glVertex4f = glVertex4f, .dg_glVertexPointer = glVertexPointer,                            \
-    .dg_glViewport = glViewport, .dg_glWaitSync = glWaitSync,                                      \
-    .dg_glGenFramebuffers = DG_API_GenFramebuffers,                                                \
+    .dg_glVertex4f = glVertex4f, .dg_glRasterPos4d = glRasterPos4d,                                \
+    .dg_glVertexPointer = glVertexPointer, .dg_glViewport = glViewport,                            \
+    .dg_glWaitSync = glWaitSync, .dg_glGenFramebuffers = DG_API_GenFramebuffers,                   \
     .dg_glDeleteFramebuffers = DG_API_DeleteFramebuffers,                                          \
     .dg_glBindFramebuffer = DG_API_BindFramebuffer,                                                \
     .dg_glFramebufferTexture2D = DG_API_FramebufferTexture2D,                                      \

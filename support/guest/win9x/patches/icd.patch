@@ -1,0 +1,74 @@
+--- a/control.c
++++ b/control.c
+@@ -90,33 +90,9 @@
+ 
+ #define OPENGL_ICD_SIZE sizeof(opengl_icd_t)
+ 
+-/* software OpenGL (Mesa3D softpipe/llvmpipe) */
+-const static opengl_icd_t software_icd = {
+-  0x2,
+-  0x1,
+-  "SOFTWARE"
+-};
+-
+-/* Mesa3D SVGA3D OpengGL */
+-const static opengl_icd_t qemu3dfx_icd = {
+-  0x2,
+-  0x1,
+-  "QEMUFX"
+-};
+-
+-/* Mesa3D SVGA3D OpengGL */
+-const static opengl_icd_t vmwsvga_icd = {
+-  0x2,
+-  0x1,
+-  "VMWSVGA"
+-};
+-
+-/* Mesa3D VirGL OpengGL */
+-const static opengl_icd_t virgl_icd = {
+-  0x2,
+-  0x1,
+-  "VIRGL"
+-};
++/* Diagnostic-only source variant: preserve the donor Win16 response ABI. */
++#include "dg-icd16.h"
++typedef char dg_icd_matches_donor_size[(sizeof(opengl_icd_t) == sizeof(DG_ICD_INFO16)) ? 1 : -1];
+ 
+ /* VIDEOPARAMETERS */
+ static VIDEOPARAMETERS_t tvsetup = {
+@@ -216,31 +192,9 @@
+       }
+       break;
+     } /* QUERYESCSUPPORT */
+-    case OPENGL_GETINFO: /* input: NULL, output: opengl_icd_t */
+-    {
+-      if((hda->flags & FB_ACCEL_VMSVGA3D) && ((hda->flags & FB_FORCE_SOFTWARE) == 0))
+-      {
+-        _fmemcpy(lpOutput, &vmwsvga_icd, OPENGL_ICD_SIZE);
+-        rc = 1;
+-      }
+-      else if((hda->flags & FB_ACCEL_VIRGL) && ((hda->flags & FB_FORCE_SOFTWARE) == 0))
+-      {
+-        _fmemcpy(lpOutput, &virgl_icd, OPENGL_ICD_SIZE);
+-        rc = 1;
+-      }
+-      else if((hda->flags & FB_ACCEL_QEMU3DFX) && ((hda->flags & FB_FORCE_SOFTWARE) == 0))
+-      {
+-        _fmemcpy(lpOutput, &qemu3dfx_icd, OPENGL_ICD_SIZE);
+-        rc = 1;
+-      }
+-      else
+-      {
+-      	if(drv_is_p2())
+-      	{
+-        	_fmemcpy(lpOutput, &software_icd, OPENGL_ICD_SIZE);
+-        	rc = 1;
+-        }
+-      }
++    case OPENGL_GETINFO: /* input: NULL, output: donor's ANSI opengl_icd_t */
++    {
++      rc = DgIcdGetInfo16(lpOutput);
+       break;
+     } /* OPENGL_GETINFO */
+     case DCICOMMAND: /* input ptr DCICMD */

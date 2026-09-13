@@ -198,7 +198,13 @@ ULONG DgBindWindow(SURFOBJ *surface, ULONG input_bytes, PVOID input, ULONG outpu
         /* GDI holds the window/device lock in WNDOBJ_SETUP. Do not keep our
          * semaphore across an engine call that can issue a callback. */
         semaphore.release();
-        object = EngCreateWnd(surface, window->Window, WindowChanged, WO_RGN_CLIENT, 0);
+        object = EngCreateWnd(surface, window->Window, WindowChanged, WO_RGN_CLIENT,
+#ifdef DG_ICD_DIAGNOSTIC
+                              1
+#else
+                              0
+#endif
+        );
         semaphore.acquire(dev->WindowLock);
         if (!object || object == (WNDOBJ *)-1) {
             EngFreeMem(window);
@@ -312,6 +318,34 @@ ULONG APIENTRY DrvDrawEscape(SURFOBJ *surface, ULONG escape, CLIPOBJ *clip, RECT
 done:
     return result;
 }
+
+#ifdef DG_ICD_DIAGNOSTIC
+/* GDI supplies and locks this WNDOBJ. Validate identity against our owned
+ * table before dereferencing consumer state; another driver's WNDOBJ is not
+ * a DreamGPU binding. The ICD runtime finishes commands before this swap.
+ * Our transport queues presentation after the submitted command sequence. */
+BOOL APIENTRY DrvSwapBuffers(SURFOBJ *surface, WNDOBJ *object) {
+    if (!surface || !surface->dhpdev || !object)
+        return FALSE;
+    PPDEV dev = (PPDEV)surface->dhpdev;
+    if (surface->hsurf != dev->hSurfEng || !dev->WindowLock || !dev->Kernel.Present ||
+        !dev->Kernel.Owner)
+        return FALSE;
+    WindowSemaphore semaphore;
+    semaphore.acquire(dev->WindowLock);
+    for (ULONG i = 0; i < DG_GL_MAX_DRAWABLES; ++i) {
+        auto *window = (DG_TRACKED_WINDOW *)dev->Windows[i];
+        if (!window || window->Object != object)
+            continue;
+        if (!window->Valid || !window->Binding ||
+            dev->Kernel.Owner(dev->Kernel.Context, window->Present.Client) !=
+                window->ProcessIdentity)
+            return FALSE;
+        return dev->Kernel.Present(dev->Kernel.Context, &window->Present) == DG_ESCAPE_OK;
+    }
+    return FALSE;
+}
+#endif
 
 VOID DgDeleteWindows(PPDEV dev) {
     WindowSemaphore semaphore;

@@ -252,3 +252,79 @@ fn scalar_buffer_selection_hints_copy_texture_and_null_abi() {
         assert_eq!(dreamgpu_gl_call_validate(FEnum_glEnd, core::ptr::null()), 0);
     }
 }
+
+#[test]
+fn raster_metadata_and_typed_state_sizes() {
+    assert_eq!(function_words(FEnum_glRasterPos4d), 8);
+    // Other catalogue enums are not wire implementations; adapters canonicalize.
+    assert_eq!(function_words(FEnum_glRasterPos4dv), u32::MAX);
+    for (state, count) in [
+        (GL_CURRENT_RASTER_POSITION, 4),
+        (GL_CURRENT_RASTER_COLOR, 4),
+        (GL_CURRENT_RASTER_TEXTURE_COORDS, 4),
+        (GL_CURRENT_RASTER_INDEX, 1),
+        (GL_CURRENT_RASTER_POSITION_VALID, 1),
+        (GL_CURRENT_RASTER_DISTANCE, 1),
+    ] {
+        for (function, size) in [
+            (FEnum_glGetBooleanv, 1),
+            (FEnum_glGetIntegerv, 4),
+            (FEnum_glGetFloatv, 4),
+            (FEnum_glGetDoublev, 8),
+        ] {
+            assert_eq!(query_validate(function, [state, 0, 0]), 0);
+            assert_eq!(query_result_bytes(function, [state, 0, 0]), count * size);
+        }
+    }
+}
+
+#[test]
+fn pixel_maps_validate_types_dimensions_and_exact_payload_bytes() {
+    for (function, size) in [
+        (FEnum_glPixelMapfv, 4),
+        (FEnum_glPixelMapuiv, 4),
+        (FEnum_glPixelMapusv, 2),
+    ] {
+        assert_eq!(function_words(function), DG_GL_FUNCTION_INLINE_DATA | 2);
+        let mut a = [0; 8];
+        a[0] = GL_PIXEL_MAP_R_TO_R;
+        a[1] = 3;
+        assert_eq!(data_validate(function, &a, &vec![0; 3 * size]), 0);
+        for bytes in [0, 3 * size - 1, 3 * size + 1] {
+            assert_eq!(
+                data_validate(function, &a, &vec![0; bytes]),
+                DG_GL_ERROR_BATCH
+            );
+        }
+        for count in [0, 257, u32::MAX] {
+            a[1] = count;
+            assert_eq!(data_validate(function, &a, &[]), DG_GL_ERROR_BATCH);
+        }
+        a[0] = GL_PIXEL_MAP_S_TO_S;
+        a[1] = 3;
+        assert_eq!(
+            data_validate(function, &a, &vec![0; 3 * size]),
+            DG_GL_ERROR_BATCH
+        );
+        a[0] = u32::MAX;
+        assert_eq!(
+            data_validate(function, &a, &vec![0; 3 * size]),
+            DG_GL_ERROR_BATCH
+        );
+    }
+    for function in [
+        FEnum_glGetPixelMapfv,
+        FEnum_glGetPixelMapuiv,
+        FEnum_glGetPixelMapusv,
+    ] {
+        assert_eq!(
+            query_result_bytes(function, [GL_PIXEL_MAP_R_TO_R, 256, 0]),
+            1024
+        );
+        assert_eq!(
+            query_result_bytes(function, [GL_PIXEL_MAP_R_TO_R, 257, 0]),
+            0
+        );
+        assert_eq!(query_result_bytes(function, [GL_PIXEL_MAP_R_TO_R, 2, 1]), 0);
+    }
+}

@@ -3,6 +3,7 @@
 use crate::gl_api::*;
 use core::ffi::c_void;
 pub(crate) mod names;
+pub(crate) mod control;
 
 #[repr(C)]
 pub struct Texture {

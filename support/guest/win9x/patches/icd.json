@@ -1,0 +1,20 @@
+{
+  "schema": 1,
+  "upstream": {
+    "vmdisp9x": "718b3d51a1532fe1ba2e133cf76186f1a609d35e"
+  },
+  "purpose": "Diagnostic-only Win98 ANSI ICD discovery; production control.c remains byte-identical",
+  "patches": [
+    {
+      "file": "icd.patch",
+      "sha256": "533586607de7b0b5019417374643a5ff0c11eabe2212a7014bcd305e2d7c67da"
+    }
+  ],
+  "files": {
+    "control.c": {
+      "before_sha256": "96c76b324f9c8ee8fb1fc147f3102f1d90fee91fc5bc773ceefd12b8b82e6c37",
+      "after_sha256": "c7cef6a0404b5c21f38234e411163bc10458ac22adbc962d3485c4c2592b01bd",
+      "normalize_lf": true
+    }
+  }
+}

@@ -160,6 +160,7 @@ unsafe extern "C" fn geti(name: u32, out: *mut i32) {
         let v = v.borrow();
         unsafe {
             *out = match name {
+                GL_MAP_COLOR | GL_MAP_STENCIL | GL_INDEX_SHIFT | GL_INDEX_OFFSET => 0,
                 GL_READ_FRAMEBUFFER_BINDING => v.read_fb,
                 GL_DRAW_FRAMEBUFFER_BINDING => v.draw_fb,
                 _ => v.pack[PACK.iter().position(|x| *x == name).unwrap()],
@@ -170,8 +171,23 @@ unsafe extern "C" fn geti(name: u32, out: *mut i32) {
 unsafe extern "C" fn seti(name: u32, value: i32) {
     N.with(|v| v.borrow_mut().pack[PACK.iter().position(|x| *x == name).unwrap()] = value)
 }
-unsafe extern "C" fn getf(_: u32, out: *mut f32) {
-    N.with(|v| unsafe { core::ptr::copy_nonoverlapping(v.borrow().color.as_ptr(), out, 4) })
+unsafe extern "C" fn getf(name: u32, out: *mut f32) {
+    if name == GL_COLOR_CLEAR_VALUE {
+        N.with(|v| unsafe { core::ptr::copy_nonoverlapping(v.borrow().color.as_ptr(), out, 4) });
+    } else {
+        unsafe {
+            out.write(
+                if matches!(
+                    name,
+                    GL_RED_SCALE | GL_GREEN_SCALE | GL_BLUE_SCALE | GL_ALPHA_SCALE | GL_DEPTH_SCALE
+                ) {
+                    1.
+                } else {
+                    0.
+                },
+            )
+        };
+    }
 }
 unsafe extern "C" fn getb(_: u32, out: *mut u8) {
     N.with(|v| unsafe { core::ptr::copy_nonoverlapping(v.borrow().mask.as_ptr(), out, 4) })
@@ -248,6 +264,8 @@ fn api() -> DreamGpuGlApi {
     a.dg_glTexSubImage2D = Some(subimage);
     a.dg_glPixelStorei = Some(seti);
     a.dg_glGetTexImage = Some(read_image);
+    a.dg_glPixelTransferi = Some(pixel_transfer_i);
+    a.dg_glPixelTransferf = Some(pixel_transfer_f);
     a
 }
 #[derive(Default)]
@@ -279,6 +297,7 @@ fn memory(a: &DreamGpuGlApi, alloc: &mut Allocator) -> Memory {
     Memory {
         api: a,
         bytes: null_mut(),
+        image_bytes: core::ptr::null_mut(),
         count: null_mut(),
         opaque: (alloc as *mut Allocator).cast(),
         allocate,
@@ -603,4 +622,164 @@ fn zero_native_names_never_clear_default_framebuffer_or_publish_drawable() {
         });
         assert_eq!((d.color, d.front, d.depth), (0, 0, 0));
     }
+}
+
+unsafe extern "C" fn pixel_transfer_i(_: u32, _: i32) {}
+unsafe extern "C" fn pixel_transfer_f(_: u32, _: f32) {}
+
+unsafe extern "C" fn copy_image_1d(t: u32, l: i32, f: u32, x: i32, y: i32, w: i32, b: i32) {
+    assert_eq!(b, 1);
+    unsafe { copy_image(t, l, f, x, y, w, 1, b) };
+}
+unsafe extern "C" fn copy_sub_1d(_: u32, _: i32, offset: i32, x: i32, y: i32, w: i32) {
+    N.with(|v| v.borrow_mut().copies.push((offset, x, y, w)));
+}
+unsafe extern "C" fn border_1d(t: u32, _: i32, p: u32, out: *mut i32) {
+    assert_eq!(t, GL_TEXTURE_1D);
+    unsafe {
+        out.write(match p {
+            GL_TEXTURE_BORDER => 1,
+            GL_TEXTURE_WIDTH => 6,
+            _ => panic!("unexpected level query"),
+        })
+    };
+}
+
+#[test]
+fn one_dimensional_copy_preserves_border_signed_offsets_and_failed_allocation() {
+    let mut a = api();
+    a.dg_glCopyTexImage1D = Some(copy_image_1d);
+    a.dg_glCopyTexSubImage1D = Some(copy_sub_1d);
+    a.dg_glGetTexLevelParameteriv = Some(border_1d);
+    N.with(|v| *v.borrow_mut() = Native::default());
+    let mut t = Texture {
+        target: GL_TEXTURE_1D,
+        ..Texture::default()
+    };
+    let mut total = 0;
+    let mut errors = 0;
+    let args = [GL_TEXTURE_1D, 0, GL_RGBA8, (-2i32) as u32, 3, 6, 1]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_copy(
+                &a,
+                &mut t,
+                &mut total,
+                &mut errors,
+                1,
+                1,
+                FEnum_glCopyTexImage1D,
+                args.as_ptr(),
+            )
+        },
+        0
+    );
+    assert_eq!((total, t.widths[0], t.heights[0]), (48, 6, 1));
+    N.with(|v| assert_eq!(v.borrow().copies, [(-2, 3, 6, 1)]));
+    let sub = [GL_TEXTURE_1D, 0, (-1i32) as u32, 2, 3, 6]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_copy(
+                &a,
+                &mut t,
+                &mut total,
+                &mut errors,
+                1,
+                1,
+                FEnum_glCopyTexSubImage1D,
+                sub.as_ptr(),
+            )
+        },
+        0
+    );
+    N.with(|v| assert_eq!(v.borrow().copies.last(), Some(&(-1, 2, 3, 6))));
+    let mut bad = sub.clone();
+    bad[8..12].copy_from_slice(&(-2i32).to_le_bytes());
+    let version = t.version;
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_copy(
+                &a,
+                &mut t,
+                &mut total,
+                &mut errors,
+                1,
+                1,
+                FEnum_glCopyTexSubImage1D,
+                bad.as_ptr(),
+            )
+        },
+        DG_GL_ERROR_TEXTURE
+    );
+    assert_eq!(t.version, version);
+    N.with(|v| v.borrow_mut().fail_copy = true);
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_copy(
+                &a,
+                &mut t,
+                &mut total,
+                &mut errors,
+                1,
+                1,
+                FEnum_glCopyTexImage1D,
+                args.as_ptr(),
+            )
+        },
+        DG_GL_ERROR_TEXTURE
+    );
+    assert_eq!((total, t.widths[0], t.version), (48, 6, version));
+    assert_ne!(errors, 0);
+}
+
+unsafe extern "C" fn stripped_border_1d(_: u32, _: i32, p: u32, out: *mut i32) {
+    unsafe {
+        out.write(match p {
+            GL_TEXTURE_WIDTH => 4,
+            GL_TEXTURE_BORDER => 0,
+            _ => panic!("unexpected native query"),
+        })
+    };
+}
+#[test]
+fn one_dimensional_metadata_tracks_native_border_stripping_without_fabricating_storage() {
+    let mut a = api();
+    a.dg_glCopyTexImage1D = Some(copy_image_1d);
+    a.dg_glGetTexLevelParameteriv = Some(stripped_border_1d);
+    N.with(|v| *v.borrow_mut() = Native::default());
+    let mut t = Texture {
+        target: GL_TEXTURE_1D,
+        ..Texture::default()
+    };
+    let mut total = 0;
+    let mut errors = 0;
+    let wire = [GL_TEXTURE_1D, 0, GL_RGBA16, 0, 0, 6, 1]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect::<Vec<_>>();
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_copy(
+                &a,
+                &mut t,
+                &mut total,
+                &mut errors,
+                1,
+                1,
+                FEnum_glCopyTexImage1D,
+                wire.as_ptr(),
+            )
+        },
+        0
+    );
+    assert_eq!(
+        (total, t.levels[0], t.widths[0], t.heights[0]),
+        (32, 32, 4, 1)
+    );
 }

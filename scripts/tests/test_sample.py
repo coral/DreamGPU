@@ -25,7 +25,10 @@ class SampleTests(unittest.TestCase):
 
     def launch(self,folder,code):
         original=subprocess.Popen;item=sampler.MeasurementSample({},Path(folder))
-        def child(args,**kwargs):return original([sys.executable,'-c',code],**kwargs)
+        def child(args,**kwargs):
+            path=args[args.index('-file')+1] if '-file' in args else args[args.index('-o')+1]
+            self.command=args
+            return original([sys.executable,'-c','from pathlib import Path;Path('+repr(path)+').write_text("profile records");'+code],**kwargs)
         with patch.object(sampler,'owned_qemu',return_value=123),patch.object(sampler.subprocess,'Popen',side_effect=child):item.start()
         return item
 
@@ -52,5 +55,41 @@ class SampleTests(unittest.TestCase):
             report=item.finish(start)
             self.assertLess(time.monotonic()-start,2);self.assertFalse(report['valid_for_measured_rendering'])
             self.assertIsNotNone(item.process.poll());self.assertFalse(item.thread.is_alive());self.assertTrue(item.log.closed)
+
+    def test_qmp_prefix_collision_is_not_fixture_ownership(self):
+        state={'pid':31,'native':'/private/frozen/qemu','qmp':'/tmp/owned-qmp'}
+        with patch.object(sampler.subprocess,'check_output',side_effect=[
+                '41','31 /private/frozen/qemu -qmp unix:/tmp/owned-qmp-other,server=on']):
+            with self.assertRaisesRegex(ValueError,'exact fixture'):sampler.owned_qemu(state)
+        with patch.object(sampler.subprocess,'check_output',side_effect=[
+                '41','31 /private/frozen/qemu -qmp unix:/tmp/owned-qmp,server=on,wait=off']):
+            self.assertEqual(sampler.owned_qemu(state),41)
+
+    def test_control_and_event_monitors_preserve_exact_child_ownership(self):
+        state={'pid':31,'native':'/private/frozen/qemu','qmp':'/tmp/owned-qmp'}
+        command='31 /private/frozen/qemu -qmp unix:/tmp/owned-events-qmp,server,nowait -qmp unix:/tmp/owned-qmp,server,nowait'
+        with patch.object(sampler.subprocess,'check_output',side_effect=['41',command]):
+            self.assertEqual(sampler.owned_qemu(state),41)
+        for changed in [command.replace('31 ', '99 ', 1),
+                        command.replace('/tmp/owned-qmp,', '/tmp/other-qmp,'),
+                        command+' -qmp unix:/tmp/owned-qmp,server=on',
+                        command+' -qmp unix:/tmp/owned-events-qmp,server=on',
+                        command+' -qmp /tmp/a -qmp /tmp/b -qmp /tmp/c']:
+            with self.subTest(command=changed),patch.object(sampler.subprocess,'check_output',side_effect=['41',changed]):
+                with self.assertRaisesRegex(ValueError,'exact fixture'):sampler.owned_qemu(state)
+        with patch.object(sampler.subprocess,'check_output',side_effect=['41 42',command,command]):
+            with self.assertRaisesRegex(ValueError,'exact fixture'):sampler.owned_qemu(state)
+
+    def test_linux_uses_bounded_software_event_and_real_output_before_claim(self):
+        with tempfile.TemporaryDirectory() as folder, patch.object(sampler.sys,'platform','linux'),\
+                patch.object(sampler.shutil,'which',side_effect=lambda n:'/usr/bin/'+n):
+            item=self.launch(folder,'pass');self.assertTrue(item.done.wait(timeout=2))
+            self.assertTrue(item.finish(time.monotonic())['valid_for_measured_rendering'])
+            self.assertEqual(self.command[self.command.index('-e')+1],'cpu-clock')
+            self.assertIn('8s',self.command)
+            self.assertEqual(self.command[-3:],['--','/bin/sleep','2'])
+            Path(item.report['path']).unlink()
+            self.assertFalse(item.finish(time.monotonic())['valid_for_measured_rendering'])
+            with self.assertRaisesRegex(RuntimeError,'single-use'):item.start()
 
 if __name__=='__main__':unittest.main()

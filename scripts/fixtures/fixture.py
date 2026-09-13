@@ -47,6 +47,13 @@ def digest(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
+def controller_identity():
+    """Record controller inputs separately from the frozen guest/native binaries."""
+    paths = ('scripts/fixtures/fixture.py', 'scripts/benchmarks/bench.py',
+             'scripts/benchmarks/halflife.py', 'scripts/automation/vm.py')
+    return {path: digest(ROOT / path) for path in paths}
+
+
 def write_json(path, value):
     Path(path).write_text(json.dumps(value, indent=2) + '\n')
 
@@ -62,6 +69,31 @@ def checked_artifact(value):
     if actual != value['sha256']:
         raise ValueError(f'Artifact hash mismatch: {path}')
     return path
+
+
+def checked_firmware(value):
+    """Validate an explicit flat firmware directory without following member links."""
+    if value is None:
+        return None
+    if not isinstance(value, dict) or not isinstance(value.get('path'), str) or not value['path']:
+        raise ValueError('Firmware requires a directory path and nonempty file hash mapping')
+    files = value.get('files')
+    if not isinstance(files, dict) or not files:
+        raise ValueError('Firmware requires a nonempty file hash mapping')
+    directory = resolve(value['path'])
+    if not directory.is_dir():
+        raise ValueError(f'Firmware directory is missing: {directory}')
+    for name, expected in files.items():
+        if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9][A-Za-z0-9_.,-]*', name):
+            raise ValueError('Firmware members must be safe basenames, not paths')
+        if not isinstance(expected, str) or not re.fullmatch(r'[a-f0-9]{64}', expected):
+            raise ValueError(f'Firmware member needs a lowercase SHA256: {name}')
+        member = directory / name
+        if member.is_symlink() or not member.is_file():
+            raise ValueError(f'Firmware member must be a regular file without symlink escape: {member}')
+        if digest(member) != expected:
+            raise ValueError(f'Firmware hash mismatch: {member}')
+    return {'path': str(directory), 'files': dict(files)}
 
 
 def replace_setting(text, table, key, value):
@@ -118,6 +150,7 @@ def prepare(manifest_path, output):
         validate_guest_program(guest_program)
         if snapshot is not None or login_delay is None:
             raise ValueError('A one-shot guest bootstrap command requires cold boot and a recorded login delay')
+    firmware = checked_firmware(manifest.get('firmware'))
     source = resolve(manifest['source_fixture'])
     if not (source / 'resources/fonts').is_dir():
         raise ValueError('Fixture source needs resources/fonts before preparing a Juke launch')
@@ -140,8 +173,9 @@ def prepare(manifest_path, output):
     output.mkdir(parents=True, exist_ok=False)
     (output / 'manifest-input.json').write_bytes(source_bytes)
     report = {'schema_version': 1, 'state': 'preparing', 'source_manifest_sha256': hashlib.sha256(source_bytes).hexdigest(),
+              'preparation_controller': controller_identity(),
               'source': manifest, 'fixture': str(output), 'machine': machine, 'snapshot': snapshot,
-              'native': str(native), 'app': str(app), 'launcher': str(launcher),
+              'native': str(native), 'app': str(app), 'launcher': str(launcher), 'firmware': firmware,
               'created_utc': datetime.now(timezone.utc).isoformat(),
               'source_image_check': {'exit_code': check.returncode, 'output': check.stdout + check.stderr,
                                      'note': 'Exit 3 is leaked allocation only; source is never repaired.'}}
@@ -188,7 +222,7 @@ def prepare(manifest_path, output):
         (machine_dir / 'machine.toml').write_text(text)
         if (source / 'resources').exists():
             (output / 'resources').symlink_to((source / 'resources').resolve(), target_is_directory=True)
-        args = [str(native), '-S', *(['-loadvm', snapshot] if snapshot else []), '-D', str(output / 'native-trace.log'),
+        args = [str(native), '-S', *(['-L', firmware['path']] if firmware else []), *(['-loadvm', snapshot] if snapshot else []), '-D', str(output / 'native-trace.log'),
                 '-chardev', f'socket,id=dgpuben,path={serial},server=on,wait=off',
                 '-serial', 'chardev:dgpuben', '-qtest', f'unix:{qtest},server=on,wait=off']
         wrapper = output / 'qemu-system-i386'
@@ -321,6 +355,7 @@ def ready(endpoint, timeout, expected_identity=None, previous_instance=None):
     if previous_instance is not None and (not expected_identity or not re.fullmatch(r'[0-9a-f]{32}',previous_instance)):
         raise ValueError('Replacement readiness needs a build hash and prior process identity')
     request = secrets.token_hex(16)
+    last_response = 'none'
     with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as connection:
         connection.settimeout(timeout)
         connection.connect(endpoint)
@@ -340,6 +375,7 @@ def ready(endpoint, timeout, expected_identity=None, previous_instance=None):
             except hl.GuestError as error:
                 if not expected_identity or error.code!='bad-command':raise
                 kind,identity='OLD_RUNNER',None
+            last_response = f'{kind} {str(identity)[:160]}'
             if expected_identity:
                 if previous_instance and kind=='INSTANCE':
                     inspected=decode_instance(identity)
@@ -350,7 +386,8 @@ def ready(endpoint, timeout, expected_identity=None, previous_instance=None):
             if kind != 'READY':
                 raise hl.ProtocolError('Expected runner READY')
             return request
-    raise TimeoutError('Serial runner discovery deadline expired')
+    raise TimeoutError(f'Serial runner discovery deadline expired; expected '
+                       f'{expected_identity or "READY"}; last response: {last_response}')
 
 
 def resume_guest(endpoint):
@@ -384,8 +421,15 @@ def start(output, timeout=60):
         raise ValueError('Start requires a newly prepared fixture; never silently restore over a previous run')
     for artifact in ('native', 'app', 'launcher'):
         checked_artifact(report['source'][artifact])
+    firmware = checked_firmware(report['source'].get('firmware'))
+    if firmware != report.get('firmware'):
+        raise ValueError('Firmware directory identity changed after fixture preparation')
     if Path(report['serial']).exists():
         raise ValueError('Serial socket already exists; another fixture may own it')
+    # A controller fix may legitimately differ from the one which prepared the
+    # disk. Preserve both identities instead of silently attributing its behavior
+    # to the same guest/native build or overwriting the preparation evidence.
+    report['startup_controller'] = controller_identity()
     began = time.monotonic()
     with (output / 'juke.log').open('xb') as log:
         process = subprocess.Popen([report['launcher'], '--config-dir', str(output), '-c', '-m', report['machine']],

@@ -128,6 +128,8 @@ class ProtocolTests(unittest.TestCase):
         report,_=self.run_server(behavior,demo='utd3d',probe=True,on_phase=seen.append)
         self.assertEqual(report['state'],'completed');self.assertEqual(seen,['MEASURING','MEASURED'])
         self.assertEqual(set(report['measurement_phases']),set(seen))
+        boundaries=report['measurement_phases']
+        self.assertLessEqual(boundaries['MEASURING']['host_monotonic_seconds'],boundaries['MEASURED']['host_monotonic_seconds'])
 
     def test_game_callback_failure_still_collects_owned_result(self):
         raw=b'PASS automated utglide: owned game completed\n'
@@ -217,7 +219,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertIn('timedemo boundary',report['error']['message'])
 
     def test_probe_requires_matching_api_pass(self):
-        for name in ('win9xinstall', 'win9xdiag', 'd3d6', 'd3d7', 'd3d8', 'd3d9', 'glide', 'windows', 'modes', 'win98', 'utlogs', 'utdsetup', 'utd3d', 'ntupdate'):
+        for name in ('sysgl', 'sysglide', 'setupcheck', 'win9xinstall', 'win9xdiag', 'd3d6', 'd3d7', 'd3d8', 'd3d9', 'glide', 'windows', 'modes', 'win98', 'utlogs', 'utdsetup', 'utd3d', 'ntupdate'):
             with self.subTest(name=name):
                 raw = f'PASS automated {name}: real GPU pixels\n'.encode()
                 self.assertEqual(hl.parse_probe(raw, name), {'probe': name, 'passed': True})

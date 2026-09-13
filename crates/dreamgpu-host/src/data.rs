@@ -110,6 +110,40 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
     let api = unsafe { &*m.api };
     let texture = unsafe { bound(state, a[0]) };
     let errors = unsafe { addr_of_mut!((*state).guest_errors) };
+    if crate::pixel_image::image_function(function) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        return unsafe {
+            crate::pixel_image::stream(m, addr_of_mut!((*state).image), errors, function, &a, data)
+        };
+    }
+    let pending = unsafe { crate::pixel_image::interleave(m, addr_of_mut!((*state).image)) };
+    if pending != 0 {
+        return pending;
+    }
+    if function == FEnum_glPrioritizeTextures {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        return unsafe {
+            crate::texture::control::prioritize(api, (*state).textures, errors, data)
+        }
+        .map_or_else(|e| e, |()| 0);
+    }
+    if crate::pixels::map_input(function).is_some() {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        return unsafe { crate::pixels::set_map(api, errors, function, a[0], a[1], data) }
+            .map_or_else(|e| e, |()| 0);
+    }
     if validation::dreamgpu_gl_vector_function(function) != 0 {
         let parameter = matches!(function, FEnum_glTexParameterfv | FEnum_glTexParameteriv);
         if parameter {

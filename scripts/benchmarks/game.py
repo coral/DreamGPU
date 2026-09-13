@@ -114,7 +114,7 @@ def ensure_host_visible(socket,pid,evidence,timeout=5):
 
 
 def attempt(fixture,game,output,sample=False,*,phase_hook=None):
-    if sample and sys.platform!="darwin":raise ValueError("--sample currently requires the macOS sample tool")
+    if sample and sys.platform not in ("darwin","linux"):raise ValueError("--sample requires macOS or Linux")
     fixture=Path(fixture).resolve();output=Path(output).resolve()
     manifest=fixture/'run.json';state=json.loads(manifest.read_text())
     if state.get('state')!='ready':raise ValueError('Fixture must already be ready; this command never boots or retries it')
@@ -135,12 +135,12 @@ def attempt(fixture,game,output,sample=False,*,phase_hook=None):
     def phase(kind):
         nonlocal screenshot,profile
         boundary={'host_monotonic_seconds':time.monotonic()}
-        if device:boundary['native']=diagnostic_stats(state['qmp'],device)
         diagnostics['boundaries'][kind]=boundary
         if sampler and kind=='MEASURING':sampler.start()
+        if sampler and kind=='MEASURED':profile=sampler.finish(boundary['host_monotonic_seconds'])
+        if device:boundary['native']=diagnostic_stats(state['qmp'],device)
         if phase_hook:phase_hook(kind,socket,state)
         if kind=='MEASURED':
-            if sampler:profile=sampler.finish(boundary['host_monotonic_seconds'])
             started=time.monotonic()
             shot=socket.command('get_rendered_screenshot','screenshot',vm_id=state.get('machine'),include_cursor=False)
             png=base64.b64decode(shot['png_base64'],validate=True)
@@ -205,6 +205,8 @@ def attempt(fixture,game,output,sample=False,*,phase_hook=None):
             diagnostics['measured_delta']=str(output/'counter-delta.json')
         except (KeyError,TypeError,ValueError) as error:
             errors.append('native measured counters: '+str(error))
+    if sampler and not (profile or {}).get('valid_for_measured_rendering'):
+        errors.append('Requested CPU sample is not a completed nonempty recording inside the observed measurement interval')
     if errors:verdict['passed']=False
     if sampler:write(output/'sample.json',profile)
     report={'schema':1,'game':game,'fixture':str(fixture),'guest_result':str(output/'guest/run.json'),
@@ -219,7 +221,7 @@ def main():
     parser.add_argument('game',choices=['utd3d','utglide'])
     parser.add_argument('--fixture',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True)
-    parser.add_argument('--sample',action='store_true',help='Mac: sample the exact owned QEMU for two seconds at MEASURING; records interval validity and instrumentation cost')
+    parser.add_argument('--sample',action='store_true',help='Mac/Linux: take a bounded two-second CPU sample of the exact owned QEMU inside MEASURING/MEASURED; records containment and instrumentation cost')
     args=parser.parse_args()
     try:report=attempt(args.fixture,args.game,args.output,args.sample)
     except (OSError,ValueError,RuntimeError,subprocess.CalledProcessError) as error:

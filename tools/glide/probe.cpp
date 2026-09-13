@@ -2,6 +2,8 @@
  * Public Glide2x GPU oracle. Fixed geometry and readback, no menu/input loop. */
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
+#include <bit>
+#include <initializer_list>
 #include "sdk2_glide.h"
 static HANDLE Log;
 static void Record(const char *s) {
@@ -12,34 +14,107 @@ static void Record(const char *s) {
     WriteFile(Log, "\r\n", 2, &w, NULL);
     FlushFileBuffers(Log);
 }
+#ifdef DG_SYSTEM_GLIDE
+#include "provider.h"
+#endif
+
+template <typename Handle, auto Release> class Owned {
+    Handle value_;
+
+  public:
+    explicit Owned(Handle value) : value_(value) {}
+    Owned(const Owned &) = delete;
+    Owned &operator=(const Owned &) = delete;
+    ~Owned() {
+        if (value_)
+            Release(value_);
+    }
+    Handle get() const {
+        return value_;
+    }
+};
+
+class GlideSession {
+    decltype(&grGlideInit) init_;
+    decltype(&grGlideShutdown) shutdown_;
+    decltype(&grSstWinOpen) open_;
+    decltype(&grSstWinClose) close_;
+    bool initialized_ = false, opened_ = false;
+
+  public:
+    GlideSession(decltype(init_) init, decltype(shutdown_) shutdown, decltype(open_) open,
+                 decltype(close_) close)
+        : init_(init), shutdown_(shutdown), open_(open), close_(close) {}
+    GlideSession(const GlideSession &) = delete;
+    GlideSession &operator=(const GlideSession &) = delete;
+    ~GlideSession() {
+        Shutdown();
+    }
+    void Init() {
+        init_();
+        initialized_ = true;
+    }
+    bool Open(HWND window) {
+        opened_ = open_((FxU)window, GR_RESOLUTION_640x480, GR_REFRESH_60Hz, GR_COLORFORMAT_ARGB,
+                        GR_ORIGIN_UPPER_LEFT, 2, 1) != FXFALSE;
+        return opened_;
+    }
+    void Close() {
+        if (opened_) {
+            close_();
+            opened_ = false;
+        }
+    }
+    void Shutdown() {
+        Close();
+        if (initialized_) {
+            shutdown_();
+            initialized_ = false;
+        }
+    }
+};
+
 static LRESULT CALLBACK WindowProc(HWND w, UINT m, WPARAM a, LPARAM b) {
     return DefWindowProcA(w, m, a, b);
 }
 #define API(name, bytes)                                                                           \
-    __typeof__(&name) p##name = (__typeof__(&name))GetProcAddress(dll, "_" #name "@" #bytes);      \
+    auto p##name = std::bit_cast<decltype(&name)>(GetProcAddress(dll, "_" #name "@" #bytes));      \
     if (!p##name) {                                                                                \
         Record("FAIL missing " #name);                                                             \
-        ExitProcess(1);                                                                            \
+        return false;                                                                              \
     }
-void WINAPI WinMainCRTStartup(void) {
-    WNDCLASSA cls = {0};
+static bool Run() {
+    WNDCLASSA cls = {};
     HWND window;
     HMODULE dll;
-    GrVertex a = {0}, b = {0}, c = {0};
+    GrVertex a = {}, b = {}, c = {};
     unsigned short pixels[256], texture[64];
-    GrTexInfo info = {0};
+    GrTexInfo info = {};
     unsigned i;
     BOOL passed = TRUE;
-    Log = CreateFileA("C:\\DGGLIDE.LOG", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0,
-                      NULL);
-    if (Log == INVALID_HANDLE_VALUE)
-        ExitProcess(1);
+#ifdef DG_SYSTEM_GLIDE
+    Record("START automated sysglide");
+    if (!CleanSystemLaunch()) {
+        Record("FAIL clean C:\\ system-loader preflight");
+        return false;
+    }
+    dll = LoadLibraryA("glide2x.dll");
+#else
     Record("START automated glide");
     dll = LoadLibraryA("C:\\SIERRA\\Half-Life\\glide2x.dll");
+#endif
+    Owned<HMODULE, FreeLibrary> library(dll);
     if (!dll) {
         Record("FAIL load glide2x.dll");
-        ExitProcess(1);
+        return false;
     }
+#ifdef DG_SYSTEM_GLIDE
+    if (!SystemModule(dll, "glide2x.dll") ||
+        !SystemModule(GetModuleHandleA("dgpugl.dll"), "dgpugl.dll")) {
+        Record("FAIL system Glide/OpenGL provider identity");
+        return false;
+    }
+#endif
     API(grGlideInit, 0);
     API(grGlideShutdown, 0);
     API(grSstSelect, 4);
@@ -60,22 +135,26 @@ void WINAPI WinMainCRTStartup(void) {
     cls.lpfnWndProc = WindowProc;
     cls.hInstance = GetModuleHandleA(NULL);
     cls.lpszClassName = "DGGlideProbe";
-    RegisterClassA(&cls);
+    if (!RegisterClassA(&cls)) {
+        Record("FAIL register window class");
+        return false;
+    }
     window = CreateWindowA(cls.lpszClassName, "DreamGPU Glide GPU probe",
                            WS_OVERLAPPEDWINDOW | WS_VISIBLE, 40, 40, 656, 519, NULL, NULL,
                            cls.hInstance, NULL);
+    Owned<HWND, DestroyWindow> owned_window(window);
     if (!window) {
         Record("FAIL create window");
-        ExitProcess(1);
+        return false;
     }
-    pgrGlideInit();
+    GlideSession session(pgrGlideInit, pgrGlideShutdown, pgrSstWinOpen, pgrSstWinClose);
+    session.Init();
     Record("INIT");
     pgrSstSelect(0);
-    if (!pgrSstWinOpen((FxU)window, GR_RESOLUTION_640x480, GR_REFRESH_60Hz, GR_COLORFORMAT_ARGB,
-                       GR_ORIGIN_UPPER_LEFT, 2, 1)) {
+    if (!session.Open(window)) {
         Record("FAIL Glide window");
-        pgrGlideShutdown();
-        ExitProcess(1);
+        session.Shutdown();
+        return false;
     }
     Record("CONTEXT");
     pgrCullMode(GR_CULL_DISABLE);
@@ -246,15 +325,14 @@ void WINAPI WinMainCRTStartup(void) {
         pgrDrawTriangle(&a, &b, &c);
         pgrBufferSwap(0);
     }
-    pgrSstWinClose();
-    pgrGlideShutdown();
+    session.Close();
+    session.Shutdown();
     /* Retail renderers can reject an initial mode and initialize again using
      * the same HWND. Check the real wrapper lifecycle, not only a fresh process. */
     Record("REINITIALIZE SAME WINDOW");
-    pgrGlideInit();
+    session.Init();
     pgrSstSelect(0);
-    if (!pgrSstWinOpen((FxU)window, GR_RESOLUTION_640x480, GR_REFRESH_60Hz, GR_COLORFORMAT_ARGB,
-                       GR_ORIGIN_UPPER_LEFT, 2, 1)) {
+    if (!session.Open(window)) {
         Record("FAIL reopened Glide window");
         passed = FALSE;
     } else {
@@ -270,15 +348,32 @@ void WINAPI WinMainCRTStartup(void) {
                     break;
                 }
         pgrBufferSwap(0);
-        pgrSstWinClose();
+        session.Close();
     }
-    pgrGlideShutdown();
-    DestroyWindow(window);
-    FreeLibrary(dll);
-    if (passed)
-        Record("PASS automated glide: triangle, RGB565 texture and same-address replacement, "
+    session.Shutdown();
+    return passed != FALSE;
+}
+
+extern "C" void WINAPI WinMainCRTStartup(void) {
+#ifdef DG_SYSTEM_GLIDE
+    const char *log_path = "C:\\DGSYSGR.LOG";
+#else
+    const char *log_path = "C:\\DGGLIDE.LOG";
+#endif
+    Log = CreateFileA(log_path, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+    if (Log == INVALID_HANDLE_VALUE)
+        ExitProcess(1);
+    bool passed = Run();
+    if (passed) {
+#ifdef DG_SYSTEM_GLIDE
+        Record("PASS automated sysglide: verified system Glide/OpenGL providers, ");
+#else
+        Record("PASS automated glide: application-local diagnostic, ");
+#endif
+        Record("triangle, RGB565 texture and same-address replacement, "
                "combiner-before-alpha/lightmap blending, 2304 exact GPU pixels, eight swaps, "
                "same-window reinitialization and cleanup");
+    }
     CloseHandle(Log);
     ExitProcess(passed ? 0 : 1);
 }

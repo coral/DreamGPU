@@ -23,8 +23,8 @@
       "after_sha256": "cb29848e6e7fc064a3206f2730c88cd554bcdd6809d72cd653cc2568060d60ad"
     },
     "wined3d/surface.c": {
-      "before_sha256": "19c10fd0f91cfce3f7cab369749db7bbac823dec5e5ef36172b4708131756247",
-      "after_sha256": "b39f905f9c4e97fe244c2c01e316c68888c590f80e158b20a83b7c0545272b48"
+      "before_sha256": "fd8c73522577cbdd4f5d2b3b47026081b541034d83b08011623374bf7238008c",
+      "after_sha256": "ca94e418e0cea6eff420561e4c0bb31d040c8e138b90ff15304f37cc3e676375"
     },
     "wined3d/swapchain.c": {
       "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",

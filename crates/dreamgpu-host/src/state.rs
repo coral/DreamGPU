@@ -49,6 +49,7 @@ pub struct ContextState {
     pub read_buffer: u32,
     pub attrib_depth: u32,
     pub attrib: [Attrib; STACK],
+    pub image: crate::pixel_image::State,
 }
 impl ContextState {
     const EMPTY: Self = Self {
@@ -62,6 +63,7 @@ impl ContextState {
         read_buffer: GL_BACK,
         attrib_depth: 0,
         attrib: [Attrib::EMPTY; STACK],
+        image: crate::pixel_image::State::EMPTY,
     };
 }
 
@@ -155,10 +157,11 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     if memory.is_null() || state.is_null() {
         return;
     }
-    let old = unsafe { state.read() };
+    let mut old = unsafe { state.read() };
     unsafe {
         state.write(ContextState::EMPTY);
     }
+    unsafe { crate::pixel_image::release(&*memory, &mut old.image) };
     assert!(old.attrib_depth as usize <= STACK);
     for saved in &old.attrib[..old.attrib_depth as usize] {
         unsafe {
@@ -416,7 +419,10 @@ unsafe fn scalar(
                 return Err(result);
             }
         }
-        FEnum_glCopyTexImage2D | FEnum_glCopyTexSubImage2D => {
+        FEnum_glCopyTexImage2D
+        | FEnum_glCopyTexSubImage2D
+        | FEnum_glCopyTexImage1D
+        | FEnum_glCopyTexSubImage1D => {
             let result =
                 unsafe { copy.ok_or(DG_GL_ERROR_UNSUPPORTED)?(opaque, function, args.as_ptr()) };
             if result != 0 {

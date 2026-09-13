@@ -119,6 +119,22 @@ unsafe fn execute(
     let a = u32::from_le_bytes(words[0..4].try_into().unwrap());
     let b = u32::from_le_bytes(words[4..8].try_into().unwrap());
     let d = u32::from_le_bytes(words[8..12].try_into().unwrap());
+    if crate::pixels::map_query(function) {
+        unsafe {
+            crate::pixels::get_map(api, errors, function, a, b, result)?;
+            *bytes = required;
+        }
+        return Ok(());
+    }
+    if function == FEnum_glAreTexturesResident {
+        let values =
+            unsafe { crate::texture::control::resident(api, state.textures, errors, [a, b, d])? };
+        unsafe {
+            core::ptr::copy_nonoverlapping(values.as_ptr(), result, 5);
+            *bytes = 5;
+        }
+        return Ok(());
+    }
     if function == FEnum_glGetTexImage {
         let read = texture_read.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
         let error = unsafe { read(opaque, a, b & 0xffff, d, required, result) };
@@ -255,6 +271,9 @@ unsafe fn execute(
                 GL_TEXTURE_BINDING_2D => integers[0] = state.binding_2d as i32,
                 GL_ATTRIB_STACK_DEPTH => integers[0] = state.attrib_depth as i32,
                 GL_MAX_ATTRIB_STACK_DEPTH => integers[0] = 16,
+                GL_MAX_PIXEL_MAP_TABLE => {
+                    integers[0] = unsafe { crate::pixels::limit(api)? } as i32
+                }
                 GL_MAX_TEXTURE_SIZE => integers[0] = DG_GL_MAX_TEXTURE_DIMENSION as i32,
                 GL_MAX_VIEWPORT_DIMS => {
                     integers[0] = DG_GL_MAX_DIMENSION as i32;

@@ -141,7 +141,7 @@ class Serial:
             return parts[0], parts[2] if len(parts) == 3 else None
 
 
-PROBES = ("hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
+PROBES = ("sysgl", "sysglide", "setupcheck", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
 
 
 def parse_probe(raw, name="arrays"):
@@ -238,7 +238,8 @@ def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_time
                 if not probe or demo not in ("utd3d","utglide","lifecycle","dual") or kind != ("MEASURING" if not phases else "MEASURED") or len(phases)>=2:
                     raise ProtocolError("unexpected or duplicate measurement phase")
                 phases.append(kind)
-                report.setdefault("measurement_phases",{})[kind]={"after_started_seconds":time.monotonic()-started}
+                observed=time.monotonic()
+                report.setdefault("measurement_phases",{})[kind]={"host_monotonic_seconds":observed,"after_started_seconds":observed-started}
                 if on_phase:
                     try:on_phase(kind)
                     except Exception as error:report["measurement_phases"][kind]["callback_error"]=str(error)

@@ -33,6 +33,7 @@ impl Default for Namespace {
 pub struct Memory {
     pub api: *const DreamGpuGlApi,
     pub bytes: *mut u64,
+    pub image_bytes: *mut u64,
     pub count: *mut u32,
     pub opaque: *mut c_void,
     pub allocate: unsafe extern "C" fn(*mut c_void, usize) -> *mut c_void,

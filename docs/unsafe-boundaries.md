@@ -296,3 +296,73 @@ pending request. A newer reset stays pending, and the worker processes it before
 claiming any new batch. The state-transition test explicitly interleaves a reset
 between snapshot and acknowledgement, including reused generations with changed
 CPU metadata, and verifies exactly one acknowledgement of the latest request.
+
+Bitmap and DrawPixels use a render-worker-owned immutable image transaction per
+context. Eight descriptor words identify shape, format, type, byte count, exact
+next offset, flags and a non-reusable transaction ID. Bitmap FIRST carries four
+raw float parameters outside image progress. Guest packing completes all address
+and length checks before the first chunk; host admission independently bounds
+shape arithmetic and reserves at most 64 MiB, with a separate 64 MiB aggregate
+CPU staging limit across contexts. Native GL receives the fully assembled image
+once, with temporary canonical unpack state restored afterward. Guest pixel
+transfer, raster position, clipping and zoom remain native GL state.
+
+No native draw or Bitmap raster movement occurs for an incomplete or malformed
+worker transaction. Ownership is detached before the single native call, so an
+error or lost acknowledgement cannot replay it. This does not promise rollback
+of arbitrary native GL errors after invocation. Matching malformed continuations,
+explicit abort, incompatible same-context commands, drawable changes/destruction,
+context destruction and reset release retained allocation credit once. Wrong IDs
+and duplicate FIRST do not release another transaction. Stateless rejection on
+the BQL side does not mutate render-worker state: its bounded pending allocation
+remains owned until worker cancellation or teardown. Flush, Finish, unchanged
+MakeCurrent and transport batch boundaries can occur between chunks. Other
+contexts may execute independently, sharing only the aggregate staging budget.
+
+The C bridge checks the render-owned active bit before constructing a memory
+callback record on ordinary scalar/query paths. All transaction mutation remains
+in Rust. The callback record and commit snapshot are local immutable values;
+allocator callbacks cannot reenter the owner or retain their pointers. Tests
+exercise exact budget saturation across two contexts, allocation/API failures,
+malformed offsets/descriptors/flags, abort and repeated teardown, native-error
+non-replay, and actual GPU pixels before/after multi-packet commit. Native tests
+also cover all scalar component widths, fractional negative zoom, zero-area
+Bitmap movement, invalid raster positions, transfer, and depth/stencil attachment
+behavior for DrawPixels and CopyPixels.
+
+For DrawPixels with BITMAP index data, the allocation is charged at its expanded
+width-times-height size. Packed rows are received unchanged, then unpacked backward
+in that allocation into exact unsigned-byte indices 0 and 1 at commit. This avoids
+a reproduced Mesa native bitmap-index unpack hang while retaining the same index
+maps, transfer, raster and fragment operations in the single native DrawPixels
+call. It does not render pixels on the CPU. Ordinary Bitmap retains packed native
+input. Expanded images over 64 MiB are rejected before allocation and guest pointer
+access; zero-width images do not iterate over their potentially large row count.
+
+Texture residency queries carry three logical texture names and return a bounded
+five-byte valid/aggregate/per-object result. The render worker resolves all names
+inside the owning namespace before invoking native AreTexturesResident; native
+object names never enter guest output. There is no persistent query cache or
+extra ownership state. The guest validates its full input and stages all replies
+before publishing a false-result residence array; an all-resident result leaves
+the caller's array unchanged. Priority requests contain bounded name/float pairs;
+zero and non-object names are ignored as specified, and valid names are translated
+before the real native priority call without rebinding texture state.
+
+CopyTexImage1D and CopyTexSubImage1D use the existing texture version, fence and
+allocation owner. A 1D definition conservatively accounts eight bytes per texel
+for the full GL1.1 format set through RGBA16; existing restricted 2D definitions
+retain their prior accounting. Width includes border texels. Subcopy validation
+uses the actual native level border and the owned level width, allowing the signed
+border offsets while rejecting out-of-range writes before the copy. Allocation
+metadata changes only after the native definition succeeds. Exact GPU tests cover
+both borders, signed framebuffer source coordinates, RGBA16 storage, unchanged
+1D/2D bindings, real priority clamping, and bounded residency replies.
+
+A native provider may discard legacy 1D border texels despite a successful copy.
+After a 1D definition, the resource owner queries actual native width and border
+before publishing its size and accounting; it never substitutes requested values
+for missing native storage. Mac's exact border oracle passes. Linux Mesa26.1.8
+currently reports width4/border0 for width6/border1, reproduced by a standalone
+EGL program without DreamGPU. That border conformance failure remains open;
+borderless copies, residency and priority have separate acceptance gates.

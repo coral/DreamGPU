@@ -8,6 +8,10 @@ if(NOT EXISTS "${ddk}/video.h")
   message(FATAL_ERROR "Pinned MinGW DDK headers missing: ${ddk}")
 endif()
 function(dreamgpu_nt_driver target entry)
+  set(driver_destination "drivers/nt5")
+  if(ARGC GREATER 2)
+    set(driver_destination "${ARGV2}")
+  endif()
   dreamgpu_freestanding(${target})
   target_compile_options(${target} PRIVATE -Os -fno-ident -Wno-unused-parameter
     -Wno-multichar -Wno-cast-function-type)
@@ -16,8 +20,8 @@ function(dreamgpu_nt_driver target entry)
   target_link_options(${target} PRIVATE -nostdlib -Wl,--subsystem,native,--no-insert-timestamp
     -Wl,--image-base,0x10000000,--major-os-version,5,--minor-os-version,0
     -Wl,--major-subsystem-version,5,--minor-subsystem-version,0 "-Wl,--entry,${entry}")
-  set_target_properties(${target} PROPERTIES PREFIX "" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/drivers/nt5")
-  install(TARGETS ${target} RUNTIME DESTINATION drivers/nt5 COMPONENT nt5)
+  set_target_properties(${target} PROPERTIES PREFIX "" RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/${driver_destination}")
+  install(TARGETS ${target} RUNTIME DESTINATION "${driver_destination}" COMPONENT nt5)
 endfunction()
 add_library(dgpumini SHARED "${DREAMGPU_GUEST}/nt/miniport/bochsmp.cpp"
   "${DREAMGPU_GUEST}/nt/miniport/transport.cpp" "${DREAMGPU_GUEST}/nt/memory.cpp")
@@ -32,6 +36,15 @@ endforeach()
 add_library(dgpudisp SHARED ${display_sources})
 dreamgpu_nt_driver(dgpudisp "_DrvEnableDriver@12")
 target_link_libraries(dgpudisp PRIVATE win32k gcc)
+# A separate driver binary exposes the incomplete ICD only in disposable
+# system-loader development fixtures. The production pair does not change.
+add_library(dgpudisp_icd SHARED ${display_sources} "${DREAMGPU_GUEST}/nt/display/icd.cpp")
+dreamgpu_nt_driver(dgpudisp_icd "_DrvEnableDriver@12" "diagnostics/icd/drivers/nt5")
+target_compile_definitions(dgpudisp_icd PRIVATE DG_ICD_DIAGNOSTIC=1)
+set_target_properties(dgpudisp_icd PROPERTIES OUTPUT_NAME dgpudisp
+  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/icd/drivers/nt5")
+target_link_libraries(dgpudisp_icd PRIVATE win32k gcc)
+
 add_executable(dginst "${DREAMGPU_ROOT}/tools/nt/install.cpp")
 dreamgpu_freestanding(dginst)
 target_compile_options(dginst PRIVATE -Os)

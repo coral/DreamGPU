@@ -61,6 +61,7 @@ fn allocation_and_native_name_failure_publish_no_resource() {
     let memory = Memory {
         api: &api,
         bytes: &mut total,
+        image_bytes: core::ptr::null_mut(),
         count: &mut count,
         opaque: (&mut allocator as *mut Allocator).cast(),
         allocate,
@@ -145,6 +146,7 @@ fn deleted_bound_storage_lives_until_last_owner_and_names_reuse() {
     let memory = Memory {
         api: &api,
         bytes: &mut total,
+        image_bytes: core::ptr::null_mut(),
         count: &mut count,
         opaque: (&mut a as *mut Allocator).cast(),
         allocate,

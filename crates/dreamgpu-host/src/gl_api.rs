@@ -5346,6 +5346,101 @@ pub type mglFuncEnum = ::core::ffi::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct DreamGpuGlApi {
+    pub dg_glAreTexturesResident: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_int,
+            arg2: *const ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_uchar,
+        ) -> ::core::ffi::c_uchar,
+    >,
+    pub dg_glPrioritizeTextures: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_int,
+            arg2: *const ::core::ffi::c_uint,
+            arg3: *const f32,
+        ),
+    >,
+    pub dg_glCopyTexImage1D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+            arg7: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glCopyTexSubImage1D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glBitmap: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_int,
+            arg2: ::core::ffi::c_int,
+            arg3: f32,
+            arg4: f32,
+            arg5: f32,
+            arg6: f32,
+            arg7: *const ::core::ffi::c_uchar,
+        ),
+    >,
+    pub dg_glDrawPixels: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_int,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_uint,
+            arg5: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glCopyPixels: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_int,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_uint,
+        ),
+    >,
+    pub dg_glPixelZoom: ::core::option::Option<unsafe extern "C" fn(arg1: f32, arg2: f32)>,
+    pub dg_glPixelTransferf:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32)>,
+    pub dg_glPixelTransferi: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_int),
+    >,
+    pub dg_glPixelMapfv: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_int, arg3: *const f32),
+    >,
+    pub dg_glPixelMapuiv: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: *const ::core::ffi::c_uint,
+        ),
+    >,
+    pub dg_glPixelMapusv: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: *const ::core::ffi::c_ushort,
+        ),
+    >,
+    pub dg_glGetPixelMapfv:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *mut f32)>,
+    pub dg_glGetPixelMapuiv: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *mut ::core::ffi::c_uint),
+    >,
+    pub dg_glGetPixelMapusv: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *mut ::core::ffi::c_ushort),
+    >,
     pub dg_glAlphaFunc:
         ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32)>,
     pub dg_glBegin: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
@@ -5808,6 +5903,8 @@ pub struct DreamGpuGlApi {
         ::core::option::Option<unsafe extern "C" fn(arg1: f32, arg2: f32, arg3: f32)>,
     pub dg_glVertex4f:
         ::core::option::Option<unsafe extern "C" fn(arg1: f32, arg2: f32, arg3: f32, arg4: f32)>,
+    pub dg_glRasterPos4d:
+        ::core::option::Option<unsafe extern "C" fn(arg1: f64, arg2: f64, arg3: f64, arg4: f64)>,
     pub dg_glVertexPointer: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: ::core::ffi::c_int,

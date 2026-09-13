@@ -26,6 +26,7 @@ fn memory(api: &DreamGpuGlApi) -> Memory {
     Memory {
         api,
         bytes: core::ptr::null_mut(),
+        image_bytes: core::ptr::null_mut(),
         count: core::ptr::null_mut(),
         opaque: core::ptr::null_mut(),
         allocate,

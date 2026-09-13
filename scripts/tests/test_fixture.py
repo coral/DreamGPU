@@ -10,6 +10,7 @@ import importlib.util
 import json
 from pathlib import Path
 import socket
+import shlex
 import subprocess
 import tempfile
 import threading
@@ -191,6 +192,26 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(qmp.call_args_list[1].args[1], [
             ('set_link', {'name': 'net0', 'up': False}), ('cont', {})])
 
+    def test_discovery_timeout_reports_the_observed_wrong_runner(self):
+        with tempfile.TemporaryDirectory(dir='/tmp') as directory:
+            endpoint = str(Path(directory) / 'serial')
+            expected, actual = 'a' * 64, 'b' * 64
+            with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as server:
+                server.bind(endpoint)
+                server.listen(1)
+                def serve():
+                    connection, _ = server.accept()
+                    with connection, connection.makefile('rwb', buffering=0) as stream:
+                        request = stream.readline().decode().split()[1]
+                        stream.write(f'IDENTITY {request} {actual}\n'.encode())
+                        stream.read(1)  # Remain connected until the client closes.
+                thread = threading.Thread(target=serve)
+                thread.start()
+                with self.assertRaisesRegex(TimeoutError, f'expected {expected}; last response: IDENTITY {actual}'):
+                    fixture.ready(endpoint, .3, expected)
+                thread.join(2)
+                self.assertFalse(thread.is_alive())
+
     def test_running_guest_is_rejected_without_touching_link_or_resuming(self):
         with patch.object(fixture, 'qmp_execute', return_value=[{'status': 'running'}]) as qmp:
             with self.assertRaisesRegex(RuntimeError, 'not paused'):
@@ -308,6 +329,36 @@ class FixtureTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'hash mismatch'):
                 fixture.checked_artifact({'path': str(binary), 'sha256': '0' * 64})
 
+    def test_firmware_requires_safe_hash_pinned_regular_members(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);bios=root/'bios.bin';bios.write_bytes(b'firmware')
+            value={'path':str(root),'files':{'bios.bin':fixture.digest(bios)}}
+            self.assertEqual(fixture.checked_firmware(value),{'path':str(root.resolve()),'files':value['files']})
+            for files in ({}, {'../bios.bin':fixture.digest(bios)}, {'x/bios.bin':fixture.digest(bios)},
+                          {'bios.bin':'invalid'}, {'missing.bin':'0'*64}, {'bios.bin':'0'*64}):
+                with self.subTest(files=files),self.assertRaises(ValueError):
+                    fixture.checked_firmware({'path':str(root),'files':files})
+            (root/'linked.bin').symlink_to(bios)
+            with self.assertRaisesRegex(ValueError,'symlink'):
+                fixture.checked_firmware({'path':str(root),'files':{'linked.bin':fixture.digest(bios)}})
+
+    def test_changed_firmware_fails_before_prepare_or_process_launch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);bios=root/'bios.bin';bios.write_bytes(b'original')
+            value={'path':str(root),'files':{'bios.bin':fixture.digest(bios)}}
+            manifest={'schema_version':1,'machine':'win2000','firmware':value}
+            manifest_path=root/'input.json';manifest_path.write_text(json.dumps(manifest))
+            bios.write_bytes(b'changed')
+            with patch.object(fixture,'copy_image') as copy,patch.object(fixture.subprocess,'Popen') as launch:
+                with self.assertRaisesRegex(ValueError,'Firmware hash mismatch'):
+                    fixture.prepare(manifest_path,root/'successor')
+                copy.assert_not_called();self.assertFalse((root/'successor').exists())
+                (root/'run.json').write_text(json.dumps({'state':'prepared','source':{
+                    'firmware':value,'native':{},'app':{},'launcher':{}},'firmware':value}))
+                with patch.object(fixture,'checked_artifact'):
+                    with self.assertRaisesRegex(ValueError,'Firmware hash mismatch'):fixture.start(root)
+                launch.assert_not_called()
+
     def test_missing_app_resources_fail_before_disk_copy(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -340,6 +391,9 @@ class FixtureTests(unittest.TestCase):
             data = {'schema_version': 1, 'source_fixture': str(source), 'machine': 'win2000',
                     'disk': str(disk), 'snapshot': 'ready', 'qemu_img': str(image_tool),
                     'native': artifact, 'app': artifact, 'launcher': artifact}
+            firmware=root/'firmware with spaces';firmware.mkdir()
+            bios=firmware/'bios.bin';bios.write_bytes(b'checked firmware')
+            data['firmware']={'path':str(firmware),'files':{'bios.bin':fixture.digest(bios)}}
             manifest = root / 'manifest.json'
             manifest.write_text(json.dumps(data))
             output = root / 'copy'
@@ -349,7 +403,11 @@ class FixtureTests(unittest.TestCase):
             chain = json.loads(subprocess.check_output([str(image_tool), 'info', '--output=json', '--backing-chain', result['disk']]))
             self.assertEqual([item['name'] for item in chain[0]['snapshots']], ['ready'])
             self.assertTrue(all(Path(item['filename']).resolve().is_relative_to(output.resolve()) for item in chain))
-            self.assertIn('-S -loadvm ready', (output / 'qemu-system-i386').read_text())
+            wrapper=shlex.split((output / 'qemu-system-i386').read_text().splitlines()[1])
+            self.assertEqual(wrapper[wrapper.index('-L')+1],str(firmware.resolve()))
+            self.assertEqual(wrapper[wrapper.index('-loadvm')+1],'ready')
+            self.assertIn('-S',wrapper)
+            self.assertEqual(result['firmware'],{**data['firmware'],'path':str(firmware.resolve())})
             self.assertNotEqual(str(disk), result['disk'])
             with self.assertRaises(FileExistsError):
                 fixture.prepare(manifest, output)

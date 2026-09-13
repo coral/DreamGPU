@@ -18,7 +18,16 @@ typedef struct {
     const void *Pointer;
     BOOL Enabled;
 } JGL_ARRAY;
+/* Stack entries borrow the same application-owned client pointers as the live
+ * descriptor; snapshots never own/free array storage or copy vertex data. */
 typedef struct {
+    GLbitfield Mask;
+    JGL_ARRAY Attribute[5];
+    JGL_UNPACK Pack, Unpack;
+} JGL_CLIENT_SNAPSHOT;
+typedef struct {
+    ULONG ClientDepth;
+    JGL_CLIENT_SNAPSHOT ClientStack[16];
     ULONG ServerDepth, ServerMasks[16], ServerDrawBuffers[16];
     JGL_ARRAY Attribute[5]; /* position, color, normal, texture coordinate, secondary color */
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
@@ -28,6 +37,8 @@ extern "C" {
 #endif
 JGL_ARRAY_STATE *JglArrays(void);
 BOOL JglArrayQuery(GLenum pname, GLint *value);
+void JglArrayElement(GLint index);
+void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer);
 BOOL JglReady(void);
 BOOL JglSupportsSecondary(void);
 GLfloat JglColorComponent(const BYTE *value, GLenum type);
@@ -37,6 +48,7 @@ void JglSetError(GLenum error);
 void JglForgetTextures(ULONG count, const GLuint *textures);
 BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *payload, ULONG bytes);
 ULONG JglMaxDataBytes(ULONG words);
+ULONG JglNextImageId(void);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);
 void JglDrawableSize(ULONG *width, ULONG *height);

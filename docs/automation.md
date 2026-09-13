@@ -44,9 +44,38 @@ python3 scripts/fixtures/fixture.py prepare /absolute/fixture-manifest.json --ou
 python3 scripts/fixtures/fixture.py start target/fixtures/candidate --timeout 120
 ```
 
+Copied QEMU executables can use an explicit, hash-pinned firmware directory in
+that manifest:
+
+```json
+"firmware": {
+  "path": "/absolute/qemu/pc-bios",
+  "files": { "bios-256k.bin": "<lowercase SHA256 of this file>" }
+}
+```
+
+List every firmware file the configured machine needs. Entries must be regular
+files with safe basenames; symlink members are rejected. Preparation and startup
+both verify the recorded hashes, and the generated QEMU wrapper receives `-L`
+with the canonical directory. Missing or changed firmware fails before process
+launch. Omitting `firmware` retains the executable's normal firmware lookup.
+
 Startup checks exact artifact hashes, stops QEMU before guest execution, disables
 the guest network link, and waits for the expected serial runner identity. The
-fixture's `run.json` records its socket endpoints and owned process ID.
+fixture's `run.json` records its socket endpoints and owned process ID. It also
+records `preparation_controller` and `startup_controller` hashes for the four
+core fixture/control modules. A controller fix between preparation and startup
+can be legitimate; preserve both identities so a harness change is not mistaken
+for a guest or native GPU change. Keep failed starts as separate evidence.
+
+Update the executable Windows actually starts, not just a similarly named root
+copy. The accepted XP fixture starts
+`C:\Documents and Settings\All Users\Start Menu\Programs\Startup\DGPUBEN.EXE`.
+Updating only `C:\DGPUBEN.EXE` leaves the older controller holding COM1; launching
+another copy then fails with access denied. Name the startup destination and
+expected hash explicitly in the offline installation manifest. Readiness timeout
+errors retain the last observed controller identity, distinguishing a stale
+controller from no serial response. `C:\DGPUBEN.LOG` records serial-open failures.
 
 ## Running fixed workloads
 
@@ -75,3 +104,45 @@ Run performance captures without concurrent builds or other active VM workloads.
 Use `scripts/fixtures/fixture.py stop` for owned process cleanup. It does not by itself
 prove Windows shut down cleanly; record an observed guest poweroff separately
 before using a disk as a clean installation source.
+
+## Sampling a diagnosed slowdown
+
+On Linux, the current serial runner creates Half-Life suspended. With sampling
+requested, the controller requires perf's enable acknowledgment before sending
+`CONTINUE`; at `TIMEDEMO_RESULT` it disables sampling before acknowledging guest
+cleanup. A missing boundary, failed profiler, or empty recording cannot claim
+coverage. This needs `perf`, GNU `timeout`, and noninteractive permission to run
+the bounded profiler through `sudo -n`:
+
+```sh
+python3 scripts/benchmarks/halflife.py run jrgperf \
+  --socket /tmp/recorded-serial.sock \
+  --sample-fixture target/fixtures/candidate/run.json \
+  --output target/results/halflife-sampled --timeout 150
+```
+
+`run.json` records the control acknowledgments and, after guest cleanup, the
+actual captured event count and first/last monotonic timestamps from `perf.data`.
+The enabled interval includes launch, loading and console visibility delay.
+Retail Half-Life exposes no timestamped first/last timedemo frames, so the exact
+engine interval remains **unknown**. Recorded CPU events are not frame times.
+The profiler uses software `cpu-clock` events at 499 Hz with DWARF stacks;
+instrumentation affects performance and must match across compared captures.
+
+For Unreal on macOS or Linux:
+
+```sh
+python3 scripts/benchmarks/game.py utd3d --sample \
+  --fixture target/fixtures/candidate --output target/results/utd3d-sampled
+```
+
+This takes a bounded two-second sample of the exact fixture-owned QEMU inside
+host-observed `MEASURING`/`MEASURED`. It is an interior rendering sample, not
+coverage of the entire game or an exact engine-frame interval. `sample.json`
+records tool start/exit times, recording size and containment; failed, unfinished
+or empty requested samples fail that diagnostic run. Neither sampling command
+builds binaries, starts a fixture, or repeats a workload automatically.
+
+For viewport, drawable, or texture-size failures, see the opt-in
+[native geometry diagnostics](geometry-diagnostics.md). Their trace overhead and
+collection limits are separate from the normal graphics acceptance gates.

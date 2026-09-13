@@ -4,10 +4,18 @@
 mod cursor;
 #[path = "native_qemu/discard.rs"]
 mod discard;
+#[path = "native_qemu/pixel_image.rs"]
+mod pixel_image;
+#[path = "native_qemu/pixels.rs"]
+mod pixels;
+#[path = "native_qemu/raster.rs"]
+mod raster;
 #[path = "native_qemu/secondary.rs"]
 mod secondary;
 #[path = "native_qemu/textures.rs"]
 mod textures;
+#[path = "native_qemu/texture_control.rs"]
+mod texture_control;
 
 use dreamgpu::shmem::ShmemServer;
 use dreamgpu::transport::*;

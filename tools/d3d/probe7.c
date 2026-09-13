@@ -70,6 +70,9 @@ static void Run(void) {
     } vertices[3] = {{80, 60, .5f, 1, 0xffff0000},
                      {240, 60, .5f, 1, 0xffff0000},
                      {160, 180, .5f, 1, 0xffff0000}};
+    const UINT region_x[5] = {0, 152, 304, 0, 304};
+    const UINT region_y[5] = {0, 92, 0, 224, 224};
+    const DWORD region_color[5] = {0x102030, 0xff0000, 0x00ff00, 0x00ffff, 0xffff00};
     UINT region, x, y;
     Log("STAGE explicit application-local DreamGPU OpenGL loader");
     gl = LoadLibraryA("C:\\SIERRA\\Half-Life\\dgpugl.dll");
@@ -180,6 +183,19 @@ static void Run(void) {
             "FAIL draw") ||
         !HR(IDirect3DDevice7_EndScene(device), "FAIL end scene"))
         return;
+    /* Distinct far-edge colors detect clipping of the desktop-sized primary
+     * through a smaller window backing, including clamped-edge replication. */
+    for (region = 2; region < 5; ++region) {
+        D3DRECT edge = {0};
+        edge.x1 = (LONG)region_x[region];
+        edge.y1 = (LONG)region_y[region];
+        edge.x2 = edge.x1 + 16;
+        edge.y2 = edge.y1 + 16;
+        if (!HR(IDirect3DDevice7_Clear(device, 1, &edge, D3DCLEAR_TARGET,
+                                       0xff000000 | region_color[region], 1, 0),
+                "FAIL distinct far-edge clear"))
+            return;
+    }
     if (ProbeGlError)
         Number("GL error after draw", ProbeGlError());
     locked.dwSize = sizeof(locked);
@@ -188,11 +204,11 @@ static void Run(void) {
             "FAIL readback lock"))
         return;
     if (Check(locked.lpSurface && locked.lPitch >= 1280, "FAIL readback layout", locked.lPitch)) {
-        for (region = 0; region < 2 && !failed; region++)
+        for (region = 0; region < 5 && !failed; region++)
             for (y = 0; y < 16 && !failed; y++)
                 for (x = 0; x < 16; x++) {
-                    UINT xx = x + (region ? 152 : 0), yy = y + (region ? 92 : 0);
-                    DWORD expected = region ? 0xff0000 : 0x102030;
+                    UINT xx = x + region_x[region], yy = y + region_y[region];
+                    DWORD expected = region_color[region];
                     DWORD actual =
                         *(DWORD *)((BYTE *)locked.lpSurface + yy * locked.lPitch + xx * 4) &
                         0xffffff;
@@ -222,11 +238,12 @@ static void Run(void) {
         if (!Check(dc != NULL, "FAIL presented window DC", GetLastError()))
             return;
         Log("STAGE actual clipped GPU front-buffer GDI readback");
-        for (region = 0; region < 2 && !failed; region++)
+        for (region = 0; region < 5 && !failed; region++)
             for (y = 0; y < 16 && !failed; y++)
                 for (x = 0; x < 16; x++) {
-                    UINT xx = x + (region ? 152 : 0), yy = y + (region ? 92 : 0);
-                    COLORREF expected = region ? RGB(255, 0, 0) : RGB(16, 32, 48);
+                    UINT xx = x + region_x[region], yy = y + region_y[region];
+                    DWORD color = region_color[region];
+                    COLORREF expected = RGB((color >> 16) & 255, (color >> 8) & 255, color & 255);
                     COLORREF actual = GetPixel(dc, xx, yy);
                     if (!Check(actual == expected, "FAIL exact presented D3D7 pixel", actual)) {
                         Number("pixel x", xx);
@@ -306,7 +323,8 @@ void WINAPI WinMainCRTStartup(void) {
     if (window)
         DestroyWindow(window);
     if (!failed)
-        Log("PASS automated d3d7: Wine HAL triangle, 512 exact GPU pixels, clipped present and "
+        Log("PASS automated d3d7: Wine HAL triangle, 1280 exact GPU pixels, 1280 exact front "
+            "pixels including far edges and "
             "clean release");
     CloseHandle(LogFile);
     ExitProcess(failed ? 1 : 0);

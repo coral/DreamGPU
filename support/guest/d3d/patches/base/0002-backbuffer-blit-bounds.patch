@@ -1,0 +1,44 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -5429,6 +5429,31 @@
+     cpu_blit_blit_surface,
+ };
+ 
++/* ORM_BACKBUFFER borrows the window drawable for offscreen rendering.
++ * A desktop-sized DirectDraw primary can exceed that drawable. Rendering it
++ * there clips before its texture copy, even with a larger GL viewport. Keep
++ * the existing framebuffer-to-texture / CPU fallback for that case. */
++static BOOL dg_surface_backbuffer_blit_fits(const struct wined3d_surface *surface)
++{
++    struct wined3d_context *context;
++    RECT client;
++    BOOL fits;
++
++    if (wined3d_settings.offscreen_rendering_mode != ORM_BACKBUFFER
++            || !wined3d_resource_is_offscreen(&surface->container->resource))
++        return TRUE;
++
++    context = context_acquire(surface->resource.device, NULL);
++    if (!context)
++        return FALSE;
++    fits = context->valid && GetClientRect(context->win_handle, &client)
++            && client.right > client.left && client.bottom > client.top
++            && surface->resource.width <= (UINT)(client.right - client.left)
++            && surface->resource.height <= (UINT)(client.bottom - client.top);
++    context_release(context);
++    return fits;
++}
++
+ HRESULT CDECL wined3d_surface_blt(struct wined3d_surface *dst_surface, const RECT *dst_rect_in,
+         struct wined3d_surface *src_surface, const RECT *src_rect_in, DWORD flags,
+         const WINEDDBLTFX *fx, enum wined3d_texture_filter_type filter)
+@@ -5645,6 +5670,9 @@
+             else
+                 goto cpu;
+         }
++
++        if (!dg_surface_backbuffer_blit_fits(dst_surface))
++            goto fallback;
+ 
+         if (flags & WINEDDBLT_COLORFILL)
+         {

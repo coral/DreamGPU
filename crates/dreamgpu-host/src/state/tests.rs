@@ -135,6 +135,7 @@ fn memory(api: &DreamGpuGlApi, a: &mut Allocator, count: &mut u32, bytes: &mut u
         api,
         count,
         bytes,
+        image_bytes: core::ptr::null_mut(),
         opaque: (a as *mut Allocator).cast(),
         allocate,
         free,
@@ -361,6 +362,9 @@ fn context_state_c_abi_layout() {
     assert_eq!(core::mem::size_of::<Attrib>(), 16 + 2 * pointer);
     assert_eq!(
         core::mem::size_of::<ContextState>(),
-        5 * pointer + 16 + 16 * (16 + 2 * pointer)
+        5 * pointer
+            + 16
+            + 16 * (16 + 2 * pointer)
+            + core::mem::size_of::<crate::pixel_image::State>()
     );
 }

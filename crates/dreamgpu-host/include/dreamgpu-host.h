@@ -34,6 +34,7 @@ typedef struct DreamGpuTextureNamespace {
 typedef struct DreamGpuTextureMemory {
     const struct DreamGpuGlApi *api;
     uint64_t *bytes;
+    uint64_t *image_bytes;
     uint32_t *count;
     void *opaque;
     void *(*allocate)(void *, size_t);
@@ -44,12 +45,19 @@ typedef struct DreamGpuAttrib {
     uint32_t mask, color_sum, draw_buffer, read_buffer;
     DreamGpuTexture *texture, *texture_1d;
 } DreamGpuAttrib;
+typedef struct DreamGpuPixelImage {
+    uint8_t *pixels;
+    uint32_t active, function, descriptor[4], bitmap[4], total, received, id, last_id;
+} DreamGpuPixelImage;
+uint32_t dreamgpu_pixel_image_interleave(const DreamGpuTextureMemory *, DreamGpuPixelImage *);
+void dreamgpu_pixel_image_release(const DreamGpuTextureMemory *, DreamGpuPixelImage *);
 typedef struct DreamGpuContextState {
     DreamGpuTextureNamespace *textures;
     DreamGpuTexture *default_texture, *bound_texture;
     DreamGpuTexture *default_texture_1d, *bound_texture_1d;
     uint32_t guest_errors, draw_buffer, read_buffer, attrib_depth;
     DreamGpuAttrib attrib[16];
+    DreamGpuPixelImage image;
 } DreamGpuContextState;
 uint32_t dreamgpu_context_state_init(const DreamGpuTextureMemory *memory,
                                      DreamGpuContextState *state, DreamGpuTextureNamespace *shared);
