@@ -123,19 +123,34 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_CURRENT_TEXTURE_COORDS
         | GL_VIEWPORT
         | GL_SCISSOR_BOX
+        | GL_MAP2_GRID_DOMAIN
+        | GL_ACCUM_CLEAR_VALUE
         | GL_COLOR_CLEAR_VALUE
         | GL_COLOR_WRITEMASK
         | GL_FOG_COLOR
         | GL_LIGHT_MODEL_AMBIENT => 4,
         GL_CURRENT_NORMAL => 3,
-        GL_DEPTH_RANGE
+        GL_MAP1_GRID_DOMAIN
+        | GL_MAP2_GRID_SEGMENTS
+        | GL_DEPTH_RANGE
         | GL_MAX_VIEWPORT_DIMS
         | GL_POLYGON_MODE
         | GL_POINT_SIZE_RANGE
         | GL_ALIASED_POINT_SIZE_RANGE
         | GL_ALIASED_LINE_WIDTH_RANGE
         | GL_LINE_WIDTH_RANGE => 2,
-        GL_CURRENT_RASTER_INDEX
+        GL_MAX_EVAL_ORDER
+        | GL_MAP1_GRID_SEGMENTS
+        | GL_CURRENT_INDEX
+        | GL_EDGE_FLAG
+        | GL_INDEX_CLEAR_VALUE
+        | GL_INDEX_WRITEMASK
+        | GL_LOGIC_OP_MODE
+        | GL_ACCUM_RED_BITS
+        | GL_ACCUM_GREEN_BITS
+        | GL_ACCUM_BLUE_BITS
+        | GL_ACCUM_ALPHA_BITS
+        | GL_CURRENT_RASTER_INDEX
         | GL_CURRENT_RASTER_POSITION_VALID
         | GL_CURRENT_RASTER_DISTANCE
         | GL_PACK_SWAP_BYTES
@@ -217,13 +232,46 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_POLYGON_SMOOTH_HINT
         | GL_FOG_HINT
         | GL_STEREO
-        | GL_AUX_BUFFERS => 1,
+        | GL_AUX_BUFFERS
+        | GL_LIST_BASE
+        | GL_LIST_INDEX
+        | GL_LIST_MODE
+        | GL_MAX_LIST_NESTING
+        | GL_RENDER_MODE
+        | GL_NAME_STACK_DEPTH
+        | GL_MAX_NAME_STACK_DEPTH
+        | GL_SELECTION_BUFFER_SIZE
+        | GL_FEEDBACK_BUFFER_SIZE
+        | GL_FEEDBACK_BUFFER_TYPE => 1,
         _ => 0,
     }
 }
 
 pub(crate) fn function_words(function: u32) -> u32 {
     match function {
+        FEnum_glNewList | FEnum_glEndList | FEnum_glGenLists | FEnum_glIsList
+        | FEnum_glDeleteLists => DG_GL_FUNCTION_QUERY | 3,
+        FEnum_glCallList | FEnum_glListBase | DG_GL_RECORD_ERROR => 1,
+        FEnum_glCallLists => DG_GL_FUNCTION_INLINE_DATA | 1,
+        FEnum_glSelectBuffer | FEnum_glFeedbackBuffer | FEnum_glRenderMode => {
+            DG_GL_FUNCTION_QUERY | 3
+        }
+        FEnum_glInitNames | FEnum_glPopName => 0,
+        FEnum_glLoadName | FEnum_glPushName | FEnum_glPassThrough => 1,
+        FEnum_glMap1d | FEnum_glMap1f => DG_GL_FUNCTION_INLINE_DATA | 2,
+        FEnum_glMap2d | FEnum_glMap2f => DG_GL_FUNCTION_INLINE_DATA | 3,
+        FEnum_glGetMapdv | FEnum_glGetMapfv | FEnum_glGetMapiv => DG_GL_FUNCTION_QUERY | 3,
+        FEnum_glMapGrid1d | FEnum_glEvalMesh2 => 5,
+        FEnum_glMapGrid2d => 10,
+        FEnum_glEvalCoord1d | FEnum_glEvalPoint2 => 2,
+        FEnum_glEvalCoord2d => 4,
+        FEnum_glEvalPoint1 => 1,
+        FEnum_glEvalMesh1 => 3,
+        FEnum_glEdgeFlag | FEnum_glClearIndex | FEnum_glIndexMask | FEnum_glLogicOp => 1,
+        FEnum_glIndexd | FEnum_glAccum => 2,
+        FEnum_glClearAccum => 4,
+        FEnum_glPolygonStipple => DG_GL_FUNCTION_INLINE_DATA,
+        FEnum_glGetPolygonStipple => DG_GL_FUNCTION_QUERY,
         FEnum_glBitmap | FEnum_glDrawPixels => DG_GL_FUNCTION_INLINE_DATA | 8,
         FEnum_glPrioritizeTextures => DG_GL_FUNCTION_INLINE_DATA | 1,
         FEnum_glAreTexturesResident => DG_GL_FUNCTION_QUERY | 3,
@@ -351,15 +399,19 @@ fn buffer_selection(mode: u32, draw: bool) -> bool {
     }
 }
 
-fn query_cap(pname: u32) -> bool {
-    if (GL_LIGHT0..=GL_LIGHT7).contains(&pname)
+pub(crate) fn query_cap(pname: u32) -> bool {
+    if crate::evaluator::components(pname).is_some()
+        || pname == GL_AUTO_NORMAL
+        || (GL_LIGHT0..=GL_LIGHT7).contains(&pname)
         || (GL_CLIP_PLANE0..=GL_CLIP_PLANE5).contains(&pname)
     {
         return true;
     }
     matches!(
         pname,
-        GL_BLEND
+        GL_COLOR_LOGIC_OP
+            | GL_INDEX_LOGIC_OP
+            | GL_BLEND
             | GL_DEPTH_TEST
             | GL_STENCIL_TEST
             | GL_SCISSOR_TEST
@@ -490,7 +542,9 @@ fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let attributes = a[if elements { 4 } else { 3 }];
     let indices = if elements { a[1] } else { 0 };
     let index_size = if elements { index_bytes(a[2]) } else { 0 };
-    let stride = if attributes & DG_GL_ARRAY_SECONDARY != 0 {
+    let stride = if attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0 {
+        DG_GL_VERTEX_EXTENDED_BYTES
+    } else if attributes & DG_GL_ARRAY_SECONDARY != 0 {
         DG_GL_VERTEX_SECONDARY_BYTES
     } else {
         DG_GL_VERTEX_BYTES
@@ -509,8 +563,13 @@ fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     }
     for vertex in data[..vertex_bytes as usize].chunks_exact(stride as usize) {
         if word(vertex, DG_GL_VERTEX_RESERVED as usize) != 0
-            || (attributes & DG_GL_ARRAY_SECONDARY != 0
+            || (stride >= DG_GL_VERTEX_SECONDARY_BYTES
                 && word(vertex, DG_GL_VERTEX_SECONDARY_PAD as usize) != 0)
+            || (stride == DG_GL_VERTEX_EXTENDED_BYTES
+                && (vertex[DG_GL_VERTEX_EDGE as usize] > 1
+                    || vertex[DG_GL_VERTEX_EDGE as usize + 1..]
+                        .iter()
+                        .any(|&v| v != 0)))
         {
             return DG_GL_ERROR_BATCH;
         }
@@ -530,6 +589,24 @@ fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     0
 }
 fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
+    if function == FEnum_glCallLists {
+        return if a[0] <= DG_GL_MAX_CAPTURE_VALUES && data.len() == a[0] as usize * 4 {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
+
+    if crate::evaluator::map_function(function) {
+        return crate::evaluator::validate(function, a, data);
+    }
+    if function == FEnum_glPolygonStipple {
+        return if data.len() == 128 {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     if crate::pixel_image::image_function(function) {
         return crate::pixel_image::validate(function, a, data);
     }
@@ -609,6 +686,35 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
     let [a, b, d] = a;
     let mut kind = DG_GL_RESULT_INT;
     let count = match function {
+        FEnum_glNewList | FEnum_glEndList | FEnum_glGenLists | FEnum_glDeleteLists
+        | FEnum_glIsList => {
+            if function == FEnum_glIsList {
+                kind = DG_GL_RESULT_BOOL;
+            }
+            crate::lists::query_shape(function, [a, b, d])
+        }
+        FEnum_glSelectBuffer | FEnum_glFeedbackBuffer | FEnum_glRenderMode => {
+            crate::selection::shape(function, [a, b, d])
+        }
+        FEnum_glGetMapdv | FEnum_glGetMapfv | FEnum_glGetMapiv => {
+            kind = match function {
+                FEnum_glGetMapdv => DG_GL_RESULT_DOUBLE,
+                FEnum_glGetMapfv => DG_GL_RESULT_FLOAT,
+                _ => DG_GL_RESULT_INT,
+            };
+            if crate::evaluator::query_count(a, b, d) {
+                d
+            } else {
+                0
+            }
+        }
+        FEnum_glGetPolygonStipple => {
+            if a == 0 && b == 0 && d == 0 {
+                32
+            } else {
+                0
+            }
+        }
         FEnum_glGetPixelMapfv | FEnum_glGetPixelMapuiv | FEnum_glGetPixelMapusv => {
             kind = if function == FEnum_glGetPixelMapfv {
                 DG_GL_RESULT_FLOAT

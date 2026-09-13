@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // Exercise the production action gateway and Win32Store with syscall seams.
 #define DG_SETUP_ADAPTER_TEST
+#define DG_SETUP_UNREADY_PROVIDER_TEST
 #include "test-win32.h"
 inline DWORD GetWindowsDirectoryA(char *out, DWORD n) {
     constexpr char path[] = "C:\\WINDOWS";

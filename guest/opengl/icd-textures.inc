@@ -11,11 +11,14 @@ static bool CopyFormat(GLenum format) {
            (format >= GL_INTENSITY4 && format <= GL_INTENSITY16) ||
            (format >= GL_RGB4 && format <= GL_RGBA16);
 }
-static bool Span(const void *pointer, ULONG count, ULONG unit) {
+static bool Span(const void *pointer, ULONG count, ULONG unit, bool command = false) {
     const ULONG_PTR max = ~(ULONG_PTR)0;
     if (!pointer || (ULONG_PTR)count > max / unit ||
         (ULONG_PTR)pointer > max - ((ULONG_PTR)count * unit - 1)) {
-        JglSetError(GL_INVALID_VALUE);
+        if (command)
+            JglCommandError(GL_INVALID_VALUE);
+        else
+            JglSetError(GL_INVALID_VALUE);
         return false;
     }
     return true;
@@ -89,16 +92,16 @@ static GLboolean APIENTRY AliasAreTexturesResident(GLsizei count, const GLuint *
 }
 static void APIENTRY AliasPrioritizeTextures(GLsizei count, const GLuint *textures,
                                              const GLclampf *priorities) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (count < 0) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     if (!count)
         return;
-    if (!dg_icd_textures::Span(textures, (ULONG)count, sizeof(*textures)) ||
-        !dg_icd_textures::Span(priorities, (ULONG)count, sizeof(*priorities)))
+    if (!dg_icd_textures::Span(textures, (ULONG)count, sizeof(*textures), true) ||
+        !dg_icd_textures::Span(priorities, (ULONG)count, sizeof(*priorities), true))
         return;
     JGL_ARRAY_STATE *arrays = JglArrays();
     if (!arrays)
@@ -110,7 +113,7 @@ static void APIENTRY AliasPrioritizeTextures(GLsizei count, const GLuint *textur
     if (capacity > DG_GL_MAX_TEXTURES)
         capacity = DG_GL_MAX_TEXTURES;
     if (!capacity) {
-        JglSetError(GL_OUT_OF_MEMORY);
+        JglCommandError(GL_OUT_OF_MEMORY);
         return;
     }
     ULONG at = 0;
@@ -129,20 +132,20 @@ static void APIENTRY AliasPrioritizeTextures(GLsizei count, const GLuint *textur
 }
 static void APIENTRY AliasCopyTexImage1D(GLenum target, GLint level, GLenum internal_format,
                                          GLint x, GLint y, GLsizei width, GLint border) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (target != GL_TEXTURE_1D) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!dg_icd_textures::CopyFormat(internal_format)) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || border < 0 || border > 1 ||
         width < 2 * border ||
         (ULONG)width > (DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * (ULONG)border) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     ULONG args[] = {target,   (ULONG)level, internal_format, (ULONG)x,
@@ -151,14 +154,19 @@ static void APIENTRY AliasCopyTexImage1D(GLenum target, GLint level, GLenum inte
 }
 static void APIENTRY AliasCopyTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLint x,
                                             GLint y, GLsizei width) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (target != GL_TEXTURE_1D) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    if (JglCompiling()) {
+        ULONG args[] = {target, (ULONG)level, (ULONG)xoffset, (ULONG)x, (ULONG)y, (ULONG)width};
+        JglScalarVector(FEnum_glCopyTexSubImage1D, 6, args);
         return;
     }
     GLint extent = 0, border = 0;
@@ -168,7 +176,7 @@ static void APIENTRY AliasCopyTexSubImage1D(GLenum target, GLint level, GLint xo
                   &bytes))
         return;
     if (bytes != sizeof(extent)) {
-        JglSetError(GL_INVALID_OPERATION);
+        JglCommandError(GL_INVALID_OPERATION);
         return;
     }
     query[2] = GL_TEXTURE_BORDER;
@@ -177,14 +185,14 @@ static void APIENTRY AliasCopyTexSubImage1D(GLenum target, GLint level, GLint xo
         return;
     if (bytes != sizeof(border) || border < 0 || border > 1 || extent < 2 * border ||
         (ULONG)extent > DG_GL_MAX_TEXTURE_DIMENSION + 2) {
-        JglSetError(GL_INVALID_OPERATION);
+        JglCommandError(GL_INVALID_OPERATION);
         return;
     }
     /* Border texel -1 is legal only for a real bordered level. Bounds are
      * checked before subtraction, so extreme GLsizei/GLint never overflow. */
     const GLint end = extent - border;
     if (xoffset < -border || xoffset > end || width > end - xoffset) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     ULONG args[] = {target, (ULONG)level, (ULONG)xoffset, (ULONG)x, (ULONG)y, (ULONG)width};

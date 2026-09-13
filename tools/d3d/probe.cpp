@@ -4,8 +4,13 @@
  * Compile once with DG_D3D_VERSION=8 and once with =9. No CRT dependency.
  */
 #define WIN32_LEAN_AND_MEAN
+#define CINTERFACE
 #define COBJMACROS
 #include <windows.h>
+#include "entry.h"
+#ifdef DG_SYSTEM_D3D
+#include "system-loader.h"
+#endif
 #if DG_D3D_VERSION == 8
 #include <d3d8.h>
 typedef IDirect3D8 D3D;
@@ -16,9 +21,18 @@ typedef IDirect3DSurface8 Surface;
 #define SURFACE(name, ...) IDirect3DSurface8_##name(__VA_ARGS__)
 #define INTERFACE_DLL "C:\\SIERRA\\Half-Life\\wined8.dll"
 #define CREATE_NAME "Direct3DCreate8"
+#ifdef DG_SYSTEM_D3D
+#define LOG_PATH "C:\\DGSYS8.LOG"
+#define DG_PROBE_NAME "sysd3d8"
+#define DG_SYSTEM_API "d3d8.dll"
+#define DG_SYSTEM_PROVIDER "wined8.dll"
+#else
 #define LOG_PATH "C:\\DGD3D8.LOG"
+#define DG_PROBE_NAME "d3d8"
+#endif
 #define PASS_LINE                                                                                  \
-    "PASS automated d3d8: Wine HAL triangle, 512 exact GPU pixels, present and clean release"
+    "PASS automated " DG_PROBE_NAME                                                                \
+    ": Wine HAL triangle, 512 exact GPU pixels, present and clean release"
 #else
 #include <d3d9.h>
 typedef IDirect3D9 D3D;
@@ -29,9 +43,18 @@ typedef IDirect3DSurface9 Surface;
 #define SURFACE(name, ...) IDirect3DSurface9_##name(__VA_ARGS__)
 #define INTERFACE_DLL "C:\\SIERRA\\Half-Life\\wined9.dll"
 #define CREATE_NAME "Direct3DCreate9"
+#ifdef DG_SYSTEM_D3D
+#define LOG_PATH "C:\\DGSYS9.LOG"
+#define DG_PROBE_NAME "sysd3d9"
+#define DG_SYSTEM_API "d3d9.dll"
+#define DG_SYSTEM_PROVIDER "wined9.dll"
+#else
 #define LOG_PATH "C:\\DGD3D9.LOG"
+#define DG_PROBE_NAME "d3d9"
+#endif
 #define PASS_LINE                                                                                  \
-    "PASS automated d3d9: Wine HAL triangle, 512 exact GPU pixels, present and clean release"
+    "PASS automated " DG_PROBE_NAME                                                                \
+    ": Wine HAL triangle, 512 exact GPU pixels, present and clean release"
 #endif
 #define GL_PATH "C:\\SIERRA\\Half-Life\\dgpugl.dll"
 static HANDLE LogFile = INVALID_HANDLE_VALUE;
@@ -42,12 +65,6 @@ static HWND window;
 static BOOL failed;
 static HMODULE gl_module;
 
-void *memset(void *destination, int value, unsigned int count) {
-    volatile BYTE *out = destination;
-    while (count--)
-        *out++ = (BYTE)value;
-    return destination;
-}
 static void Log(const char *text) {
     DWORD written;
     if (LogFile == INVALID_HANDLE_VALUE)
@@ -69,30 +86,22 @@ static void GLState(const char *stage) {
     typedef DWORD(WINAPI * GetError)(void);
     typedef void(WINAPI * GetInteger)(DWORD, int *);
     typedef HDC(WINAPI * CurrentDC)(void);
-    union {
-        FARPROC generic;
-        GetError error;
-        GetInteger integer;
-        CurrentDC dc;
-    } call;
     GetError error;
     GetInteger integer;
     HDC dc;
     RECT rect;
-    int value[4] = {0};
+    int value[4] = {};
     UINT i;
     static const DWORD queries[] = {0x0c01, 0x0c02, 0x0ba2, 0x0c10, 0x0c23};
     if (!gl_module)
         return;
     Log(stage);
-    call.generic = GetProcAddress(gl_module, "glGetError");
-    error = call.error;
-    call.generic = GetProcAddress(gl_module, "glGetIntegerv");
-    integer = call.integer;
-    call.generic = GetProcAddress(gl_module, "wglGetCurrentDC");
-    if (!error || !integer || !call.dc)
+    error = Entry<GetError>(gl_module, "glGetError");
+    integer = Entry<GetInteger>(gl_module, "glGetIntegerv");
+    const auto current_dc = Entry<CurrentDC>(gl_module, "wglGetCurrentDC");
+    if (!error || !integer || !current_dc)
         return;
-    dc = call.dc();
+    dc = current_dc();
     Number("current GL DC", (DWORD)(ULONG_PTR)dc);
     if (dc && GetClientRect(WindowFromDC(dc), &rect)) {
         Number("current drawable width", rect.right);
@@ -172,14 +181,12 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
+#ifndef DG_SYSTEM_D3D
     char loaded[MAX_PATH];
+#endif
     CreateD3D create;
-    union {
-        FARPROC generic;
-        CreateD3D factory;
-    } entry;
-    WNDCLASSA klass = {0};
-    D3DPRESENT_PARAMETERS pp = {0};
+    WNDCLASSA klass = {};
+    D3DPRESENT_PARAMETERS pp = {};
     D3DLOCKED_RECT locked;
     RECT bounds = {0, 0, 320, 240}, client;
     struct Vertex {
@@ -188,6 +195,14 @@ static void Run(void) {
     } vertices[3] = {{80, 60, .5f, 1, 0xffff0000},
                      {240, 60, .5f, 1, 0xffff0000},
                      {160, 180, .5f, 1, 0xffff0000}};
+#ifdef DG_SYSTEM_D3D
+    Log("STAGE ordinary system Direct3D loader");
+    runtime = system_loader::load(DG_SYSTEM_API, Log);
+    gl = nullptr;
+    if (!Check(runtime != nullptr, "FAIL system Direct3D loader or private neighbor",
+               GetLastError()))
+        return;
+#else
     Log("STAGE explicit application-local DreamGPU OpenGL loader");
     gl = LoadLibraryA(GL_PATH);
     gl_module = gl;
@@ -204,8 +219,8 @@ static void Run(void) {
         return;
     if (!Check(GetModuleHandleA("dgpugl.dll") == gl, "FAIL Wine loaded another OpenGL module", 0))
         return;
-    entry.generic = GetProcAddress(runtime, CREATE_NAME);
-    create = entry.factory;
+#endif
+    create = Entry<CreateD3D>(runtime, CREATE_NAME);
     if (!create) {
         Check(FALSE, "FAIL Direct3D factory export", GetLastError());
         return;
@@ -214,6 +229,13 @@ static void Run(void) {
     d3d = create(D3D_SDK_VERSION);
     if (!Check(d3d != NULL, "FAIL create D3D object", GetLastError()))
         return;
+#ifdef DG_SYSTEM_D3D
+    if (!Check(system_loader::object(d3d->lpVtbl, DG_SYSTEM_PROVIDER),
+               "FAIL actual system Wine Direct3D object/dependencies", 0))
+        return;
+    gl = GetModuleHandleA("dgpugl.dll");
+    gl_module = gl;
+#endif
     klass.lpfnWndProc = WindowProc;
     klass.hInstance = GetModuleHandleA(NULL);
     klass.lpszClassName = "DreamGPUD3DProbe";
@@ -293,7 +315,7 @@ static void Run(void) {
     Log("STAGE present");
     HR(DEVICE(Present, device, NULL, NULL, NULL, NULL), "FAIL present");
 }
-void WINAPI WinMainCRTStartup(void) {
+extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     LogFile = CreateFileA(LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS,
                           FILE_ATTRIBUTE_NORMAL, NULL);

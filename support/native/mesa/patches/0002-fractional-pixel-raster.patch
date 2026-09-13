@@ -1,0 +1,140 @@
+--- a/src/mesa/main/drawpix.c
++++ b/src/mesa/main/drawpix.c
+@@ -149,8 +149,8 @@
+    if (ctx->RenderMode == GL_RENDER) {
+       if (width > 0 && height > 0) {
+          /* Round, to satisfy conformance tests (matches SGI's OpenGL) */
+-         GLint x = lroundf(ctx->Current.RasterPos[0]);
+-         GLint y = lroundf(ctx->Current.RasterPos[1]);
++         GLfloat x = ctx->Current.RasterPos[0];
++         GLfloat y = ctx->Current.RasterPos[1];
+ 
+          if (ctx->Unpack.BufferObj) {
+             /* unpack from PBO */
+@@ -288,8 +288,8 @@
+    if (ctx->RenderMode == GL_RENDER) {
+       /* Round to satisfy conformance tests (matches SGI's OpenGL) */
+       if (width > 0 && height > 0) {
+-         GLint destx = lroundf(ctx->Current.RasterPos[0]);
+-         GLint desty = lroundf(ctx->Current.RasterPos[1]);
++         GLfloat destx = ctx->Current.RasterPos[0];
++         GLfloat desty = ctx->Current.RasterPos[1];
+          st_CopyPixels( ctx, srcx, srcy, width, height, destx, desty,
+                         type );
+       }
+--- a/src/mesa/state_tracker/st_cb_drawpixels.c
++++ b/src/mesa/state_tracker/st_cb_drawpixels.c
+@@ -710,7 +710,7 @@
+ 
+ 
+ static void
+-draw_textured_quad(struct gl_context *ctx, GLint x, GLint y, GLfloat z,
++draw_textured_quad(struct gl_context *ctx, GLfloat x, GLfloat y, GLfloat z,
+                    GLsizei width, GLsizei height,
+                    GLfloat zoomX, GLfloat zoomY,
+                    struct pipe_sampler_view **sv,
+@@ -892,7 +892,7 @@
+     * vertex shader and viewport transformation.
+     */
+    if (_mesa_fb_orientation(ctx->DrawBuffer) == Y_0_BOTTOM) {
+-      y = fb_height - (int) (y + height * ctx->Pixel.ZoomY);
++      y = fb_height - (y + height * ctx->Pixel.ZoomY);
+       invertTex = !invertTex;
+    }
+ 
+@@ -1252,8 +1252,15 @@
+    }
+ }
+ 
++/* Integer clipping/blits cannot represent a fractional raster origin. */
++static bool
++integral_pixel_position(GLfloat p)
++{
++   return p >= (GLfloat) INT_MIN && p < -(GLfloat) INT_MIN && p == floorf(p);
++}
++
+ void
+-st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
++st_DrawPixels(struct gl_context *ctx, GLfloat x, GLfloat y,
+               GLsizei width, GLsizei height,
+               GLenum format, GLenum type,
+               const struct gl_pixelstore_attrib *unpack, const void *pixels)
+@@ -1283,8 +1290,13 @@
+ 
+    /* Skip totally clipped DrawPixels. */
+    if (ctx->Pixel.ZoomX == 1 && ctx->Pixel.ZoomY == 1 &&
+-       !_mesa_clip_drawpixels(ctx, &x, &y, &width, &height, &clippedUnpack))
+-      return;
++       integral_pixel_position(x) && integral_pixel_position(y)) {
++      GLint ix = (GLint) x, iy = (GLint) y;
++      if (!_mesa_clip_drawpixels(ctx, &ix, &iy, &width, &height, &clippedUnpack))
++         return;
++      x = ix;
++      y = iy;
++   }
+ 
+    /* Limit the size of the glDrawPixels to the max texture size.
+     * Strictly speaking, that's not correct but since we don't handle
+@@ -1302,7 +1314,7 @@
+    if (write_stencil &&
+        !st->has_stencil_export) {
+       /* software fallback */
+-      draw_stencil_pixels(ctx, x, y, width, height, format, type,
++      draw_stencil_pixels(ctx, lroundf(x), lroundf(y), width, height, format, type,
+                           unpack, pixels);
+       return;
+    }
+@@ -1654,7 +1666,7 @@
+ void
+ st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
+               GLsizei width, GLsizei height,
+-              GLint dstx, GLint dsty, GLenum type)
++              GLfloat dstx, GLfloat dsty, GLenum type)
+ {
+    struct st_context *st = st_context(ctx);
+    struct pipe_context *pipe = st->pipe;
+@@ -1682,7 +1694,8 @@
+    ST_PIPELINE_META_STATE_MASK(mask);
+    st_validate_state(st, mask);
+ 
+-   if (blit_copy_pixels(ctx, srcx, srcy, width, height, dstx, dsty, type))
++   if (integral_pixel_position(dstx) && integral_pixel_position(dsty) &&
++       blit_copy_pixels(ctx, srcx, srcy, width, height, (GLint) dstx, (GLint) dsty, type))
+       return;
+ 
+    /* fallback if the driver can't do stencil exports */
+@@ -1696,7 +1709,7 @@
+    /* fallback if the driver can't do stencil exports */
+    if (type == GL_STENCIL &&
+        !st->has_stencil_export) {
+-      copy_stencil_pixels(ctx, srcx, srcy, width, height, dstx, dsty);
++      copy_stencil_pixels(ctx, srcx, srcy, width, height, lroundf(dstx), lroundf(dsty));
+       return;
+    }
+ 
+@@ -1766,7 +1779,7 @@
+       }
+       else if (type == GL_STENCIL) {
+          /* can't use texturing, fallback to copy */
+-         copy_stencil_pixels(ctx, srcx, srcy, width, height, dstx, dsty);
++         copy_stencil_pixels(ctx, srcx, srcy, width, height, lroundf(dstx), lroundf(dsty));
+          return;
+       }
+       else {
+--- a/src/mesa/state_tracker/st_cb_drawpixels.h
++++ b/src/mesa/state_tracker/st_cb_drawpixels.h
+@@ -44,12 +44,12 @@
+ extern void
+ st_make_passthrough_vertex_shader(struct st_context *st);
+ 
+-void st_DrawPixels(struct gl_context *ctx, GLint x, GLint y,
++void st_DrawPixels(struct gl_context *ctx, GLfloat x, GLfloat y,
+                    GLsizei width, GLsizei height,
+                    GLenum format, GLenum type,
+                    const struct gl_pixelstore_attrib *unpack, const void *pixels);
+ void st_CopyPixels(struct gl_context *ctx, GLint srcx, GLint srcy,
+                    GLsizei width, GLsizei height,
+-                   GLint dstx, GLint dsty, GLenum type);
++                   GLfloat dstx, GLfloat dsty, GLenum type);
+ 
+ #endif /* ST_CB_DRAWPIXELS_H */

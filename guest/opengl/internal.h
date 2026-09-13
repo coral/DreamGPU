@@ -22,14 +22,18 @@ typedef struct {
  * descriptor; snapshots never own/free array storage or copy vertex data. */
 typedef struct {
     GLbitfield Mask;
-    JGL_ARRAY Attribute[5];
+    JGL_ARRAY Attribute[7];
     JGL_UNPACK Pack, Unpack;
 } JGL_CLIENT_SNAPSHOT;
 typedef struct {
+    void *SelectPointer, *FeedbackPointer;
+    ULONG SelectSize, FeedbackSize, CaptureMode;
+    ULONG ListMode, ListAware;
     ULONG ClientDepth;
     JGL_CLIENT_SNAPSHOT ClientStack[16];
     ULONG ServerDepth, ServerMasks[16], ServerDrawBuffers[16];
-    JGL_ARRAY Attribute[5]; /* position, color, normal, texture coordinate, secondary color */
+    JGL_ARRAY Attribute[7]; /* position, color, normal, texture coordinate, secondary color, index,
+                               edge */
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
 } JGL_ARRAY_STATE;
 #ifdef __cplusplus
@@ -40,11 +44,17 @@ BOOL JglArrayQuery(GLenum pname, GLint *value);
 void JglArrayElement(GLint index);
 void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer);
 BOOL JglReady(void);
+BOOL JglCommandReady(void);
+BOOL JglListMode(ULONG mode);
+BOOL JglCompiling(void);
+void JglCallList(ULONG name);
+BOOL JglCallLists(ULONG count, const ULONG *offsets);
 BOOL JglSupportsSecondary(void);
 GLfloat JglColorComponent(const BYTE *value, GLenum type);
 void JglScalarVector(ULONG function, ULONG words, const void *arguments);
 HINSTANCE JglModule(void);
 void JglSetError(GLenum error);
+void JglCommandError(GLenum error);
 void JglForgetTextures(ULONG count, const GLuint *textures);
 BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *payload, ULONG bytes);
 ULONG JglMaxDataBytes(ULONG words);

@@ -3,11 +3,21 @@
  * Fixed CD helper protocol, 512 target + 512 presented pixels, no software device.
  */
 #define WIN32_LEAN_AND_MEAN
+#define CINTERFACE
 #define COBJMACROS
 #define INITGUID
 #include <windows.h>
+#include "entry.h"
 #include <ddraw.h>
 #include <d3d.h>
+#ifdef DG_SYSTEM_D3D
+#include "system-loader.h"
+#define DG_LOG_PATH "C:\\DGSYS6.LOG"
+#define DG_PROBE_NAME "sysd3d6"
+#else
+#define DG_LOG_PATH "C:\\DGD3D6.LOG"
+#define DG_PROBE_NAME "d3d6"
+#endif
 
 static HANDLE LogFile;
 static IDirectDraw4 *draw;
@@ -19,12 +29,6 @@ static IDirectDrawClipper *clipper;
 static HWND window;
 static BOOL failed;
 static unsigned int(WINAPI *ProbeGlError)(void);
-void *memset(void *destination, int value, unsigned int count) {
-    volatile BYTE *out = destination;
-    while (count--)
-        *out++ = (BYTE)value;
-    return destination;
-}
 static void Log(const char *text) {
     DWORD written;
     WriteFile(LogFile, text, lstrlenA(text), &written, NULL);
@@ -56,16 +60,14 @@ static LRESULT CALLBACK WindowProc(HWND w, UINT message, WPARAM a, LPARAM b) {
 static void Run(void) {
     typedef HRESULT(WINAPI * CreateDraw)(GUID *, IDirectDraw **, IUnknown *);
     IDirectDraw *legacy_draw = NULL;
-    union {
-        FARPROC generic;
-        CreateDraw factory;
-    } entry;
     HMODULE gl, runtime;
+#ifndef DG_SYSTEM_D3D
     char path[MAX_PATH];
-    WNDCLASSA klass = {0};
+#endif
+    WNDCLASSA klass = {};
     RECT bounds = {0, 0, 320, 240}, client;
     POINT origin = {0, 0};
-    DDSURFACEDESC2 desc = {0}, locked = {0};
+    DDSURFACEDESC2 desc = {}, locked = {};
     D3DVIEWPORT2 viewport = {sizeof(D3DVIEWPORT2), 0, 0, 320, 240, -1, 1, 2, 2, 0, 1};
     D3DRECT clear_rect = {.x1 = 0, .y1 = 0, .x2 = 320, .y2 = 240};
     struct Vertex {
@@ -75,6 +77,14 @@ static void Run(void) {
                      {240, 60, .5f, 1, 0xffff0000},
                      {160, 180, .5f, 1, 0xffff0000}};
     UINT region, x, y;
+#ifdef DG_SYSTEM_D3D
+    Log("STAGE ordinary system DirectDraw loader");
+    runtime = system_loader::load("ddraw.dll", Log);
+    gl = nullptr;
+    if (!Check(runtime != nullptr, "FAIL system DirectDraw loader or private neighbor",
+               GetLastError()))
+        return;
+#else
     Log("STAGE explicit application-local DreamGPU OpenGL loader");
     gl = LoadLibraryA("C:\\SIERRA\\Half-Life\\dgpugl.dll");
     if (!Check(gl != NULL, "FAIL load DreamGPU OpenGL", GetLastError()))
@@ -85,24 +95,32 @@ static void Run(void) {
     if (!Check(lstrcmpiA(path, "C:\\SIERRA\\Half-Life\\dgpugl.dll") == 0,
                "FAIL system OpenGL fallback is forbidden", 0))
         return;
-    ProbeGlError = (void *)GetProcAddress(gl, "glGetError");
+    ProbeGlError = Entry<decltype(ProbeGlError)>(gl, "glGetError");
     runtime = LoadLibraryA("C:\\SIERRA\\Half-Life\\winedd.dll");
     if (!Check(runtime != NULL, "FAIL load Wine DirectDraw interface", GetLastError()))
         return;
     if (!Check(GetModuleHandleA("dgpugl.dll") == gl, "FAIL Wine OpenGL module identity", 0))
         return;
-    entry.generic = GetProcAddress(runtime, "DirectDrawCreate");
-    if (!Check(entry.generic != NULL, "FAIL DirectDraw factory", GetLastError()))
+#endif
+    const auto create = Entry<CreateDraw>(runtime, "DirectDrawCreate");
+    if (!Check(create != nullptr, "FAIL DirectDraw factory", GetLastError()))
         return;
     Log("STAGE create DirectDraw4 and Direct3D3");
-    if (!HR(entry.factory(NULL, &legacy_draw, NULL), "FAIL DirectDraw creation"))
+    if (!HR(create(NULL, &legacy_draw, NULL), "FAIL DirectDraw creation"))
         return;
-    HRESULT query = IDirectDraw_QueryInterface(legacy_draw, &IID_IDirectDraw4, (void **)&draw);
+    HRESULT query = IDirectDraw_QueryInterface(legacy_draw, IID_IDirectDraw4, (void **)&draw);
     IDirectDraw_Release(legacy_draw);
     if (!HR(query, "FAIL DirectDraw4 query") ||
-        !HR(IDirectDraw4_QueryInterface(draw, &IID_IDirect3D3, (void **)&d3d),
+        !HR(IDirectDraw4_QueryInterface(draw, IID_IDirect3D3, (void **)&d3d),
             "FAIL Direct3D3 query"))
         return;
+#ifdef DG_SYSTEM_D3D
+    if (!Check(system_loader::object(draw->lpVtbl, "winedd.dll"),
+               "FAIL actual system Wine DirectDraw object/dependencies", 0))
+        return;
+    gl = GetModuleHandleA("dgpugl.dll");
+    ProbeGlError = Entry<decltype(ProbeGlError)>(gl, "glGetError");
+#endif
     klass.lpfnWndProc = WindowProc;
     klass.hInstance = GetModuleHandleA(NULL);
     klass.lpszClassName = "DreamGPUD3D6Probe";
@@ -120,9 +138,9 @@ static void Run(void) {
     if (!HR(IDirectDraw4_SetCooperativeLevel(draw, window, DDSCL_NORMAL), "FAIL cooperative level"))
         return;
     {
-        DDSCAPS2 caps = {0};
+        DDSCAPS2 caps = {};
         DWORD total = 0, available = 0;
-        DDSURFACEDESC2 mode = {0};
+        DDSURFACEDESC2 mode = {};
         caps.dwCaps = DDSCAPS_VIDEOMEMORY;
         mode.dwSize = sizeof(mode);
         if (HR(IDirectDraw4_GetAvailableVidMem(draw, &caps, &total, &available),
@@ -160,7 +178,7 @@ static void Run(void) {
         Number("GL error before HAL", ProbeGlError());
     Log("STAGE create HAL render target and device");
     if (!HR(IDirectDraw4_CreateSurface(draw, &desc, &target, NULL), "FAIL render target") ||
-        !HR(IDirect3D3_CreateDevice(d3d, &IID_IDirect3DHALDevice, target, &device, NULL),
+        !HR(IDirect3D3_CreateDevice(d3d, IID_IDirect3DHALDevice, target, &device, NULL),
             "FAIL HAL device") ||
         !HR(IDirect3D3_CreateViewport(d3d, &view, NULL), "FAIL viewport creation") ||
         !HR(IDirect3DDevice3_AddViewport(device, view), "FAIL attach viewport") ||
@@ -246,19 +264,16 @@ static void Run(void) {
                             typedef void(WINAPI * ReadPixels)(int, int, int, int, unsigned int,
                                                               unsigned int, void *);
                             typedef unsigned int(WINAPI * GetError)(void);
-                            CurrentDC current =
-                                (CurrentDC)(void *)GetProcAddress(gl, "wglGetCurrentDC");
-                            ReadBuffer buffer =
-                                (ReadBuffer)(void *)GetProcAddress(gl, "glReadBuffer");
-                            ReadPixels pixels =
-                                (ReadPixels)(void *)GetProcAddress(gl, "glReadPixels");
-                            GetError error = (GetError)(void *)GetProcAddress(gl, "glGetError");
+                            CurrentDC current = Entry<CurrentDC>(gl, "wglGetCurrentDC");
+                            ReadBuffer buffer = Entry<ReadBuffer>(gl, "glReadBuffer");
+                            ReadPixels pixels = Entry<ReadPixels>(gl, "glReadPixels");
+                            GetError error = Entry<GetError>(gl, "glGetError");
                             HWND fg = GetForegroundWindow(),
                                  active = current ? WindowFromDC(current()) : NULL;
                             POINT point = {(int)xx, (int)yy};
                             RECT bounds;
                             DWORD pid = 0;
-                            BYTE rgba[4] = {0};
+                            BYTE rgba[4] = {};
                             HDC screen;
                             Number("owned HWND", (DWORD)window);
                             Number("foreground HWND", (DWORD)fg);
@@ -292,10 +307,10 @@ static void Run(void) {
         ReleaseDC(window, dc);
     }
 }
-void WINAPI WinMainCRTStartup(void) {
+extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     LogFile =
-        CreateFileA("C:\\DGD3D6.LOG", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+        CreateFileA(DG_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
     if (LogFile == INVALID_HANDLE_VALUE)
         ExitProcess(2);
     Run();
@@ -318,7 +333,8 @@ void WINAPI WinMainCRTStartup(void) {
     if (window)
         DestroyWindow(window);
     if (!failed)
-        Log("PASS automated d3d6: D3D6 HAL, 1024 exact target/front pixels, viewport3 and "
+        Log("PASS automated " DG_PROBE_NAME
+            ": D3D6 HAL, 1024 exact target/front pixels, viewport3 and "
             "independent release");
     CloseHandle(LogFile);
     ExitProcess(failed ? 1 : 0);

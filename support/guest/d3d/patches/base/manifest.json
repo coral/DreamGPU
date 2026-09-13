@@ -11,6 +11,18 @@
     {
       "file": "0002-backbuffer-blit-bounds.patch",
       "sha256": "9266cb009081aea1ec8a0c094965a72aebb2e445b1e2dd30c3a29a9da8756c2b"
+    },
+    {
+      "file": "0003-switcher-publication-and-paths.patch",
+      "sha256": "f37edc44874b601e3059467e620dcb7b6af1f3c05e4675dd72629af67b056684"
+    },
+    {
+      "file": "0004-contiguous-cpu-rows.patch",
+      "sha256": "f6b0549bd574bfb266374fe02d32d7fff6860b7060eaceab7a99431f64deafc5"
+    },
+    {
+      "file": "0005-current-cpu-map-context.patch",
+      "sha256": "36095ca74e07f350309ae55fd7f7c1340d0009af1cfa1315f92c121c0315bdaa"
     }
   ],
   "files": {
@@ -32,11 +44,59 @@
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "fd8c73522577cbdd4f5d2b3b47026081b541034d83b08011623374bf7238008c"
+      "after_sha256": "d518f285b5cfe0d7a07ceb4f25f529917c7af2f30033365f02828ca71bc28ffe"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
       "after_sha256": "13663b3b47f8a524af91704eededc0c011d25cbd98dee86217bd11192e72cbb2"
+    },
+    "switcher/switcher.c": {
+      "before_sha256": "a820f660bdc88a06aa27b8c31b2b2871fbb84baa5ad93a5b6c4bcc767be0e123",
+      "after_sha256": "4fbe8e8e5ada73868af3b5b28f2668ccec8d743c2a793ca2c4ca4e056879e6f0"
+    },
+    "switcher/switcher.h": {
+      "before_sha256": "75bf5c74540993deb8600c34b5b16e8acb5db8702ab0c949862934a3d8290b15",
+      "after_sha256": "56447f72bfa0bf8c19a36a928d55ab7325168fe68bfad3924f2b8e0b1bfd8c67"
+    },
+    "switcher/ddraw_sw.c": {
+      "before_sha256": "8ff71a87239b350ca5d3afd7642453e378b62651bd0b9eb7903109ab666953d4",
+      "after_sha256": "228643711f443a4c5613a893f712131c627a0d256d5606b6d05ac0f75620d122"
+    },
+    "switcher/ddraw_stubs.c": {
+      "before_sha256": "a8cd73976f38a3387a4c64e5abc87c2f532925f7d7faa922508a67aa3ae5769c",
+      "after_sha256": "e773269facfe8ff02c491cc0ac9b549d3994dba7ce84213fa4d06e1a44ddaba3"
+    },
+    "switcher/ddraw_sw.asm": {
+      "before_sha256": "12f9db43d54b4e27540f8be255683857c1902674f0eae1ac8e81b3daf1231820",
+      "after_sha256": "3b3eb82e45f91a79d5e0e84096f34fe0bda1308f0fc2f2b9c89f26f83219d8bb"
+    },
+    "switcher/d3d8_sw.c": {
+      "before_sha256": "4273649068351e387369d5597e8a3c187d64a9a57b3d3a5cb5ed91d72558f59b",
+      "after_sha256": "e9c267dcad20d3c07acb48fd6a24d35fca123a4fba01c68dfed1c2fd834b4132"
+    },
+    "switcher/d3d8_stubs.c": {
+      "before_sha256": "b5e74c3ea6587faf1ee3e482aa1a5c2008c453fbe7d12d225d6fa539127d99dc",
+      "after_sha256": "c015119a6d54fee7dfb9314b27abecd45495108d24d0791cbad6c59b7885b17f"
+    },
+    "switcher/d3d8_sw.asm": {
+      "before_sha256": "c591b5de5d8a1a758efb996b00421b01a6cef3b300e25a68d857ddf69037fd7e",
+      "after_sha256": "db6fe3f307cfd7332dd1564b838e5f86a078124c3ac6d43cffe5dbaa9aede9b7"
+    },
+    "switcher/d3d9_sw.c": {
+      "before_sha256": "6278b5665a23997cba71bd3c1cfc74f6ef5d3c0110cacd9fe3af45f1cd724057",
+      "after_sha256": "03857c49a1c098ec3875325171a4e47673eb185de9e40b3a0730362387f5a7aa"
+    },
+    "switcher/d3d9_stubs.c": {
+      "before_sha256": "751cc5b5cdfe69b3d711457b4c8f2560bb6eb74854436ca41b810b7ab605838e",
+      "after_sha256": "c23e683429e0b3291c86057e9adf28fc37ab3d01346cf7ab956ec663d1551720"
+    },
+    "switcher/d3d9_sw.asm": {
+      "before_sha256": "d3adf2263358c8224a2201ee87ada826ffeebfc2d302bade6595c731b532dc88",
+      "after_sha256": "f23a084e1a0c767060943847ff319eb6700b43f223004f59e146cb6695ad85f2"
+    },
+    "switcher/switcher.inc": {
+      "before_sha256": "3ff73248fcaef76c87e1b40aa1d24e1caf1b95cff36e8c31367e1b35af27e530",
+      "after_sha256": "38262116802194c4dc1ab705476cb787e8fec326e12a3f1dde88e22787c7cc4b"
     }
   }
 }

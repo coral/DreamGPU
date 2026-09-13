@@ -198,13 +198,7 @@ ULONG DgBindWindow(SURFOBJ *surface, ULONG input_bytes, PVOID input, ULONG outpu
         /* GDI holds the window/device lock in WNDOBJ_SETUP. Do not keep our
          * semaphore across an engine call that can issue a callback. */
         semaphore.release();
-        object = EngCreateWnd(surface, window->Window, WindowChanged, WO_RGN_CLIENT,
-#ifdef DG_ICD_DIAGNOSTIC
-                              1
-#else
-                              0
-#endif
-        );
+        object = EngCreateWnd(surface, window->Window, WindowChanged, WO_RGN_CLIENT, 1);
         semaphore.acquire(dev->WindowLock);
         if (!object || object == (WNDOBJ *)-1) {
             EngFreeMem(window);
@@ -319,7 +313,6 @@ done:
     return result;
 }
 
-#ifdef DG_ICD_DIAGNOSTIC
 /* GDI supplies and locks this WNDOBJ. Validate identity against our owned
  * table before dereferencing consumer state; another driver's WNDOBJ is not
  * a DreamGPU binding. The ICD runtime finishes commands before this swap.
@@ -345,7 +338,6 @@ BOOL APIENTRY DrvSwapBuffers(SURFOBJ *surface, WNDOBJ *object) {
     }
     return FALSE;
 }
-#endif
 
 VOID DgDeleteWindows(PPDEV dev) {
     WindowSemaphore semaphore;

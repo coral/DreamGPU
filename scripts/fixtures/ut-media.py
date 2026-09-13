@@ -81,7 +81,7 @@ def assemble(args):
             'Private original UT99 fixture media. No redistribution of game assets.\n'
             'One shared Win98/NT5 setup: install DGSETUP.EXE using the owned runner replacement handshake.\n'
             'PROBE utsetup copies original assets and decompresses maps through original UCC.exe.\n'
-            'PROBE utdsetup selects the fixed private D3D module and app-local Wine/DreamGPU providers.\n'
+            'PROBE utdsetup selects the original D3D module and normal system-installed providers.\n'
             'PROBE utglide / utd3d use fixed CityIntro, provider identity, foreground and measured phase gates.\n'
             'The helper discovers a unique optical DGUT.INI marker; D: on Win98 and E: on NT both work.\n'
             'Networking must remain disabled. No display drivers or Windows system DLLs are installed.\n')

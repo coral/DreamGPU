@@ -4,6 +4,10 @@
 mod cursor;
 #[path = "native_qemu/discard.rs"]
 mod discard;
+#[path = "native_qemu/evaluator.rs"]
+mod evaluator;
+#[path = "native_qemu/fixed.rs"]
+mod fixed;
 #[path = "native_qemu/pixel_image.rs"]
 mod pixel_image;
 #[path = "native_qemu/pixels.rs"]
@@ -12,10 +16,10 @@ mod pixels;
 mod raster;
 #[path = "native_qemu/secondary.rs"]
 mod secondary;
-#[path = "native_qemu/textures.rs"]
-mod textures;
 #[path = "native_qemu/texture_control.rs"]
 mod texture_control;
+#[path = "native_qemu/textures.rs"]
+mod textures;
 
 use dreamgpu::shmem::ShmemServer;
 use dreamgpu::transport::*;
@@ -61,8 +65,22 @@ impl Qemu {
             "Build DreamGPU QEMU or set DREAMGPU_QEMU_PATH: {}",
             binary.display()
         );
+        // Frozen binaries may live outside QEMU's build directory. Bind their
+        // firmware explicitly instead of relying on executable-relative lookup.
+        let firmware = std::env::var_os("DREAMGPU_FIRMWARE_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| {
+                PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("vendor/qemu/pc-bios")
+            });
+        assert!(
+            firmware.join("bios-256k.bin").is_file(),
+            "QEMU firmware unavailable: {}",
+            firmware.display()
+        );
         let qtest_path = directory.join("qtest.sock");
         let child = Command::new(binary)
+            .arg("-L")
+            .arg(&firmware)
             .args([
                 "-machine",
                 "pc",
@@ -988,3 +1006,9 @@ fn drive_lifecycle(
         let _ = wake.recv_timeout(Duration::from_millis(2));
     }
 }
+
+#[path = "native_qemu/selection.rs"]
+mod selection;
+
+#[path = "native_qemu/lists.rs"]
+mod lists;

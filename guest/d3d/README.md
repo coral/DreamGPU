@@ -1,7 +1,15 @@
 # Guest Direct3D integration
 
+The guest `dreamgpu.exe` installer owns the system DirectDraw/Direct3D6–9
+providers and their WineD3D dependencies. Ordinary games use those system APIs
+without neighboring DLLs or patched imports. Full installer/API activation has
+passed on Windows 2000 and XP; remaining lifecycle and Win98 gates are recorded
+in [the plan](../../docs/plan.md).
+
+## Diagnostic probes
+
 The bounded public probes live in `tools/d3d/`; this directory keeps the
-runtime Wine adaptations. `tools/d3d/probe.c` builds as `DGD3D8.EXE` and `DGD3D9.EXE`. Each loads the source-built
+runtime Wine adaptations. `tools/d3d/probe.cpp` builds as `DGD3D8.EXE` and `DGD3D9.EXE`. Each loads the source-built
 Wine9x interface (`wined8.dll` or `wined9.dll`) from `C:\SIERRA\Half-Life`, creates
 a HAL device with a 320×240 X8R8G8B8 lockable backbuffer, draws a fixed red triangle,
 checks 512 exact RGB pixels through a real backbuffer read, presents and releases
@@ -30,8 +38,9 @@ a Direct3D game works.
 
 ## Wine and DreamGPU binding
 
-Install `wined3d.dll`, `wined8.dll`, `wined9.dll` and `dgpugl.dll` beside the
-application. Current Wine packages directly import the uniquely named DreamGPU
+The system installer places `wined3d.dll`, `wined8.dll`, `wined9.dll` and
+`dgpugl.dll` in the OS system directory. Private diagnostic fixtures may retain
+their own copies. Current Wine packages directly import the uniquely named DreamGPU
 frontend; games do not need a diagnostic process to preload an OpenGL alias.
 Historical accepted probes/packages used an explicit `opengl32.dll` preload,
 so retain their original package identities when interpreting recorded results.
@@ -54,7 +63,7 @@ broader compatibility and performance acceptance.
 
 ## Direct3D 7
 
-`tools/d3d/probe7.c` builds as `DGD3D7.EXE`. It explicitly loads `winedd.dll`, calls
+`tools/d3d/probe7.cpp` builds as `DGD3D7.EXE`. It explicitly loads `winedd.dll`, calls
 DirectDrawCreateEx and queries Direct3D7. It creates a HAL device on a 320×240
 32-bit RGB video-memory render target, checks the same 512 triangle/background
 pixels through a real DirectDraw surface lock, and presents with a window-clipped
@@ -132,7 +141,7 @@ artifacts and limits are recorded in `benchmarks/retro-gpu/ut-d3d-progress.json`
 
 ## Direct3D 6
 
-`tools/d3d/probe6.c` uses the actual legacy `DirectDrawCreate` factory, then queries
+`tools/d3d/probe6.cpp` uses the actual legacy `DirectDrawCreate` factory, then queries
 `IDirectDraw4` and `IDirect3D3`. It creates only the HAL Device3 and a Viewport3,
 sets `D3DVIEWPORT2`, clears with `Clear2`, draws a fixed triangle and checks
 512 target pixels through Lock plus512 window-front pixels through GetPixel.
@@ -156,3 +165,30 @@ rejections. Linux acceptance is separate; see `d3d-acceptance.json`.
 See [guest tools](../../tools/README.md) for probe builders and
 [execution evidence](../../docs/progress.md) for current acceptance. Historical
 benchmark filenames above remain references into the original Juke tree.
+
+## Public system providers
+
+The system route installs the reviewed switchers as Windows' public `ddraw.dll`,
+`d3d8.dll` and `d3d9.dll`, with Wine's providers and `dgpugl.dll` in the same
+system directory. An ordinary unknown application uses Wine without a per-game
+registry enrollment or DLL copy. Preserved native aliases support the switcher's
+explicit compatibility routes; native and Wine COM factories are never exchanged
+after an object has been returned. The earlier app-local instructions above
+describe the retained diagnostic and historical game fixtures.
+
+`DGDD2D.EXE` exercises an ordinary DirectDraw-only client through the public loader,
+verifies the actual COM provider, exact fill/copy/color-key/primary pixels and two
+object lifecycles, and times completed offscreen blits. Its `--native` variant
+checks the original public provider with the same workload. A native primary-blit
+failure remains a failure even when the independent offscreen timing succeeded.
+
+The checked Wine patches retain the original pitched/overlapping row paths while
+coalescing proven contiguous, nonoverlapping CPU copies. CPU surface maps skip GL
+context binding only when the exact color SYSMEM, USER_MEMORY or DIB location is
+already current. Stale copies, depth/stencil and GPU/PBO locations retain their
+original synchronization path. These changes preserve GPU rendering and avoid
+unnecessary Windows 98 window/atom thunks during ordinary CPU surface access.
+
+Provider installation requires recorded original DLL identities, a cold boot and
+an exact rollback receipt. Passing a bounded API probe does not establish broad
+game compatibility or a universal 2D performance guarantee.

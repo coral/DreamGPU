@@ -1,0 +1,566 @@
+--- a/switcher/switcher.c
++++ b/switcher/switcher.c
+@@ -15,7 +15,7 @@ static HMODULE userlib = NULL;
+ static HMODULE systemlib = NULL;
+ 
+ /* settings */
+-BOOL unkToSystemDll = FALSE;
++BOOL unkToSystemDll = TRUE;
+ 
+ /* build in blacklist */
+ static const char *blacklist_exe[] = {
+@@ -28,6 +28,13 @@ static const char *blacklist_dll[] = {
+ 	"opengl32.dll",
+ 	"mesa3d.dll",
+ 	"vmwsgl32.dll",
++	"dgpuicd.dll",
++	"dgpugl.dll",
++	"ddsys.dll",
++	"ddr95.dll",
++	"ddr98.dll",
++	"msd3d8.dll",
++	"msd3d9.dll",
+ 	NULL
+ };
+ 
+@@ -95,23 +102,21 @@ BOOL isWindows2k()
+ 
+ BOOL getVMDISP9xFlags(DWORD *pFlags)
+ {
+-	HWND hDesktop = GetDesktopWindow();
+-	HDC hdc = GetDC(hDesktop);
+-	FBHDA_t *hda = NULL;
+-
+-	if(ExtEscape(hdc, OP_FBHDA_SETUP, 0, NULL, sizeof(FBHDA_t *), (LPVOID)&hda))
+-	{
+-		if(hda != NULL)
+-		{
+-			if(hda->cb == sizeof(FBHDA_t) && hda->version == API_3DACCEL_VER)
+-			{
+-				*pFlags = hda->flags;
+-				return TRUE;
+-			}
+-		}
+-	}
+-	
+-	return FALSE;
++    HWND desktop = GetDesktopWindow();
++    HDC dc = GetDC(desktop);
++    FBHDA_t *hda = NULL;
++    BOOL result = FALSE;
++    if (!dc || !pFlags) {
++        if (dc) ReleaseDC(desktop, dc);
++        return FALSE;
++    }
++    if (ExtEscape(dc, OP_FBHDA_SETUP, 0, NULL, sizeof(hda), (LPVOID)&hda) > 0 && hda &&
++        hda->cb == sizeof(*hda) && hda->version == API_3DACCEL_VER) {
++        *pFlags = hda->flags;
++        result = TRUE;
++    }
++    ReleaseDC(desktop, dc);
++    return result;
+ }
+ 
+ BOOL isNineSafe(DWORD drv_flags)
+@@ -147,27 +152,31 @@ BOOL isNineSafe(DWORD drv_flags)
+ 	return TRUE;
+ }
+ 
++/* DreamGPU: installed providers are resolved only in the Windows system
++ * directory. Neither current-directory search nor arbitrary registry DLL paths
++ * may replace the native 2D provider. Verify the loaded module's identity too,
++ * since legacy loaders can reuse an already loaded module by basename. */
+ HMODULE tryLoad(const char *path, const char *check_entry)
+ {
+-	HMODULE lib = LoadLibraryA(path);
+-	if(lib != NULL)
+-	{
+-		if(lib != thisDLL)
+-		{
+-			if(GetProcAddress(lib, check_entry) != NULL)
+-			{
+-				return lib;
+-			}
+-		}
+-		
+-		FreeLibrary(lib);
+-	}
+-	else
+-	{	
+-		DBG("LoadLibraryA(%s): %ld", path, GetLastError());
+-	}
+-	
+-	return NULL;
++    char expected[MAX_PATH], loaded[MAX_PATH];
++    const char *name = path;
++    const char *last;
++    HMODULE lib;
++    DWORD length;
++    if (!path || !*path || !check_entry) return NULL;
++    last = strrchr(path, '\\');
++    if (last) name = last + 1;
++    getSysPath(expected, (char *)name);
++    if (!expected[0]) return NULL;
++    if (name != path && stricmp(path, expected) != 0) return NULL;
++    lib = LoadLibraryA(expected);
++    if (!lib) return NULL;
++    length = GetModuleFileNameA(lib, loaded, sizeof(loaded));
++    if (lib != thisDLL && length > 0 && length < sizeof(loaded) &&
++        loaded[length] == 0 && stricmp(loaded, expected) == 0 &&
++        GetProcAddress(lib, check_entry) != NULL) return lib;
++    FreeLibrary(lib);
++    return NULL;
+ }
+ 
+ /**
+@@ -178,43 +187,29 @@ HMODULE tryLoad(const char *path, const char *check_entry)
+  **/
+ BOOL fncheck(BYTE *returnaddress, DWORD fn)
+ {
+-	DBG("returnaddress: %X fn: %X", returnaddress, fn);
+-	
+-	HANDLE hSnapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
+-	MODULEENTRY32 modentry = { 0 };
+-	
+-	(void)fn;
+-	
+-	if(hSnapshot != NULL)
+-	{
+-		modentry.dwSize = sizeof(MODULEENTRY32);
+-		Module32First(hSnapshot, &modentry);
+-		do
+-		{
+-			if ((modentry.modBaseAddr <= returnaddress) &&
+-				(modentry.modBaseAddr + modentry.modBaseSize > returnaddress))
+-			{
+-				int i = 0;
+-				const char *blentry;
+-				for(i = 0; (blentry = blacklist_dll[i]) != NULL; i++)
+-				{
+-					/* WARNING: check for module name case insensitive! */
+-					if(stricmp(modentry.szModule, blentry) == 0)
+-					{
+-						CloseHandle(hSnapshot);
+-						DBG("LOOP");
+-						return FALSE;
+-					}
+-					
+-				}
+-			}
+-		} while (Module32Next(hSnapshot, &modentry));
+-			
+-		CloseHandle(hSnapshot);
+-	}
+-	
+-	DBG("PASS");
+-	return TRUE;
++    HANDLE snapshot = CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, 0);
++    MODULEENTRY32 entry = {0};
++    BOOL allowed = FALSE;
++    (void)fn;
++    if (snapshot == INVALID_HANDLE_VALUE || !snapshot) return FALSE;
++    entry.dwSize = sizeof(entry);
++    if (Module32First(snapshot, &entry)) do {
++        uintptr_t address = (uintptr_t)returnaddress;
++        uintptr_t base = (uintptr_t)entry.modBaseAddr;
++        if (address >= base && address - base < entry.modBaseSize) {
++            int i;
++            size_t length;
++            for (length = 0; length < sizeof(entry.szModule); ++length)
++                if (!entry.szModule[length]) break;
++            allowed = length < sizeof(entry.szModule);
++            if (!allowed) break;
++            for (i = 0; blacklist_dll[i]; ++i)
++                if (stricmp(entry.szModule, blacklist_dll[i]) == 0) allowed = FALSE;
++            break;
++        }
++    } while (Module32Next(snapshot, &entry));
++    CloseHandle(snapshot);
++    return allowed; /* Unknown callers keep the native 2D path. */
+ }
+ 
+ void fnprint(DWORD fn)
+@@ -225,118 +220,64 @@ void fnprint(DWORD fn)
+ }
+ 
+ /* registry and settings */
++/* All three caller buffers have exactly MAX_PATH bytes. Reject truncated
++ * OS/registry results before using a string function on them. */
+ static char *getExeName(char *buffer)
+ {
+-	char pathbuf[MAX_PATH];
+-	if(GetModuleFileNameA(NULL, pathbuf, MAX_PATH))
+-	{
+-		const char *exe = strrchr(pathbuf, '\\');
+-		if(exe != NULL && strlen(exe) > 1)
+-		{
+-			strcpy(buffer, exe+1);
+-			return buffer;
+-		}
+-	}
+-	
+-	return NULL;
++    char path[MAX_PATH];
++    DWORD length = GetModuleFileNameA(NULL, path, sizeof(path));
++    const char *name;
++    buffer[0] = 0;
++    if (!length || length >= sizeof(path) || path[length] != 0) return NULL;
++    name = strrchr(path, '\\');
++    if (!name || !name[1]) return NULL;
++    strcpy(buffer, name + 1);
++    return buffer;
+ }
+-
+-void getSysPath(char *buf, char *dllname)
++void getSysPath(char *buffer, char *name)
+ {
+-	if(GetSystemDirectoryA(buf, MAX_PATH) != 0)
+-	{
+-		strcat(buf, "\\");
+-		strcat(buf, dllname);
+-	}
+-	else
+-	{
+-		strcpy(buf, dllname);	
+-	}
++    DWORD length;
++    size_t n;
++    buffer[0] = 0;
++    if (!name || !*name || strchr(name, '\\') || strchr(name, '/') || strchr(name, ':')) return;
++    n = strlen(name);
++    if (n > MAX_PATH - 2) return;
++    length = GetSystemDirectoryA(buffer, MAX_PATH);
++    if (!length || length >= MAX_PATH || length + n + 2 > MAX_PATH) {buffer[0] = 0; return;}
++    buffer[length] = '\\';
++    memcpy(buffer + length + 1, name, n + 1);
++}
++static BOOL readSetting(HKEY key, const char *name, char *buffer)
++{
++    DWORD type = 0, bytes = MAX_PATH;
++    LONG result;
++    buffer[0] = 0;
++    result = RegQueryValueExA(key, name, NULL, &type, (BYTE *)buffer, &bytes);
++    if (result != ERROR_SUCCESS || type != REG_SZ || !bytes || bytes > MAX_PATH ||
++        buffer[bytes - 1] != 0 || strlen(buffer) != bytes - 1) {buffer[0] = 0; return FALSE;}
++    /* Fixed provider policy values; no DLL-path execution from the registry. */
++    if (stricmp(buffer, "system") && stricmp(buffer, "wine") && stricmp(buffer, "default") &&
++        stricmp(buffer, "nine") && stricmp(buffer, "ninemore") && stricmp(buffer, "nineforce")) {
++        buffer[0] = 0;
++        return FALSE;
++    }
++    return TRUE;
+ }
+-
+ static char *getSettings(char *buffer, const char *exe)
+ {
+-	DWORD type;
+-	LSTATUS lResult;
+-	HKEY hKey;
+-	DWORD size;
+-	char *result = NULL;
+-	int i;
+-	
+-	if(exe != NULL)
+-	{
+-		for(i = 0; blacklist_exe[i] != NULL; i++)
+-		{
+-			if(stricmp(exe, blacklist_exe[i]) == 0)
+-			{
+-				result = buffer;
+-				strcpy(result, "system");
+-				break;
+-			}
+-		}
+-	}
+-	
+-	lResult = RegOpenKeyEx(HKEY_LOCAL_MACHINE, reg_base, 0, KEY_READ, &hKey);
+-	if(lResult == ERROR_SUCCESS)
+-	{
+-		if(exe != NULL)
+-		{
+-			size = PATH_MAX;
+-			lResult = RegQueryValueExA(hKey, exe, NULL, &type, buffer, &size);
+-	    if(lResult == ERROR_SUCCESS)
+-	    {
+-	      switch(type)
+-	      {
+-	        case REG_SZ:
+-	        case REG_MULTI_SZ:
+-	        case REG_EXPAND_SZ:
+-	        {
+-	        	result = buffer;
+-	        	break;
+-	        }
+-	        case REG_DWORD:
+-	        {
+-	        	/* conv DWORD to string */
+-	        	DWORD tmp = *((DWORD*)buffer);
+-	        	sprintf(buffer, "%u", tmp);	
+-	        	result = buffer;
+-	          break;
+-	        }
+-	      }
+-			}
+-		}
+-		
+-		if(result == NULL)
+-		{
+-			size = PATH_MAX;
+-			lResult = RegQueryValueExA(hKey, "global", NULL, &type, buffer, &size);
+-	    if(lResult == ERROR_SUCCESS)
+-	    {
+-	      switch(type)
+-	      {
+-	        case REG_SZ:
+-	        case REG_MULTI_SZ:
+-	        case REG_EXPAND_SZ:
+-	        {
+-	        	result = buffer;
+-	        	break;
+-	        }
+-	        case REG_DWORD:
+-	        {
+-	        	/* conv DWORD to string */
+-	        	DWORD tmp = *((DWORD*)buffer);
+-	        	sprintf(buffer, "%u", tmp);	     
+-	        	result = buffer;   	
+-	          break;
+-	        }
+-	      }
+-			}
+-		}
+-		
+-		RegCloseKey(hKey);
+-	} // RegOpenKeyEx(...) == ERROR_SUCCESS
+-	
+-	return result;
++    HKEY key;
++    BOOL found = FALSE;
++    int i;
++    buffer[0] = 0;
++    if (exe) for (i = 0; blacklist_exe[i]; ++i) if (!stricmp(exe, blacklist_exe[i])) {
++        strcpy(buffer, "system");
++        return buffer; /* A global Wine setting must not reroute Explorer. */
++    }
++    if (RegOpenKeyEx(HKEY_LOCAL_MACHINE, reg_base, 0, KEY_READ, &key) != ERROR_SUCCESS) return NULL;
++    if (exe) found = readSetting(key, exe, buffer);
++    if (!found) found = readSetting(key, "global", buffer);
++    RegCloseKey(key);
++    return found ? buffer : NULL;
+ }
+ 
+ BOOL switcher_init()
+@@ -355,7 +296,7 @@ BOOL switcher_init()
+ 	
+ 	DBG("userlib: %X, systemlib: %X", userlib, systemlib);
+ 
+-	if(userlib == NULL && systemlib == NULL)
++	if((userlib == NULL && systemlib == NULL) || (requireSystemLib && systemlib == NULL))
+ 	{
+ 		return FALSE;
+ 	}
+@@ -366,31 +307,30 @@ BOOL switcher_init()
+ 	return TRUE;
+ }
+ 
+-static volatile DWORD need_init = 0;
+-
+-void switcher_reinit()
++/* Lazy initialization publishes all dispatch slots before READY. Reentrant
++ * loads and a bounded wait failure use immutable failure stubs, never partial
++ * tables. No spin loop and no LoadLibrary while this DLL's DllMain is active. */
++static volatile LONG init_state = 0;
++static volatile LONG init_owner = 0;
++static HANDLE init_event = NULL;
++BOOL switcher_reinit(void)
+ {
+-	if(InterlockedExchange(&need_init, 1) == 0)
+-	{
+-		switcher_init();
+-	}
++    LONG state = InterlockedCompareExchange(&init_state, 1, 0);
++    if (!state) {
++        BOOL success;
++        InterlockedExchange(&init_owner, (LONG)GetCurrentThreadId());
++        success = switcher_init();
++        InterlockedExchange(&init_owner, 0);
++        InterlockedExchange(&init_state, success ? 2 : 3);
++        SetEvent(init_event);
++        return success;
++    }
++    if (state == 1) {
++        if ((DWORD)InterlockedCompareExchange(&init_owner, 0, 0) == GetCurrentThreadId()) return FALSE;
++        if (WaitForSingleObject(init_event, 5000) != WAIT_OBJECT_0) return FALSE;
++    }
++    return InterlockedCompareExchange(&init_state, 0, 0) == 2;
+ }
+-
+-void switcher_free()
+-{
+-	if(userlib != NULL)
+-	{
+-		FreeLibrary(userlib);
+-		userlib = NULL;
+-	}
+-	
+-	if(systemlib != NULL)
+-	{
+-		FreeLibrary(systemlib);
+-		systemlib = NULL;
+-	}
+-}
+-
+ /* DLL main */
+ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
+ {
+@@ -398,6 +338,8 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
+   {
+     case DLL_PROCESS_ATTACH:
+     	thisDLL = (HMODULE)inst;
++        init_event = CreateEventA(NULL, TRUE, FALSE, NULL);
++        if (!init_event) return FALSE;
+     	/* 
+     	JH: We cannot call LoadLibrary here! (on 9x works, on XP no)
+     	if(!switcher_init())
+@@ -406,7 +348,10 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, void *reserved)
+     		
+     	break;
+     case DLL_PROCESS_DETACH:
+-    	switcher_free();
++    	/* Provider COM objects may outlive this forwarding DLL. Keep those
++         * module references until process teardown instead of FreeLibrary
++         * under the loader lock. */
++        if (init_event) CloseHandle(init_event);
+     	break;
+    }
+ 	
+--- a/switcher/switcher.h
++++ b/switcher/switcher.h
+@@ -31,6 +31,7 @@ void dbg_printf(const char *fmt, ...);
+ 
+ /* global setting */
+ extern BOOL unkToSystemDll;
++extern const BOOL requireSystemLib;
+ 
+ /* globals from modules */
+ extern const char  reg_base[];
+--- a/switcher/ddraw_sw.c
++++ b/switcher/ddraw_sw.c
+@@ -19,6 +19,7 @@ typedef struct _fnlistStruct {
+ #include "switcher_mf_clean.h"
+ 
+ /* globals */
++const BOOL requireSystemLib = TRUE;
+ const char reg_base[] = "Software\\DDSwitcher";
+ const char log_name[] = "C:\\ddswitch.log";
+ extern fnlistStruct fnlist;
+--- a/switcher/ddraw_stubs.c
++++ b/switcher/ddraw_stubs.c
+@@ -32,6 +32,10 @@ fnlistStruct fnlist = {
+ 	#include "ddraw_list.h"
+ };
+ 
++const fnlistStruct fnlist_stubs = {
++	#include "ddraw_list.h"
++};
++
+ fnlistStruct fnlist_sys = {
+ 	#include "ddraw_list.h"
+ };
+--- a/switcher/ddraw_sw.asm
++++ b/switcher/ddraw_sw.asm
+@@ -2,6 +2,7 @@
+ 
+ extern _fnlist
+ extern _fnlist_sys
++extern _fnlist_stubs
+ extern _fnprint
+ extern _fncheck
+ extern _switcher_reinit
+--- a/switcher/d3d8_sw.c
++++ b/switcher/d3d8_sw.c
+@@ -19,6 +19,7 @@ typedef struct _fnlistStruct {
+ #include "switcher_mf_clean.h"
+ 
+ /* globals */
++const BOOL requireSystemLib = FALSE;
+ const char reg_base[] = "Software\\D8Switcher";
+ const char log_name[] = "C:\\d8switch.log";
+ extern fnlistStruct fnlist;
+--- a/switcher/d3d8_stubs.c
++++ b/switcher/d3d8_stubs.c
+@@ -32,6 +32,10 @@ fnlistStruct fnlist = {
+ 	#include "d3d8_list.h"
+ };
+ 
++const fnlistStruct fnlist_stubs = {
++	#include "d3d8_list.h"
++};
++
+ fnlistStruct fnlist_sys = {
+ 	#include "d3d8_list.h"
+ };
+--- a/switcher/d3d8_sw.asm
++++ b/switcher/d3d8_sw.asm
+@@ -2,6 +2,7 @@
+ 
+ extern _fnlist
+ extern _fnlist_sys
++extern _fnlist_stubs
+ extern _fnprint
+ extern _fncheck
+ extern _switcher_reinit
+--- a/switcher/d3d9_sw.c
++++ b/switcher/d3d9_sw.c
+@@ -19,6 +19,7 @@ typedef struct _fnlistStruct {
+ #include "switcher_mf_clean.h"
+ 
+ /* globals */
++const BOOL requireSystemLib = FALSE;
+ const char reg_base[] = "Software\\D9Switcher";
+ const char log_name[] = "C:\\d9switch.log";
+ extern fnlistStruct fnlist;
+--- a/switcher/d3d9_stubs.c
++++ b/switcher/d3d9_stubs.c
+@@ -32,6 +32,10 @@ fnlistStruct fnlist = {
+ 	#include "d3d9_list.h"
+ };
+ 
++const fnlistStruct fnlist_stubs = {
++	#include "d3d9_list.h"
++};
++
+ fnlistStruct fnlist_sys = {
+ 	#include "d3d9_list.h"
+ };
+--- a/switcher/d3d9_sw.asm
++++ b/switcher/d3d9_sw.asm
+@@ -2,6 +2,7 @@
+ 
+ extern _fnlist
+ extern _fnlist_sys
++extern _fnlist_stubs
+ extern _fnprint
+ extern _fncheck
+ extern _switcher_reinit
+--- a/switcher/switcher.inc
++++ b/switcher/switcher.inc
+@@ -6,6 +6,8 @@
+ ;		call _initSW
+ ;		add esp,4
+ 		call _switcher_reinit
++        test eax, eax
++        jz %1 %+ _not_ready
+ 
+ 		mov eax,fnlistStruct.p %+ %1
+ 		push eax
+@@ -29,4 +31,9 @@
+ 			mov eax,[eax + fnlistStruct.p %+ %1 ]
+ 			jmp eax
+ 		
++        %1 %+ _not_ready:
++            mov eax,_fnlist_stubs
++            mov eax,[eax + fnlistStruct.p %+ %1 ]
++            jmp eax
++
+ %endmacro

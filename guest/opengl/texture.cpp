@@ -49,7 +49,7 @@ static ULONG PixelBytes(GLenum format, GLenum type) {
     if (type == GL_UNSIGNED_BYTE) {
         ULONG bytes = Components(format);
         if (!bytes)
-            JglSetError(GL_INVALID_ENUM);
+            JglCommandError(GL_INVALID_ENUM);
         return bytes;
     }
     switch (type) {
@@ -73,10 +73,10 @@ static ULONG PixelBytes(GLenum format, GLenum type) {
                 return 2;
             break;
         default:
-            JglSetError(GL_INVALID_ENUM);
+            JglCommandError(GL_INVALID_ENUM);
             return 0;
     }
-    JglSetError(Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
+    JglCommandError(Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
     return 0;
 }
 
@@ -151,7 +151,7 @@ static BOOL NormalizeType(GLenum format, GLenum *type) {
     if (*type != 0x8367)
         return TRUE;
     if (format != GL_RGBA && format != 0x80e1) {
-        JglSetError(Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
+        JglCommandError(Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
         return FALSE;
     }
     if (!JglUnpack()->SwapBytes)
@@ -190,7 +190,7 @@ static BOOL InternalFormat(GLint format) {
 static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, GLenum format,
                      GLenum type, ULONG *components) {
     if (target != GL_TEXTURE_2D) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return FALSE;
     }
     if (!(*components = PixelBytes(format, type)))
@@ -198,7 +198,7 @@ static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, 
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 ||
         (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) ||
         (ULONG)height > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level)) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return FALSE;
     }
     return TRUE;
@@ -223,7 +223,7 @@ static BOOL Layout(GLsizei width, GLsizei height, ULONG components, const void *
     layout->Stride = stride;
     return TRUE;
 overflow:
-    JglSetError(GL_INVALID_VALUE);
+    JglCommandError(GL_INVALID_VALUE);
     return FALSE;
 }
 
@@ -310,7 +310,7 @@ static ULONG Capacity(ULONG components) {
     /* The record also pads its payload to a four-byte boundary. */
     ULONG capacity = JglMaxDataBytes(8) & ~3UL;
     if (capacity < components) {
-        JglSetError(GL_OUT_OF_MEMORY);
+        JglCommandError(GL_OUT_OF_MEMORY);
         return 0;
     }
     return capacity;
@@ -368,11 +368,11 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
     ULONG components, capacity, args[8];
     JGL_PIXEL_LAYOUT layout;
 
-    if (!JglReady() || !NormalizeType(format, &type) ||
+    if (!JglCommandReady() || !NormalizeType(format, &type) ||
         !Validate(target, level, width, height, format, type, &components))
         return;
     if (border || !width || !height || !InternalFormat(internal_format)) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     capacity = pixels ? Capacity(type == GL_UNSIGNED_BYTE ? components : 4) : 0;
@@ -404,19 +404,19 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
     ULONG components, capacity, limit;
     JGL_PIXEL_LAYOUT layout;
 
-    if (!JglReady() || !NormalizeType(format, &type) ||
+    if (!JglCommandReady() || !NormalizeType(format, &type) ||
         !Validate(target, level, width, height, format, type, &components))
         return;
     limit = DG_GL_MAX_TEXTURE_DIMENSION >> level;
     if (xoffset < 0 || yoffset < 0 || (ULONG)xoffset > limit || (ULONG)yoffset > limit ||
         (ULONG)width > limit - xoffset || (ULONG)height > limit - yoffset) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     if (!width || !height)
         return;
     if (!pixels) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     capacity = Capacity(type == GL_UNSIGNED_BYTE ? components : 4);
@@ -431,7 +431,7 @@ static BOOL Layout1D(GLsizei width, ULONG components, const void *pixels,
     ULONG_PTR skip, first, end;
     if (!Multiply(JglUnpack()->SkipPixels, components, &skip) ||
         !Add((ULONG_PTR)pixels, skip, &first) || !Add(first, (ULONG_PTR)width * components, &end)) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return FALSE;
     }
     layout->First = (const unsigned char *)first;
@@ -442,17 +442,17 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internal_format, GL
                            GLint border, GLenum format, GLenum type, const void *pixels) {
     ULONG components, capacity, args[8];
     JGL_PIXEL_LAYOUT layout;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (target != GL_TEXTURE_1D) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!NormalizeType(format, &type) ||
         !Validate(GL_TEXTURE_2D, level, width, 1, format, type, &components))
         return;
     if (border || !width || !InternalFormat(internal_format)) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     capacity = pixels ? Capacity(type == GL_UNSIGNED_BYTE ? components : 4) : 0;
@@ -479,10 +479,10 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei
                               GLenum format, GLenum type, const void *pixels) {
     ULONG components, capacity, limit;
     JGL_PIXEL_LAYOUT layout;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (target != GL_TEXTURE_1D) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!NormalizeType(format, &type) ||
@@ -490,13 +490,13 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei
         return;
     limit = DG_GL_MAX_TEXTURE_DIMENSION >> level;
     if (xoffset < 0 || (ULONG)xoffset > limit || (ULONG)width > limit - xoffset) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     if (!width)
         return;
     if (!pixels) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     capacity = Capacity(type == GL_UNSIGNED_BYTE ? components : 4);

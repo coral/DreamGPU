@@ -31,7 +31,7 @@ template <class T> inline bool vector(const T *v) {
     // As in the other ICD aliases: reject null, read exactly the API's fixed
     // component count. Non-null client pointers must address readable values.
     if (!v) {
-        JglSetError(GL_INVALID_OPERATION);
+        JglCommandError(GL_INVALID_OPERATION);
         return false;
     }
     return true;
@@ -39,7 +39,7 @@ template <class T> inline bool vector(const T *v) {
 template <class T> inline void rect(T x1, T y1, T x2, T y2) {
     // Checking first is essential: a rejected nested Begin alone would let the
     // following vertices corrupt, and End prematurely close, the caller's draw.
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     glBegin(GL_POLYGON);
     glVertex2f(static_cast<GLfloat>(x1), static_cast<GLfloat>(y1));
@@ -205,7 +205,7 @@ static void APIENTRY AliasRectd(GLdouble x1, GLdouble y1, GLdouble x2, GLdouble 
     dg_icd_numeric::rect(x1, y1, x2, y2);
 }
 static void APIENTRY AliasRectdv(const GLdouble *a, const GLdouble *b) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!dg_icd_numeric::vector(a) || !dg_icd_numeric::vector(b))
         return;
@@ -215,7 +215,7 @@ static void APIENTRY AliasRectf(GLfloat x1, GLfloat y1, GLfloat x2, GLfloat y2) 
     dg_icd_numeric::rect(x1, y1, x2, y2);
 }
 static void APIENTRY AliasRectfv(const GLfloat *a, const GLfloat *b) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!dg_icd_numeric::vector(a) || !dg_icd_numeric::vector(b))
         return;
@@ -225,7 +225,7 @@ static void APIENTRY AliasRecti(GLint x1, GLint y1, GLint x2, GLint y2) {
     dg_icd_numeric::rect(x1, y1, x2, y2);
 }
 static void APIENTRY AliasRectiv(const GLint *a, const GLint *b) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!dg_icd_numeric::vector(a) || !dg_icd_numeric::vector(b))
         return;
@@ -235,7 +235,7 @@ static void APIENTRY AliasRects(GLshort x1, GLshort y1, GLshort x2, GLshort y2) 
     dg_icd_numeric::rect(x1, y1, x2, y2);
 }
 static void APIENTRY AliasRectsv(const GLshort *a, const GLshort *b) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!dg_icd_numeric::vector(a) || !dg_icd_numeric::vector(b))
         return;

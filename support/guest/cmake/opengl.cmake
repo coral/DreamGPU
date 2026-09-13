@@ -13,14 +13,13 @@ target_link_libraries(dgpugl PRIVATE kernel32 user32 gdi32 gcc)
 set_target_properties(dgpugl PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/application")
 install(TARGETS dgpugl RUNTIME DESTINATION application COMPONENT ${DREAMGPU_GUEST_OS})
 
-# System-loader development gate. Do not place this incomplete ICD in the
-# production provider registration manifest. Existing dgpugl remains unchanged.
+# System ICD and the app-local frontend share the same implementation.
 add_library(dgpuicd SHARED ${frontend_units} "${DREAMGPU_GUEST}/opengl/icd.cpp"
   "${DREAMGPU_GUEST}/opengl/icd.def")
 dreamgpu_user(dgpuicd)
 target_link_options(dgpuicd PRIVATE -Wl,--entry,_DllMain@12)
 target_link_libraries(dgpuicd PRIVATE kernel32 user32 gdi32 gcc)
-set_target_properties(dgpuicd PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/icd")
-install(TARGETS dgpuicd RUNTIME DESTINATION diagnostics/icd COMPONENT ${DREAMGPU_GUEST_OS})
+set_target_properties(dgpuicd PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/application")
+install(TARGETS dgpuicd RUNTIME DESTINATION application COMPONENT ${DREAMGPU_GUEST_OS})
 install(FILES "${DREAMGPU_GUEST}/opengl/icd-coverage.json"
-  DESTINATION diagnostics/icd COMPONENT ${DREAMGPU_GUEST_OS})
+  DESTINATION licenses/opengl COMPONENT ${DREAMGPU_GUEST_OS})

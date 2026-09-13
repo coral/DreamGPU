@@ -10,6 +10,8 @@ def run(body):
     api=(ROOT/'crates/dreamgpu-host/src/gl_api.rs').read_text()
     constants={name:value for name,value in re.findall(r'pub const (GL_\w+): [^=]+ = (\d+);',api)}
     source=r'''
+#define JglCommandError JglSetError
+#define JglCommandReady JglReady
 #include <cassert>
 #include <cstdint>
 #include <cstring>

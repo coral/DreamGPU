@@ -10,7 +10,9 @@ use std::{
 };
 pub mod guest;
 pub mod installer;
+pub mod mesa;
 pub mod native;
+pub mod native_runtime;
 pub mod package_metadata;
 pub mod prepare;
 
@@ -121,16 +123,21 @@ pub fn build(root: &Path) -> Result<()> {
     fs::create_dir_all(&output)?;
     println!(
         "cargo::rustc-env=DREAMGPU_NATIVE_DIR={}",
-        output.join("qemu-build").display()
+        native::launch_directory(&output.join("qemu-build")).display()
     );
     if selection == "native" || selection == "all" {
-        for path in ["vendor/qemu", "crates/dreamgpu-host", "include/dreamgpu"] {
+        for path in [
+            "vendor/qemu",
+            "crates/dreamgpu-host",
+            "include/dreamgpu",
+            "support/native",
+        ] {
             println!("cargo::rerun-if-changed={}", root.join(path).display());
         }
         native::build(root, &output.join("qemu-build"))?;
         println!(
             "cargo::metadata=native_dir={}",
-            output.join("qemu-build").display()
+            native::launch_directory(&output.join("qemu-build")).display()
         );
     }
     if selection == "guest" || selection == "all" {

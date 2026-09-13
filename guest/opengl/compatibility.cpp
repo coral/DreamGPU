@@ -76,24 +76,24 @@ static ULONG FogCount(GLenum pname) {
 }
 void APIENTRY glFogfv(GLenum pname, const GLfloat *values) {
     ULONG count, args[1] = {pname};
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     count = FogCount(pname);
     if (!count) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     JglData(FEnum_glFogfv, args, 1, values, count * sizeof(*values));
 }
 void APIENTRY glFogi(GLenum pname, GLint value) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (FogCount(pname) != 1) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     glFogf(pname, (GLfloat)value);
@@ -175,15 +175,15 @@ void APIENTRY glColor4usv(const GLushort *v) {
 void APIENTRY glFogiv(GLenum pname, const GLint *values) {
     ULONG i, count;
     GLfloat converted[4];
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     count = FogCount(pname);
     if (!count) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     for (i = 0; i < count; ++i)

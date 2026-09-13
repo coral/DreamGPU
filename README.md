@@ -1,6 +1,6 @@
 # DreamGPU
 
-DreamGPU accelerates graphics for Windows 98/2000/XP guests in QEMU on macOS and Linux. It combines guest display drivers and an OpenGL frontend with a native host renderer and a Rust transport/presentation SDK. Glide uses OpenGLide; Direct3D uses app-local WineD3D for Windows.
+DreamGPU accelerates graphics for Windows 98/2000/XP guests in QEMU on macOS and Linux. It combines guest display drivers and an OpenGL frontend with a native host renderer and a Rust transport/presentation SDK. Glide uses OpenGLide; Direct3D uses WineD3D for Windows through the guest system providers.
 
 ## Source layout
 
@@ -46,7 +46,7 @@ Outputs:
   implementations, with tools kept separate from runtime drivers.
 - `target/guest/dreamgpu.exe`: combined guest installer, with an adjacent
   `installer-manifest.json` recording payload identities. System-wide activation
-  is under development; the current installer refuses incomplete providers.
+  is implemented, with full guest lifecycle acceptance in progress.
   See [installer status](tools/setup/README.md) and the [remaining plan](docs/plan.md).
 
 ## Licensing

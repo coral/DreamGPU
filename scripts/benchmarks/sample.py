@@ -6,6 +6,7 @@ if __package__ in (None, ""):
     from pathlib import Path as _Path
     _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
 
+from scripts.automation.native_runtime import digest as native_digest
 from datetime import datetime, timezone
 from pathlib import Path
 import subprocess
@@ -22,9 +23,13 @@ def owned_qemu(state):
         raise ValueError('Fixture must record a positive owned application PID')
     children=subprocess.check_output(['pgrep','-P',str(state['pid'])],text=True).split()
     if len(children)>32:raise ValueError('Too many fixture children for bounded sampler discovery')
-    expected=str(Path(state['native']).resolve());matches=[]
+    execution=state.get('native_execution')
+    expected=str(Path(execution['path'] if execution else state['native']).resolve());matches=[]
+    if execution and native_digest(expected)!=execution['sha256']:
+        raise ValueError('Native execution identity changed before sampling')
     for child in children:
         if not child.isdecimal():raise ValueError('Invalid child PID')
+        if execution and sys.platform=='linux' and str(Path(f'/proc/{child}/exe').resolve())!=expected:continue
         value=subprocess.check_output(['ps','-p',child,'-o','ppid=','-o','args='],text=True).strip()
         parts=value.split(None,1)
         if len(parts)!=2 or parts[0]!=str(state['pid']):continue

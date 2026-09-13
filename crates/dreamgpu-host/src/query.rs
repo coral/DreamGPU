@@ -16,6 +16,9 @@ pub struct QueryState {
     pub binding_2d: u32,
     pub attrib_depth: u32,
     pub textures: *mut crate::texture::names::Namespace,
+    pub capture: *mut crate::selection::State,
+    pub memory: *const crate::texture::names::Memory,
+    pub context: *mut crate::state::ContextState,
 }
 pub type TextureRead = unsafe extern "C" fn(*mut c_void, u32, u32, u32, u32, *mut u8) -> u32;
 
@@ -119,6 +122,47 @@ unsafe fn execute(
     let a = u32::from_le_bytes(words[0..4].try_into().unwrap());
     let b = u32::from_le_bytes(words[4..8].try_into().unwrap());
     let d = u32::from_le_bytes(words[8..12].try_into().unwrap());
+    if crate::lists::query_function(function) {
+        if state.context.is_null() || state.memory.is_null() {
+            return Err(DG_GL_ERROR_CONTEXT);
+        }
+        unsafe {
+            crate::lists::query(&*state.memory, state.context, function, [a, b, d], result)?;
+            *bytes = required;
+        }
+        return Ok(());
+    }
+    if crate::selection::query_function(function) {
+        if state.capture.is_null() || state.memory.is_null() {
+            return Err(DG_GL_ERROR_CONTEXT);
+        }
+        unsafe {
+            crate::selection::query(
+                &*state.memory,
+                state.capture,
+                errors,
+                function,
+                [a, b, d],
+                result,
+            )?;
+            *bytes = required;
+        }
+        return Ok(());
+    }
+    if crate::evaluator::map_query(function) {
+        unsafe {
+            crate::evaluator::get(api, errors, function, a, b, d, result)?;
+            *bytes = required;
+        }
+        return Ok(());
+    }
+    if function == FEnum_glGetPolygonStipple {
+        unsafe {
+            crate::stipple::get(api, errors, result)?;
+            *bytes = 128;
+        }
+        return Ok(());
+    }
     if crate::pixels::map_query(function) {
         unsafe {
             crate::pixels::get_map(api, errors, function, a, b, result)?;
@@ -263,6 +307,24 @@ unsafe fn execute(
         _ => {
             logical = true;
             match a {
+                GL_LIST_INDEX | GL_LIST_MODE | GL_MAX_LIST_NESTING => {
+                    if state.context.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    integers[0] = unsafe { crate::lists::state_value(state.context, a) } as i32;
+                }
+                GL_SELECTION_BUFFER_SIZE | GL_FEEDBACK_BUFFER_SIZE => {
+                    if state.capture.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    integers[0] = unsafe {
+                        if a == GL_SELECTION_BUFFER_SIZE {
+                            (*state.capture).select_size
+                        } else {
+                            (*state.capture).feedback_size
+                        }
+                    } as i32;
+                }
                 GL_DRAW_BUFFER => integers[0] = state.draw_buffer as i32,
                 GL_READ_BUFFER => integers[0] = state.read_buffer as i32,
                 GL_DOUBLEBUFFER => integers[0] = 1,
@@ -271,6 +333,9 @@ unsafe fn execute(
                 GL_TEXTURE_BINDING_2D => integers[0] = state.binding_2d as i32,
                 GL_ATTRIB_STACK_DEPTH => integers[0] = state.attrib_depth as i32,
                 GL_MAX_ATTRIB_STACK_DEPTH => integers[0] = 16,
+                GL_MAX_EVAL_ORDER => {
+                    integers[0] = unsafe { crate::evaluator::limit(api)? } as i32;
+                }
                 GL_MAX_PIXEL_MAP_TABLE => {
                     integers[0] = unsafe { crate::pixels::limit(api)? } as i32
                 }

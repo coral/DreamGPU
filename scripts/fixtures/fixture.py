@@ -34,6 +34,7 @@ import sys
 import time
 import tomllib
 
+from scripts.automation.native_runtime import checked_execution
 from scripts.benchmarks.bench import qmp_execute, qmp_screenshot, probe_barcode
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -50,7 +51,8 @@ def digest(path):
 def controller_identity():
     """Record controller inputs separately from the frozen guest/native binaries."""
     paths = ('scripts/fixtures/fixture.py', 'scripts/benchmarks/bench.py',
-             'scripts/benchmarks/halflife.py', 'scripts/automation/vm.py')
+             'scripts/benchmarks/halflife.py', 'scripts/automation/vm.py',
+             'scripts/automation/native_runtime.py')
     return {path: digest(ROOT / path) for path in paths}
 
 
@@ -155,6 +157,7 @@ def prepare(manifest_path, output):
     if not (source / 'resources/fonts').is_dir():
         raise ValueError('Fixture source needs resources/fonts before preparing a Juke launch')
     native = checked_artifact(manifest['native'])
+    native_execution = checked_execution(manifest['native'], resolve)
     app = checked_artifact(manifest['app'])
     launcher = checked_artifact(manifest['launcher'])
     image_tool = resolve(manifest['qemu_img'])
@@ -175,7 +178,7 @@ def prepare(manifest_path, output):
     report = {'schema_version': 1, 'state': 'preparing', 'source_manifest_sha256': hashlib.sha256(source_bytes).hexdigest(),
               'preparation_controller': controller_identity(),
               'source': manifest, 'fixture': str(output), 'machine': machine, 'snapshot': snapshot,
-              'native': str(native), 'app': str(app), 'launcher': str(launcher), 'firmware': firmware,
+              'native': str(native), 'native_execution': native_execution, 'app': str(app), 'launcher': str(launcher), 'firmware': firmware,
               'created_utc': datetime.now(timezone.utc).isoformat(),
               'source_image_check': {'exit_code': check.returncode, 'output': check.stdout + check.stderr,
                                      'note': 'Exit 3 is leaked allocation only; source is never repaired.'}}
@@ -390,8 +393,19 @@ def ready(endpoint, timeout, expected_identity=None, previous_instance=None):
                        f'{expected_identity or "READY"}; last response: {last_response}')
 
 
-def resume_guest(endpoint):
-    status = qmp_execute(endpoint, [('query-status', {})])[0]
+def resume_guest(endpoint, deadline=None):
+    # A Unix socket path exists after bind(), before listen()/QMP readiness.
+    # Retry only this read-only handshake, never set_link or cont: a connection
+    # failure after a mutation must retain its original ambiguous outcome.
+    while True:
+        try:
+            status = qmp_execute(endpoint, [('query-status', {})])[0]
+            break
+        except (ConnectionRefusedError, FileNotFoundError, TimeoutError):
+            remaining = 0 if deadline is None else deadline - time.monotonic()
+            if remaining <= 0:
+                raise
+            time.sleep(min(.05, remaining))
     if status['status'] not in ('prelaunch', 'paused'):
         raise RuntimeError(f'Guest was not paused before network disable: {status}')
     qmp_execute(endpoint, [('set_link', {'name': 'net0', 'up': False}), ('cont', {})])
@@ -421,6 +435,8 @@ def start(output, timeout=60):
         raise ValueError('Start requires a newly prepared fixture; never silently restore over a previous run')
     for artifact in ('native', 'app', 'launcher'):
         checked_artifact(report['source'][artifact])
+    if checked_execution(report['source']['native'], resolve) != report.get('native_execution'):
+        raise ValueError('Native execution identity changed after fixture preparation')
     firmware = checked_firmware(report['source'].get('firmware'))
     if firmware != report.get('firmware'):
         raise ValueError('Firmware directory identity changed after fixture preparation')
@@ -445,7 +461,7 @@ def start(output, timeout=60):
             matches = re.findall(r'-qmp unix:([^,\s]+)', text)
             if matches and Path(matches[0]).exists():
                 report['qmp'] = matches[0]
-                report['prelaunch'] = resume_guest(report['qmp'])
+                report['prelaunch'] = resume_guest(report['qmp'], deadline=deadline)
                 report['network_link_before_cont'] = False
                 break
             time.sleep(.1)

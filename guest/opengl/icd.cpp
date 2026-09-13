@@ -14,11 +14,6 @@ BOOL WINAPI wglSwapBuffers(HDC);
 }
 
 static volatile LONG UnsupportedSlot = -1;
-static void Unsupported(LONG slot) {
-    InterlockedExchange(&UnsupportedSlot, slot);
-    JglSetError(GL_INVALID_OPERATION);
-    SetLastError(ERROR_CALL_NOT_IMPLEMENTED);
-}
 
 #include "icd-functions.inc"
 #include "icd-numeric.inc"
@@ -28,6 +23,10 @@ static void Unsupported(LONG slot) {
 #include "icd-pixels.inc"
 #include "icd-images.inc"
 #include "icd-textures.inc"
+#include "icd-fixed.inc"
+#include "icd-evaluator.inc"
+#include "icd-selection.inc"
+#include "icd-lists.inc"
 
 struct Dispatch final {
 #define DG_ICD_SLOT(index, result, name, signature) result(APIENTRY *name) signature;

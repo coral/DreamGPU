@@ -2143,6 +2143,7 @@ pub const DG_DESKTOP_IMAGE_EPOCH: u32 = 48;
 pub const DG_DESKTOP_IMAGE_FRAME: u32 = 56;
 pub const DG_GL_FUNCTION_INLINE_DATA: u32 = 2147483648;
 pub const DG_GL_FUNCTION_QUERY: u32 = 1073741824;
+pub const DG_GL_RECORD_ERROR: u32 = 4095;
 pub const DG_GL_FUNCTION_KIND_MASK: u32 = 3221225472;
 pub const DG_GL_DATA_FUNCTION: u32 = 32;
 pub const DG_GL_DATA_BYTES: u32 = 36;
@@ -2162,11 +2163,18 @@ pub const DG_GL_ARRAY_COLOR: u32 = 2;
 pub const DG_GL_ARRAY_NORMAL: u32 = 4;
 pub const DG_GL_ARRAY_TEXCOORD: u32 = 8;
 pub const DG_GL_ARRAY_SECONDARY: u32 = 16;
-pub const DG_GL_ARRAY_MASK: u32 = 31;
+pub const DG_GL_ARRAY_INDEX: u32 = 32;
+pub const DG_GL_ARRAY_EDGE: u32 = 64;
+pub const DG_GL_ARRAY_MASK: u32 = 127;
+pub const DG_GL_VERTEX_INDEX: u32 = 80;
+pub const DG_GL_VERTEX_EDGE: u32 = 88;
+pub const DG_GL_VERTEX_EXTENDED_BYTES: u32 = 96;
 pub const DG_GL_VERTEX_SECONDARY: u32 = 64;
 pub const DG_GL_VERTEX_SECONDARY_PAD: u32 = 76;
 pub const DG_GL_VERTEX_SECONDARY_BYTES: u32 = 80;
 pub const DG_GL_MAX_VERTICES: u32 = 65536;
+pub const DG_GL_MAX_EVAL_ORDER: u32 = 8;
+pub const DG_GL_MAX_CAPTURE_VALUES: u32 = 16384;
 pub const DG_GL_MAX_INDICES: u32 = 262144;
 pub const DG_GL_QUERY_BYTES: u32 = 48;
 pub const DG_GL_MAX_RESULT_BYTES: u32 = 512;
@@ -5346,6 +5354,140 @@ pub type mglFuncEnum = ::core::ffi::c_uint;
 #[repr(C)]
 #[derive(Debug, Copy, Clone)]
 pub struct DreamGpuGlApi {
+    pub dg_glListBase: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glSelectBuffer: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *mut ::core::ffi::c_uint),
+    >,
+    pub dg_glFeedbackBuffer: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: ::core::ffi::c_uint, arg3: *mut f32),
+    >,
+    pub dg_glRenderMode: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint) -> ::core::ffi::c_int,
+    >,
+    pub dg_glInitNames: ::core::option::Option<unsafe extern "C" fn()>,
+    pub dg_glLoadName: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glPushName: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glPopName: ::core::option::Option<unsafe extern "C" fn()>,
+    pub dg_glPassThrough: ::core::option::Option<unsafe extern "C" fn(arg1: f32)>,
+    pub dg_glMap1d: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: f64,
+            arg3: f64,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: *const f64,
+        ),
+    >,
+    pub dg_glMap1f: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: f32,
+            arg3: f32,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: *const f32,
+        ),
+    >,
+    pub dg_glMap2d: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: f64,
+            arg3: f64,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: f64,
+            arg7: f64,
+            arg8: ::core::ffi::c_int,
+            arg9: ::core::ffi::c_int,
+            arg10: *const f64,
+        ),
+    >,
+    pub dg_glMap2f: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: f32,
+            arg3: f32,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: f32,
+            arg7: f32,
+            arg8: ::core::ffi::c_int,
+            arg9: ::core::ffi::c_int,
+            arg10: *const f32,
+        ),
+    >,
+    pub dg_glMapGrid1d: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: f64, arg3: f64),
+    >,
+    pub dg_glMapGrid2d: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_int,
+            arg2: f64,
+            arg3: f64,
+            arg4: ::core::ffi::c_int,
+            arg5: f64,
+            arg6: f64,
+        ),
+    >,
+    pub dg_glEvalCoord1d: ::core::option::Option<unsafe extern "C" fn(arg1: f64)>,
+    pub dg_glEvalCoord2d: ::core::option::Option<unsafe extern "C" fn(arg1: f64, arg2: f64)>,
+    pub dg_glEvalPoint1: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_int)>,
+    pub dg_glEvalPoint2: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: ::core::ffi::c_int),
+    >,
+    pub dg_glEvalMesh1: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glEvalMesh2: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glGetMapdv: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint, arg3: *mut f64),
+    >,
+    pub dg_glGetMapfv: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint, arg3: *mut f32),
+    >,
+    pub dg_glGetMapiv: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glEdgeFlag: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uchar)>,
+    pub dg_glIndexd: ::core::option::Option<unsafe extern "C" fn(arg1: f64)>,
+    pub dg_glIndexPointer: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glEdgeFlagPointer: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *const ::core::ffi::c_void),
+    >,
+    pub dg_glPolygonStipple:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *const ::core::ffi::c_uchar)>,
+    pub dg_glGetPolygonStipple:
+        ::core::option::Option<unsafe extern "C" fn(arg1: *mut ::core::ffi::c_uchar)>,
+    pub dg_glClearAccum:
+        ::core::option::Option<unsafe extern "C" fn(arg1: f32, arg2: f32, arg3: f32, arg4: f32)>,
+    pub dg_glClearIndex: ::core::option::Option<unsafe extern "C" fn(arg1: f32)>,
+    pub dg_glIndexMask: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glAccum:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32)>,
+    pub dg_glLogicOp: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
     pub dg_glAreTexturesResident: ::core::option::Option<
         unsafe extern "C" fn(
             arg1: ::core::ffi::c_int,

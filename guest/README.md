@@ -55,8 +55,11 @@ client memory, process ownership and GDI clipping contracts are described in
 [the Win98 OpenGL notes](win9x/OPENGL.md). Debug/identity packages are diagnostic
 artifacts; the normal runtime omits their logging paths.
 
-The frontend is an app-local `DGPUGL.DLL`, not a replacement for Windows system
-OpenGL or DirectDraw. See [OpenGL](opengl/README.md),
+Run the combined `dreamgpu.exe` inside the guest to install the display driver,
+OpenGL ICD, Glide2 and DirectDraw/Direct3D providers system-wide. Microsoft
+`opengl32.dll` remains the OpenGL loader; it discovers DreamGPU's system ICD.
+Games do not need neighboring provider DLLs. See the
+[installer and acceptance status](../tools/setup/README.md), [OpenGL](opengl/README.md),
 [Glide](glide/README.md) and [Direct3D](d3d/README.md) for their contracts.
 Use the matched native runtime and guest package. Driver/service changes require
 a cold boot and new snapshots; historical snapshots retain their installed

@@ -38,16 +38,37 @@ unsafe fn stage_arrays<'a>(
     let storage = unsafe { resource::OwnedBytes::copied(m, data, bytes as usize) }?;
     let elements = fnc == FEnum_glDrawElements;
     let vertices = a[if elements { 3 } else { 2 }] as usize;
-    let stride = if a[if elements { 4 } else { 3 }] & DG_GL_ARRAY_SECONDARY != 0 {
+    let attributes = a[if elements { 4 } else { 3 }];
+    let stride = if attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0 {
+        DG_GL_VERTEX_EXTENDED_BYTES
+    } else if attributes & DG_GL_ARRAY_SECONDARY != 0 {
         DG_GL_VERTEX_SECONDARY_BYTES
     } else {
         DG_GL_VERTEX_BYTES
     } as usize;
-    for offset in (0..vertices * stride).step_by(4) {
-        let word = unsafe { data.add(offset).cast::<u32>().read_unaligned() }.to_le();
-        unsafe {
-            core::ptr::copy_nonoverlapping(word.to_be_bytes().as_ptr(), storage.p.add(offset), 4)
-        };
+    for vertex in 0..vertices {
+        let base = vertex * stride;
+        for offset in (base..base + stride.min(DG_GL_VERTEX_SECONDARY_BYTES as usize)).step_by(4) {
+            let word = u32::from_le(unsafe { data.add(offset).cast::<u32>().read_unaligned() });
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    word.to_be_bytes().as_ptr(),
+                    storage.p.add(offset),
+                    4,
+                )
+            };
+        }
+        if stride == DG_GL_VERTEX_EXTENDED_BYTES as usize {
+            let offset = base + DG_GL_VERTEX_INDEX as usize;
+            let word = u64::from_le(unsafe { data.add(offset).cast::<u64>().read_unaligned() });
+            unsafe {
+                core::ptr::copy_nonoverlapping(
+                    word.to_be_bytes().as_ptr(),
+                    storage.p.add(offset),
+                    8,
+                )
+            };
+        }
     }
     if elements {
         let size = validation::dreamgpu_gl_index_bytes(a[2]) as usize;
@@ -123,6 +144,14 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
     let pending = unsafe { crate::pixel_image::interleave(m, addr_of_mut!((*state).image)) };
     if pending != 0 {
         return pending;
+    }
+    if crate::evaluator::map_function(function) {
+        let data = unsafe { core::slice::from_raw_parts(data, bytes as usize) };
+        return unsafe { crate::evaluator::set(api, errors, function, &a, data) }
+            .map_or_else(|e| e, |()| 0);
+    }
+    if function == FEnum_glPolygonStipple {
+        return unsafe { crate::stipple::set(api, errors, data, bytes) }.map_or_else(|e| e, |()| 0);
     }
     if function == FEnum_glPrioritizeTextures {
         let data = if bytes == 0 {

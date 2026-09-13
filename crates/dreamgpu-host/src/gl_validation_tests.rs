@@ -328,3 +328,36 @@ fn pixel_maps_validate_types_dimensions_and_exact_payload_bytes() {
         assert_eq!(query_result_bytes(function, [GL_PIXEL_MAP_R_TO_R, 2, 1]), 0);
     }
 }
+#[test]
+fn fixed_state_and_extended_arrays_reject_malformed_payloads() {
+    let a = [
+        GL_TRIANGLES,
+        0,
+        1,
+        DG_GL_ARRAY_POSITION | DG_GL_ARRAY_EDGE | DG_GL_ARRAY_INDEX,
+        0,
+        0,
+        0,
+        0,
+    ];
+    let mut p = [0u8; 96];
+    assert_eq!(data_validate(FEnum_glDrawArrays, &a, &p), 0);
+    for index in [60, 76, 89, 95] {
+        p[index] = 1;
+        assert_ne!(data_validate(FEnum_glDrawArrays, &a, &p), 0);
+        p[index] = 0;
+    }
+    p[88] = 2;
+    assert_ne!(data_validate(FEnum_glDrawArrays, &a, &p), 0);
+    p[88] = 1;
+    assert_eq!(data_validate(FEnum_glDrawArrays, &a, &p), 0);
+    for n in [0, 64, 80, 95] {
+        assert_ne!(data_validate(FEnum_glDrawArrays, &a, &p[..n]), 0);
+    }
+    assert_eq!(data_validate(FEnum_glPolygonStipple, &[0; 8], &[0; 128]), 0);
+    assert_ne!(data_validate(FEnum_glPolygonStipple, &[0; 8], &[0; 127]), 0);
+    assert_eq!(query_result_bytes(FEnum_glGetPolygonStipple, [0; 3]), 128);
+    assert_ne!(query_validate(FEnum_glGetPolygonStipple, [1, 0, 0]), 0);
+    assert_eq!(function_words(FEnum_glIndexd), 2);
+    assert_eq!(query_state_count(GL_ACCUM_CLEAR_VALUE), 4);
+}

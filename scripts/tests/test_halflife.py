@@ -33,6 +33,30 @@ class ResultTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 self.assertIsNone(hl.parse_result(raw)["fps"])
 
+    def test_renderer_evidence_remains_separate_from_summary_and_counter_proof(self):
+        self.assertEqual(hl.parse_renderer_proof(ENGINE)["status"], "not_established")
+        evidence = (b"\r\nRENDERER_MODULE C:\\SIERRA\\Half-Life\\hl.exe\r\n"
+                    b"RENDERER_MODULE C:\\SIERRA\\Half-Life\\hw.dll\r\n"
+                    b"RENDERER_MODULE C:\\WINNT\\system32\\opengl32.dll\r\n"
+                    b"RENDERER_MODULE C:\\WINNT\\system32\\dgpuicd.dll\r\n"
+                    b"RENDERER_MODULE C:\\WINNT\\system32\\dgpugl.dll\r\n"
+                    b"ENGINE_GL_VENDOR: DreamGPU\r\n"
+                    b"ENGINE_GL_RENDERER: DreamGPU (native host OpenGL)\r\n"
+                    b"ENGINE_GL_VERSION: 1.1 DreamGPU\r\n"
+                    b"RENDERER_PROOF system-icd-and-engine-strings\r\n")
+        module_only = evidence.split(b"ENGINE_GL_VENDOR:")[0] + (
+            b"ENGINE_GL_STRINGS unavailable\r\nRENDERER_PROOF system-icd-modules\r\n")
+        self.assertEqual(hl.parse_renderer_proof(module_only)["status"], "verified_by_runner")
+        self.assertFalse(hl.parse_renderer_proof(module_only)["engine_strings_observed"])
+        proof = hl.parse_renderer_proof(ENGINE + evidence)
+        self.assertEqual(proof["status"], "verified_by_runner")
+        self.assertFalse(proof["gpu_command_execution_proven"])
+        self.assertEqual(hl.parse_result(ENGINE + evidence), hl.parse_result(ENGINE))
+        for invalid in (evidence.replace(b"DreamGPU (native host OpenGL)", b"GDI Generic"),
+                        evidence + b"ENGINE_GL_VERSION: duplicate\r\n",
+                        b"RENDERER_PROOF system-icd-and-engine-strings\r\n"):
+            self.assertEqual(hl.parse_renderer_proof(invalid)["status"], "not_established")
+
     def test_command_is_bounded_and_rejects_injected_demo(self):
         self.assertIn("-toconsole -condebug", hl.launch_command("dgperf.dem"))
         for name in ["../x", "a b", "x;+quit", "a" * 65, "a\nquit"]:
@@ -180,6 +204,23 @@ class ProtocolTests(unittest.TestCase):
         self.assertLessEqual(window['start'],bounds['PROCESS_RESUMED']['host_monotonic_seconds'])
         self.assertLessEqual(window['end'],report['host_monotonic_seconds']['result_received'])
 
+    def test_host_counter_observations_are_preserved_at_acknowledged_boundaries(self):
+        def behavior(stream, request_id):
+            self.started(stream, request_id)
+            stream.write(f'PROCESS_READY {request_id}\n'.encode())
+            self.assertEqual(stream.readline().decode().strip(), f'CONTINUE {request_id}')
+            stream.write(f'PROCESS_RESUMED {request_id}\nCONSOLE_OBSERVED {request_id}\nTIMEDEMO_RESULT {request_id}\n'.encode())
+            self.assertEqual(stream.readline().decode().strip(), f'OBSERVED {request_id}')
+            stream.write(f'RESULT {request_id} {ENGINE.hex()}\n'.encode())
+        def counter(kind):
+            if kind == 'TIMEDEMO_RESULT':
+                return {'source': 'fixture-owned-counter', 'submitted': 123, 'completed': 123}
+            return None
+        report, _ = self.run_server(behavior, on_phase=counter)
+        self.assertEqual(report['state'], 'completed')
+        self.assertEqual(report['timedemo_boundaries']['TIMEDEMO_RESULT']['host_observation']['completed'], 123)
+        self.assertFalse(report['renderer_proof']['gpu_command_execution_proven'])
+
     def test_failed_sampler_arming_aborts_suspended_process(self):
         def behavior(stream,request_id):
             self.started(stream,request_id)
@@ -225,6 +266,22 @@ class ProtocolTests(unittest.TestCase):
                 self.assertEqual(hl.parse_probe(raw, name), {'probe': name, 'passed': True})
                 with self.assertRaises(hl.ProtocolError):
                     hl.parse_probe(b'PASS automated arrays: unrelated API\n', name)
+
+    def test_ui_requires_observed_dialog_and_matching_continuation(self):
+        for code in (0, 11, 12, 13):
+            receipt = {'schema': 1, 'operation': 'sysresume', 'installer_exit': code,
+                       'terminal': code != 11}
+            action = 'INSTALLER_RESTART_DECLINED' if code == 11 else 'INSTALLER_DIALOG_ACCEPTED'
+            raw = (action + f'\nINSTALLER_EXIT {code}\n' + json.dumps(receipt, separators=(',', ':'))
+                   + '\nPASS automated sysresume: complete installer operation receipt\n').encode()
+            self.assertEqual(hl.parse_probe(raw, 'sysui'), {'probe': 'sysui', 'passed': True})
+            for invalid in (raw.replace(action.encode() + b'\n', b''),
+                            raw + action.encode() + b'\n',
+                            raw.replace(f'INSTALLER_EXIT {code}'.encode(), b'INSTALLER_EXIT 28'),
+                            raw.replace(b'"terminal":true', b'"terminal":false') if code != 11
+                            else raw.replace(b'"terminal":false', b'"terminal":true')):
+                with self.assertRaises(hl.ProtocolError):
+                    hl.parse_probe(invalid, 'sysui')
 
     def test_probe_rejects_missing_or_contradictory_pass(self):
         for raw in (b'379 frames 4.877 seconds 77.717 fps',

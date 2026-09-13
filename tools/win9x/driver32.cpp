@@ -10,6 +10,7 @@
 #include <setupapi.h>
 #include <cfgmgr32.h>
 #include "dg-escape.h"
+#include "../setup/driver-node.h"
 
 static_assert(sizeof(SP_DRVINFO_DATA_A) == 780, "Win98 driver-info V1 ABI");
 static_assert(sizeof(SP_DEVINFO_DATA) == 28, "Win98 device-info ABI");
@@ -146,55 +147,19 @@ static bool Install(Devices &devices, SP_DEVINFO_DATA &device) {
     Line(inf);
     if (GetFileAttributesA(inf) == INVALID_FILE_ATTRIBUTES)
         return Fail("fixed INF missing");
+    setup::driver::Node expected{};
+    lstrcpyA(expected.inf, inf);
+    lstrcpyA(expected.description, "DreamGPU");
+    lstrcpyA(expected.provider, "DreamGPU");
+    lstrcpyA(expected.section, "Dg");
+    setup::driver::DriverList list(devices.value, device);
+    if (!list.select(expected))
+        return Fail("unique exact INF selection");
+    Line("STAGE DIF_INSTALLDEVICE exact DreamGPU INF; quiet installation");
+    if (!list.bind())
+        return Fail("install selected device");
     SP_DEVINSTALL_PARAMS_A parameters{};
     parameters.cbSize = sizeof(parameters);
-    if (!SetupDiGetDeviceInstallParamsA(devices.value, &device, &parameters))
-        return Fail("read install parameters");
-    parameters.Flags |= DI_ENUMSINGLEINF | DI_QUIETINSTALL;
-    lstrcpyA(parameters.DriverPath, inf);
-    if (!SetupDiSetDeviceInstallParamsA(devices.value, &device, &parameters))
-        return Fail("set fixed INF parameters");
-    if (!SetupDiBuildDriverInfoList(devices.value, &device, SPDIT_COMPATDRIVER))
-        return Fail("build compatible driver list");
-    struct DriverList final {
-        HDEVINFO devices;
-        SP_DEVINFO_DATA *device;
-        ~DriverList() {
-            SetupDiDestroyDriverInfoList(devices, device, SPDIT_COMPATDRIVER);
-        }
-    } list{devices.value, &device};
-    SP_DRVINFO_DATA_A driver{};
-    driver.cbSize = sizeof(driver);
-    if (!SetupDiEnumDriverInfoA(devices.value, &device, SPDIT_COMPATDRIVER, 0, &driver))
-        return Fail("fixed compatible driver absent");
-    if (lstrcmpA(driver.Description, "DreamGPU") || lstrcmpA(driver.ProviderName, "DreamGPU")) {
-        SetLastError(ERROR_INVALID_DATA);
-        return Fail("driver provider identity");
-    }
-    alignas(SP_DRVINFO_DETAIL_DATA_A) BYTE bytes[4096]{};
-    auto *detail = reinterpret_cast<SP_DRVINFO_DETAIL_DATA_A *>(bytes);
-    detail->cbSize = sizeof(*detail);
-    DWORD required = 0;
-    if (!SetupDiGetDriverInfoDetailA(devices.value, &device, &driver, detail, sizeof(bytes),
-                                     &required))
-        return Fail("driver INF details");
-    if (required > sizeof(bytes) || lstrcmpiA(detail->InfFileName, inf) ||
-        lstrcmpA(detail->SectionName, "Dg") || !MatchId(detail->HardwareID)) {
-        SetLastError(ERROR_INVALID_DATA);
-        return Fail("driver INF identity");
-    }
-    SP_DRVINFO_DATA_A extra{};
-    extra.cbSize = sizeof(extra);
-    if (SetupDiEnumDriverInfoA(devices.value, &device, SPDIT_COMPATDRIVER, 1, &extra) ||
-        GetLastError() != ERROR_NO_MORE_ITEMS) {
-        SetLastError(ERROR_INVALID_DATA);
-        return Fail("ambiguous compatible driver");
-    }
-    if (!SetupDiSetSelectedDriverA(devices.value, &device, &driver))
-        return Fail("select fixed driver");
-    Line("STAGE DIF_INSTALLDEVICE exact DreamGPU INF; quiet installation");
-    if (!SetupDiCallClassInstaller(DIF_INSTALLDEVICE, devices.value, &device))
-        return Fail("install selected device");
     if (!DriverPair(devices, device))
         return false;
     if (!SetupDiGetDeviceInstallParamsA(devices.value, &device, &parameters))

@@ -846,6 +846,25 @@ int main(void) {
     Reset();
     context = Create();
     c = Lookup(context);
+    assert(JglListMode(GL_COMPILE));
+    const ULONG errorStart = c->Used;
+    glBegin(GL_POLYGON + 1);
+    assert(!c->InBegin && !c->Error && c->Records == 1);
+    assert(c->Packet.Words[errorStart + 8] == DG_GL_RECORD_ERROR &&
+           c->Packet.Words[errorStart + 9] == GL_INVALID_ENUM);
+    glBegin(GL_TRIANGLES);
+    glDrawBuffer(0xdead); /* Illegal inside Begin is deferred, without changing it. */
+    assert(c->InBegin && !c->Error && c->Records == 3);
+    glEnd();
+    JglSetError(GL_INVALID_VALUE); /* Immediate query/client-state error stays local. */
+    assert(c->Error == GL_INVALID_VALUE && c->Records == 4);
+    c->Error = 0;
+    assert(JglListMode(0));
+    assert(wglDeleteContext(context));
+
+    Reset();
+    context = Create();
+    c = Lookup(context);
     DllMain(NULL, DLL_THREAD_DETACH, NULL);
     assert(!c->Owner);
     Tls[0] = NULL;

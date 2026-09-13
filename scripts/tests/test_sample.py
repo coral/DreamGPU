@@ -23,6 +23,20 @@ class SampleTests(unittest.TestCase):
         with patch.object(sampler.subprocess,'check_output',side_effect=['41','31 /private/other/qemu-system-i386 -qmp /tmp/owned-qmp']):
             with self.assertRaisesRegex(ValueError,'exact fixture'):sampler.owned_qemu(state)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'actual /proc executable ownership')
+    def test_launcher_exec_identity_uses_exact_real_elf(self):
+        import os
+        executable=str(Path(sys.executable).resolve())
+        child=subprocess.Popen([executable,'-c','import time;time.sleep(20)','-qmp','unix:/tmp/owned-runtime-qmp,server=on'])
+        try:
+            state={'pid':os.getpid(),'native':'/a/frozen/launcher','qmp':'/tmp/owned-runtime-qmp',
+                   'native_execution':{'path':executable,'sha256':sampler.native_digest(executable)}}
+            self.assertEqual(sampler.owned_qemu(state),child.pid)
+            state['native_execution']['sha256']='0'*64
+            with self.assertRaisesRegex(ValueError,'identity changed'):sampler.owned_qemu(state)
+        finally:
+            child.terminate();child.wait(timeout=2)
+
     def launch(self,folder,code):
         original=subprocess.Popen;item=sampler.MeasurementSample({},Path(folder))
         def child(args,**kwargs):

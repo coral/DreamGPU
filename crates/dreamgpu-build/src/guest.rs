@@ -110,7 +110,6 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
     let prepared = if valid_cache {
         crate::prepare::Prepared {
             vmdisp: source_work.join("vmdisp9x"),
-            vmdisp_icd: source_work.join("vmdisp9x-icd"),
             wine: source_work.join("wine9x"),
             glide: source_work.join("openglide"),
             patches: cached.unwrap()["patches"].clone(),
@@ -148,10 +147,6 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
             .arg(format!(
                 "-DDREAMGPU_VMDISP_SOURCE={}",
                 prepared.vmdisp.display()
-            ))
-            .arg(format!(
-                "-DDREAMGPU_VMDISP_ICD_SOURCE={}",
-                prepared.vmdisp_icd.display()
             ))
             .arg(format!(
                 "-DDREAMGPU_WINE_SOURCE={}",
@@ -449,6 +444,7 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
             .collect();
         let name = path.file_name().unwrap().to_string_lossy().to_lowercase();
         let allowed: &[&str] = match name.as_str() {
+            "dgimplc.exe" if relative == "tools/nt5/DGIMPLC.EXE" => &["kernel32.dll", "dgptst.dll"],
             "dgpumini.sys" => &["videoprt.sys", "ntoskrnl.exe", "hal.dll"],
             "dgpudisp.dll" => &["win32k.sys"],
             "dgpugl.dll" => &["kernel32.dll", "user32.dll", "gdi32.dll"],
@@ -492,6 +488,12 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
             libraries.iter().all(|s| allowed.contains(&s.as_str())),
             "{relative}: unexpected runtime dependency for this component: {libraries:?}"
         );
+        if name == "dgimplc.exe" {
+            anyhow::ensure!(
+                libraries.iter().any(|s| s == "dgptst.dll"),
+                "implicit-loader probe must retain its real marker DLL import"
+            );
+        }
         if name == "wined3d.dll" || name == "glide2x.dll" {
             anyhow::ensure!(
                 libraries.iter().any(|s| s == "dgpugl.dll"),

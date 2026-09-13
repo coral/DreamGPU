@@ -18,6 +18,9 @@ def prepare(work, output, copy_diagnostics=False):
     evidence = {'base': patches.apply(work, base)}
     shutil.copy2(ROOT / 'guest/d3d/wine-diagnostics.h', work / 'ddraw/dg-wine-diagnostics.h')
     shutil.copy2(ROOT / 'guest/d3d/wine-blit-usage.h', work / 'wined3d/dg-wine-blit-usage.h')
+    for name in ('row-copy', 'map-policy'):
+        shutil.copy2(ROOT / ('guest/d3d/wine-' + name + '.h'),
+                     work / ('wined3d/dg-wine-' + name + '.h'))
     shutil.copyfile(work / 'ddraw/surface.c', output / 'surface-diagnostic.c')
     sources = {}
     if copy_diagnostics:

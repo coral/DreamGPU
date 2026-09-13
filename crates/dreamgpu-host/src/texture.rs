@@ -2,8 +2,8 @@
 //! Native texture storage ownership, cross-context ordering and uploads.
 use crate::gl_api::*;
 use core::ffi::c_void;
-pub(crate) mod names;
 pub(crate) mod control;
+pub(crate) mod names;
 
 #[repr(C)]
 pub struct Texture {

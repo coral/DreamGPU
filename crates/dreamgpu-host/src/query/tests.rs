@@ -73,6 +73,9 @@ fn state() -> QueryState {
         binding_2d: 0xf1234567,
         attrib_depth: 3,
         textures: core::ptr::null_mut(),
+        capture: core::ptr::null_mut(),
+        memory: core::ptr::null(),
+        context: core::ptr::null_mut(),
     }
 }
 fn api() -> DreamGpuGlApi {
@@ -368,9 +371,9 @@ fn large_texture_callback_is_bounded_and_owns_its_disjoint_outputs() {
     assert_eq!(
         core::mem::size_of::<QueryState>(),
         if core::mem::size_of::<usize>() == 8 {
-            48
+            72
         } else {
-            40
+            52
         }
     );
 }

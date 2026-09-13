@@ -3,7 +3,7 @@
   "upstream": {
     "vmdisp9x": "718b3d51a1532fe1ba2e133cf76186f1a609d35e"
   },
-  "purpose": "Diagnostic-only Win98 ANSI ICD discovery; production control.c remains byte-identical",
+  "purpose": "Production Win98 ANSI ICD discovery using the checked Win16 far-pointer ABI",
   "patches": [
     {
       "file": "icd.patch",

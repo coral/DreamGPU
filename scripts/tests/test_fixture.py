@@ -192,6 +192,32 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(qmp.call_args_list[1].args[1], [
             ('set_link', {'name': 'net0', 'up': False}), ('cont', {})])
 
+    def test_socket_bind_before_listen_retries_only_readiness(self):
+        effects = [ConnectionRefusedError(), FileNotFoundError(), TimeoutError(),
+                   [{'status': 'prelaunch'}], [{}, {}]]
+        with patch.object(fixture, 'qmp_execute', side_effect=effects) as qmp, \
+             patch.object(fixture.time, 'monotonic', return_value=1), \
+             patch.object(fixture.time, 'sleep'):
+            self.assertEqual(fixture.resume_guest('/tmp/test', deadline=2)['status'], 'prelaunch')
+        self.assertEqual([call.args[1] for call in qmp.call_args_list[:-1]],
+                         [[('query-status', {})]] * 4)
+        self.assertEqual(qmp.call_args_list[-1].args[1], [
+            ('set_link', {'name': 'net0', 'up': False}), ('cont', {})])
+
+    def test_resume_mutation_failure_is_never_retried(self):
+        with patch.object(fixture, 'qmp_execute', side_effect=[
+                [{'status': 'paused'}], ConnectionRefusedError()]) as qmp:
+            with self.assertRaises(ConnectionRefusedError):
+                fixture.resume_guest('/tmp/test', deadline=float('inf'))
+        self.assertEqual(qmp.call_count, 2)
+
+    def test_readiness_stops_at_deadline_without_mutations(self):
+        with patch.object(fixture, 'qmp_execute', side_effect=ConnectionRefusedError()) as qmp, \
+             patch.object(fixture.time, 'monotonic', return_value=2):
+            with self.assertRaises(ConnectionRefusedError):
+                fixture.resume_guest('/tmp/test', deadline=1)
+        qmp.assert_called_once_with('/tmp/test', [('query-status', {})])
+
     def test_discovery_timeout_reports_the_observed_wrong_runner(self):
         with tempfile.TemporaryDirectory(dir='/tmp') as directory:
             endpoint = str(Path(directory) / 'serial')

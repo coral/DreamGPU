@@ -7,6 +7,8 @@
 #include <windows.h>
 #include <GL/gl.h>
 
+#include "../common/provider-clean.h"
+
 namespace {
 class Log {
     HANDLE file_ = CreateFileA("C:\\DGSYSGL.LOG", GENERIC_WRITE, FILE_SHARE_READ, nullptr,
@@ -76,29 +78,7 @@ bool append(char *path, DWORD capacity, const char *name) {
 }
 
 bool clean_application_directory() {
-    char base[MAX_PATH];
-    DWORD count = GetModuleFileNameA(nullptr, base, sizeof(base));
-    if (!count || count >= sizeof(base))
-        return false;
-    while (count && base[count - 1] != '\\')
-        --count;
-    if (!count)
-        return false;
-    const char *names[] = {"opengl32.dll", "dgpuicd.dll", "dgpugl.dll", "glide2x.dll",
-                           "ddraw.dll",    "d3d8.dll",    "d3d9.dll",   "wined3d.dll",
-                           "winedd.dll",   "wined8.dll",  "wined9.dll"};
-    for (auto name : names) {
-        base[count] = 0;
-        if (!append(base, sizeof(base), name))
-            return false;
-        SetLastError(ERROR_SUCCESS);
-        if (GetFileAttributesA(base) != INVALID_FILE_ATTRIBUTES)
-            return false;
-        DWORD error = GetLastError();
-        if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
-            return false;
-    }
-    return true;
+    return provider_clean::launch();
 }
 
 bool system_module(HMODULE module, const char *name, Log &log) {
@@ -195,7 +175,7 @@ class Context {
 
 bool run(Log &log) {
     if (!clean_application_directory()) {
-        log.line("FAIL private provider or unreadable application directory");
+        log.line("FAIL private provider, mismatched cwd, or unreadable helper directory");
         return false;
     }
     Module module;

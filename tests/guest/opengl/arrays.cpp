@@ -9,10 +9,26 @@ static GLfloat Positions[100][1024];
 static BYTE Packed[65536];
 static BOOL Ready = TRUE, Stipple, Secondary = TRUE;
 static GLfloat SecondaryValues[3];
+static ULONG ScalarFunctions[16], ScalarCount;
+static GLdouble CurrentIndex;
+static ULONG CurrentEdge;
 BOOL JglSupportsSecondary(void) {
     return Secondary;
 }
 void JglScalarVector(ULONG fn, ULONG words, const void *p) {
+    ScalarFunctions[ScalarCount++] = fn;
+    if (fn == FEnum_glIndexd) {
+        assert(words == 2);
+        memcpy(&CurrentIndex, p, 8);
+        return;
+    }
+    if (fn == FEnum_glEdgeFlag) {
+        assert(words == 1);
+        memcpy(&CurrentEdge, p, 4);
+        return;
+    }
+    if (fn == FEnum_glVertex4f)
+        return;
     assert(fn == FEnum_glSecondaryColor3f && words == 3);
     memcpy(SecondaryValues, p, 12);
 }
@@ -58,7 +74,7 @@ BOOL JglData(ULONG fn, const ULONG *args, ULONG words, const void *payload, ULON
 static void Reset(void) {
     ULONG i, j;
     memset(States, 0, sizeof(States));
-    Current = Error = Calls = 0;
+    Current = Error = Calls = ScalarCount = 0;
     Ready = TRUE;
     Capacity = 1023;
     for (j = 0; j < 2; ++j)
@@ -85,6 +101,34 @@ int main(void) {
         vertices[i][1] = 0;
         vertices[i][2] = 0;
     }
+    Reset();
+    GLdouble color_indices[] = {16777217.25, -91.5, 2147483647.0};
+    GLubyte edges[] = {0, 7, 1};
+    glVertexPointer(3, GL_FLOAT, 0, vertices);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    glIndexPointer(GL_DOUBLE, 0, color_indices);
+    glEdgeFlagPointer(0, edges);
+    glEnableClientState(GL_INDEX_ARRAY);
+    glEnableClientState(GL_EDGE_FLAG_ARRAY);
+    glDrawArrays(GL_TRIANGLES, 0, 3);
+    assert(Masks[0] == (DG_GL_ARRAY_POSITION | DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE));
+    for (ULONG n = 0; n < 3; ++n) {
+        GLdouble v;
+        memcpy(&v, Packed + n * 96 + 80, 8);
+        assert(v == color_indices[n]);
+        assert(Packed[n * 96 + 88] == (edges[n] != 0));
+        for (ULONG j = 89; j < 96; ++j)
+            assert(!Packed[n * 96 + j]);
+    }
+    JglArrayElement(1);
+    assert(CurrentIndex == -91.5 && CurrentEdge == 1 && ScalarCount == 3 &&
+           ScalarFunctions[2] == FEnum_glVertex4f);
+    glIndexPointer(GL_UNSIGNED_INT, 0, (void *)1);
+    assert(Error == GL_INVALID_ENUM);
+    Error = 0;
+    glGetPointerv(GL_INDEX_ARRAY_POINTER, &pointer);
+    assert(pointer == color_indices);
+    assert(JglArrayQuery(GL_EDGE_FLAG_ARRAY, &value) && value == 1);
     Reset();
     glVertexPointer(3, GL_FLOAT, 0, vertices);
     glEnableClientState(GL_VERTEX_ARRAY);
@@ -213,4 +257,11 @@ int main(void) {
     puts("PASS actual client arrays: local state, indexed/strided snapshots, normalization, "
          "topology across bounded packets, invalid ranges/types, zero draws");
     return 0;
+}
+
+void JglCommandError(GLenum e) {
+    JglSetError(e);
+}
+BOOL JglCommandReady(void) {
+    return JglReady();
 }

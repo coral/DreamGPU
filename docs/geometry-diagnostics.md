@@ -40,7 +40,7 @@ converting the failed collection into an acceptance claim.
 Validate a correction with geometry tracing disabled. The checked Wine backing
 size policy and original framebuffer-to-texture copy are exercised by
 [`test_wine_backbuffer_bounds.py`](../tests/guest/d3d/test_wine_backbuffer_bounds.py).
-The public [`D3D7 probe`](../tools/d3d/probe7.c) checks distinct colors at the far
+The public [`D3D7 probe`](../tools/d3d/probe7.cpp) checks distinct colors at the far
 right and bottom of a window at a nonzero desktop origin, through both GPU
 readback and displayed GDI pixels. A real-game acceptance also retains one
 composited image showing the full client area; frame activity alone cannot prove

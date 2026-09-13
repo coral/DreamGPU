@@ -11,6 +11,8 @@ constants={name:value for name,value in re.findall(r'pub const (GL_\w+): [^=]+ =
 needed={'GL_PIXEL_MAP_R_TO_R','GL_PIXEL_MAP_S_TO_S'} | set(re.findall(r'\bGL_[A-Z0-9_]+\b',(ROOT/'guest/opengl/icd-pixels.inc').read_text()))
 assert not needed-constants.keys(),needed-constants.keys()
 source=r'''
+#define JglCommandError JglSetError
+#define JglCommandReady JglReady
 #include <cassert>
 #include <cstdint>
 #include <cstring>

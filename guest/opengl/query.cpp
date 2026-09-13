@@ -110,7 +110,7 @@ const GLubyte *APIENTRY glGetString(GLenum name) {
     static const GLubyte renderer[] = "DreamGPU (native host OpenGL)";
     static const GLubyte extensions[] = "";
     static const GLubyte secondary[] = "GL_EXT_secondary_color GL_EXT_separate_specular_color";
-    static const GLubyte version[] = "0.0 DreamGPU development";
+    static const GLubyte version[] = "1.1 DreamGPU";
     if (!JglReady())
         return NULL;
     switch (name) {

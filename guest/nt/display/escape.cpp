@@ -2,9 +2,7 @@
 extern "C" {
 #include "framebuf.h"
 #include "dg-ioctl.h"
-#ifdef DG_ICD_DIAGNOSTIC
 #include "icd-info.h"
-#endif
 
 ULONG APIENTRY DrvEscape(SURFOBJ *surface, ULONG escape, ULONG input_bytes, PVOID input,
                          ULONG output_bytes, PVOID output) {
@@ -12,14 +10,12 @@ ULONG APIENTRY DrvEscape(SURFOBJ *surface, ULONG escape, ULONG input_bytes, PVOI
     ULONG returned, capacity;
     DG_ESCAPE_REQUEST *request;
     DG_ESCAPE_REPLY *reply;
-#ifdef DG_ICD_DIAGNOSTIC
     if (escape == DG_OPENGL_GETINFO)
         return surface && surface->dhpdev ? DgIcdGetInfo(input_bytes, input, output_bytes, output)
                                           : 0;
     if (escape == QUERYESCSUPPORT && input_bytes >= sizeof(ULONG) && input &&
         *(ULONG *)input == DG_OPENGL_GETINFO)
         return 1;
-#endif
     if (escape == QUERYESCSUPPORT)
         return input_bytes >= sizeof(ULONG) && input &&
                (*(ULONG *)input == DG_ESCAPE || *(ULONG *)input == WNDOBJ_SETUP ||

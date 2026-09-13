@@ -52,3 +52,7 @@ void APIENTRY glLightModelf(GLenum, GLfloat);
 #ifdef __cplusplus
 }
 #endif
+
+/* These isolated arithmetic tests model ordinary execution, outside lists. */
+#define JglCommandError JglSetError
+#define JglCommandReady JglReady

@@ -95,7 +95,7 @@ static bool Run() {
 #ifdef DG_SYSTEM_GLIDE
     Record("START automated sysglide");
     if (!CleanSystemLaunch()) {
-        Record("FAIL clean C:\\ system-loader preflight");
+        Record("FAIL clean application/cwd system-loader preflight");
         return false;
     }
     dll = LoadLibraryA("glide2x.dll");

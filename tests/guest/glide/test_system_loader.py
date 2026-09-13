@@ -14,11 +14,11 @@ HARNESS = r'''
 #include <cstdio>
 using HMODULE=void*;using UINT=unsigned;using DWORD=unsigned;
 constexpr unsigned MAX_PATH=260,INVALID_FILE_ATTRIBUTES=~0u;
-constexpr unsigned ERROR_FILE_NOT_FOUND=2,ERROR_PATH_NOT_FOUND=3;
+constexpr unsigned ERROR_SUCCESS=0,ERROR_FILE_NOT_FOUND=2,ERROR_PATH_NOT_FOUND=3;
 static const char *cwd="C:\\",*exe="C:\\DGSYSGR.EXE",*system_dir="C:\\WINNT\\SYSTEM32";
 static const char *glide="C:\\WINNT\\SYSTEM32\\glide2x.dll",*gl="C:\\WINNT\\SYSTEM32\\dgpugl.dll";
 static bool loaded_glide,loaded_gl,local_glide,local_gl,truncate;
-static DWORD file_error=ERROR_FILE_NOT_FOUND;
+static DWORD file_error=ERROR_FILE_NOT_FOUND,last_error=ERROR_FILE_NOT_FOUND;
 static void Record(const char*){}
 static unsigned Copy(const char*s,char*d,unsigned n){unsigned len=std::strlen(s);if(truncate||len>=n)return n;std::memcpy(d,s,len+1);return len;}
 static UINT GetSystemDirectoryA(char*p,UINT n){return Copy(system_dir,p,n);}
@@ -28,11 +28,18 @@ static int lstrlenA(const char*s){return std::strlen(s);}
 static char*lstrcpyA(char*d,const char*s){return std::strcpy(d,s);}
 static int lstrcmpiA(const char*a,const char*b){return strcasecmp(a,b);}
 static HMODULE GetModuleHandleA(const char*n){return (std::strcmp(n,"glide2x.dll")==0?loaded_glide:loaded_gl)?(void*)1:nullptr;}
-static DWORD GetFileAttributesA(const char*n){return (std::strcmp(n,"C:\\glide2x.dll")==0?local_glide:local_gl)?0:INVALID_FILE_ATTRIBUTES;}
-static DWORD GetLastError(){return file_error;}
+static DWORD GetFileAttributesA(const char*n){last_error=file_error;const char*base=std::strrchr(n,'\\');base=base?base+1:n;return (!std::strcmp(base,"glide2x.dll")?local_glide:!std::strcmp(base,"dgpugl.dll")?local_gl:false)?0:INVALID_FILE_ATTRIBUTES;}
+static DWORD GetLastError(){return last_error;}
+static void SetLastError(DWORD e){last_error=e;}
 #include "provider.h"
 int main(){
  assert(CleanSystemLaunch());
+ cwd="C:\\WINNT\\DreamGPU\\tools\\glide";exe="C:\\WINNT\\DreamGPU\\tools\\glide\\DGSYSGR.EXE";assert(CleanSystemLaunch());
+ local_gl=true;assert(!CleanSystemLaunch());local_gl=false;
+ cwd="c:\\winnt\\dreamgpu\\tools\\glide\\";assert(CleanSystemLaunch());
+ cwd="C:\\CLEAN";assert(!CleanSystemLaunch());
+ cwd="C:\\";exe="C:\\DGSYSGR.EXE";
+
  cwd="C:\\PRIVATE";assert(!CleanSystemLaunch());cwd="C:\\";
  exe="C:\\PRIVATE\\DGSYSGR.EXE";assert(!CleanSystemLaunch());exe="C:\\DGSYSGR.EXE";
  loaded_glide=true;assert(!CleanSystemLaunch());loaded_glide=false;

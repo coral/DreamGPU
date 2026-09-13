@@ -61,3 +61,7 @@ void glTexSubImage1D(GLenum, GLint, GLint, GLsizei, GLenum, GLenum, const void *
 #ifdef __cplusplus
 }
 #endif
+
+/* These isolated arithmetic tests model ordinary execution, outside lists. */
+#define JglCommandError JglSetError
+#define JglCommandReady JglReady

@@ -166,3 +166,28 @@ fn dispatch_rejects_primitive_changes_before_native_calls_and_accepts_empty_arra
         0
     );
 }
+#[test]
+fn extended_array_endian_staging_preserves_double_and_byte_edge() {
+    let api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    let m = memory(&api);
+    let mut source = [0u8; 96];
+    source[80..88].copy_from_slice(&0x7ff0_0001_dead_beefu64.to_le_bytes());
+    source[88] = 1;
+    let args = [
+        GL_TRIANGLES,
+        0,
+        1,
+        DG_GL_ARRAY_POSITION | DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE,
+        0,
+        0,
+        0,
+        0,
+    ];
+    let storage =
+        unsafe { stage_arrays(&m, FEnum_glDrawArrays, &args, source.as_ptr(), 96, true) }.unwrap();
+    let bytes = unsafe { core::slice::from_raw_parts(storage.p, 96) };
+    assert_eq!(&bytes[80..88], &0x7ff0_0001_dead_beefu64.to_be_bytes());
+    assert_eq!(&bytes[88..], &source[88..]);
+    drop(storage);
+    LIVE.with(|v| assert_eq!(v.get(), 0));
+}

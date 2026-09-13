@@ -5,6 +5,13 @@ use serde_json::json;
 use sha2::{Digest, Sha256};
 use std::{env, fs, path::Path, process::Command};
 
+pub fn launch_directory(output: &Path) -> std::path::PathBuf {
+    if cfg!(target_os = "linux") {
+        output.join("bin")
+    } else {
+        output.to_owned()
+    }
+}
 pub fn build(root: &Path, output: &Path) -> Result<()> {
     let source = root.join("vendor/qemu");
     if !source.join("configure").is_file() {
@@ -128,6 +135,10 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
         }
         anyhow::ensure!(path.is_file(), "native build omitted {name}");
         binaries.insert(name, json!({"path":path,"sha256":digest(&path)?}));
+    }
+    if host == "linux" {
+        let provider = crate::mesa::build(root, &output.join("mesa"))?;
+        binaries = crate::native_runtime::package(root, output, &provider, &binaries)?;
     }
     let mut host_sources = serde_json::Map::new();
     record_tree(root, &root.join("crates/dreamgpu-host"), &mut host_sources)?;

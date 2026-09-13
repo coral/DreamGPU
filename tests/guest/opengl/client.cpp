@@ -67,28 +67,66 @@ int main() {
     AliasArrayElement(-1);
     assert(!c->Records && c->Error == GL_INVALID_VALUE);
     clear(c);
-    // Unsupported edge/index enables reject explicitly; they never become
-    // enabled-but-ignored data sources in ArrayElement or interleaved draws.
-    glEnableClientState(0x8077); // INDEX_ARRAY
-    assert(c->Error == GL_INVALID_ENUM);
-    clear(c);
-    glEnableClientState(0x8079); // EDGE_FLAG_ARRAY
-    assert(c->Error == GL_INVALID_ENUM);
-    clear(c);
-    for (GLenum cap : {0x8077, 0x8079}) {
-        GLint enabled = 1;
+    // Both additional descriptors participate in ArrayElement and client stacks.
+    for (GLenum cap : {GL_COLOR_ARRAY, GL_NORMAL_ARRAY, GL_TEXTURE_COORD_ARRAY})
         glDisableClientState(cap);
-        assert(!c->Error && JglArrayQuery(cap, &enabled) && enabled == 0);
-    }
-    for (GLenum name : {0x8091, 0x8093}) {
-        void *pointer = positions;
-        glGetPointerv(name, &pointer);
-        assert(!c->Error && !pointer);
-    }
-    GLint initial = -1;
-    assert(JglArrayQuery(0x8085, &initial) && initial == GL_FLOAT);
-    assert(JglArrayQuery(0x8086, &initial) && initial == 0);
-    assert(JglArrayQuery(0x808c, &initial) && initial == 0);
+    GLdouble index_values[] = {16777217.25, -5.5};
+    GLubyte edge_values[] = {0, 7};
+    glIndexPointer(GL_DOUBLE, 0, index_values);
+    glEdgeFlagPointer(0, edge_values);
+    glEnableClientState(GL_INDEX_ARRAY);
+    glEnableClientState(GL_EDGE_FLAG_ARRAY);
+    glBegin(GL_TRIANGLES);
+    AliasArrayElement(0);
+    glEnd();
+    assert(!c->Error && c->Records == 4);
+    const ULONG *r = c->Packet.Words + 10;
+    assert(r[8] == FEnum_glIndexd);
+    GLdouble exact;
+    memcpy(&exact, r + 9, 8);
+    assert(exact == index_values[0]);
+    r += 11;
+    assert(r[8] == FEnum_glEdgeFlag && r[9] == 0);
+    clear(c);
+    AliasPushClientAttrib(2);
+    glDisableClientState(GL_EDGE_FLAG_ARRAY);
+    AliasPopClientAttrib();
+    GLint enabled = 0;
+    assert(JglArrayQuery(GL_EDGE_FLAG_ARRAY, &enabled) && enabled == 1);
+    assert(!c->Error);
+    clear(c);
+    glBegin(GL_POINTS);
+    GLdouble eval = 0.25;
+    JglScalarVector(FEnum_glEvalCoord1d, 2, &eval);
+    GLint point = 1;
+    JglScalarVector(FEnum_glEvalPoint1, 1, &point);
+    glEnd();
+    assert(!c->Error && c->Records == 4);
+    clear(c);
+    c->DrawBuffer = GL_FRONT;
+    c->FrontDirty = FALSE;
+    ULONG mesh[] = {0x1b00, 0, 2};
+    JglScalarVector(FEnum_glEvalMesh1, 3, mesh);
+    assert(c->FrontDirty);
+    c->FrontDirty = FALSE;
+    c->Arrays.CaptureMode = GL_FEEDBACK;
+    JglScalarVector(FEnum_glEvalMesh1, 3, mesh);
+    assert(!c->FrontDirty);
+    clear(c);
+    glBegin(GL_POINTS);
+    glVertex3f(0, 0, 0);
+    glEnd();
+    assert(!c->FrontDirty && !c->Error);
+    c->Arrays.SelectPointer = &enabled;
+    c->Arrays.FeedbackPointer = &eval;
+    void *pointer = nullptr;
+    glGetPointerv(GL_SELECTION_BUFFER_POINTER, &pointer);
+    assert(pointer == &enabled);
+    glGetPointerv(GL_FEEDBACK_BUFFER_POINTER, &pointer);
+    assert(pointer == &eval);
+    c->Arrays.CaptureMode = GL_RENDER;
+    c->DrawBuffer = GL_BACK;
+    clear(c);
 
     alignas(float) unsigned char interleaved[256] = {};
     struct Expected {
@@ -106,7 +144,7 @@ int main() {
         {48, 3, 36, 4, 8, 24, 2, true, false}, {60, 4, 44, 4, 16, 32, 4, true, false}};
     for (unsigned n = 0; n < 14; ++n) {
         const auto &e = expected[n];
-        JGL_ARRAY previous[5];
+        JGL_ARRAY previous[7];
         memcpy(previous, c->Arrays.Attribute, sizeof(previous));
         AliasInterleavedArrays(0x2a20 + n, 0, interleaved);
         assert(!c->Error);
@@ -131,13 +169,14 @@ int main() {
             assert(a[2].Size == 3 && a[2].Pointer == interleaved + e.normal_offset);
         if (e.tex_size)
             assert(a[3].Size == (GLint)e.tex_size && a[3].Pointer == interleaved);
+        assert(!a[5].Enabled && !a[6].Enabled);
         assert(!memcmp(&a[4], &previous[4], sizeof(a[4])));
         AliasInterleavedArrays(0x2a20 + n, 71, interleaved);
         for (unsigned i = 0; i < 4; ++i)
             if (a[i].Enabled)
                 assert(a[i].Stride == 71);
     }
-    JGL_ARRAY saved[5];
+    JGL_ARRAY saved[7];
     memcpy(saved, c->Arrays.Attribute, sizeof(saved));
     for (unsigned failure = 0; failure < 4; ++failure) {
         clear(c);
@@ -226,5 +265,5 @@ int main() {
     assert(!Allocations);
     puts("PASS client state: actual arrays/core;14 interleaved layouts; borrowed "
          "per-context16-entry stacks;pack/unpack;vertex-last normalization; transactional "
-         "rejection; explicit edge/index gaps");
+         "rejection; exact edge/index snapshots and client-stack restoration");
 }

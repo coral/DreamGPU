@@ -46,11 +46,9 @@ static DRVFN DrvFunctionTable[] = {
     {INDEX_DrvEscape, (PFN)DrvEscape},
     {INDEX_DrvDrawEscape, (PFN)DrvDrawEscape},
     {INDEX_DrvSynchronizeSurface, (PFN)DrvSynchronizeSurface},
-#ifdef DG_ICD_DIAGNOSTIC
     {INDEX_DrvDescribePixelFormat, (PFN)DrvDescribePixelFormat},
     {INDEX_DrvSetPixelFormat, (PFN)DrvSetPixelFormat},
     {INDEX_DrvSwapBuffers, (PFN)DrvSwapBuffers},
-#endif
 
 };
 

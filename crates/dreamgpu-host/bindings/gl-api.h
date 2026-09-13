@@ -43,6 +43,44 @@
 #include "../../../vendor/qemu/include/standard-headers/dreamgpu/gpu.h"
 #include "../../../vendor/qemu/include/standard-headers/dreamgpu/cursor.h"
 typedef struct DreamGpuGlApi {
+    __typeof__(1 ? glListBase : glListBase) dg_glListBase;
+    __typeof__(1 ? glSelectBuffer : glSelectBuffer) dg_glSelectBuffer;
+    __typeof__(1 ? glFeedbackBuffer : glFeedbackBuffer) dg_glFeedbackBuffer;
+    __typeof__(1 ? glRenderMode : glRenderMode) dg_glRenderMode;
+    __typeof__(1 ? glInitNames : glInitNames) dg_glInitNames;
+    __typeof__(1 ? glLoadName : glLoadName) dg_glLoadName;
+    __typeof__(1 ? glPushName : glPushName) dg_glPushName;
+    __typeof__(1 ? glPopName : glPopName) dg_glPopName;
+    __typeof__(1 ? glPassThrough : glPassThrough) dg_glPassThrough;
+
+    __typeof__(1 ? glMap1d : glMap1d) dg_glMap1d;
+    __typeof__(1 ? glMap1f : glMap1f) dg_glMap1f;
+    __typeof__(1 ? glMap2d : glMap2d) dg_glMap2d;
+    __typeof__(1 ? glMap2f : glMap2f) dg_glMap2f;
+    __typeof__(1 ? glMapGrid1d : glMapGrid1d) dg_glMapGrid1d;
+    __typeof__(1 ? glMapGrid2d : glMapGrid2d) dg_glMapGrid2d;
+    __typeof__(1 ? glEvalCoord1d : glEvalCoord1d) dg_glEvalCoord1d;
+    __typeof__(1 ? glEvalCoord2d : glEvalCoord2d) dg_glEvalCoord2d;
+    __typeof__(1 ? glEvalPoint1 : glEvalPoint1) dg_glEvalPoint1;
+    __typeof__(1 ? glEvalPoint2 : glEvalPoint2) dg_glEvalPoint2;
+    __typeof__(1 ? glEvalMesh1 : glEvalMesh1) dg_glEvalMesh1;
+    __typeof__(1 ? glEvalMesh2 : glEvalMesh2) dg_glEvalMesh2;
+    __typeof__(1 ? glGetMapdv : glGetMapdv) dg_glGetMapdv;
+    __typeof__(1 ? glGetMapfv : glGetMapfv) dg_glGetMapfv;
+    __typeof__(1 ? glGetMapiv : glGetMapiv) dg_glGetMapiv;
+
+    __typeof__(1 ? glEdgeFlag : glEdgeFlag) dg_glEdgeFlag;
+    __typeof__(1 ? glIndexd : glIndexd) dg_glIndexd;
+    __typeof__(1 ? glIndexPointer : glIndexPointer) dg_glIndexPointer;
+    __typeof__(1 ? glEdgeFlagPointer : glEdgeFlagPointer) dg_glEdgeFlagPointer;
+    __typeof__(1 ? glPolygonStipple : glPolygonStipple) dg_glPolygonStipple;
+    __typeof__(1 ? glGetPolygonStipple : glGetPolygonStipple) dg_glGetPolygonStipple;
+    __typeof__(1 ? glClearAccum : glClearAccum) dg_glClearAccum;
+    __typeof__(1 ? glClearIndex : glClearIndex) dg_glClearIndex;
+    __typeof__(1 ? glIndexMask : glIndexMask) dg_glIndexMask;
+    __typeof__(1 ? glAccum : glAccum) dg_glAccum;
+    __typeof__(1 ? glLogicOp : glLogicOp) dg_glLogicOp;
+
     __typeof__(1 ? glAreTexturesResident : glAreTexturesResident) dg_glAreTexturesResident;
     __typeof__(1 ? glPrioritizeTextures : glPrioritizeTextures) dg_glPrioritizeTextures;
     __typeof__(1 ? glCopyTexImage1D : glCopyTexImage1D) dg_glCopyTexImage1D;
@@ -208,13 +246,26 @@ typedef struct DreamGpuGlApi {
                  : DG_API_FramebufferRenderbuffer) dg_glFramebufferRenderbuffer;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
-    .dg_glAlphaFunc = glAlphaFunc, .dg_glBegin = glBegin, .dg_glBindTexture = glBindTexture,       \
-    .dg_glBlendFunc = glBlendFunc, .dg_glClear = glClear, .dg_glClearColor = glClearColor,         \
-    .dg_glClearDepth = glClearDepth, .dg_glClearStencil = glClearStencil,                          \
-    .dg_glClientWaitSync = glClientWaitSync, .dg_glClipPlane = glClipPlane,                        \
-    .dg_glColor3f = glColor3f, .dg_glColor4f = glColor4f, .dg_glColor4fv = glColor4fv,             \
-    .dg_glColorMask = glColorMask, .dg_glColorMaterial = glColorMaterial,                          \
-    .dg_glAreTexturesResident = glAreTexturesResident,                                             \
+    .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer, .dg_glFeedbackBuffer = glFeedbackBuffer,                  \
+    .dg_glRenderMode = glRenderMode, .dg_glInitNames = glInitNames, .dg_glLoadName = glLoadName,   \
+    .dg_glPushName = glPushName, .dg_glPopName = glPopName, .dg_glPassThrough = glPassThrough,     \
+    .dg_glMap1d = glMap1d, .dg_glMap1f = glMap1f, .dg_glMap2d = glMap2d, .dg_glMap2f = glMap2f,    \
+    .dg_glMapGrid1d = glMapGrid1d, .dg_glMapGrid2d = glMapGrid2d,                                  \
+    .dg_glEvalCoord1d = glEvalCoord1d, .dg_glEvalCoord2d = glEvalCoord2d,                          \
+    .dg_glEvalPoint1 = glEvalPoint1, .dg_glEvalPoint2 = glEvalPoint2,                              \
+    .dg_glEvalMesh1 = glEvalMesh1, .dg_glEvalMesh2 = glEvalMesh2, .dg_glGetMapdv = glGetMapdv,     \
+    .dg_glGetMapfv = glGetMapfv, .dg_glGetMapiv = glGetMapiv, .dg_glEdgeFlag = glEdgeFlag,         \
+    .dg_glIndexd = glIndexd, .dg_glIndexPointer = glIndexPointer,                                  \
+    .dg_glEdgeFlagPointer = glEdgeFlagPointer, .dg_glPolygonStipple = glPolygonStipple,            \
+    .dg_glGetPolygonStipple = glGetPolygonStipple, .dg_glClearAccum = glClearAccum,                \
+    .dg_glClearIndex = glClearIndex, .dg_glIndexMask = glIndexMask, .dg_glAccum = glAccum,         \
+    .dg_glLogicOp = glLogicOp, .dg_glAlphaFunc = glAlphaFunc, .dg_glBegin = glBegin,               \
+    .dg_glBindTexture = glBindTexture, .dg_glBlendFunc = glBlendFunc, .dg_glClear = glClear,       \
+    .dg_glClearColor = glClearColor, .dg_glClearDepth = glClearDepth,                              \
+    .dg_glClearStencil = glClearStencil, .dg_glClientWaitSync = glClientWaitSync,                  \
+    .dg_glClipPlane = glClipPlane, .dg_glColor3f = glColor3f, .dg_glColor4f = glColor4f,           \
+    .dg_glColor4fv = glColor4fv, .dg_glColorMask = glColorMask,                                    \
+    .dg_glColorMaterial = glColorMaterial, .dg_glAreTexturesResident = glAreTexturesResident,      \
     .dg_glPrioritizeTextures = glPrioritizeTextures, .dg_glCopyTexImage1D = glCopyTexImage1D,      \
     .dg_glCopyTexSubImage1D = glCopyTexSubImage1D, .dg_glColorPointer = glColorPointer,            \
     .dg_glCopyTexImage2D = glCopyTexImage2D, .dg_glCopyTexSubImage2D = glCopyTexSubImage2D,        \

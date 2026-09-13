@@ -14,7 +14,10 @@ unsafe fn draw(
     }
     let vertices = args[if elements { 3 } else { 2 }];
     let attributes = args[if elements { 4 } else { 3 }];
-    let stride = if attributes & DG_GL_ARRAY_SECONDARY != 0 {
+    let extended = attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0;
+    let stride = if extended {
+        DG_GL_VERTEX_EXTENDED_BYTES as u64
+    } else if attributes & DG_GL_ARRAY_SECONDARY != 0 {
         DG_GL_VERTEX_SECONDARY_BYTES as u64
     } else {
         DG_GL_VERTEX_BYTES as u64
@@ -65,6 +68,18 @@ unsafe fn draw(
     {
         return Err(3);
     }
+    if extended
+        && (api.dg_glGetDoublev.is_none()
+            || api.dg_glGetBooleanv.is_none()
+            || api.dg_glIndexd.is_none()
+            || api.dg_glEdgeFlag.is_none()
+            || api.dg_glIndexPointer.is_none()
+            || api.dg_glEdgeFlagPointer.is_none())
+    {
+        return Err(3);
+    }
+    let mut index = 0.0;
+    let mut edge = 0;
     let mut color = [0.0f32; 4];
     let mut normal = [0.0f32; 3];
     let mut texcoord = [0.0f32; 4];
@@ -74,6 +89,10 @@ unsafe fn draw(
         api.dg_glGetFloatv.unwrap()(GL_CURRENT_SECONDARY_COLOR, secondary.as_mut_ptr());
         api.dg_glGetFloatv.unwrap()(GL_CURRENT_NORMAL, normal.as_mut_ptr());
         api.dg_glGetFloatv.unwrap()(GL_CURRENT_TEXTURE_COORDS, texcoord.as_mut_ptr());
+        if extended {
+            api.dg_glGetDoublev.unwrap()(GL_CURRENT_INDEX, &mut index);
+            api.dg_glGetBooleanv.unwrap()(GL_EDGE_FLAG, &mut edge);
+        }
         api.dg_glPushClientAttrib.unwrap()(GL_CLIENT_VERTEX_ARRAY_BIT);
         api.dg_glEnableClientState.unwrap()(GL_VERTEX_ARRAY);
         api.dg_glVertexPointer.unwrap()(4, GL_FLOAT, stride as i32, data.as_ptr().cast());
@@ -114,6 +133,27 @@ unsafe fn draw(
                 data.as_ptr().add(DG_GL_VERTEX_SECONDARY as usize).cast(),
             );
         }
+        if extended {
+            for (bit, cap) in [
+                (DG_GL_ARRAY_INDEX, GL_INDEX_ARRAY),
+                (DG_GL_ARRAY_EDGE, GL_EDGE_FLAG_ARRAY),
+            ] {
+                if attributes & bit != 0 {
+                    api.dg_glEnableClientState.unwrap()(cap);
+                } else {
+                    api.dg_glDisableClientState.unwrap()(cap);
+                }
+            }
+            api.dg_glIndexPointer.unwrap()(
+                GL_DOUBLE,
+                stride as i32,
+                data.as_ptr().add(DG_GL_VERTEX_INDEX as usize).cast(),
+            );
+            api.dg_glEdgeFlagPointer.unwrap()(
+                stride as i32,
+                data.as_ptr().add(DG_GL_VERTEX_EDGE as usize).cast(),
+            );
+        }
         if elements {
             api.dg_glDrawElements.unwrap()(
                 args[0],
@@ -132,6 +172,10 @@ unsafe fn draw(
         api.dg_glSecondaryColor3fv.unwrap()(secondary.as_ptr());
         api.dg_glNormal3fv.unwrap()(normal.as_ptr());
         api.dg_glTexCoord4fv.unwrap()(texcoord.as_ptr());
+        if extended {
+            api.dg_glIndexd.unwrap()(index);
+            api.dg_glEdgeFlag.unwrap()(edge);
+        }
         Ok(error)
     }
 }

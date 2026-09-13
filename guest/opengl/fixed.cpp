@@ -111,15 +111,15 @@ static void Vector(ULONG function, GLenum target, GLenum pname, const void *valu
     ULONG args[2] = {target, pname}, count;
     /* Material vectors are legal inside Begin/End; JglData enforces this
      * exception itself. Every other vector must check readiness first. */
-    if (function != FEnum_glMaterialfv && !JglReady())
+    if (function != FEnum_glMaterialfv && !JglCommandReady())
         return;
     count = Count(function, target, pname);
     if (!count) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     JglData(function, args, words, values, count * bytes);
@@ -145,10 +145,10 @@ void APIENTRY glClipPlane(GLenum plane, const GLdouble *equation) {
 }
 void APIENTRY glTexGeni(GLenum target, GLenum pname, GLint value) {
     GLfloat number = (GLfloat)value;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (Count(FEnum_glTexGenfv, target, pname) != 1) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     glTexGenfv(target, pname, &number);
@@ -157,15 +157,15 @@ void APIENTRY glTexGeni(GLenum target, GLenum pname, GLint value) {
 void APIENTRY glLightModeliv(GLenum pname, const GLint *values) {
     GLfloat converted[4];
     ULONG count, i;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     count = Count(FEnum_glLightModelfv, pname, 0);
     if (!count) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     for (i = 0; i < count; ++i)

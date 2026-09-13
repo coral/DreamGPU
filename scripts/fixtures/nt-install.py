@@ -6,6 +6,9 @@ a stopped source qcow2, its SHA256, and files with explicit guest destinations
 and SHA256 values. Source images are never mounted or modified. RAM snapshots
 are intentionally discarded: new driver/process binaries require a cold boot.
 No guest networking, registry dumps, shell commands or UI automation are used.
+Optional removals entries contain destination and sha256 for owned application
+provider DLLs. All hashes are checked before deletion; Windows/WinNT paths and
+links are refused, and each verified absence is included in install.json.
 """
 
 # Keep this CLI runnable by its file path as well as through the scripts package.
@@ -23,6 +26,7 @@ import platform
 import struct
 import subprocess
 import tempfile
+from scripts.fixtures import app_removals, guest_tools
 
 
 def digest(path):
@@ -67,6 +71,7 @@ def install(manifest_path, output, qemu_img):
     if platform.system() != 'Linux':
         raise ValueError('NTFS copy installation runs on the Linux host')
     data = json.loads(Path(manifest_path).read_text())
+    guest_tools.validate(data)
     source = Path(data['source']).resolve()
     if digest(source) != data['source_sha256']:
         raise ValueError('Source disk identity mismatch')
@@ -83,12 +88,13 @@ def install(manifest_path, output, qemu_img):
             raise ValueError(f'Package identity mismatch: {local}')
         destinations.add(str(guest).casefold())
         files.append((local, str(guest), item['sha256']))
-    if not files:
-        raise ValueError('No files to install')
+    removals = app_removals.parse(data.get('removals', []), destinations)
+    if not files and not removals:
+        raise ValueError('No files to install or remove')
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     report = {'schema_version': 1, 'state': 'preparing', 'input': data,
-              'cold_boot_required': True, 'source_modified': False}
+              'cold_boot_required': True, 'source_modified': False, 'removals': []}
     destination = output / 'disk.qcow2'
     try:
         with tempfile.TemporaryDirectory(prefix='nt-install-', dir=output) as directory:
@@ -110,6 +116,15 @@ def install(manifest_path, output, qemu_img):
             loop = run('sudo', '-n', 'losetup', '--find', '--show',
                        '--offset', offset, '--sizelimit', size, raw).decode().strip()
             try:
+                if removals:
+                    mount = Path(directory) / 'removals'
+                    mount.mkdir()
+                    run('sudo', '-n', 'ntfs-3g', loop, mount,
+                        '-o', f'uid={os.getuid()},gid={os.getgid()},umask=077,noexec,nodev,nosuid')
+                    try:
+                        app_removals.apply(removals, app_removals.Mounted(mount), report['removals'])
+                    finally:
+                        run('sudo', '-n', 'umount', mount)
                 if directories:
                     create_directories(loop, Path(directory) / 'ntfs', directories)
                 for local, guest, checksum in files:

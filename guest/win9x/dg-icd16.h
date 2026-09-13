@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later AND MIT
  * Source: vendor/vmdisp9x/control.c @718b3d51a1532fe1ba2e133cf76186f1a609d35e;
- * copied descriptor ABI with modifications: diagnostic DGPUICD name, explicit
+ * copied descriptor ABI with modifications: DGPUICD provider name, explicit
  * layout checks, null/16-bit segment-bound validation. DreamGPU modifications
  * are GPL-2.0-or-later; the copied donor descriptor retains its MIT notice below.
  */

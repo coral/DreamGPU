@@ -142,7 +142,7 @@ pub(crate) unsafe fn interleave(m: &Memory, s: *mut State) -> u32 {
     unsafe { release(m, s) };
     DG_GL_ERROR_CONTEXT
 }
-struct Unpack<'a> {
+pub(crate) struct Unpack<'a> {
     api: &'a DreamGpuGlApi,
     values: [i32; 6],
 }
@@ -155,7 +155,7 @@ const UNPACK: [u32; 6] = [
     GL_UNPACK_LSB_FIRST,
 ];
 impl<'a> Unpack<'a> {
-    unsafe fn new(api: &'a DreamGpuGlApi) -> Result<Self, u32> {
+    pub(crate) unsafe fn new(api: &'a DreamGpuGlApi) -> Result<Self, u32> {
         let get = api.dg_glGetIntegerv.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
         let set = api.dg_glPixelStorei.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
         let mut s = Self {

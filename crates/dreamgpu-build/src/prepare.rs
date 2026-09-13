@@ -13,7 +13,6 @@ use std::{
 
 pub struct Prepared {
     pub vmdisp: PathBuf,
-    pub vmdisp_icd: PathBuf,
     pub wine: PathBuf,
     pub glide: PathBuf,
     pub patches: Value,
@@ -251,10 +250,9 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
     let glu_source = pinned(root, &lock["sources"], "wine-glu")?.join("dlls/glu32/mipmap.c");
     fs::create_dir_all(work)?;
     let vmdisp = work.join("vmdisp9x");
-    let vmdisp_icd = work.join("vmdisp9x-icd");
     let wine = work.join("wine9x");
     let glide = work.join("openglide");
-    for path in [&vmdisp, &vmdisp_icd, &wine, &glide] {
+    for path in [&vmdisp, &wine, &glide] {
         ensure!(
             !path.exists(),
             "source staging must be fresh: {}",
@@ -305,14 +303,12 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
     }
     copy(vmdisp.join("makefile"), vmdisp.join("makefile.dreamgpu"))?;
     let vmdisp_patches = apply(&vmdisp, &support.join("win9x/patches/base.json"))?;
-    // Separate generated tree and objects: diagnostic loader discovery must
-    // never contaminate the production Win16 driver or its build cache.
-    copy_tree(&vmdisp, &vmdisp_icd)?;
+    // The checked ANSI discovery patch is part of the single production driver.
     copy(
         root.join("guest/win9x/dg-icd16.h"),
-        vmdisp_icd.join("dg-icd16.h"),
+        vmdisp.join("dg-icd16.h"),
     )?;
-    let vmdisp_icd_patches = apply(&vmdisp_icd, &support.join("win9x/patches/icd.json"))?;
+    let vmdisp_icd_patches = apply(&vmdisp, &support.join("win9x/patches/icd.json"))?;
     let wine_patches = apply(&wine, &support.join("d3d/patches/base/manifest.json"))?;
     copy(
         root.join("guest/d3d/wine-diagnostics.h"),
@@ -321,6 +317,14 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
     copy(
         root.join("guest/d3d/wine-blit-usage.h"),
         wine.join("wined3d/dg-wine-blit-usage.h"),
+    )?;
+    copy(
+        root.join("guest/d3d/wine-row-copy.h"),
+        wine.join("wined3d/dg-wine-row-copy.h"),
+    )?;
+    copy(
+        root.join("guest/d3d/wine-map-policy.h"),
+        wine.join("wined3d/dg-wine-map-policy.h"),
     )?;
     copy(
         wine.join("ddraw/surface.c"),
@@ -418,7 +422,6 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
 
     Ok(Prepared {
         vmdisp,
-        vmdisp_icd,
         wine,
         glide,
         patches: json!({"vmdisp9x": vmdisp_patches, "vmdisp9x-icd": vmdisp_icd_patches, "wine9x": {"base": wine_patches}, "openglide": glide_patches}),
@@ -552,19 +555,23 @@ mod tests {
         let prepared = guest_sources(root, &output, "i686-w64-mingw32-").unwrap();
         crate::write_json(&output.join("patch-evidence.json"), &prepared.patches).unwrap();
         assert!(prepared.vmdisp.join("makefile.dreamgpu").is_file());
-        assert_eq!(
-            fs::read(prepared.vmdisp.join("control.c")).unwrap(),
-            fs::read(root.join("vendor/vmdisp9x/control.c")).unwrap()
-        );
-        assert!(text(&prepared.vmdisp_icd.join("control.c"))
+        assert!(text(&prepared.vmdisp.join("control.c"))
             .unwrap()
             .contains("DgIcdGetInfo16(lpOutput)"));
-        assert!(prepared.vmdisp_icd.join("dg-icd16.h").is_file());
+        assert!(prepared.vmdisp.join("dg-icd16.h").is_file());
         assert!(prepared.wine.join("config.mk").is_file());
         assert!(prepared.glide.join("dg-imports.def").is_file());
         for (identity, debug) in [(true, false), (false, true), (true, true)] {
             let variant = output.join(format!("vmdisp-identity-{identity}-debug-{debug}"));
             copy_tree(&prepared.vmdisp, &variant).unwrap();
+            // Historical identity instrumentation has its own checked control.c
+            // patch. Test that independent recipe against its pinned donor input;
+            // it is not an alternate production driver or package target.
+            copy(
+                root.join("vendor/vmdisp9x/control.c"),
+                variant.join("control.c"),
+            )
+            .unwrap();
             let patches = root.join("support/guest/win9x/patches");
             if identity {
                 apply(&variant, &patches.join("identity.json")).unwrap();

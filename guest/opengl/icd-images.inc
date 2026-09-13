@@ -24,8 +24,10 @@ static bool Multiply(ULONG_PTR a, ULONG_PTR b, ULONG_PTR *out) {
     *out = a * b;
     return true;
 }
-static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, const void *pixels,
-                     Layout *out) {
+static bool DescribeStore(GLsizei width, GLsizei height, GLenum format, GLenum type,
+                          const void *pixels, Layout *out, const JGL_UNPACK *u,
+                          bool command = true) {
+    const auto fail = command ? JglCommandError : JglSetError;
     ULONG components;
     switch (format) {
         case GL_COLOR_INDEX:
@@ -48,7 +50,7 @@ static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, 
             components = 4;
             break;
         default:
-            JglSetError(GL_INVALID_ENUM);
+            fail(GL_INVALID_ENUM);
             return false;
     }
     ULONG unit;
@@ -70,15 +72,15 @@ static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, 
             unit = 4;
             break;
         default:
-            JglSetError(GL_INVALID_ENUM);
+            fail(GL_INVALID_ENUM);
             return false;
     }
     if (!unit && format != GL_COLOR_INDEX && format != GL_STENCIL_INDEX) {
-        JglSetError(GL_INVALID_ENUM);
+        fail(GL_INVALID_ENUM);
         return false;
     }
     if (width < 0 || height < 0) {
-        JglSetError(GL_INVALID_VALUE);
+        fail(GL_INVALID_VALUE);
         return false;
     }
     *out = {};
@@ -87,10 +89,9 @@ static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, 
     if (!width || !height)
         return true;
     if (!pixels) {
-        JglSetError(GL_INVALID_VALUE);
+        fail(GL_INVALID_VALUE);
         return false;
     }
-    const JGL_UNPACK *u = JglUnpack();
     if (!u)
         return false;
     ULONG_PTR row, stride, skip, first, end, span;
@@ -111,7 +112,7 @@ static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, 
         skip = (ULONG_PTR)u->SkipPixels / 8;
     }
     if (row > ImageLimit || (ULONG_PTR)height > ImageLimit / row) {
-        JglSetError(GL_OUT_OF_MEMORY);
+        fail(GL_OUT_OF_MEMORY);
         return false;
     }
     if (!Add(stride, (ULONG_PTR)u->Alignment - 1, &stride))
@@ -140,8 +141,12 @@ static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, 
     out->Lsb = u->LsbFirst != 0;
     return true;
 invalid:
-    JglSetError(GL_INVALID_VALUE);
+    fail(GL_INVALID_VALUE);
     return false;
+}
+static bool Describe(GLsizei width, GLsizei height, GLenum format, GLenum type, const void *p,
+                     Layout *out) {
+    return DescribeStore(width, height, format, type, p, out, JglUnpack());
 }
 static void Pack(const Layout &l, ULONG width, ULONG offset, BYTE *output, ULONG bytes) {
     while (bytes) {
@@ -175,7 +180,7 @@ static void Pack(const Layout &l, ULONG width, ULONG offset, BYTE *output, ULONG
 }
 static void Draw(ULONG function, GLsizei width, GLsizei height, GLenum format, GLenum type,
                  const void *pixels, const ULONG *bitmap) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     Layout layout;
     if (!Describe(width, height, format, type, pixels, &layout))
@@ -186,7 +191,7 @@ static void Draw(ULONG function, GLsizei width, GLsizei height, GLenum format, G
      * glBitmap stays packed and does not need this additional budget. */
     if (function == FEnum_glDrawPixels && type == GL_BITMAP && width > 0 && height > 0 &&
         (ULONG)width > ImageLimit / (ULONG)height) {
-        JglSetError(GL_OUT_OF_MEMORY);
+        JglCommandError(GL_OUT_OF_MEMORY);
         return;
     }
     JGL_ARRAY_STATE *arrays = JglArrays();
@@ -196,7 +201,7 @@ static void Draw(ULONG function, GLsizei width, GLsizei height, GLenum format, G
     if (capacity > sizeof(arrays->Scratch))
         capacity = sizeof(arrays->Scratch);
     if (capacity <= 16) {
-        JglSetError(GL_OUT_OF_MEMORY);
+        JglCommandError(GL_OUT_OF_MEMORY);
         return;
     }
     ULONG id = JglNextImageId();

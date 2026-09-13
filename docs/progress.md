@@ -916,3 +916,576 @@ combined Cargo rebuild passes in 9.23s, with exact outputs in
 from the preceding checkpoint; the combined installer is rebuilt with the final
 guest tools. Existing strict Clippy and full formatting results are retained,
 and the changed helper passes its targeted formatting check.
+
+
+### System installation follow-through
+
+The NT5 system-loader experiment is now part of the Cargo-built guest tools.
+It uses an isolated synthetic DLL name, a distinct original marker in System32,
+and a temporary LocalSystem service owning a named image section. The serial
+`ntloader` request checks normal system loading before publication, implicit
+imports and both forms of LoadLibrary during publication, then service removal
+and original loading afterward. No Microsoft runtime or protected DLL cache is
+modified. The PE5 link, exact diagnostic-only import audit and target-aware
+clang-tidy pass. Runtime results are recorded separately; compilation does not
+establish this as the production Direct3D route.
+
+The public DirectDraw 2D probe is also included in the normal guest build. It
+checks the actual COM implementation module, completed copy/fill/color-key work,
+visible pixels and object recreation. The Win98 switcher source now has checked
+publication and native-library path fixes with actual-source sanitizer and
+legacy-link evidence. Independent system-provider installation and matched 2D
+runtime measurements remain in progress.
+
+The next 21-function OpenGL batch is accepted on both hosts. Edge/index arrays
+close ArrayElement's dependency gap; polygon stipple, logic/index and accumulation
+API behavior use the real advertised RGBA visual. The visual has zero accumulation
+bits, so accumulation operations correctly report the specified no-buffer error.
+Coverage is now 146 existing functions, 151 adapters and 39 missing operations,
+with four retained native-provider limitations. Both hosts pass the changed
+fixed-state GPU oracle and 99 host tests; actual guest source tests, legacy links
+and targeted static analysis pass. Exact identities are retained in
+`target/follow-through/fixed-state-acceptance.json`. Evaluators are the next group.
+
+### NT5 named-image loader result
+
+Windows 2000 loads the alternate synthetic provider through implicit imports and
+bare LoadLibrary, but an absolute System32 path loads the original disk image.
+The owned service and section are removed, and original loading is restored.
+The first short-deadline attempt is retained as failed; instrumented service
+startup with the longer bounded deadline completes and gives the actual loader
+result. This eliminates named sections as the complete system Direct3D route.
+It does not justify replacing the protected runtime or claiming XP support.
+Exact artifacts and raw logs are in
+`target/follow-through/nt-system-loader-v1/acceptance.json`.
+
+The donor's XP instructions replace both protected runtime and cache files.
+Microsoft's [WFP replacement documentation](https://learn.microsoft.com/en-us/windows/win32/wfp/detecting-file-replacement)
+confirms that catalog validation can restore the original from cache or media.
+A durable installer cannot treat a successful copy as provider activation.
+
+### Normal system Direct3D probe variants
+
+The existing D3D6/7/8/9 pixel workloads now share C++23 sources between diagnostic
+and normal system-loading variants. New DGSYS6/7/8/9 helpers load the public API
+DLL name from a clean application/current directory, verify the returned COM
+vtable belongs to the system Wine provider, and check system GPU dependency
+locations. They do not preload a private OpenGL DLL to influence resolution.
+The C++ conversion replaces inactive-union function-pointer access with a bounded
+representation copy and uses the common freestanding memory implementation.
+
+Both Cargo-built packages pass legacy linking and import auditing. The actual
+loader-policy sanitizer tests and 23 serial-controller tests pass. Maintained
+tool links now treat linker warnings as failures, so a missing entry point cannot
+silently produce a runnable-looking executable. Frozen helpers and controller
+identities are in `target/follow-through/system-d3d-probes-v1/`. Actual system
+Direct3D rendering acceptance is still pending.
+
+All 23 evaluator functions now pass their guest and both-host native gates.
+The advertised order is an honest bounded eight; checked map/grid payloads and
+query results retain context ownership. A valid terminal INT_MAX mesh is handled
+with equivalent widened-index native primitives instead of overflowing a provider
+loop. Coverage is 146 existing functions, 174 adapters and 16 missing operations.
+Display lists and selection/feedback remain; the four known native-provider
+limitations stay documented separately from missing DreamGPU implementation.
+Evidence: `target/follow-through/evaluator-acceptance.json`, including 103 host
+tests on each host, guest sanitizer checks and target-aware compilation/analysis.
+
+### System Direct3D loading and actual driver lifecycle
+
+The frozen Win98 global Wine candidate now passes ordinary Direct3D6, 7, 8 and
+9 loading from clean application/current directories. These are the same C++23
+HAL pixel workloads as the diagnostic probes, with actual system DLL paths and
+Wine COM object ownership checked. The receipt is
+`target/follow-through/system-d3d-probes-v1/win98-acceptance.json`. The first
+attempt exposed a doubled separator in the probe's root-directory path check;
+Win98 returned access denied. The fixed join is covered by actual-source loader
+policy tests. A separate controller startup timeout happened while that fixture
+was paused for another measurement; it executed no graphics test. Future quiet
+windows must start after READY, not interrupt the bounded boot deadline.
+
+The accepted runtime uses the earlier frozen native frontend. Wine discovery
+leaves GL_INVALID_ENUM before the workload, while draw/presentation errors are
+zero. This receipt establishes the normal-loader route and pixels, not full GL
+coverage, performance or installer activation. No passed unchanged API test was
+repeated.
+
+The Windows 2000 installer driver journal now completes actual install, cold
+boot, started-device verification, exact previous-driver restore, another cold
+boot and restored-device verification. The first attempt found that CopyFile
+preserved READONLY on private originals, preventing the flush reopen; the
+corrected transaction temporarily clears and restores those private attributes.
+Evidence is under `target/follow-through/driver-lifecycle-nt-v2`. Win98 reached a
+real SetupAPI Insert Disk prompt despite local payloads; its source-list/queue
+handling is being corrected before further mutation. These driver mechanics do
+not yet establish full system provider installation.
+
+### Windows 2000 normal system Direct3D route
+
+A separate stopped-source copy now boots the owned Wine switchers in System32
+and passes all four ordinary Direct3D6/7/8/9 pixel probes. The native DDRAW is
+preserved as DDSYS and the original DLL cache is unchanged. The new read-only
+`ntruntime` tool records SHA256 and actual `SfcIsFileProtected` results:
+SFCDisable is zero, system DDRAW is protected but remains the candidate, and the
+cache contains the exact original. D3D8/9 were absent in this source and are not
+on this Windows 2000 protected-file list. The receipt is
+`target/follow-through/nt-global-d3d-v1/acceptance.json`.
+
+This corrects our overly broad assumption that protected replacements inevitably
+get restored at boot. It establishes a usable system route, not the production
+installer or resilience to an explicit OS restore/update. WFP reacts to directory
+notifications and verifies catalogs, as described by [Microsoft](https://learn.microsoft.com/en-us/windows/win32/wfp/detecting-file-replacement).
+The next concrete implementation gate is a scoped deferred replacement and
+rollback via reboot. Microsoft documents `AllowProtectedRenames` as a consumed
+one-boot setting for [Server 2003 restore operations](https://learn.microsoft.com/en-us/windows/win32/vss/backing-up-and-restoring-system-state-under-vss);
+that documentation is not proof for Windows 2000/XP, so the exact target guests
+must execute the transaction. No persistent SFC disabling or cache overwrite is
+part of this proposed route. The earlier protected-DLL prohibition was our
+implementation assumption, not a requirement from the user.
+
+### Deferred system replacement and driver acceptance
+
+Windows 2000 now executes the real protected-DDRAW install/restore cycle using
+`MoveFileEx(DELAY_UNTIL_REBOOT | REPLACE_EXISTING)` and the consumed one-boot
+`AllowProtectedRenames` value. The diagnostic refuses foreign queues or existing
+permission, records original/candidate hashes before enqueue, and verifies the
+exact native pending pair. After clean shutdown/cold boot the desired hash is
+present; after the reverse queue and another clean boot the original hash is
+restored. Both times the queue and permission value are absent afterward. WFP
+policy and original cache stay unchanged. The source compiles/audits and both
+compiled variants pass target-aware clang-tidy. Evidence:
+`target/follow-through/nt-boot-rename-v1/acceptance.json`.
+
+This closes mechanism feasibility on Windows 2000; the production installer
+still needs durable multi-file queue ownership, interruption recovery and
+cancellation. The diagnostic is deliberately fixed to one runtime and never
+claims that enqueuing alone is an installation success. The production adapter
+is now being integrated independently from the driver journal. XP uses the same
+frozen helper on a separate prepared copy; its result remains pending.
+
+Existing-driver lifecycle acceptance is now complete on both Windows 2000 and
+Windows 98, with four fixed command receipts and cold device checks. Win98's
+source-media issue was resolved using a temporary process-local source list and
+bounded queue callback; same-INF pending replacements require inspecting the
+queued bytes before classifying the node as original. The final accepted path
+needs no media dialogs or repeated binding. Source adapters cover224 injected
+mutation failures plus these target-specific cases. Exact receipts are
+`target/follow-through/driver-lifecycle-nt-v2/acceptance.json` and
+`target/follow-through/driver-lifecycle-win98-v3/acceptance.json`. First install
+from stock/unbound VGA remains a distinct gate.
+
+### XP system runtimes and the first-install distinction
+
+XP passes all four ordinary system Direct3D6/7/8/9 HAL pixel probes. Its protected
+DDRAW also passes the real deferred install and restore cycle through clean
+boots, including exact original hash restoration and automatic removal of the
+queue/one-boot permission. SFCDisable stays zero and the original cache is
+unchanged. D3D8/9 are protected on XP; in this feasibility fixture they were
+coldstaged before the first boot and remain the candidate. The full multi-file
+installer transaction still requires its own acceptance. Exact receipt:
+`target/follow-through/xp-boot-rename-v1/acceptance.json`. A stale native path was
+rejected before preparation; the corrected manifest uses the already accepted
+frozen native image rather than attributing a mutable build path to an old hash.
+
+The next first-install case is explicitly unbound PCI plus VGA fallback, as found
+in the pristine XP UTM source. It has no prior display INF node. Driver records
+now distinguish stock, DreamGPU and unbound bindings without fabricating INF
+identity; V2 retains the V1 byte layout and can still decode old stock/owned
+records. The existing224 mutation-failure checks remain passing. Unbound capture
+is not yet activated: it needs durable ownership of newly published OEM INF/PNF
+files and a checked device-removal/re-enumeration path. Removing a new package
+must never delete a pre-existing or shared OEM package.
+
+### NT first-install ownership integration (in progress)
+
+The driver journal now distinguishes stock, existing DreamGPU and genuinely
+unbound NT PCI devices. V2 retains the 11,076-byte V1 layout and reads old
+stock/owned records; V1 cannot encode an absent prior binding. Detection requires
+actual driver property, service property and driver-key absence. SetupAPI sets
+are refreshed rather than reusing devnode data after removal. Actual-source
+ASan/UBSan passes the existing 224 mutation failures plus V1 loading, malformed
+unbound records, registry-error distinction and changed-adapter identity checks.
+
+First-install mutation remains guarded pending integration of owned OEM INF/PNF
+publication/removal and its recovery journal. The pristine imported XP UTM disk
+will be the runtime first-install source; earlier XP tests with an existing
+DreamGPU binding do not satisfy that gate.
+
+### Complete ICD dispatch and Win98 deferred-file adapter
+
+The final display-list batch now passes 113 Rust host tests on each host, strict
+Clippy, 35 Mac/33 Linux native GPU tests, guest sanitizers, pinned GCC16 and
+three-translation-unit target-aware tidy. Immutable list payloads, replay/resource
+ownership and deferred compile errors are implemented. Coverage is 146 direct
+exports plus 190 typed adapters, zero missing slots; four prior native-provider
+edge cases remain documented. Frozen native binaries and source hashes are in
+`target/follow-through/gl11-native-v1` and `lists-acceptance.json`. Production
+driver packaging is now being consolidated around the verified ICD path.
+
+The Windows98 reboot adapter uses actual WININIT.INI DOS short-path pairs,
+preserves unrelated sections/comments/rename entries, and supports repeated NUL
+deletions. Checksummed private before/after receipts precede public renames;
+recovery validates exact bytes, including the boot-consumed WININIT.BAK when
+interrupted between publication and completion. Tests exposed and fixed a staging
+retry that preserved bytes but lost hidden/system attributes. ASan/UBSan now
+passes 59 injected mutation failures, cancellation, replacement/deletion/reboot,
+consumption before completion, foreign queue collisions and corrupted receipts.
+Pinned GCC16 analyzer/Werror and explicit header-filtered target-aware tidy pass.
+Actual Win98 mechanism and final installer execution remain pending.
+
+### Windows98 deferred file replacement mechanism accepted
+
+An independent Win98 fixture now passes the actual WININIT sequence: queue an
+existing-file replacement, an existing-file deletion and an originally absent
+file installation; clean shutdown/cold boot; verify all exact desired identities;
+queue reversal; clean shutdown/cold boot; verify original identities and the new
+file's absence. Receipt: `target/follow-through/win98-boot-queue-v1/acceptance.json`.
+No display driver or public API runtime was changed by this synthetic mechanism
+test. The final fixture is paused. The frozen mechanism binary precedes later
+competing-writer/alias-path hardening, covered by separate actual-source fault
+tests; final installer acceptance still needs the latest coherent package.
+
+The initial controller lacked the selected fixed route and rejected the request
+before guest helper execution. A newer frozen controller resolved that. The
+NT-only shutdown helper was unsuitable for Win98; the fixture's existing Win98
+JRGSTOP helper completed both actual clean poweroffs. Automation remains fixed
+serial requests and QMP program launch, with no screen/menu decisions.
+
+### Whole-installation coordinator and normal activation verification
+
+The installer now has separate per-generation runtime executable/proof-helper
+copies, so new packages do not overwrite a prior generation's recovery tools.
+Six exact-hash ordinary-loader probes run from the authenticated private tools
+directory, with matching clean current directory and verified system providers.
+Successful helper bits and child PIDs are durable; retries skip acknowledged
+passes. Failed GPU proofs report failure, not a fabricated pending reboot.
+
+The top-level policy sequences driver then providers, reverses that order for
+removal, persists direction/phase before component work, and owns a separate
+DreamGPU.Setup RunOnce continuation. Its pure actual-source policy gate passes
+64 interruption cases and 40 pending/error cases, with GCC16/analyzer/tidy. The
+concrete Win32 coordinator and main routing are being integrated and tested.
+Readable setup messages and a normal Windows restart offer replace raw JSON
+message boxes; /silent and machine-readable receipts remain available.
+
+### Continued system-installer integration
+
+The pristine XP fixture now has actual first-install, cold driver activation and
+cold restoration to its original unbound state. The intermediate removal returned
+a conflict after successful service deletion because XP exposes the marked
+service as disabled. The source now accepts that transition only for an already
+owned deleting service; the actual baseline was restored and the fixture shut
+down cleanly. See `target/follow-through/xp-first-install-v2/runtime-ledger.json`.
+The classifier fix will be covered by the coherent installer run, without repeating
+the unchanged standalone cold-boot proof.
+
+The global adapter passed 95 actual Win32 seam interruptions, covering operation
+epochs, private resume-executable identity and foreign RunOnce refusal. Driver
+generation provenance and provider preparation recovery are being integrated
+separately; those component internals are not inferred from global seam tests.
+
+Added fixed complete-installer serial operations and a bounded cold-boot controller
+(`scripts/fixtures/system-install.py`). The acceptance helper pins the executable,
+reads every checksummed global record without journal repair, records phase/epoch
+and provider generation, and distinguishes pending from terminal completion.
+The first helper target compile passed pinned GCC16/Pentium III/no-SSE with
+`-fanalyzer`; final schema/helper/runtime acceptance follows the coherent package.
+
+### First complete installer runtime, September 13
+
+The frozen combined installer at
+`target/follow-through/system-installer-initial-v1/inputs/dreamgpu.exe`
+has SHA256 `2c8de4fc90bb9f2844a5cb2a2ad108be32a116b388ddb08a85b1962a4850ae30`.
+It includes both production display/ICD packages, the GL1.1 frontend, all six
+normal-loader proofs and global schema3 coordination. Pinned GCC16 compilation,
+PE4/import/payload audits and complete installer/header clang-tidy pass. Current
+all-target/all-feature Rust Clippy also passes after three new toolchain lint
+fixes in native test array decoding.
+
+The first untouched-XP run completed driver installation and its cold-boot
+activation, then stopped with ownership conflict29 at global provider phase1.
+The controller preserved the actual guest error, and the owned fixture was
+cleanly powered off for exact journal/filesystem inspection. This is an identified
+integration failure, not complete system activation. Evidence lives under
+`target/follow-through/system-installer-xp-v1/install-cycle`. Investigation uses
+the failed disk and source snapshot rather than repeating the same install.
+
+The combined ICD/frontend source contract now passes actual Drv-to-frontend
+format, thread, context-sharing, swap and resize tests. Its source-only receipt is
+`target/follow-through/icd-frontend-contract-v1/acceptance.json`; no production
+GL binary changed for this test.
+
+### XP complete system activation accepted
+
+The same frozen `2c8de4fc...` installer now completed its remaining provider boot
+and all six normal-loader tests on XP with the frozen GL1.1 Linux native
+`1733ead1...`. Evidence:
+`target/follow-through/system-installer-xp-v1/provider-resume-cycle/operation-0`.
+System Microsoft `opengl32.dll` loaded system `dgpuicd.dll` and checked 8,192
+pixels/two swaps; system Glide2 checked 2,304 pixels/eight swaps; Direct3D6/7/8/9
+checked 1,024/2,560/512/512 pixels and presentation/cleanup. The global installer
+returned activated0 only after these checks. This proves initial installation
+and API activation, not yet uninstall, changed-driver upgrade or other OSes.
+
+The earlier XP conflict was caused by three unrelated Plug-and-Play pending
+temporary-file deletions. Read-only inspection verified that all 13 DreamGPU
+runtime replacements remained privately staged and original public DLLs intact.
+After a cold boot consumed Windows' queue, the same installer queued its own
+files successfully. The source now defers disjoint valid OS queues with a bounded
+private wait receipt; ambiguous/colliding paths remain conflicts and foreign
+queue/permission bytes are unchanged. The corrected source passed fault injection,
+GCC16 analysis and target-aware tidy; the accepted executable predates that
+classification improvement. No unchanged complete install was repeated.
+
+Win98's first acceptance helper stopped before launching setup due to its mutex
+preflight. The helper now uses the same CreateMutex-based API as setup and logs
+the failing gate explicitly. With that helper corrected, Win98 setup reaches
+post-stage preparation but exits27 before a global journal is created. Its exact
+private/runtime state is being inspected before another installer change. A
+40-second poweroff bound was too short on the XP runtime-replacement boot; the
+automation now waits up to 120 seconds and still refuses forced reset.
+
+
+### Complete Windows 2000 activation and XP removal recovery
+
+The original full `2c8de4fc...` installer now completes unattended Windows 2000
+installation through two clean cold boots. All six normal-loader GPU checks
+pass before activated0, GLOBAL phase2. Exact receipts and helper output:
+`target/follow-through/system-installer-win2000-v1/install-cycle`. The activated
+disk is retained separately for normal game and upgrade tests.
+
+XP initial uninstall restored providers, removed the owned device/OEM package,
+and marked its service for deletion, then misclassified a stale devnode lookup
+as exit26 while the kernel still held the service. The recorded stopped failure
+was continued through one additional cold boot, without repeating uninstall;
+`system-installer-xp-v1/uninstall-final-cycle` returns removed13, phase5. Source
+regression tests reproduce and fix the pending-unload classification. Independent
+final baseline hash/registry inspection follows the terminal receipt.
+
+Win98's post-stage exit27 was a fixture provenance failure: the selected source
+already contained an unjournalled Wine system namespace. No public runtime bytes
+were changed. The corrected native-restored source is
+`win98-system-ddraw/rollback-v1-staged.qcow2`, SHA256
+`38b45c2dc2d312266e824ca54b5418b93254b95bd5627a47980dcc98a326e41b`.
+With that baseline, initial setup requests its driver boot successfully. The
+next startup stalls at Updating System Settings: read-only evidence shows driver
+activation succeeded and 12 provider replacements were queued, but Windows 98
+repeated the newly re-registered RunOnce continuations before Explorer started.
+The driver/runtime startup adapters are being corrected to use a next-login
+continuation with durable ownership, without this same-boot loop.
+
+The combined `8367af72...` candidate passes GCC16, PE4/import/resource audits,
+full-header clang-tidy and analyzer checks. It contains driver generations,
+repair, initial extraction recovery/cancellation and foreign NT queue deferral.
+It predates the newly identified Win98 startup correction; its source and receipt
+remain frozen and must not be relabelled as the corrected candidate.
+
+
+### Mac normal-system API acceptance
+
+A stopped copy of installer-activated XP was staged with the six unchanged
+normal-loader helpers in its root directory, then cold-booted on Mac with the
+GL1.1 native binary `f35ce5c4...`. All six actual OpenGL/Glide2/Direct3D6–9
+pixel/presentation probes passed; evidence is
+`target/follow-through/system-installer-xp-mac-v1/acceptance.json`.
+The source activated disk remained unchanged. No installation was repeated,
+no API DLL was placed beside an executable and the NIC was disabled before
+continuing the guest. These results cover the exact initial package providers,
+not the later installer's newly added lifecycle transitions.
+
+### System-wide follow-through: normal games, recovery, and desktop sampling
+
+The initial complete installer activated all six API proofs on XP and Windows
+2000. The same activated XP providers pass OpenGL, Glide2, and Direct3D6/7/8/9
+on the Mac host. XP initial removal now has an independent exact-original audit:
+all18 global entries restored, owned service/OEM package removed, and the PCI
+device reenumerated unbound. Current8367 upgrade and provider-only repair pass
+on independent XP copies. Repair retained the driver generation and repeated
+only the affected DirectDraw-dependent proofs; it did require three D3D6 attempts
+before completion, so this is not an exactly-once execution claim.
+
+An interrupted8367 rollback exposed Windows regenerating a borrowed PNF cache.
+The fix authenticates the borrowed INF and leaves its derived PNF alone. A new
+executor recovery handoff remains necessary to finish the old pending journal
+without overwriting frozen executors or erasing payload provenance.
+
+Win98 startup continuation now uses an owned persistent Run entry, avoiding the
+RunOnce rearming loop. Its next boot revealed historical Wine DDRAW bytes in
+SYSBCKUP restoring themselves over the captured Microsoft public DLL. The new
+installer journals existing matching cache/public pairs; it neither invents
+absent cache entries nor touches NT caches. Combined6382 is under actual Win98
+and NT lifecycle acceptance; successful source checks are not activation.
+
+Mac normal system-loading Unreal Direct3D and Glide both pass with the original
+game renderer and no app-local providers. The full640x480 D3D client image is
+retained. Half-Life's normal launch completed379 frames in5.387s (70.35fps), but
+its current receipt lacks actual ICD module evidence; do not count that number
+as confirmed hardware-path acceptance. The runner is acquiring that evidence.
+
+The current-native system-installed desktop pair retained all16 acknowledgements,
+zero trace drops, and240Hz. Copy/scroll/repaint and idle CPU regressed despite
+improved fill. Sampling identified repeated empty VGA dirty-snapshot TLB resets,
+with both virtual CPUs otherwise sleeping. A narrow QEMU fix passes actual-body
+atomic/bitmap boundary tests and builds on Linux/Mac. One changed Mac capture is
+underway against the saved same-source installed run. Evidence lives under
+`target/follow-through/{system-desktop-mac-v1,dirty-snapshot-v1}`.
+
+Win98 v5/6382 now reaches activated exit0 after cold2 with all six API pixel
+proofs. Cold1's explicit helper raced the real startup continuation and returned
+busy28; the automatic executor independently completed driver verification and
+queued13 owned renames. The controller followed that durable evidence into the
+required queue-consumption boot, without replaying installation. Current6382 XP
+baseline uninstall also reaches restored exit13 after two clean boots; final
+readonly restoration audit and fresh reinstall are pending.
+
+The Mac empty-dirty-snapshot candidatee60d reduced idle QEMU CPU28.35→8.63%
+of one core, copy mean11.11→10.45ms, and repaint19.44→14.01ms. Fill and
+scroll remain mixed; no universal parity claim. A separate sampled scroll run
+shows most remaining VGA time in the unconditional post-snapshot vCPU rendezvous.
+A follow-on change skips that fence only for an empty captured TCG snapshot,
+preserving real dirty writes and non-TCG listener callbacks. Its actual MemoryRegion
+wrapper plus bitmap-body ASan/UBSan test passes; independent review/build/runtime
+checks remain in progress.
+
+The follow-on empty-snapshot rendezvous fix91a7Mac/b4c2Linux passes both-host
+native builds and actual-source sanitizer/bitmap gates plus independent race
+review. The saved changed Mac run reduces idle QEMU CPU again to5.68% of one
+core (pre-install7.65%). Fill8.83ms, copy10.28ms, scroll10.23ms and repaint16.97ms
+are completed16-acknowledgement means with zero dropped records and240Hz. The
+remaining short desktop distributions overlap and some captures contain guest
+background CPU bursts; this is not universal latency-parity evidence. All original
+and changed measurements remain in dirty-fence-v1/comparison.json.
+
+Win986382 baseline uninstall now has an independent exact-original audit: all14
+global files and both driver files restored, native DDRAW public/cache botha278,
+and absent D3D8/9 caches still absent. The installed source82f5 and restoredb9b2
+are cleanly stopped and preserved. XP6382 fresh reinstall after removal also
+reaches terminal activation after two clean boots; readonly identity audit is
+underway. Next coherent installer adds authenticated pending-rollback recovery,
+bounded mutex ownership handoff, and exact-original Win98 cache repair.
+
+The final native copy trace contains349 complete inline submissions, no errors,
+no continuation work, and763.6MB processed. Median native batch elapsed179us,
+work164us, and non-work8us; this separates actual 2D execution from the roughly
+10ms input-to-visible-ack metric. The diagnostic trace adds logging overhead and
+is not a latency benchmark. Evidence: dirty-fence-v1/macos-copy-native-trace.
+
+Diskless native tests exposed a harness issue with relocated frozen binaries:
+firmware lookup still depended on QEMU build-directory placement. The harness
+now passes an explicit firmware directory (or DREAMGPU_FIRMWARE_DIR override).
+The original missing-BIOS failures are preserved separately from rerun results.
+
+Normal Half-Life hardware-path acceptance now passes on Mac: system
+opengl32/dgpuicd/dgpugl loaded in the exact owned hl/hw process, with native GPU
+draws and presented drawable frames.379 frames/5.408s=70.083fps. Retail engine
+GL strings are absent, explicitly recorded; actual module and host execution
+evidence establish the route. The completed run is retained, not replayed.
+
+Fully installer-activated Win986382 source774d passes all six API pixel proofs
+on the final91a7 Mac native as well as an ordinary system DirectDraw 2D caller
+(exact copy/color-key/primary pixels, two object lifecycles,1024 completed blits).
+Its clean app directories contain no replacement provider DLLs. Normal games
+are now running against this same source.
+
+Win98 Mac normal Half-Life also passes hardware-path proof:379 frames/5.351s
+=70.833fps with system ICD modules plus native draw/presentation evidence.
+The `sysddrawnative` comparison invocation on this same installed Wine public
+provider correctly refuses its native-provider assertion; this was an invalid
+baseline configuration, not a product failure, and yields no native timing.
+Do not use it for a performance comparison or weaken the provider assertion.
+
+Normal game rendering now passes on both hosts (Win98 and Windows2000):
+system ICD Half-Life with native hardware-path proof, and system Direct3D/Glide
+Unreal Tournament with full client bounds. Linux W2K cleanly shut down. Win98
+shutdown after these games fails on both hosts; those private guests are paused,
+not clean, and must not become fixture sources. The preserved installer-only
+Win98 sources had clean shutdowns and remain unchanged.
+
+The Win98 fault maps to KRNL386 ordinal535, VWin32_BoostThreadGroup. Linux
+faults dereferencing a null thread lookup result; Mac faults in VMM priority
+adjustment reached by the same function. This does not yet identify a product
+bug. Both Glide test receipts reveal forced TerminateProcess cleanup after a
+2-second close deadline; their graphics proofs pass, but graceful game exit was
+not established. The automation is being corrected to close the actual retail
+viewport, wait a bounded interval, and fail its clean-exit gate on termination.
+No speculative driver patch is justified by this evidence.
+
+The maintained DGSTOP artifact used here is NT5-only and was rejected by the
+Win98 loader. That failed invocation is retained separately; the subsequent
+legacy PE4 shutdown helper reached the kernel fault. The common shutdown tool
+also needs a correctly targeted Win98-compatible build.
+
+XP corrected-executor recovery is complete and audited: new b1f8 installer
+resumes the preserved8367 failed rollback without rewriting old G/D/T executors,
+payloads or backups. All13 providers and two driver files match immediate-before
+images; recovery receipt binds the old/new executors and all owned startup and
+NT queue/permission entries are absent. Recovered disk32d1 is cleanly stopped.
+Evidence: system-installer-xp-recovery-v1/acceptance.json.
+
+The final-native desktop comparison now uses91a7 for both pre-install and
+installed states, with the same app/probe/display. All16 acknowledgements,
+zero dropped records,240Hz and clean pre-install shutdown. Before→installed
+mean ms: fill7.84→8.83, copy9.59→10.28, scroll9.86→10.23, repaint16.81→16.97;
+idle QEMU core%5.18→5.68. The sampled empty-dirty reset/rendezvous regression is
+removed. Remaining short fill/copy distributions do not establish universal
+parity. Saved comparison: dirty-fence-v1/matched-final-native.json.
+
+The first corrected Glide exit diagnostic still failed its graceful-exit gate:
+WM_CLOSE on the exact viewport did not stop UT within15s. This time its subsequent
+Win98 shutdown completed cleanly, so forced termination alone is not sufficient
+to explain the original cross-host shutdown fault. Original W2K Glide runs also
+used forced cleanup while W2K shut down normally. Historical rendering results
+remain valid; their graceful-exit claims are withdrawn.
+
+Retail Window.dll disassembly provides a concrete automation fix: its owned
+WLog's ID_LogFileExit command calls the engine's appRequestExit. A hash-bound
+helper now uses that exact engine command, with module-path/owner validation and
+pre-force window/thread/log diagnostics. Runtime verification is in progress;
+no speculative GL/VxD patch has been made.
+
+Installer GUI automation is implemented as a hash-bound sysui route using the
+actual /continue flow and the existing durable outcome verifier. It reads only
+the owned standard dialog, checks exact result text/button identity, declines
+reboot through verified default IDNO, and requires the corresponding process
+exit status. Foreign/reused windows, hung controls and unknown dialogs fail.
+Twelve actual-adapter sanitizer cases, PE4 GCC16 compilation and target-aware
+clang-tidy pass. Guest UI acceptance is next on an independent activated copy.
+
+Linux's corrected retail-engine quit completes the original three-game history
+(Half-Life → UT D3D → UT Glide) and clean Win98 shutdown. The first Mac attempt
+was an invalid deployment: root copied new UT helpers to C:\ while the fixed
+runner uses C:\SIERRA\Half-Life. Its wrong-path receipt remains preserved and
+that private guest shut down cleanly; it is not evidence for the changed helper.
+Both FAT/NT stagers now validate explicitly declared probe hashes against the
+actual runner's launch paths before disk work. Seven path/identity cases pass.
+The corrected Mac helper readback targets the actual launch locations.
+
+The interactive UI fixture also exposed a startup-control race before the guest
+was resumed: QMP's Unix socket pathname existed before it accepted connections.
+Readiness now retries only read-only query-status within the existing deadline;
+network disable and cont remain outside that loop and run once. Three new cases
+cover transient readiness, deadline failure, and never retrying a mutation.
+All29 fixture tests pass. No guest install was repeated for this controller fix.
+
+### Corrected full game exit history, both hosts
+
+The exact-path corrected engine-quit helpers complete Half-Life → UT Direct3D →
+UT Glide and a no-force Win98 shutdown on both hosts. Mac ledger:
+`target/follow-through/win98-graceful-exit-v1/macos-history-v2.json`; Linux:
+`history.json` in the same evidence family. This closes the changed lifecycle
+gate, without repeating or relabelling historical graphics/FPS evidence. The
+original faulted disks stay preserved and are not clean fixture sources.
+
+Interactive W2K setup reached the exact system-wide installed success dialog.
+The first sysui helper failed before dismissal with Win32 error1421; the failure
+boundary needs control diagnostics. One Return dismissed that known dialog and
+the private guest then shut down cleanly. This is an observed product UI result,
+not an automated UI gate pass. Diagnostic helper9722 adds owned button IDs and
+explicit failure stages; it retains the exact7afe installer and fixed operation.
+
+The isolated Mesa26.1.8 hardware proof fixes integer INDEX_OFFSET precision and
+fractional negative PixelZoom: direct EGL and unchanged DreamGPU GPU oracles
+pass on the Framework's radeonsi hardware. Cargo/private runtime integration is
+in progress; no system Mesa replacement or global library-path change is used.
+Legacy 1D borders remain a separate unaccepted implementation until sampling,
+copy, query and lifetime oracles pass.

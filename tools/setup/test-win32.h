@@ -2,6 +2,7 @@
 // Host test syscall seam for the actual Win32Store. No transaction policy here.
 #pragma once
 #include <cstdint>
+#include <cstdlib>
 #include <cstdarg>
 #include <cstdio>
 #include <cstring>
@@ -24,7 +25,8 @@ constexpr DWORD INVALID_FILE_ATTRIBUTES = 0xffffffff, INVALID_FILE_SIZE = 0xffff
 constexpr DWORD ERROR_SUCCESS = 0, ERROR_FILE_NOT_FOUND = 2, ERROR_ACCESS_DENIED = 5,
                 ERROR_SHARING_VIOLATION = 32, ERROR_MORE_DATA = 234;
 constexpr DWORD FILE_ATTRIBUTE_DIRECTORY = 16, FILE_ATTRIBUTE_REPARSE_POINT = 1024,
-                FILE_ATTRIBUTE_NORMAL = 128, FILE_SHARE_READ = 1;
+                FILE_ATTRIBUTE_NORMAL = 128, FILE_SHARE_READ = 1, FILE_SHARE_WRITE = 2,
+                FILE_ATTRIBUTE_READONLY = 1;
 constexpr DWORD GENERIC_READ = 1, GENERIC_WRITE = 2, OPEN_EXISTING = 3, OPEN_ALWAYS = 4,
                 CREATE_NEW = 1, FILE_BEGIN = 0, FILE_END = 2, KEY_READ = 1, KEY_WRITE = 2,
                 KEY_QUERY_VALUE = 1, KEY_SET_VALUE = 2, REG_SZ = 1, REG_DWORD = 4;
@@ -36,10 +38,12 @@ struct Node {
     std::vector<BYTE> bytes;
     bool directory = false;
     bool flushed = false;
+    DWORD attributes = FILE_ATTRIBUTE_NORMAL;
 };
 struct Open {
     std::string path;
     DWORD pos = 0;
+    DWORD access = 0, share = 0;
 };
 struct Value {
     DWORD type;
@@ -50,6 +54,7 @@ inline std::map<intptr_t, Open> handles;
 inline std::map<std::string, std::map<std::string, Value>> keys;
 inline std::map<intptr_t, std::string> key_handles;
 inline std::map<intptr_t, std::vector<BYTE>> resources;
+inline bool enforce_file_sharing = false;
 inline intptr_t next = 10;
 inline DWORD error = 0, mutation = 0, fail = 0;
 inline bool fault() {
@@ -114,12 +119,38 @@ inline DWORD GetFileAttributesA(const char *p) {
         fake_win32::error = ERROR_FILE_NOT_FOUND;
         return INVALID_FILE_ATTRIBUTES;
     }
-    return i->second.directory ? FILE_ATTRIBUTE_DIRECTORY : FILE_ATTRIBUTE_NORMAL;
+    return i->second.attributes | (i->second.directory ? FILE_ATTRIBUTE_DIRECTORY : 0);
 }
-inline HANDLE CreateFileA(const char *p, DWORD, DWORD, void *, DWORD mode, DWORD, void *) {
+inline bool SetFileAttributesA(const char *p, DWORD attributes) {
+    using namespace fake_win32;
+    auto i = files.find(canon(p));
+    if (i == files.end() || fault())
+        return false;
+    i->second.attributes = attributes;
+    return true;
+}
+inline HANDLE CreateFileA(const char *p, DWORD access, DWORD share, void *, DWORD mode, DWORD,
+                          void *) {
     using namespace fake_win32;
     auto name = canon(p);
     auto i = files.find(name);
+    if (enforce_file_sharing)
+        for (const auto &[id, opened] : handles) {
+            (void)id;
+            if (opened.path == name &&
+                (((access & GENERIC_READ) && !(opened.share & FILE_SHARE_READ)) ||
+                 ((access & GENERIC_WRITE) && !(opened.share & FILE_SHARE_WRITE)) ||
+                 ((opened.access & GENERIC_READ) && !(share & FILE_SHARE_READ)) ||
+                 ((opened.access & GENERIC_WRITE) && !(share & FILE_SHARE_WRITE)))) {
+                error = 32; // ERROR_SHARING_VIOLATION
+                return INVALID_HANDLE_VALUE;
+            }
+        }
+    if (i != files.end() && (i->second.attributes & FILE_ATTRIBUTE_READONLY) &&
+        (access & GENERIC_WRITE)) {
+        error = ERROR_ACCESS_DENIED;
+        return INVALID_HANDLE_VALUE;
+    }
     if (mode == CREATE_NEW) {
         if (i != files.end() || fault())
             return INVALID_HANDLE_VALUE;
@@ -133,7 +164,7 @@ inline HANDLE CreateFileA(const char *p, DWORD, DWORD, void *, DWORD mode, DWORD
         return INVALID_HANDLE_VALUE;
     }
     auto id = next++;
-    handles[id] = {name, 0};
+    handles[id] = {name, 0, access, share};
     return id;
 }
 inline bool CloseHandle(HANDLE h) {
@@ -276,6 +307,19 @@ inline LONG RegCreateKeyExA(HKEY, const char *p, DWORD, void *, DWORD, DWORD, vo
     key_handles[*out] = path;
     return ERROR_SUCCESS;
 }
+inline LONG RegQueryInfoKeyA(HKEY key, char *, DWORD *, DWORD *, DWORD *subkeys, DWORD *, DWORD *,
+                             DWORD *values, DWORD *, DWORD *, DWORD *, void *) {
+    using namespace fake_win32;
+    const auto &path = key_handles[key];
+    if (!keys.count(path))
+        return ERROR_FILE_NOT_FOUND;
+    *values = DWORD(keys[path].size());
+    *subkeys = 0;
+    for (const auto &entry : keys)
+        if (entry.first.starts_with(path + "\\"))
+            ++*subkeys;
+    return ERROR_SUCCESS;
+}
 inline LONG RegDeleteKeyA(HKEY, const char *p) {
     using namespace fake_win32;
     auto i = keys.find(canon(p));
@@ -298,4 +342,15 @@ inline HGLOBAL LoadResource(void *, HRSRC r) {
 }
 inline const void *LockResource(HGLOBAL r) {
     return fake_win32::resources[r].data();
+}
+
+inline HANDLE GetProcessHeap() {
+    return 1;
+}
+inline void *HeapAlloc(HANDLE, DWORD, size_t bytes) {
+    return std::malloc(bytes);
+}
+inline bool HeapFree(HANDLE, DWORD, void *p) {
+    std::free(p);
+    return true;
 }

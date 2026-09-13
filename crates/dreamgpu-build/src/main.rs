@@ -21,7 +21,14 @@ fn main() -> Result<()> {
     let output = output.canonicalize()?;
     match action.as_str() {
         "guest" => dreamgpu_build::guest::build(&root, &output),
+        "native-runtime" => dreamgpu_build::native_runtime::package_existing(&root, &output),
+        "mesa" => dreamgpu_build::mesa::build(&root, &output).map(|_| ()),
         "native" => dreamgpu_build::native::build(&root, &output),
+        "installer" => dreamgpu_build::installer::build(
+            &root,
+            &output,
+            &std::env::var("DREAMGPU_CROSS_COMPILE").unwrap_or_else(|_| "i686-w64-mingw32-".into()),
+        ),
         _ => anyhow::bail!("unknown component {action}"),
     }
 }

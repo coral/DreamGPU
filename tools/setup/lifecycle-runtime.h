@@ -39,15 +39,32 @@ template <class Payloads> bool prepare_shared(Os os, const Payloads &payloads) {
     if (!verified_owner(store))
         return false;
     static Journal j;
-    if (!shared_plan(os, payloads, j) || !store.create_generation(j.generation))
+    const bool full_system = providers(os).ready();
+    if (!(full_system ? system_plan(os, payloads, j, true) : shared_plan(os, payloads, j)))
         return false;
-    for (unsigned n = 0; n < j.count; n++)
-        if (!store.capture(j, n))
-            return false;
-    return store.persist(j);
+    return capture_system(os, store, j);
 }
-enum class Action { continue_install, rollback, uninstall, upgrade };
+// Forward-only startup recovery after the owned stage was committed. A
+// partial initial append is repaired only against the exact P1-authorized
+// completed plan; corrupt complete journals never grant a fresh install.
+template <class Payloads> bool ensure_prepared(Os os, const Payloads &payloads) {
+    Win32Store store;
+    if (!verified_owner(store))
+        return false;
+    static Journal current;
+    if (!store.load(current))
+        return prepare_shared(os, payloads);
+    if (is_system_journal(current))
+        return true;
+    if (!providers(os).ready())
+        return false;
+    static Journal next;
+    return promote_staged_system(os, payloads, store, current, next) == Result::complete;
+}
+enum class Action { continue_install, rollback, uninstall, upgrade, repair };
 template <class Payloads> Result act(Os os, Action action, const Payloads &payloads) {
+    if (action == Action::repair)
+        return Result::invalid; // Historical shared-only receipts have no system repair route.
     // Upgrade always installs new providers. Continuation must first inspect
     // the owned journal: recovery and removal do not require ready providers.
     if (action == Action::upgrade && !providers(os).ready())
@@ -68,17 +85,12 @@ template <class Payloads> Result act(Os os, Action action, const Payloads &paylo
     }
     if (action == Action::uninstall) {
         static Journal removal;
-        if (!uninstall_plan(j, removal) || !store.create_generation(removal.generation))
+        const auto allowed = make_uninstall_plan(store, j, removal);
+        if (allowed != Result::complete)
+            return allowed;
+        if (!store.prepare_generation(removal, nullptr, true))
             return Result::invalid;
-        for (unsigned n = 0; n < removal.count; n++) {
-            // Capture uninstall's immediate-before backup for its own rollback,
-            // preserving each original-generation reference for desired restore.
-            Item retained = removal.items[n];
-            if (!store.capture(removal, n) || !same(removal.items[n].before, retained.before))
-                return Result::conflict;
-            removal.items[n] = retained;
-        }
-        if (!store.persist(removal))
+        if (!store.publish_preparation(removal))
             return Result::io_error;
         Engine engine(store, removal);
         return engine.continue_apply(false);
@@ -87,7 +99,7 @@ template <class Payloads> Result act(Os os, Action action, const Payloads &paylo
         if (j.state != State::activated || j.generation == 0xffffffff)
             return Result::invalid;
         static Journal next;
-        if (!shared_plan(os, payloads, next))
+        if (!system_plan(os, payloads, next, providers(os).opengl_icd))
             return Result::invalid;
         next.generation = j.generation + 1;
         // Never forget an older owned destination, even if a changed package
@@ -103,23 +115,8 @@ template <class Payloads> Result act(Os os, Action action, const Payloads &paylo
             if (!retained)
                 return Result::invalid;
         }
-        if (!store.create_generation(next.generation))
-            return Result::io_error;
-        for (unsigned n = 0; n < next.count; n++) {
-            const Item *prior = nullptr;
-            for (unsigned k = 0; k < j.count; k++)
-                if (next.items[n].kind == j.items[k].kind &&
-                    destination_equal(next.items[n].path, j.items[k].path,
-                                      sizeof(j.items[k].path)) &&
-                    destination_equal(next.items[n].name, j.items[k].name, sizeof(j.items[k].name)))
-                    prior = &j.items[k];
-            if (!store.capture(next, n, prior))
-                return Result::conflict;
-        }
-        // Removing an old provider is a separate removal transaction; do not
-        // silently forget old owned destinations when changing package shape.
-        if (!store.persist(next))
-            return Result::io_error;
+        if (!capture_system(os, store, next, &j))
+            return Result::conflict;
         j = next;
     }
     Engine engine(store, j);

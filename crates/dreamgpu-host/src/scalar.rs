@@ -7,6 +7,29 @@ use core::ffi::c_void;
 
 pub type ResourceHook = unsafe extern "C" fn(*mut c_void, u32, *const u8) -> u32;
 
+pub(crate) fn allowed_in_begin(function: u32) -> bool {
+    matches!(
+        function,
+        FEnum_glEnd
+            | FEnum_glEvalCoord1d
+            | FEnum_glEvalCoord2d
+            | FEnum_glEvalPoint1
+            | FEnum_glEvalPoint2
+            | FEnum_glEdgeFlag
+            | FEnum_glIndexd
+            | FEnum_glVertex2f
+            | FEnum_glVertex3f
+            | FEnum_glVertex4f
+            | FEnum_glTexCoord4f
+            | FEnum_glColor3f
+            | FEnum_glColor4f
+            | FEnum_glSecondaryColor3f
+            | FEnum_glTexCoord2f
+            | FEnum_glNormal3f
+            | FEnum_glMaterialf
+    )
+}
+
 unsafe fn execute(
     api: &DreamGpuGlApi,
     in_begin: *mut u32,
@@ -26,22 +49,7 @@ unsafe fn execute(
             u64::from(u(n)?) | (u64::from(u(n + 1)?) << 32),
         ))
     };
-    if unsafe { *in_begin } != 0
-        && !matches!(
-            function,
-            FEnum_glEnd
-                | FEnum_glVertex2f
-                | FEnum_glVertex3f
-                | FEnum_glVertex4f
-                | FEnum_glTexCoord4f
-                | FEnum_glColor3f
-                | FEnum_glColor4f
-                | FEnum_glSecondaryColor3f
-                | FEnum_glTexCoord2f
-                | FEnum_glNormal3f
-                | FEnum_glMaterialf
-        )
-    {
+    if unsafe { *in_begin } != 0 && !allowed_in_begin(function) {
         return Err(4);
     }
     match function {
@@ -88,6 +96,82 @@ unsafe fn execute(
                 *in_begin = 0;
             }
         }
+        FEnum_glListBase => unsafe { api.dg_glListBase.ok_or(3u32)?(u(0)?) },
+        FEnum_glInitNames => unsafe { api.dg_glInitNames.ok_or(3u32)?() },
+        FEnum_glPopName => unsafe { api.dg_glPopName.ok_or(3u32)?() },
+        FEnum_glLoadName => unsafe { api.dg_glLoadName.ok_or(3u32)?(u(0)?) },
+        FEnum_glPushName => unsafe { api.dg_glPushName.ok_or(3u32)?(u(0)?) },
+        FEnum_glPassThrough => unsafe { api.dg_glPassThrough.ok_or(3u32)?(f(0)?) },
+        FEnum_glMapGrid1d => unsafe { api.dg_glMapGrid1d.ok_or(3u32)?(u(0)? as i32, d(1)?, d(3)?) },
+        FEnum_glMapGrid2d => unsafe {
+            api.dg_glMapGrid2d.ok_or(3u32)?(u(0)? as i32, d(1)?, d(3)?, u(5)? as i32, d(6)?, d(8)?)
+        },
+        FEnum_glEvalCoord1d => unsafe { api.dg_glEvalCoord1d.ok_or(3u32)?(d(0)?) },
+        FEnum_glEvalCoord2d => unsafe { api.dg_glEvalCoord2d.ok_or(3u32)?(d(0)?, d(2)?) },
+        FEnum_glEvalPoint1 => unsafe { api.dg_glEvalPoint1.ok_or(3u32)?(u(0)? as i32) },
+        FEnum_glEvalPoint2 => unsafe {
+            api.dg_glEvalPoint2.ok_or(3u32)?(u(0)? as i32, u(1)? as i32)
+        },
+        FEnum_glEvalMesh1 | FEnum_glEvalMesh2 => {
+            let a = [
+                u(0)?,
+                u(1)?,
+                u(2)?,
+                if function == FEnum_glEvalMesh2 {
+                    u(3)?
+                } else {
+                    0
+                },
+                if function == FEnum_glEvalMesh2 {
+                    u(4)?
+                } else {
+                    0
+                },
+            ];
+            if !crate::evaluator::mesh(function, &a) {
+                return Err(DG_GL_ERROR_LIMIT);
+            }
+            if (function == FEnum_glEvalMesh1 && api.dg_glEvalMesh1.is_none())
+                || (function == FEnum_glEvalMesh2 && api.dg_glEvalMesh2.is_none())
+            {
+                return Err(DG_GL_ERROR_UNSUPPORTED);
+            }
+            if crate::evaluator::empty(function, &a) {
+                return Ok(());
+            }
+            // EvalMesh contains native Begin/End operations. Reuse the same
+            // logical texture-definition and fence admission as an explicit Begin.
+            let mode = GL_POINTS.to_le_bytes();
+            let admission = unsafe { hook(opaque, FEnum_glBegin, mode.as_ptr()) };
+            if admission != 0 {
+                return Err(admission);
+            }
+            if crate::evaluator::terminal(function, &a) {
+                return unsafe { crate::evaluator::terminal_mesh(api, function, &a) };
+            }
+            unsafe {
+                if function == FEnum_glEvalMesh1 {
+                    api.dg_glEvalMesh1.ok_or(3u32)?(a[0], a[1] as i32, a[2] as i32)
+                } else {
+                    api.dg_glEvalMesh2.ok_or(3u32)?(
+                        a[0],
+                        a[1] as i32,
+                        a[2] as i32,
+                        a[3] as i32,
+                        a[4] as i32,
+                    )
+                }
+            }
+        }
+        FEnum_glEdgeFlag => unsafe { api.dg_glEdgeFlag.ok_or(3u32)?((u(0)? != 0) as u8) },
+        FEnum_glIndexd => unsafe { api.dg_glIndexd.ok_or(3u32)?(d(0)?) },
+        FEnum_glClearAccum => unsafe {
+            api.dg_glClearAccum.ok_or(3u32)?(f(0)?, f(1)?, f(2)?, f(3)?)
+        },
+        FEnum_glClearIndex => unsafe { api.dg_glClearIndex.ok_or(3u32)?(f(0)?) },
+        FEnum_glIndexMask => unsafe { api.dg_glIndexMask.ok_or(3u32)?(u(0)?) },
+        FEnum_glAccum => unsafe { api.dg_glAccum.ok_or(3u32)?(u(0)?, f(1)?) },
+        FEnum_glLogicOp => unsafe { api.dg_glLogicOp.ok_or(3u32)?(u(0)?) },
         FEnum_glCopyPixels => unsafe {
             api.dg_glCopyPixels.ok_or(3u32)?(
                 u(0)? as i32,

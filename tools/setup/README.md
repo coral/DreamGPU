@@ -1,109 +1,120 @@
-# Installer foundation
+# Windows guest installer
 
-Cargo packages one `dreamgpu.exe` containing both existing guest packages. It
-selects Windows98 or NT5 (2000/XP), requires exactly one present PCI1234:1113
-adapter, validates every selected embedded payload SHA256 before filesystem
-changes, and has no dynamic CRT or C++ exception dependency.
+`DREAMGPU_BUILD=all cargo build --release` produces one
+`target/guest/dreamgpu.exe`. Run it **inside the Windows guest**. It detects
+Windows 98 or 32-bit Windows 2000/XP, validates the DreamGPU PCI adapter and
+embedded payloads, installs the display driver and system graphics providers,
+and offers a restart when needed. macOS and Linux use the same guest installer.
 
-System-provider integration is unfinished. Normal execution returns exit30,
-`system_provider_not_ready`, without changing disk or registry. This is not yet
-a completed system GPU installer. The diagnostic `/stage` operation creates a
-fresh `%WINDIR%\DGSETUP.NEW`, records PREPARE.json, writes/read-verifies files,
-then renames to `%WINDIR%\DreamGPU` only after RESULT.json is durable. Existing
-destinations are never adopted or overwritten. Stage exit10 means staging only.
+The normal provider paths are:
 
-`/silent` suppresses UI; JSON is emitted to inherited stdout and debug output,
-with an explicit process exit code. Staged receipts also live inside the owned
-directory. Exit20 unsupported OS,21 missing/ambiguous device,22 invalid payload,
-23 arguments,24 occupied/unavailable destination,25 failed staging rolled back,
-26 incomplete rollback,30 unavailable system provider. No code reports installed
-success. A crash leaves its fresh staging directory for explicit recovery; a
-later run refuses it. Initial private-preparation cleanup and actual system-provider activation remain
-unfinished; journalled lifecycle operations are described below.
+- OpenGL: Microsoft system `opengl32.dll` and GDI load `dgpuicd.dll`.
+- Glide2: the system `glide2x.dll` uses the DreamGPU OpenGL frontend.
+- DirectDraw and Direct3D6–9: system providers use the packaged WineD3D
+  translation libraries and DreamGPU acceleration.
 
-The modern owned logic is C++23 with Win32 RAII. Current atomic ownership tests
-exercise the actual transaction template and SHA256 vectors under ASan/UBSan.
-The future driver/ICD activation transaction must retain this preflight and
-receipt model; it must not replace NT protected system DLLs.
+Games use their ordinary renderer selection. Installation does not require
+copying DLLs beside games, a custom OpenGL driver argument or patched imports.
+Glide1/3 and a native Direct3D HAL are not advertised. API coverage and measured
+native-provider limitations are recorded in [the plan](../../docs/plan.md).
 
-## Journalled lifecycle
+## Status
 
-`lifecycle.h` owns a fixed, pointer-free v1 journal: file, registry-key and
-registry-value operations record immediate-before, desired and first-install
-original identities. Each phase is appended with SHA256 and flushed before its
-mutation. Recovery validates records and trims only an incomplete final record;
-corrupt complete records are rejected. The journal has a16MiB limit.
+The complete installer has activated all six normal-loader GPU checks on
+Windows 98, Windows 2000 and XP. Current Win98 and XP baseline removal and XP
+fresh reinstall have exact-original audits. XP also recovered a preserved failed
+rollback using the corrected installer while retaining its original executables
+and backups. Final composed upgrade/rollback/removal gates and Win98 shutdown
+after games remain in progress. [Progress](../../docs/progress.md) records exact
+artifacts and limits; a build alone does not establish runtime acceptance.
 
-`win32-lifecycle.h` supplies the actual syscall adapter. Before backups and
-restored temporary copies are flushed/read-verified. Windows98-compatible file
-replacement records the intent, moves the original into an owned private slot,
-then publishes the verified new file. A journalled rename gap is reconciled
-only with its exact backup. Current bytes that disagree with both known states
-are an ownership conflict. A named installer mutex prevents competing installer
-processes. This is process-interruption recovery using Windows file APIs, not a
-claim of filesystem atomicity under host power loss or concurrent hostile edits.
+## Commands and results
 
-`/stage` now also captures the current shared-library originals into its private
-journal generation. It does not change the system libraries. `/rollback`
-reconciles and restores a generation; `/continue` resumes recorded installation,
-removal, or rollback work; `/upgrade` inherits first-install originals only when
-current files equal the previous owned result; `/uninstall` creates a reverse
-transaction and captures its own immediate-before backup for rollback. Native
-files that already equalled the requested bytes before initial installation are
-borrowed, never newly owned. Backups/receipts remain available as evidence.
+Double-clicking the installer runs installation or reconciles its owned current
+installation. It reports completion only after driver verification and six
+normal-loader tests: OpenGL, Glide2 and Direct3D6/7/8/9. A restart request is
+pending work, not installed success. An owned startup entry resumes the recorded
+operation (Run on Windows 98, RunOnce on NT5).
 
-Global plans name `dgpugl.dll`, `glide2x.dll`, `wined3d.dll`, `winedd.dll`,
-`wined8.dll`, and `wined9.dll` in the OS system directory. The separate ICD hook
-uses a typed NT DGPUICD key plus four values, or the Win98 named value. Its
-production-readiness flag is false; the diagnostic ICD is not registered.
-Microsoft `opengl32.dll`, `ddraw.dll`, `d3d8.dll` and `d3d9.dll` are absent from
-the adapter's allowed destinations. A completed mutation list cannot produce
-`activated`: the real activation verifier still deliberately returns false.
+| Command | Meaning |
+| --- | --- |
+| `dreamgpu.exe /silent` | Install with JSON receipts and process exit status, without UI |
+| `dreamgpu.exe /continue` | Resume the durable current operation |
+| `dreamgpu.exe /recover` | Use a corrected executor to finish an authenticated pending rollback or removal |
+| `dreamgpu.exe /upgrade` | Install a new owned generation, retaining the immediate prior state |
+| `dreamgpu.exe /repair` | Repair exact known-original runtime drift; reject unknown replacement bytes |
+| `dreamgpu.exe /rollback` | Restore the immediate prior generation, or cancel incomplete initial staging |
+| `dreamgpu.exe /uninstall` | Restore the captured first-install baseline, or cancel incomplete staging |
+| `dreamgpu.exe /stage` | Diagnostic private extraction/preparation only; does not activate graphics |
 
-Additional receipt exits are11 pending_reboot,12 rolled_back,13 removed,
-27 staged_journal_failed,28 installer_busy,29 ownership_conflict. Exit0 is
-reserved for independently verified activation, currently unreachable because
-provider readiness and activation verification remain false. Default execution
-still fails before writes. Upgrade is disabled until providers are ready.
+`/silent` can accompany an operation. Repair preserves the verified driver and
+reruns only affected API proofs. Uninstall removes only owned files, device,
+service, INF and registry changes; borrowed original components remain intact.
+A removal already in progress must finish rather than reverse into installation.
 
-## Remaining provider work
+Key exit statuses are 0 activated, 10 staged, 11 pending reboot, 12 rolled back,
+13 removed, 17 staging cancelled, 20 unsupported OS, 21 missing/ambiguous device,
+22 invalid payload, 23 arguments, 26 operation incomplete, 27 preparation failed,
+28 installer busy and 29 ownership conflict. Driver-only diagnostic statuses
+14–16 do not report full graphics activation.
 
-The existing Win98 `tools/win9x/driver32.cpp` already selects exactly one present
-PCI1234:1113 node, verifies adjacent DG9X.INF's provider/section/hardware identity,
-uses V1 SetupAPI structures and DIF_INSTALLDEVICE, then audits the selected driver
-pair. Reuse that checked implementation as a library or extract its existing
-helper alongside the INF in the private driver directory. The OS binding change
-needs its own saved previous-driver identity and reboot verification; a child
-process exit alone is insufficient. The NT equivalent is `tools/nt/install.cpp`
-using dynamically resolved newdev; do not import that NT API into the PE4
-bootstrap. Neither is activated by this lifecycle foundation yet.
+## Ownership and recovery
 
-Still required: owned driver-binding rollback, production ICD/capability proof,
-NT5 system Direct3D HAL/integration, activation verifier, checked automatic reboot
-continuation registration, recovery/cleanup of interrupted initial private
-preparation, and removal of archived private payloads after verified uninstall.
-A pending journal can be resumed explicitly without a busy retry loop. These
-limitations are explicit; no system-install success is inferred from staging.
+The C++23 Win32 boundary uses checked lengths, bounded allocations, RAII,
+SHA256-verified payloads and no dynamic C++ runtime, exceptions or RTTI. The
+installer targets PE4 and imports APIs available on the selected legacy OS.
+The Cargo audit specifically checks that `CM_Get_Device_IDA` resolves from
+CfgMgr32, since Windows 98 does not export it from SetupAPI.
 
-Host tests compile the actual policy, engine and Win32 adapter under ASan/UBSan.
-The adapter syscall seam injects failures into capture, journal append/flush,
-copy/rename, registry mutation and rollback, and verifies exact original bytes,
-foreign-edit refusal, key ownership and uninstall's own rollback backup. No
-mock duplicates the ordering or reconciliation policy.
+A checksummed ticket binds initial extraction to the installer, OS and complete
+payload catalog before creating `%WINDIR%\DGSETUP.NEW`. Exact owned partial
+copies can resume; cancellation records its direction before deleting anything.
+Only a complete catalog is published as `%WINDIR%\DreamGPU`. Unknown files,
+foreign edits and corrupt complete records are rejected. A crash before the
+first ownership ticket is fully written fails closed; unproven files are not
+silently adopted.
 
-The optional `dreamgpu-setup-verify` CMake target requires
-`DREAMGPU_SETUP_VERIFY_HASH` naming one audited installer SHA256. Its fixed
-`DGSETTST.EXE` helper runs only in an independent Windows 98/2000/XP fixture: default
-execution must refuse activation without private state, `/stage` must preserve
-six global originals in its journal, and `/rollback` must leave all fourteen
-observed graphics files unchanged, including the Win98 display-driver pair.
-It checks the Win98 ICD value or the four NT ICD values according to the detected
-OS. Supported helper targets are not a claim of completed runtime acceptance on
-each OS. The serial `setupcheck`
-route collects `C:\DGSETTST.LOG`; it never enables providers or claims system
-installation. This targeted helper is separate from the normal installer.
+Within that private tree, GLOBAL coordinates driver and provider transactions.
+Independent immutable generations retain both the original baseline and the
+immediate predecessor. Before-images and intent records are flushed before
+public mutations. The initial driver transaction supports prior DreamGPU,
+Microsoft VGA and an unbound NT5 PCI device; unsupported prior drivers are
+rejected before public changes. The currently loaded driver protocol cannot
+report a resident build hash, so verification makes no such claim.
 
-The combined installer links CfgMgr32 before SetupAPI. MinGW's SetupAPI import
-library also offers `CM_Get_Device_IDA`, but Windows 98's actual SetupAPI DLL
-does not export it. The Cargo artifact audit requires this function to resolve
-from CfgMgr32; checking DLL names alone would miss this loader incompatibility.
+NT5 protected-runtime replacement uses an owned boot rename transaction without
+disabling Windows File Protection or replacing its original cache. A disjoint
+valid OS rename queue defers installation to a reboot; overlapping or ambiguous
+entries remain conflicts. Win98 uses its checked boot replacement transaction.
+Startup entries retain their own before-images and exact installer identities.
+Windows 98 uses a persistent owned Run value while work is pending, avoiding
+RunOnce re-registration during the same startup; completion restores its baseline.
+The coordinator installs the driver before providers and restores providers
+before removing the driver. Retained private journals/originals support recovery;
+this is interruption recovery through Windows APIs, not a claim of atomicity
+under arbitrary power loss or hostile concurrent disk changes.
+
+## Automated acceptance
+
+`scripts/fixtures/system-install.py` drives fixed hash-pinned helpers over serial,
+records global phase/epoch/generation receipts and performs bounded clean cold
+boots. It disables guest networking before execution and never forces a reboot
+or repeats a completed operation. Every cold successor uses an independent copy
+of the stopped private disk. Failed operations retain their original errors.
+
+The fixed `sysinstall`, `sysresume`, `sysupgrade`, `sysrollback`, `sysremove` and
+`sysrepair` and `sysrecover` routes accept no arbitrary guest command. Their helpers require the
+exact installer SHA256. Normal-loader proofs verify actual loaded system-module
+paths and pixel/presentation results with no neighboring provider DLLs.
+Actual policy/Win32 adapter tests inject failures into extraction, journals,
+copy/rename, registry state, reboot queues, driver generations and recovery.
+
+For an installer-only incremental build from already audited OS packages:
+
+```sh
+cargo run -p dreamgpu-build -- installer --root . --output target/guest
+```
+
+This rebuilds the installer resources and verification header together; it does
+not rebuild unchanged drivers or translators. Runtime receipts always identify
+the exact executable tested.

@@ -1,6 +1,5 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
- * Diagnostic NT5 pixel-format DDIs. This is the frontend's single actual
- * RGBA8/D24S8 window format, not an assertion of full OpenGL 1.1 coverage.
+ * NT5 pixel-format DDIs for the frontend's RGBA8/D24S8 window format.
  */
 extern "C" {
 #include "framebuf.h"

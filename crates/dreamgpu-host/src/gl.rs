@@ -267,7 +267,8 @@ unsafe fn execute(s: *mut Resources, p: &Platform, r: &[u8], pw: u32, ph: u32) -
             if op == 7 && flags & 16 != 0 && (word(32)? != width || word(36)? != height) {
                 return Err(DRAWABLE);
             }
-            if op != 6 && unsafe { (p.in_begin)(p.opaque, ci as u32) } != 0 {
+            let list_array = op == 10 && word(32)? == crate::gl_api::FEnum_glCallLists;
+            if op != 6 && !list_array && unsafe { (p.in_begin)(p.opaque, ci as u32) } != 0 {
                 return Err(CONTEXT);
             }
             code(unsafe { (p.make_current)(p.opaque, ci as u32, di as u32) })?;

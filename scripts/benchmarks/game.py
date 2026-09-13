@@ -164,7 +164,10 @@ def attempt(fixture,game,output,sample=False,*,phase_hook=None):
             diagnostics.update(available=True,device=device)
             diagnostics['attempt_start']=diagnostic_stats(state['qmp'],device)
         socket.command('start_capture','ok');capturing=True
-        guest=hl.run_demo(state['serial'],game,output/'guest',manifest,30,30,90,probe=True,on_phase=phase)
+        # The guest owns a 95-second UT deadline including graceful cleanup.
+        # Leave room for its terminal receipt; a host timeout must not precede
+        # the owned helper's cleanup bound. The measured game interval is still10s.
+        guest=hl.run_demo(state['serial'],game,output/'guest',manifest,30,30,110,probe=True,on_phase=phase)
         for name,event in guest.get('measurement_phases',{}).items():
             if 'callback_error' in event:errors.append(name+': '+event['callback_error'])
     except Exception as error:

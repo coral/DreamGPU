@@ -33,17 +33,10 @@ set(display_sources "${DREAMGPU_GUEST}/nt/memory.cpp" "${DREAMGPU_GUEST}/nt/disp
 foreach(unit IN LISTS display_units)
   list(APPEND display_sources "${DREAMGPU_GUEST}/nt/display/${unit}.cpp")
 endforeach()
-add_library(dgpudisp SHARED ${display_sources})
+# The single production display driver implements normal system ICD discovery.
+add_library(dgpudisp SHARED ${display_sources} "${DREAMGPU_GUEST}/nt/display/icd.cpp")
 dreamgpu_nt_driver(dgpudisp "_DrvEnableDriver@12")
 target_link_libraries(dgpudisp PRIVATE win32k gcc)
-# A separate driver binary exposes the incomplete ICD only in disposable
-# system-loader development fixtures. The production pair does not change.
-add_library(dgpudisp_icd SHARED ${display_sources} "${DREAMGPU_GUEST}/nt/display/icd.cpp")
-dreamgpu_nt_driver(dgpudisp_icd "_DrvEnableDriver@12" "diagnostics/icd/drivers/nt5")
-target_compile_definitions(dgpudisp_icd PRIVATE DG_ICD_DIAGNOSTIC=1)
-set_target_properties(dgpudisp_icd PROPERTIES OUTPUT_NAME dgpudisp
-  ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/diagnostics/icd/drivers/nt5")
-target_link_libraries(dgpudisp_icd PRIVATE win32k gcc)
 
 add_executable(dginst "${DREAMGPU_ROOT}/tools/nt/install.cpp")
 dreamgpu_freestanding(dginst)

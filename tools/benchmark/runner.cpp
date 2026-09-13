@@ -45,6 +45,7 @@ void *memset(void *destination, int value, unsigned int bytes) {
     return destination;
 }
 #include "process-evidence.h"
+#include "renderer-evidence.h"
 static BOOL Equal(const char *a, const char *b) {
     while (*a && *a == *b) {
         ++a;
@@ -442,8 +443,7 @@ static const char *Run(const char *id, const char *demo) {
     }
     p = Append(command, "\"");
     p = Append(p, Executable);
-    p = Append(p,
-               "\" -windowed -toconsole -nosound -dev -gl -gldrv dgpugl.dll -condebug +timedemo ");
+    p = Append(p, "\" -windowed -toconsole -nosound -dev -gl -condebug +timedemo ");
     Append(p, demo);
     memset(&startup, 0, sizeof(startup));
     startup.cb = sizeof(startup);
@@ -474,6 +474,23 @@ static const char *Run(const char *id, const char *demo) {
             }
             if (complete) {
                 error = ResultObserved(id);
+                if (!error) {
+                    /* OBSERVED is sent only after host sampling has stopped.
+                     * Inspect only our still-owned child and its fresh log. */
+                    BOOL prefix =
+                        DgRenderText((char *)Output, sizeof(Output), &OutputBytes, "\r\n");
+                    BOOL modules = DgRendererModules(process.dwProcessId, process.hProcess, Game,
+                                                     (char *)Output, sizeof(Output), &OutputBytes);
+                    BOOL observed = FALSE;
+                    BOOL console = DgRendererLog(Logs[i], (char *)Reading, 32768, (char *)Output,
+                                                 sizeof(Output), &OutputBytes, &observed);
+                    if (!prefix || !modules || (observed && !console) ||
+                        !DgRenderText((char *)Output, sizeof(Output), &OutputBytes,
+                                      console ? "RENDERER_PROOF system-icd-and-engine-strings\r\n"
+                                              : "ENGINE_GL_STRINGS unavailable\r\n"
+                                                "RENDERER_PROOF system-icd-modules\r\n"))
+                        error = "renderer-proof-failed";
+                }
                 break;
             }
             if (exited) {
@@ -509,9 +526,31 @@ typedef struct {
     DWORD timeout;
 } PROBE_SPEC;
 static const PROBE_SPEC Probes[] = {
+    {"sysinstall", "C:\\DGINST.EXE", "C:\\DGINST.LOG", "", 450000},
+    {"sysresume", "C:\\DGCONT.EXE", "C:\\DGCONT.LOG", "", 450000},
+    {"sysrecover", "C:\\DGRECOV.EXE", "C:\\DGRECOV.LOG", "", 450000},
+    {"sysui", "C:\\DGSETUI.EXE", "C:\\DGSETUI.LOG", "", 450000},
+    {"hlevidence", "C:\\DGHLEVID.EXE", "C:\\DGHLEVID.LOG", "", 10000},
+    {"sysrepair", "C:\\DGREPAIR.EXE", "C:\\DGREPAIR.LOG", "", 450000},
+    {"sysupgrade", "C:\\DGUPGR.EXE", "C:\\DGUPGR.LOG", "", 450000},
+    {"sysrollback", "C:\\DGUNDO.EXE", "C:\\DGUNDO.LOG", "", 450000},
+    {"sysremove", "C:\\DGREMOVE.EXE", "C:\\DGREMOVE.LOG", "", 450000},
+    {"drvbind", "C:\\DGDRVB.EXE", "C:\\DGDRVB.LOG", "", 120000},
+    {"drvcheck", "C:\\DGDRVC.EXE", "C:\\DGDRVC.LOG", "", 120000},
+    {"drvrestore", "C:\\DGDRVR.EXE", "C:\\DGDRVR.LOG", "", 120000},
+    {"sysd3d6", "C:\\DGSYS6.EXE", "C:\\DGSYS6.LOG", "", 30000},
+    {"sysd3d7", "C:\\DGSYS7.EXE", "C:\\DGSYS7.LOG", "", 30000},
+    {"sysd3d8", "C:\\DGSYS8.EXE", "C:\\DGSYS8.LOG", "", 30000},
+    {"sysd3d9", "C:\\DGSYS9.EXE", "C:\\DGSYS9.LOG", "", 30000},
     {"sysgl", "C:\\DGSYSGL.EXE", "C:\\DGSYSGL.LOG", "", 30000},
     {"sysglide", "C:\\DGSYSGR.EXE", "C:\\DGSYSGR.LOG", "", 30000},
     {"setupcheck", "C:\\DGSETTST.EXE", "C:\\DGSETTST.LOG", "", 120000},
+    {"ntrename", "C:\\DGRP.EXE", "C:\\DGRP.LOG", "", 30000},
+    {"ntrestore", "C:\\DGRS.EXE", "C:\\DGRS.LOG", "", 30000},
+    {"ntruntime", "C:\\DGRT.EXE", "C:\\DGRT.LOG", "", 30000},
+    {"ntloader", "C:\\DGLOAD.EXE", "C:\\DGLOAD.LOG", "", 90000},
+    {"sysddraw", "C:\\DGDD2D.EXE", "C:\\DGDD2D.LOG", "", 60000},
+    {"sysddrawnative", "C:\\DGDD2D.EXE", "C:\\DGDD2D.LOG", "--native", 60000},
     {"hldebug", "C:\\SIERRA\\Half-Life\\DGHLDBG.EXE", "C:\\DGHLDBG.LOG", "", 40000},
     {"win9xinstall", "E:\\DG9INST.EXE", "C:\\DG9INST.LOG", "", 120000},
     {"win9xdiag", "C:\\SIERRA\\Half-Life\\DG9AUDIT.EXE", "C:\\DG9AUDIT.LOG", "", 30000},
@@ -534,8 +573,8 @@ static const PROBE_SPEC Probes[] = {
     {"utlogs", "C:\\SIERRA\\Half-Life\\DGUTLOG.EXE", "C:\\DGUTLOG.LOG", "", 10000},
     {"ntupdate", "E:\\DGDRV.EXE", "C:\\DGDRV.LOG", "", 120000},
     {"utdsetup", "C:\\SIERRA\\Half-Life\\DGUTDS.EXE", "C:\\DGUTDS.LOG", "", 10000},
-    {"utd3d", "C:\\SIERRA\\Half-Life\\DGUTD3.EXE", "C:\\DGUTD3.LOG", "", 75000},
-    {"utglide", "C:\\SIERRA\\Half-Life\\DGUT.EXE", "C:\\DGUT.LOG", "", 75000}};
+    {"utd3d", "C:\\SIERRA\\Half-Life\\DGUTD3.EXE", "C:\\DGUTD3.LOG", "", 95000},
+    {"utglide", "C:\\SIERRA\\Half-Life\\DGUT.EXE", "C:\\DGUT.LOG", "", 95000}};
 static const PROBE_SPEC *FindProbe(const char *name) {
     unsigned i;
     for (i = 0; i < sizeof(Probes) / sizeof(Probes[0]); ++i)
@@ -674,10 +713,22 @@ static const char *Probe(const char *id, const PROBE_SPEC *spec) {
             ResetEvent(minimized);
         phase_count = 2;
     }
-    const char *working_directory = (Equal(spec->name, "sysgl") || Equal(spec->name, "sysglide") ||
-                                     Equal(spec->name, "setupcheck"))
-                                        ? "C:\\"
-                                        : Game;
+    const char *working_directory =
+        (Equal(spec->name, "sysinstall") || Equal(spec->name, "sysresume") ||
+         Equal(spec->name, "sysupgrade") || Equal(spec->name, "sysrepair") ||
+         Equal(spec->name, "sysrecover") || Equal(spec->name, "sysui") ||
+         Equal(spec->name, "hlevidence") || Equal(spec->name, "sysrollback") ||
+         Equal(spec->name, "sysremove") || Equal(spec->name, "drvbind") ||
+         Equal(spec->name, "drvcheck") || Equal(spec->name, "drvrestore") ||
+         Equal(spec->name, "sysgl") || Equal(spec->name, "sysglide") ||
+         Equal(spec->name, "setupcheck") || Equal(spec->name, "ntloader") ||
+         Equal(spec->name, "ntruntime") || Equal(spec->name, "ntrename") ||
+         Equal(spec->name, "ntrestore") || Equal(spec->name, "sysddraw") ||
+         Equal(spec->name, "sysddrawnative") || Equal(spec->name, "sysd3d6") ||
+         Equal(spec->name, "sysd3d7") || Equal(spec->name, "sysd3d8") ||
+         Equal(spec->name, "sysd3d9"))
+            ? "C:\\"
+            : Game;
     if (!CreateProcessA(path, command, NULL, NULL, FALSE, foreground ? CREATE_SUSPENDED : 0, NULL,
                         working_directory, &startup, &process)) {
         const char *launch_error = ProcessLaunchFailure("launch-failed");

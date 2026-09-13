@@ -51,6 +51,11 @@ typedef struct DreamGpuPixelImage {
 } DreamGpuPixelImage;
 uint32_t dreamgpu_pixel_image_interleave(const DreamGpuTextureMemory *, DreamGpuPixelImage *);
 void dreamgpu_pixel_image_release(const DreamGpuTextureMemory *, DreamGpuPixelImage *);
+typedef struct DreamGpuCapture {
+    uint32_t *selection, *feedback;
+    uint32_t select_size, feedback_size, mode, completed_mode, completed_count;
+} DreamGpuCapture;
+typedef struct DreamGpuListState DreamGpuListState;
 typedef struct DreamGpuContextState {
     DreamGpuTextureNamespace *textures;
     DreamGpuTexture *default_texture, *bound_texture;
@@ -58,6 +63,9 @@ typedef struct DreamGpuContextState {
     uint32_t guest_errors, draw_buffer, read_buffer, attrib_depth;
     DreamGpuAttrib attrib[16];
     DreamGpuPixelImage image;
+    DreamGpuCapture capture;
+    DreamGpuListState *lists;
+    uint32_t list_mode;
 } DreamGpuContextState;
 uint32_t dreamgpu_context_state_init(const DreamGpuTextureMemory *memory,
                                      DreamGpuContextState *state, DreamGpuTextureNamespace *shared);
@@ -108,7 +116,15 @@ typedef struct DreamGpuQueryState {
     uint32_t in_begin, has_drawable, width, height;
     uint32_t draw_buffer, read_buffer, binding_1d, binding_2d, attrib_depth;
     DreamGpuTextureNamespace *textures;
+    DreamGpuCapture *capture;
+    const DreamGpuTextureMemory *memory;
+    DreamGpuContextState *context;
 } DreamGpuQueryState;
+typedef uint32_t (*DreamGpuListExecute)(void *, uint32_t, uint32_t, const uint8_t *,
+                                        const uint8_t *, uint32_t);
+uint32_t dreamgpu_list_dispatch(const DreamGpuTextureMemory *, DreamGpuContextState *, uint32_t *,
+                                DreamGpuListExecute, void *, uint32_t, uint32_t, const uint8_t *,
+                                uint32_t, const uint8_t *, uint32_t);
 typedef uint32_t (*DreamGpuTextureRead)(void *, uint32_t, uint32_t, uint32_t, uint32_t, uint8_t *);
 uint32_t dreamgpu_gl_query(const struct DreamGpuGlApi *api, const DreamGpuQueryState *state,
                            uint32_t *errors, uint32_t function, const uint8_t *args,

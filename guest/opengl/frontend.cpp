@@ -110,6 +110,7 @@ static BOOL MatchingGeometry(JGL_CONTEXT *c);
 JGL_INLINE JGL_CONTEXT *CurrentContext(void) {
     return (JGL_CONTEXT *)TlsGetValue(Current);
 }
+static void CommandError(JGL_CONTEXT *c, GLenum error);
 static void Error(JGL_CONTEXT *c, GLenum error) {
     if (c && !c->Error)
         c->Error = error;
@@ -197,29 +198,42 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
         function != FEnum_glVertex4f && function != FEnum_glColor3f &&
         function != FEnum_glColor4f && function != FEnum_glSecondaryColor3f &&
         function != FEnum_glNormal3f && function != FEnum_glTexCoord2f &&
-        function != FEnum_glTexCoord4f && function != FEnum_glMaterialf) {
-        Error(c, GL_INVALID_OPERATION);
+        function != FEnum_glTexCoord4f && function != FEnum_glMaterialf &&
+        function != FEnum_glEvalCoord1d && function != FEnum_glEvalCoord2d &&
+        function != FEnum_glEvalPoint1 && function != FEnum_glEvalPoint2 &&
+        function != FEnum_glIndexd && function != FEnum_glEdgeFlag &&
+        function != FEnum_glCallList && function != DG_GL_RECORD_ERROR) {
+        if (function == FEnum_glFlush || function == FEnum_glFinish)
+            Error(c, GL_INVALID_OPERATION);
+        else
+            CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (function == FEnum_glSecondaryColor3f && !SecondarySupported) {
-        Error(c, GL_INVALID_OPERATION);
+        if (function == FEnum_glFlush || function == FEnum_glFinish)
+            Error(c, GL_INVALID_OPERATION);
+        else
+            CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (!SecondarySupported && (function == FEnum_glEnable || function == FEnum_glDisable) &&
         *(const ULONG *)arguments == 0x8458) {
-        Error(c, GL_INVALID_ENUM);
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
-    if (c->Failed || StateUnchanged(&c->State, function, arguments))
+    if (c->Failed || (!c->Arrays.ListMode && StateUnchanged(&c->State, function, arguments)))
         return;
     record = Record(c, DG_GL_CALL, c->Id, c->Id, words + 1);
     if (record) {
         record[0] = function;
         for (i = 0; i < words; ++i)
             __builtin_memcpy(record + 1 + i, (const BYTE *)arguments + i * 4, 4);
-        if ((c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
+        if (c->Arrays.ListMode != GL_COMPILE &&
+            (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
+            (c->DrawBuffer == ~0u || c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
              c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK) &&
-            (function == FEnum_glBegin ||
+            (function == FEnum_glBegin || function == FEnum_glEvalMesh1 ||
+             function == FEnum_glEvalMesh2 ||
              (function == FEnum_glCopyPixels && ((const ULONG *)arguments)[4] == GL_COLOR) ||
              (function == FEnum_glClear && (*(const ULONG *)arguments & GL_COLOR_BUFFER_BIT))))
             c->FrontDirty = TRUE;
@@ -263,6 +277,26 @@ static void Unbind(JGL_CONTEXT *c) {
     TlsSetValue(Current, NULL);
     if (c)
         InterlockedExchange(&c->Owner, 0);
+}
+static void CommandError(JGL_CONTEXT *c, GLenum error) {
+    if (c && c->Arrays.ListMode && !c->Failed) {
+        ScalarForContext(c, DG_GL_RECORD_ERROR, 1, &error);
+    } else {
+        Error(c, error);
+    }
+}
+void JglCommandError(GLenum error) {
+    CommandError(CurrentContext(), error);
+}
+BOOL JglCommandReady(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c)
+        return FALSE;
+    if (c->InBegin || c->Failed) {
+        CommandError(c, GL_INVALID_OPERATION);
+        return FALSE;
+    }
+    return TRUE;
 }
 BOOL JglReady(void) {
     JGL_CONTEXT *c = CurrentContext();
@@ -336,13 +370,20 @@ BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *pa
     c = CurrentContext();
     if (!c)
         return FALSE;
-    if (c->Failed || (c->InBegin && function != FEnum_glMaterialfv)) {
-        Error(c, GL_INVALID_OPERATION);
+    if (c->Failed ||
+        (c->InBegin && function != FEnum_glMaterialfv && function != FEnum_glCallLists)) {
+        if (function == FEnum_glDeleteTextures)
+            Error(c, GL_INVALID_OPERATION);
+        else
+            CommandError(c, GL_INVALID_OPERATION);
         return FALSE;
     }
     if ((words && !arguments) || (bytes && !payload) || words > MaxWords - 10 ||
         bytes > JglMaxDataBytes(words)) {
-        Error(c, GL_INVALID_VALUE);
+        if (function == FEnum_glDeleteTextures)
+            Error(c, GL_INVALID_VALUE);
+        else
+            CommandError(c, GL_INVALID_VALUE);
         return FALSE;
     }
     record = Record(c, DG_GL_DATA_CALL, c->Id, c->Id, 2 + words + (bytes + 3) / 4);
@@ -356,14 +397,16 @@ BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *pa
         record[2 + words + bytes / 4] = 0;
     if (bytes)
         CopyMemory(record + 2 + words, payload, bytes);
-    if ((function == FEnum_glDrawArrays || function == FEnum_glDrawElements ||
+    if (c->Arrays.ListMode != GL_COMPILE &&
+        (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
+        (function == FEnum_glDrawArrays || function == FEnum_glDrawElements ||
          (words == 8 &&
           (function == FEnum_glBitmap ||
            (function == FEnum_glDrawPixels && arguments[2] != GL_DEPTH_COMPONENT &&
             arguments[2] != GL_STENCIL_INDEX)) &&
           (arguments[6] & 2))) &&
-        (c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT || c->DrawBuffer == GL_LEFT ||
-         c->DrawBuffer == GL_FRONT_AND_BACK))
+        (c->DrawBuffer == ~0u || c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
+         c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK))
         c->FrontDirty = TRUE;
     return TRUE;
 }
@@ -559,6 +602,9 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
     }
     for (i = 0; i < MAX_JGL_CONTEXTS && Contexts[i]; ++i) {
     }
+    c->Arrays.Attribute[5].Size = c->Arrays.Attribute[6].Size = 1;
+    c->Arrays.Attribute[5].Type = GL_FLOAT;
+    c->Arrays.Attribute[6].Type = GL_UNSIGNED_BYTE;
     c->DrawBuffer = GL_BACK;
     c->Id = ++NextId;
     c->DC = dc;
@@ -614,6 +660,15 @@ void APIENTRY glGenTextures(GLsizei count, GLuint *textures) {
         entry = FindName(names, candidate);
         if (entry->Name)
             continue;
+        if (names->NativeLists) {
+            ULONG query[3] = {candidate, 0, 0}, bytes = 0;
+            GLboolean exists = 0;
+            if (!JglQuery(FEnum_glIsTexture, query, DG_GL_RESULT_BOOL, &exists, 1, &bytes) ||
+                bytes != 1)
+                goto done;
+            if (exists)
+                continue;
+        }
         entry->Name = candidate;
         entry->Target = 0;
         ++names->Count;
@@ -627,11 +682,11 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) {
     JGL_NAMES *names;
     JGL_NAME *entry = NULL;
     ULONG *record;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     c = CurrentContext();
     if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
-        Error(c, GL_INVALID_ENUM);
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
     if (!texture) {
@@ -642,17 +697,22 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) {
     EnterCriticalSection(&Lock);
     names = TextureNames(c);
     if (!names) {
-        Error(c, GL_OUT_OF_MEMORY);
+        CommandError(c, GL_OUT_OF_MEMORY);
+        goto done;
+    }
+    if (names->NativeLists) {
+        ULONG args[2] = {target, texture};
+        ScalarForContext(c, FEnum_glBindTexture, 2, args);
         goto done;
     }
     if (texture) {
         entry = FindName(names, texture);
         if (entry->Name && entry->Target && entry->Target != target) {
-            Error(c, GL_INVALID_OPERATION);
+            CommandError(c, GL_INVALID_OPERATION);
             goto done;
         }
         if (!entry->Name && names->Count == DG_GL_MAX_TEXTURES) {
-            Error(c, GL_OUT_OF_MEMORY);
+            CommandError(c, GL_OUT_OF_MEMORY);
             goto done;
         }
     }
@@ -679,7 +739,12 @@ GLboolean APIENTRY glIsTexture(GLuint texture) {
         return GL_FALSE;
     c = CurrentContext();
     EnterCriticalSection(&Lock);
-    if (c->Names) {
+    if (c->Names && c->Names->NativeLists) {
+        ULONG query[3] = {texture, 0, 0}, bytes = 0;
+        if (!JglQuery(FEnum_glIsTexture, query, DG_GL_RESULT_BOOL, &result, 1, &bytes) ||
+            bytes != 1)
+            result = GL_FALSE;
+    } else if (c->Names) {
         entry = FindName(c->Names, texture);
         result = entry && entry->Name && entry->Target != 0;
     }
@@ -904,6 +969,63 @@ BOOL WINAPI wglSwapBuffers(HDC dc) {
     c->FrontDirty = FALSE;
     return TRUE;
 }
+BOOL JglListMode(ULONG mode) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c)
+        return FALSE;
+    EnterCriticalSection(&Lock);
+    JGL_NAMES *names = TextureNames(c);
+    if (names)
+        names->NativeLists = TRUE;
+    LeaveCriticalSection(&Lock);
+    if (!names) {
+        Error(c, GL_OUT_OF_MEMORY);
+        return FALSE;
+    }
+    c->Arrays.ListMode = mode;
+    c->Arrays.ListAware = TRUE;
+    if (!mode)
+        ZeroMemory(&c->State, sizeof(c->State));
+    return TRUE;
+}
+BOOL JglCompiling(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    return c && c->Arrays.ListMode;
+}
+static void ListEffects(JGL_CONTEXT *c) {
+    if (c->Arrays.ListMode == GL_COMPILE)
+        return;
+    ZeroMemory(&c->State, sizeof(c->State));
+    c->DrawBuffer = ~0u;
+    c->Arrays.ListAware = TRUE;
+    if (!c->Arrays.CaptureMode || c->Arrays.CaptureMode == GL_RENDER)
+        c->FrontDirty = TRUE;
+}
+void JglCallList(ULONG name) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c || c->Failed)
+        return;
+    if (!name) {
+        CommandError(c, GL_INVALID_VALUE);
+        return;
+    }
+    if (!c->Arrays.ListAware && !JglListMode(c->Arrays.ListMode))
+        return;
+    ScalarForContext(c, FEnum_glCallList, 1, &name);
+    ListEffects(c);
+}
+BOOL JglCallLists(ULONG count, const ULONG *offsets) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c || c->Failed)
+        return FALSE;
+    if (!c->Arrays.ListAware && !JglListMode(c->Arrays.ListMode))
+        return FALSE;
+    BOOL result = JglData(FEnum_glCallLists, &count, 1, offsets, count * 4);
+    if (result)
+        ListEffects(c);
+    return result;
+}
+
 static BOOL PublishFront(JGL_CONTEXT *c) {
     DG_WINDOW_PRESENT present;
     if (!c->FrontDirty)
@@ -924,33 +1046,34 @@ static BOOL PublishFront(JGL_CONTEXT *c) {
 }
 void APIENTRY glDrawBuffer(GLenum mode) {
     JGL_CONTEXT *c;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     c = CurrentContext();
     if (!(c->Capabilities & DG_WINDOW_CAP_FRONT_ONLY)) {
-        Error(c, GL_INVALID_OPERATION);
+        CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (mode != GL_FRONT && mode != GL_FRONT_LEFT && mode != GL_BACK && mode != GL_BACK_LEFT &&
         mode != GL_LEFT && mode != GL_FRONT_AND_BACK && mode != GL_NONE) {
-        Error(c, GL_INVALID_ENUM);
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
     ScalarForContext(c, FEnum_glDrawBuffer, 1, &mode);
-    c->DrawBuffer = mode;
+    if (c->Arrays.ListMode != GL_COMPILE)
+        c->DrawBuffer = mode;
 }
 void APIENTRY glReadBuffer(GLenum mode) {
     JGL_CONTEXT *c;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     c = CurrentContext();
     if (!(c->Capabilities & DG_WINDOW_CAP_FRONT_ONLY)) {
-        Error(c, GL_INVALID_OPERATION);
+        CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (mode != GL_FRONT && mode != GL_FRONT_LEFT && mode != GL_BACK && mode != GL_BACK_LEFT &&
         mode != GL_LEFT) {
-        Error(c, GL_INVALID_ENUM);
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
     ScalarForContext(c, FEnum_glReadBuffer, 1, &mode);
@@ -1022,15 +1145,19 @@ BOOL WINAPI wglSetPixelFormat(HDC dc, int format, const PIXELFORMATDESCRIPTOR *d
 }
 void APIENTRY glPushAttrib(GLbitfield mask) {
     JGL_CONTEXT *c;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     c = CurrentContext();
     if (mask & ~0x000fffffUL) {
-        Error(c, 0x0501);
+        CommandError(c, 0x0501);
+        return;
+    }
+    if (c->Arrays.ListAware) {
+        ScalarForContext(c, FEnum_glPushAttrib, 1, &mask);
         return;
     }
     if (c->Arrays.ServerDepth == 16) {
-        Error(c, 0x0503);
+        CommandError(c, 0x0503);
         return;
     }
     ScalarForContext(c, FEnum_glPushAttrib, 1, &mask);
@@ -1041,11 +1168,19 @@ void APIENTRY glPushAttrib(GLbitfield mask) {
 }
 void APIENTRY glPopAttrib(void) {
     JGL_CONTEXT *c;
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     c = CurrentContext();
+    if (c->Arrays.ListAware) {
+        ScalarForContext(c, FEnum_glPopAttrib, 0, NULL);
+        if (c->Arrays.ListMode != GL_COMPILE) {
+            ZeroMemory(&c->State, sizeof(c->State));
+            c->DrawBuffer = ~0u;
+        }
+        return;
+    }
     if (!c->Arrays.ServerDepth) {
-        Error(c, 0x0504);
+        CommandError(c, 0x0504);
         return;
     }
     ScalarForContext(c, FEnum_glPopAttrib, 0, NULL);
@@ -1063,11 +1198,11 @@ void APIENTRY glBegin(GLenum mode) {
     if (!c)
         return;
     if (c->InBegin) {
-        Error(c, GL_INVALID_OPERATION);
+        CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (mode > GL_POLYGON) {
-        Error(c, GL_INVALID_ENUM);
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
     c->InBegin = TRUE;
@@ -1078,7 +1213,7 @@ void APIENTRY glEnd(void) {
     if (!c)
         return;
     if (!c->InBegin) {
-        Error(c, GL_INVALID_OPERATION);
+        CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     ScalarForContext(c, FEnum_glEnd, 0, NULL);

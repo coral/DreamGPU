@@ -57,7 +57,7 @@ def launch_command(demo, mode="timedemo", executable=r"C:\SIERRA\Half-Life\hl.ex
         raise ValueError("executable must be an absolute Windows .exe path")
     return subprocess.list2cmdline([
         executable, "-windowed", "-toconsole", "-condebug", "-nosound", "-dev", "-gl",
-        "-gldrv", "dgpugl.dll", "+" + mode, demo,
+        "+" + mode, demo,
     ])
 
 
@@ -94,6 +94,33 @@ def parse_result(raw):
         if math.isfinite(value) and value > 0:
             return {"parse_status": "labelled_fps", "fps": value}
     return {"parse_status": "unrecognized", "fps": None}
+
+
+def parse_renderer_proof(raw):
+    """Retain runner observations separately from FPS and GPU counter evidence."""
+    lines = raw.decode("latin-1").splitlines()
+    modules = [line[len("RENDERER_MODULE "):] for line in lines
+               if line.startswith("RENDERER_MODULE ")]
+    fields = {}
+    for name in ("VENDOR", "RENDERER", "VERSION"):
+        prefix = "ENGINE_GL_" + name + ": "
+        values = [line[len(prefix):] for line in lines if line.startswith(prefix)]
+        fields[name.lower()] = values[0] if len(values) == 1 else None
+    accepted = (lines.count("RENDERER_PROOF system-icd-and-engine-strings") == 1
+                and len(modules) == 5 and len(set(value.lower() for value in modules)) == 5
+                and fields["vendor"] == "DreamGPU"
+                and fields["renderer"] == "DreamGPU (native host OpenGL)"
+                and bool(fields["version"]))
+    module_only = (lines.count("RENDERER_PROOF system-icd-modules") == 1
+                   and lines.count("ENGINE_GL_STRINGS unavailable") == 1
+                   and len(modules) == 5 and len(set(value.lower() for value in modules)) == 5
+                   and not any(fields.values()))
+    return {"status": "verified_by_runner" if accepted or module_only else "not_established",
+            "engine_strings_observed": accepted,
+            "modules": modules, "engine_gl": fields,
+            "observation": "after timedemo summary acknowledgement, before owned process cleanup",
+            "gpu_command_execution_proven": False,
+            "scope": "actual module paths and available engine GL strings; requested host GPU counter/presentation evidence is recorded separately"}
 
 
 class Serial:
@@ -141,18 +168,39 @@ class Serial:
             return parts[0], parts[2] if len(parts) == 3 else None
 
 
-PROBES = ("sysgl", "sysglide", "setupcheck", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
+PROBES = ("sysui", "sysrecover", "hlevidence", "sysrepair", "sysinstall", "sysresume", "sysupgrade", "sysrollback", "sysremove", "drvbind", "drvcheck", "drvrestore", "sysgl", "sysglide", "setupcheck", "ntloader", "ntrename", "ntrestore", "ntruntime", "sysddraw", "sysddrawnative", "sysd3d6", "sysd3d7", "sysd3d8", "sysd3d9", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
 
 
 def parse_probe(raw, name="arrays"):
     lines = raw.decode('latin-1').splitlines()
+    operation = 'sysresume' if name == 'sysui' else name
     if any(line.startswith('FAIL') for line in lines) or not any(
-            line.startswith(f'PASS automated {name}:') for line in lines):
+            line.startswith(f'PASS automated {operation}:') for line in lines):
         raise ProtocolError('probe did not return its required pixel/lifecycle PASS record')
+    if name == 'sysui':
+        # sysui exercises the real /continue operation; its durable receipt is
+        # intentionally sysresume. A silent continuation is not a UI result.
+        try:
+            receipts = [json.loads(line) for line in lines if line.startswith('{"schema":')]
+            if len(receipts) != 1:
+                raise ValueError('expected one continuation receipt')
+            receipt = receipts[0]
+            code = receipt['installer_exit']
+            expected = 'INSTALLER_RESTART_DECLINED' if code == 11 else 'INSTALLER_DIALOG_ACCEPTED'
+            actions = [line for line in lines if line in
+                       ('INSTALLER_RESTART_DECLINED', 'INSTALLER_DIALOG_ACCEPTED')]
+            exits = [line for line in lines if line.startswith('INSTALLER_EXIT ')]
+            if (receipt.get('schema') != 1 or receipt.get('operation') != 'sysresume'
+                    or type(code) is not int or code not in (0, 11, 12, 13)
+                    or receipt.get('terminal') is not (code != 11)
+                    or actions != [expected] or exits != [f'INSTALLER_EXIT {code}']):
+                raise ValueError('UI action, process exit and continuation disagree')
+        except (ValueError, KeyError, TypeError) as error:
+            raise ProtocolError('invalid installer UI receipt: ' + str(error)) from error
     return {'probe': name, 'passed': True}
 
 
-def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_timeout=30, timeout=180, *, probe=False, on_phase=None, sampler=None):
+def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_timeout=30, timeout=180, *, probe=False, on_phase=None, sampler=None, gpu=None):
     demo = demo_name(demo)
     if probe and demo not in PROBES:
         raise ValueError('Unknown fixed public API probe')
@@ -221,7 +269,19 @@ def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_time
                     report.setdefault("timedemo_boundaries", {})[kind] = event
                     try:
                         if sampler: sampler.phase(kind, observed)
-                        if on_phase: on_phase(kind)
+                        if gpu:
+                            gpu_observation = gpu.phase(kind)
+                            if gpu_observation is not None:
+                                event["gpu_observation"] = gpu_observation
+                        if on_phase:
+                            observation = on_phase(kind)
+                            if observation is not None:
+                                # Preserve caller-supplied counters/artifact identities at the
+                                # acknowledged boundary, without inferring GPU execution.
+                                encoded = json.dumps(observation, allow_nan=False)
+                                if len(encoded) > 65536:
+                                    raise ValueError("phase observation exceeds 64 KiB")
+                                event["host_observation"] = json.loads(encoded)
                     except Exception as error:
                         event["callback_error"] = str(error)
                     if kind == "PROCESS_READY":
@@ -264,6 +324,8 @@ def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_time
             report.update(state="completed", result=parse_probe(raw, demo) if probe else parse_result(raw),
                           raw_text=raw.decode("latin-1"), result_bytes=len(raw),
                           result_sha256=hashlib.sha256(raw).hexdigest())
+            if not probe:
+                report["renderer_proof"] = parse_renderer_proof(raw)
             report["latency_seconds"].update(completion_after_run=completed - submitted,
                                             completion_after_started=completed - started)
     except (OSError, ProtocolError, KeyboardInterrupt) as error:
@@ -273,7 +335,20 @@ def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_time
             (output / "engine-error.txt").write_bytes(error.raw)
             report["error"].update(raw_text=error.raw.decode("latin-1"),
                                    sha256=hashlib.sha256(error.raw).hexdigest())
+            if not probe:
+                report["renderer_proof"] = parse_renderer_proof(error.raw)
     finally:
+        if gpu:
+            try:
+                report["gpu_evidence"] = gpu.finish()
+                route = report.get("renderer_proof", {}).get("status") == "verified_by_runner"
+                report["hardware_path_proven"] = (report.get("state") == "completed" and route
+                                                   and report["gpu_evidence"].get("passed") is True)
+                if "renderer_proof" in report:
+                    report["renderer_proof"]["gpu_command_execution_proven"] = report["hardware_path_proven"]
+            except Exception as error:
+                report["gpu_evidence"] = {"passed": False, "error": str(error)}
+                report["hardware_path_proven"] = False
         if sampler:
             try: report["cpu_sample"] = sampler.finish(report.get("timedemo_boundaries", {}))
             except Exception as error: report["cpu_sample"] = {"error": str(error), "coverage_proven": False}
@@ -301,6 +376,8 @@ def main():
         command.add_argument("--start-timeout", type=float, default=30)
         command.add_argument("--timeout", type=float, default=180, help="Seconds after STARTED; guest also has a bounded deadline and cleanup")
     run.add_argument("--sample-fixture", type=Path, help="Linux: arm bounded perf recording of this fixture's exact QEMU/Juke before resuming the owned game; input is fixture/run.json")
+    run.add_argument("--gpu-fixture", type=Path,
+                     help="Record native GL counters and presented GPU frames between acknowledged launch boundaries of this exact fixture; requires new renderer-proof runner")
     args = parser.parse_args()
     try:
         if args.command == "command":
@@ -316,11 +393,24 @@ def main():
             if str(state['serial']) != str(args.socket):
                 raise ValueError("sampling fixture serial endpoint differs from benchmark endpoint")
             sampler = LaunchSample(state, args.output)
+        gpu = None
+        if args.command == 'run' and args.gpu_fixture:
+            from scripts.benchmarks.halflife_gpu import GpuProof
+            state = json.loads(args.gpu_fixture.read_text())
+            if str(state['serial']) != str(args.socket):
+                raise ValueError("GPU fixture serial endpoint differs from benchmark endpoint")
+            gpu = GpuProof(state, args.output)
+            gpu.report['fixture_manifest'] = {
+                'path': str(args.gpu_fixture.resolve()),
+                'sha256': hashlib.sha256(args.gpu_fixture.read_bytes()).hexdigest()}
         report = run_demo(args.socket, args.demo, args.output, args.manifest,
                           args.ready_timeout, args.start_timeout, args.timeout,
-                          probe=args.command == 'probe', sampler=sampler)
+                          probe=args.command == 'probe', sampler=sampler, gpu=gpu)
         if report["state"] == "error":
             print(f"{report['failed_state']}: {report['error']['message']} ({args.output / 'run.json'})", file=sys.stderr)
+            return 1
+        if gpu and not report.get('hardware_path_proven'):
+            print(f"Hardware renderer proof incomplete ({args.output / 'run.json'})", file=sys.stderr)
             return 1
         if sampler and not report['cpu_sample'].get('coverage_proven'):
             print(f"Sample did not establish launch-to-summary coverage ({args.output / 'run.json'})", file=sys.stderr)

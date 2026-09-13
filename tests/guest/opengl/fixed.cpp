@@ -196,3 +196,11 @@ int main(void) {
          "Begin exception, typed query canaries and local array queries");
     return 0;
 }
+
+/* This isolated vector/query harness models ordinary execution outside lists. */
+void JglCommandError(GLenum error) {
+    JglSetError(error);
+}
+BOOL JglCommandReady(void) {
+    return JglReady();
+}

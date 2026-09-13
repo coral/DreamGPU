@@ -4,22 +4,22 @@
 #include <tlhelp32.h>
 #include "focus.h"
 #include "focus-input.h"
+#include "system-provider.h"
+#include "engine-exit.h"
 #ifdef DG_UT_D3D
 #define PROBE_NAME "utd3d"
 #define PROBE_LOG "C:\\DGUTD3.LOG"
 #define ENGINE_LOG "C:\\DGUTD3E.LOG"
 #define GAME_INI "DGD3D.INI"
 #define RENDERER_READY "Direct3D"
-#define PROVIDER_NAME "dgddr.dll"
-#define PROVIDER_PATH "C:\\UT99\\System\\dgddr.dll"
+
 #else
 #define PROBE_NAME "utglide"
 #define PROBE_LOG "C:\\DGUT.LOG"
 #define ENGINE_LOG "C:\\DGUTENG.LOG"
 #define GAME_INI "DGUT.INI"
 #define RENDERER_READY "Glide info:"
-#define PROVIDER_NAME "glide2x.dll"
-#define PROVIDER_PATH "C:\\UT99\\System\\glide2x.dll"
+
 #endif
 static char EngineLog[65537];
 static BYTE RawLog[65536];
@@ -156,33 +156,35 @@ static BOOL LatestContextPresented(void) {
 #endif
 
 static BOOL Providers(DWORD pid) {
-    OwnedHandle snapshot{CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid)};
-    MODULEENTRY32 module;
-    BOOL found, gl = FALSE, glide = FALSE;
-#ifdef DG_UT_D3D
-    BOOL wine = FALSE;
-#endif
-    if (!snapshot) {
+    UtSystemProviders providers;
+    if (!providers.initialize())
         return FALSE;
-    }
+    OwnedHandle snapshot{CreateToolhelp32Snapshot(TH32CS_SNAPMODULE, pid)};
+    if (!snapshot)
+        return FALSE;
+    MODULEENTRY32 module{};
     module.dwSize = sizeof(module);
-    found = Module32First(snapshot.get(), &module);
+    BOOL found = Module32First(snapshot.get(), &module), retailWindow = FALSE;
     while (found) {
-        if (Equal(module.szModule, "dgpugl.dll"))
-            gl = Equal(module.szExePath, "C:\\UT99\\System\\dgpugl.dll");
-        if (Equal(module.szModule, PROVIDER_NAME))
-            glide = Equal(module.szExePath, PROVIDER_PATH);
-#ifdef DG_UT_D3D
-        if (Equal(module.szModule, "wined3d.dll"))
-            wine = Equal(module.szExePath, "C:\\UT99\\System\\wined3d.dll");
-#endif
+        if (Equal(module.szModule, "Window.dll")) {
+            if (retailWindow || !Equal(module.szExePath, RetailExitModule))
+                return FALSE;
+            retailWindow = TRUE;
+        }
+        providers.observe(module.szModule, module.szExePath);
+        if (UtProviderName(module.szModule)) {
+            Text("OBSERVED_PROVIDER ");
+            Text(module.szExePath);
+            Text("\r\n");
+        }
         found = Module32Next(snapshot.get(), &module);
     }
-    snapshot.reset();
+    if (GetLastError() != ERROR_NO_MORE_FILES || !retailWindow)
+        return FALSE;
 #ifdef DG_UT_D3D
-    return gl && glide && wine;
+    return providers.complete(TRUE);
 #else
-    return gl && glide;
+    return providers.complete(FALSE);
 #endif
 }
 
@@ -277,14 +279,6 @@ static BOOL FocusViewport(void) {
     return RecordForeground("FOREGROUND_MEASURE_PID");
 }
 
-static BOOL CALLBACK CloseGameWindow(HWND window, LPARAM ignored) {
-    DWORD pid;
-    (void)ignored;
-    GetWindowThreadProcessId(window, &pid);
-    if (pid == GamePid)
-        PostMessageA(window, WM_CLOSE, 0, 0);
-    return TRUE;
-}
 /* Detect owned startup errors without interacting with the desktop. The retail
  * engine buffers its log until shutdown, so a modal error otherwise wastes the
  * entire readiness deadline before its exact cause becomes readable. */
@@ -303,22 +297,102 @@ static BOOL CALLBACK ErrorWindow(HWND window, LPARAM result) {
     }
     return TRUE;
 }
-static BOOL Cleanup(HANDLE process) {
-    DWORD result = WaitForSingleObject(process, 0);
-    if (result == WAIT_OBJECT_0)
-        return TRUE;
-    EnumWindows(CloseGameWindow, 0);
-    result = WaitForSingleObject(process, 2000);
-    if (result == WAIT_OBJECT_0) {
-        Record("CLEANUP_GRACEFUL", 0);
-        return TRUE;
+static HWND ExitLog;
+static unsigned ExitLogCount;
+static BOOL CALLBACK FindExitLog(HWND window, LPARAM) {
+    DWORD pid = 0;
+    if (GetWindowThreadProcessId(window, &pid) && pid == GamePid && RetailLogClass(window)) {
+        ExitLog = window;
+        ++ExitLogCount;
     }
-    if (!TerminateProcess(process, 0))
-        return FALSE;
-    result = WaitForSingleObject(process, 3000);
-    Record("CLEANUP_OWNED_TERMINATE", result);
-    return result == WAIT_OBJECT_0;
+    return TRUE;
 }
+/* Read-only failure evidence precedes forced disposal. No window messages other
+ * than bounded WM_GETTEXT/WM_NULL, no thread suspension or context mutation. */
+static DWORD ExitEvidenceStarted, ExitEvidenceCalls;
+static BOOL ExitEvidenceBudget(void) {
+    return ExitEvidenceCalls < 32 && GetTickCount() - ExitEvidenceStarted < 500;
+}
+static void ExitWindowText(HWND window, const char *label) {
+    DWORD pid = 0;
+    char text[256] = {};
+    DWORD_PTR result = 0;
+    if (!ExitEvidenceBudget() || !GetWindowThreadProcessId(window, &pid) || pid != GamePid)
+        return;
+    ++ExitEvidenceCalls;
+    if (SendMessageTimeoutA(window, WM_GETTEXT, sizeof(text), (LPARAM)text,
+                            SMTO_ABORTIFHUNG | SMTO_BLOCK, 50, &result)) {
+        text[sizeof(text) - 1] = 0;
+        for (unsigned i = 0; text[i]; ++i)
+            if ((unsigned char)text[i] < 32 || (unsigned char)text[i] >= 127)
+                text[i] = '?';
+        Text(label);
+        Text(text);
+        Text("\r\n");
+    }
+}
+static BOOL CALLBACK ExitEvidenceChild(HWND window, LPARAM) {
+    char name[32] = {};
+    if (!ExitEvidenceBudget())
+        return FALSE;
+    if (GetClassNameA(window, name, sizeof(name)) && Equal(name, "Static"))
+        ExitWindowText(window, "EXIT_MODAL_STATIC ");
+    return ExitEvidenceBudget();
+}
+static BOOL CALLBACK ExitEvidenceWindow(HWND window, LPARAM) {
+    DWORD pid = 0;
+    char name[128] = {};
+    if (!ExitEvidenceBudget())
+        return FALSE;
+    const DWORD thread = GetWindowThreadProcessId(window, &pid);
+    if (!thread || pid != GamePid)
+        return TRUE;
+    Record("EXIT_WINDOW_THREAD", thread);
+    Record("EXIT_WINDOW_VISIBLE", IsWindowVisible(window));
+    if (GetClassNameA(window, name, sizeof(name))) {
+        name[sizeof(name) - 1] = 0;
+        Text("EXIT_WINDOW_CLASS ");
+        Text(name);
+        Text("\r\n");
+    }
+    ExitWindowText(window, "EXIT_WINDOW_TITLE ");
+    if (Equal(name, "#32770"))
+        EnumChildWindows(window, ExitEvidenceChild, 0);
+    return ExitEvidenceBudget();
+}
+static void CleanupFailureEvidence(HANDLE process, DWORD pid) {
+    DWORD code = 0;
+    Record("EXIT_PROCESS_QUERY_OK", GetExitCodeProcess(process, &code));
+    Record("EXIT_PROCESS_CODE", code);
+    ExitEvidenceStarted = GetTickCount();
+    ExitEvidenceCalls = 0;
+    EnumWindows(ExitEvidenceWindow, 0);
+    /* Refresh the known engine log and owned WLog before either disappears. */
+    ReadEngine();
+    Text("EXIT_ENGINE_TAIL_BEGIN\r\n");
+    const DWORD length = Length(EngineLog);
+    Text(EngineLog + (length > 8192 ? length - 8192 : 0));
+    Text("\r\nEXIT_ENGINE_TAIL_END\r\n");
+    EnumWindows(ReadLogWindow, 0);
+    OwnedHandle snapshot{CreateToolhelp32Snapshot(TH32CS_SNAPTHREAD, 0)};
+    THREADENTRY32 entry = {};
+    entry.dwSize = sizeof(entry);
+    BOOL more = snapshot && Thread32First(snapshot.get(), &entry);
+    unsigned count = 0, owned = 0;
+    const DWORD started = GetTickCount();
+    while (more && count++ < 1024 && owned < 32 && GetTickCount() - started < 500) {
+        if (entry.th32OwnerProcessID == pid) {
+            ++owned;
+            Record("EXIT_OWNED_THREAD", entry.th32ThreadID);
+            Record("EXIT_THREAD_BASE_PRIORITY", (DWORD)entry.tpBasePri);
+            Record("EXIT_THREAD_PRIORITY_DELTA", (DWORD)entry.tpDeltaPri);
+        }
+        entry.dwSize = sizeof(entry);
+        more = Thread32Next(snapshot.get(), &entry);
+    }
+    Record("EXIT_THREAD_ENUM_COMPLETE", snapshot && !more && GetLastError() == ERROR_NO_MORE_FILES);
+}
+#include "cleanup.h"
 static void Evidence(void) {
     DWORD bytes = ReadEngine();
     Text("ENGINE_LOG_BEGIN\r\n");
@@ -376,6 +450,8 @@ static UINT Run(void) {
         ExitProcess(1);
     }
     Text("UT_BEGIN " PROBE_NAME "\r\n");
+    if (!UtCleanDirectory("C:\\UT99\\System"))
+        Die("FAIL APP_LOCAL_PROVIDER");
     Record("HELPER_PID", GetCurrentProcessId());
     Record("HELPER_THREAD", GetCurrentThreadId());
 #ifdef DG_UT_D3D
@@ -406,6 +482,9 @@ static UINT Run(void) {
      * receives an exact PID grant while that ownership is still valid. */
     if (!input.acquire())
         Die("FAIL OWNED_INPUT_HANDOFF");
+    OwnedHandle exitModule = LockRetailExitModule();
+    if (!exitModule)
+        Die("FAIL ENGINE_EXIT_MODULE_IDENTITY");
     if (!CreateProcessA("C:\\UT99\\System\\UnrealTournament.exe", command, NULL, NULL, FALSE,
                         CREATE_SUSPENDED, NULL, "C:\\UT99\\System", &startup, &process)) {
         DWORD error = GetLastError();
@@ -533,7 +612,10 @@ static UINT Run(void) {
 #endif
         Record("FAIL ENGINE_NOT_READY", GetTickCount() - started);
     }
-    clean = Cleanup(child.get());
+    ExitLog = NULL;
+    ExitLogCount = 0;
+    EnumWindows(FindExitLog, 0);
+    clean = CleanupOwnedGame(child.get(), GamePid, ExitLogCount == 1 ? ExitLog : NULL);
     if (!clean)
         Record("FAIL CLEANUP", GetLastError());
     input.reset();
@@ -541,8 +623,8 @@ static UINT Run(void) {
     Evidence();
     if (passed && clean)
         Text("PASS automated " PROBE_NAME
-             ": CityIntro engine-ready, app-local GPU providers,10-second game run, owned process "
-             "cleanup\r\n");
+             ": CityIntro engine-ready, system GPU providers,10-second game run, owned process "
+             "graceful exit\r\n");
     else
         Text("FAIL automated " PROBE_NAME "\r\n");
     return passed && clean ? 0 : 1;

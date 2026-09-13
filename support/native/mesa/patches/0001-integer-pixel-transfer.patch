@@ -1,0 +1,20 @@
+--- a/src/mesa/main/pixel.c
++++ b/src/mesa/main/pixel.c
+@@ -598,6 +598,17 @@
+ void GLAPIENTRY
+ _mesa_PixelTransferi( GLenum pname, GLint param )
+ {
++   /* Integer state must not round through GLfloat (GL 1.1, section 3.6.2). */
++   if (pname == GL_INDEX_SHIFT || pname == GL_INDEX_OFFSET) {
++      GET_CURRENT_CONTEXT(ctx);
++      GLint *value = pname == GL_INDEX_SHIFT ? &ctx->Pixel.IndexShift
++                                           : &ctx->Pixel.IndexOffset;
++      if (*value == param)
++         return;
++      FLUSH_VERTICES(ctx, _NEW_PIXEL, GL_PIXEL_MODE_BIT);
++      *value = param;
++      return;
++   }
+    _mesa_PixelTransferf( pname, (GLfloat) param );
+ }
+ 

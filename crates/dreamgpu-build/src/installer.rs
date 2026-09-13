@@ -112,7 +112,10 @@ fn prepare(output: &Path) -> Result<Vec<serde_json::Value>> {
             );
             id += 1;
             header += &format!("{{{os},{id},{size},\"{name}\",\"{hash}\"}},\n");
-            resources += &format!("{id} RCDATA \"{}\"\n", rc_path(&path)?);
+            // RC compilers do not reliably emit dependencies for RCDATA files.
+            // Include each verified digest so a payload-only update rebuilds the
+            // resource object even when its path and generated IDs are unchanged.
+            resources += &format!("// sha256 {hash}\n{id} RCDATA \"{}\"\n", rc_path(&path)?);
             evidence.push(json!({"os":os,"path":name,"size":size,"sha256":hash}));
         }
     }
@@ -185,7 +188,27 @@ pub fn build(root: &Path, output: &Path, prefix: &str) -> Result<()> {
     }
     write_json(
         &output.join("installer-manifest.json"),
-        &json!({"schema":1,"exe":"dreamgpu.exe","sha256":digest(&exe)?,"imports":imports,"inputs":inputs,"payloads":evidence,"activation":"provider_not_ready","journal_schema":1,"stage":"fresh-owned-directory-only"}),
+        &json!({
+            "schema":1,"exe":"dreamgpu.exe","sha256":digest(&exe)?,
+            "imports":imports,"inputs":inputs,"payloads":evidence,
+            "activation":"journalled-system-installation","journal_schema":2,
+            "stage":{"journal_schema":1,"ownership":"authenticated-private-staging-tree",
+                     "recovery":"resume-exact-owned-prefix-or-durable-cancellation"},
+            "global":{"journal_schema":3,
+                      "commands":["default install","/continue","/upgrade","/rollback","/uninstall","/repair","/recover"],
+                      "completion":"verified-driver-and-six-normal-system-API-proofs",
+                      "rollback_history":"restored-installed-parent-remains-upgradeable-and-uninstallable; authenticated-history-bound-32",
+                      "repair":"exact-recorded-original-public-runtime-or-win98-cache-only; renew-affected-API-proofs",
+                      "recovery":"explicit-NT-reverse-driver-only; durable-origin-bound-independent-executor; immutable-G-D-T-preserved"},
+            "driver_binding":{"journal_schemas_read":[1,2,3],
+                "journal_schema_written":{"win98":3,"windows2000-xp":2},"lineage_schema":1,
+                "commands":["/driver-install","/driver-resume","/driver-restore"],
+                "previous_bindings":["DreamGPU","Microsoft VGA","unbound NT5 PCI device"],
+                "generations":"immutable-original-baseline-and-immediate-before-rollback",
+                "verification":"started-devnode-and-driver-protocol",
+                "resident_build_hash_available":false},
+            "runtime_acceptance":"recorded-separately-against-exact-installer-and-fixture-identities"
+        }),
     )
 }
 
@@ -249,6 +272,7 @@ mod tests {
         let evidence = prepare(&root)?;
         assert_eq!(evidence.len(), 8);
         let header = fs::read(root.join("build/setup-input/payload.h"))?;
+        let resource = fs::read(root.join("build/setup-input/payload.rc"))?;
         fs::write(
             root.join("packages/windows2000-xp/application/test.dll"),
             b"changed",
@@ -258,6 +282,18 @@ mod tests {
             .to_string()
             .contains("changed package"));
         assert_eq!(fs::read(root.join("build/setup-input/payload.h"))?, header);
+        let package = root.join("packages/windows2000-xp");
+        write_json(
+            &package.join("manifest.json"),
+            &json!({"guest_os":"windows2000-xp","files":{
+            "application/test.dll":digest(&package.join("application/test.dll"))?}}),
+        )?;
+        prepare(&root)?;
+        assert_ne!(
+            fs::read(root.join("build/setup-input/payload.rc"))?,
+            resource,
+            "payload-only changes must invalidate the resource compiler input"
+        );
         Ok(())
     }
 }

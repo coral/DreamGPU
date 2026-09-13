@@ -1,5 +1,6 @@
 /* Fixed original UT99 media installation; no shell, networking or menu automation. */
 #include "common.h"
+#include "system-provider.h"
 static DWORD Started, Files, Bytes, Skipped;
 static char MediaRoot[4], MediaGame[MAX_PATH];
 static BOOL Deadline(void) {
@@ -32,7 +33,7 @@ static void MediaDirectory(const char *name) {
     if (!find)
         Die(name);
     do {
-        if (file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY)
+        if ((file.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) || UtProviderName(file.cFileName))
             continue;
         if (!Deadline()) {
             find.reset();
@@ -240,13 +241,13 @@ static UINT Run(void) {
     Directory("C:\\UT99\\Cache");
     for (i = 0; i < sizeof(directories) / sizeof(directories[0]); i++)
         MediaDirectory(directories[i]);
-    /* Immutable original media may skip same-size targets; changing guest GPU
-     * providers and benchmark configuration are always copied afresh. */
-    if (!Copy("C:\\SIERRA\\Half-Life\\dgpugl.dll", "C:\\UT99\\System\\dgpugl.dll") ||
-        !Copy("C:\\SIERRA\\Half-Life\\glide2x.dll", "C:\\UT99\\System\\glide2x.dll") ||
-        !Copy(config, "C:\\UT99\\System\\DGUT.INI") ||
+    /* Only original game resources and renderer preferences are installed.
+     * Public runtimes belong to the system installer. */
+    if (!UtCleanDirectory("C:\\UT99\\System"))
+        Die("FAIL APP_LOCAL_PROVIDER");
+    if (!Copy(config, "C:\\UT99\\System\\DGUT.INI") ||
         !Copy("C:\\UT99\\System\\DefUser.ini", "C:\\UT99\\System\\DGUSER.INI"))
-        Die("FAIL CONFIG_OR_GPU");
+        Die("FAIL CONFIG");
     if (!AllMaps()) {
         DWORD error = GetLastError();
         UccEvidence();
@@ -257,7 +258,7 @@ static UINT Run(void) {
     Record("SKIPPED_SAME_SIZE", Skipped);
     Record("COPY_BYTES", Bytes);
     Record("ELAPSED_MS", GetTickCount() - Started);
-    Text("PASS automated utsetup: original CityIntro, fixed Glide provider and "
+    Text("PASS automated utsetup: original CityIntro, normal system Glide and "
          "guest-fullscreen640x480 config\r\n");
     return 0;
 }

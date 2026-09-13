@@ -27,6 +27,8 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-wine-patches-') as temporary:
         assert evidence['inputs']['tests/guest/support/wine_prepare.py'] == prepare.patches.digest(HERE / 'wine_prepare.py')
         assert (output / 'surface-diagnostic.c').read_bytes() == (work / 'ddraw/surface.c').read_bytes()
         assert (work / 'ddraw/dg-wine-diagnostics.h').read_bytes() == (ROOT / 'guest/d3d/wine-diagnostics.h').read_bytes()
+        for name in ('row-copy', 'map-policy'):
+            assert (work / ('wined3d/dg-wine-' + name + '.h')).read_bytes() == (ROOT / ('guest/d3d/wine-' + name + '.h')).read_bytes()
         if diagnostic:
             source_ids = {str(index): path.name for index, path in enumerate(sorted((source / 'wined3d').glob('*.c')), 1)}
             assert evidence['copy_sources'] == source_ids

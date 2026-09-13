@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "version": "26.1.8",
+  "directory": "mesa-26.1.8",
+  "url": "https://archive.mesa3d.org/mesa-26.1.8.tar.xz",
+  "sha256": "b320f65874fd9653ac6c0bd1616605387344e1247411a50c797b5f3fb9dc0b55",
+  "patches": {
+    "patches/0001-integer-pixel-transfer.patch": "1033f75b98ed6cf7b46dc2b38d7184a847e78d831edfbac75caaf7afe4a1c8ce",
+    "patches/0002-fractional-pixel-raster.patch": "f6976cf36a615b5e8ae5093adee7c3cf0a1588e47e97f63d2940c39576d77216"
+  },
+  "files": {
+    "src/mesa/main/pixel.c": {
+      "before": "c6f9b6aa1d16bc4d503f6d1bec9f257e1c4317dee8129dc3359d876349c410b1",
+      "after": "e2c8cdf47ca255129a16d359f19886657d340a77bd66e38d2017955b55434893"
+    },
+    "src/mesa/main/drawpix.c": {
+      "before": "a8534071efa84e95fb3a2859ed819ddc8d551a8b88d79c0bcbb326fe309be68f",
+      "after": "a2f602f80aeae509f7e845bccacc15a5f1c7fd7e899d10c7afcbc627c0a348e2"
+    },
+    "src/mesa/state_tracker/st_cb_drawpixels.c": {
+      "before": "91c5e874b9bd1f85812b7cc31ea81a12894a03610fcd0c31983605f8a02ec780",
+      "after": "8092e5abc517cc92eab806e637e22f5461ac09d7e83c6041b19440858e15587c"
+    },
+    "src/mesa/state_tracker/st_cb_drawpixels.h": {
+      "before": "2cf769bdbb95288a073331308acf73e9ce93d5275438884c52d12cfc9110b6a5",
+      "after": "39084d21dc05ee13b52a833e06fa9e71342c2330414f1011f6f4ffc34b88e468"
+    }
+  },
+  "subprojects": {
+    "expat": {
+      "version": "2.5.0",
+      "source_sha256": "ef2420f0232c087801abf705e89ae65f6257df6b7931d37846a193ef2e8cdcbe",
+      "meson_patch_sha256": "e30c8c32f79fd4563a86a5c9cfe419568c35b775077c2d1428170081129406b4",
+      "pin_source": "mesa-26.1.8/subprojects/expat.wrap",
+      "policy": "forced pinned upstream fallback"
+    }
+  }
+}

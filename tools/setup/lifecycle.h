@@ -3,7 +3,9 @@
 #include <stdint.h>
 #include <stddef.h>
 namespace setup::lifecycle {
-constexpr uint32_t max_items = 16;
+constexpr uint32_t legacy_items = 16;
+constexpr uint32_t max_items = 32;
+constexpr uint32_t derived_resource = 0x80000000u;
 enum class Kind : uint32_t { file = 1, registry = 2, registry_key = 3 };
 enum class Phase : uint32_t { prepared, changing, applied, restoring, restored, borrowed };
 enum class State : uint32_t {
@@ -31,13 +33,13 @@ struct Item {
     Image before = {}, desired = {}, original = {};
 };
 struct Journal {
-    uint32_t magic = 0x314a4744, version = 1, generation = 0, count = 0;
+    uint32_t magic = 0x314a4744, version = 2, generation = 0, count = 0;
     State state = State::staged;
     uint32_t uninstall = 0;
     Item items[max_items] = {};
 };
-static_assert(sizeof(Image) == 336 && sizeof(Item) == 1284 && sizeof(Journal) == 20568,
-              "persistent schema v1 layout");
+static_assert(sizeof(Image) == 336 && sizeof(Item) == 1284 && sizeof(Journal) == 41112,
+              "persistent schema v2 layout");
 inline bool text_equal(const char *a, const char *b, size_t limit) {
     for (size_t i = 0; i < limit; ++i) {
         if (a[i] != b[i])
@@ -96,7 +98,7 @@ inline bool valid_image(const Image &i, Kind kind) {
     return !i.sha[64];
 }
 inline bool valid(const Journal &j) {
-    if (j.magic != 0x314a4744 || j.version != 1 || !j.generation || !j.count ||
+    if (j.magic != 0x314a4744 || j.version != 2 || !j.generation || !j.count ||
         j.count > max_items || j.uninstall > 1 || uint32_t(j.state) > uint32_t(State::removed))
         return false;
     for (unsigned n = 0; n < j.count; n++) {
@@ -236,20 +238,28 @@ template <class Store> class Engine {
 // Build a new generation without losing first-install originals. The caller
 // captures each before image and its immutable backup BEFORE persisting this
 // journal; no public destination changes until all entries are prepared.
-inline bool inherit(Item &next, const Item &previous) {
-    if (previous.phase != Phase::applied && previous.phase != Phase::borrowed)
+inline bool inherit(Item &next, const Item &previous, bool known_original = false,
+                    bool restored = false) {
+    if (previous.phase != (restored ? Phase::restored : Phase::applied) &&
+        previous.phase != Phase::borrowed)
         return false;
     if (next.kind != previous.kind || !text_equal(next.path, previous.path, sizeof(next.path)) ||
         !text_equal(next.name, previous.name, sizeof(next.name)) ||
-        !same(next.before, previous.desired))
+        (!same(next.before, restored ? previous.before : previous.desired) &&
+         !(known_original && previous.original.exists && same(next.before, previous.original))))
         return false;
     next.original = previous.original;
     next.original_generation = previous.original_generation;
     next.original_index = previous.original_index;
     return true;
 }
-inline bool uninstall_plan(const Journal &installed, Journal &removal) {
-    if (!valid(installed) || installed.state != State::activated ||
+// Restored-upgrade admission requires make_uninstall_plan's authenticated
+// history assessment. The ordinary two-argument API retains its active-only gate.
+inline bool uninstall_plan(const Journal &installed, Journal &removal,
+                           bool authenticated_restored_upgrade = false) {
+    const bool restored = authenticated_restored_upgrade && installed.state == State::failed &&
+                          installed.generation > 1 && !installed.uninstall;
+    if (!valid(installed) || (installed.state != State::activated && !restored) ||
         installed.generation == 0xffffffff)
         return false;
     removal = installed;
@@ -259,11 +269,11 @@ inline bool uninstall_plan(const Journal &installed, Journal &removal) {
     for (unsigned n = 0; n < removal.count; n++) {
         removal.items[n] = installed.items[installed.count - 1 - n];
         auto &i = removal.items[n];
-        i.before = i.desired;
+        i.before = restored ? i.before : i.desired;
         i.desired = i.original;
-        i.phase = installed.items[installed.count - 1 - n].phase == Phase::borrowed
-                      ? Phase::borrowed
-                      : Phase::prepared;
+        // A later generation may have borrowed the previous provider bytes.
+        // Removal still owns their inherited baseline restoration.
+        i.phase = same(i.before, i.desired) ? Phase::borrowed : Phase::prepared;
     }
     return true;
 }

@@ -11,10 +11,12 @@ typedef float GLfloat, GLclampf;
 typedef double GLdouble, GLclampd;
 typedef uint8_t GLboolean, GLubyte;
 typedef uint16_t GLushort;
+typedef int16_t GLshort;
 #define GL_NO_ERROR 0
 #define GL_INVALID_ENUM 0x500
 #define GL_INVALID_VALUE 0x501
 #define GL_INVALID_OPERATION 0x502
+#define GL_POINTS 0
 #define GL_POLYGON 9
 #define GL_QUADS 7
 #define GL_NONE 0
@@ -129,3 +131,26 @@ typedef uint16_t GLushort;
 
 #define GL_DEPTH_COMPONENT 0x1902
 #define GL_STENCIL_INDEX 0x1901
+
+#define GL_INDEX_ARRAY 0x8077
+
+#define GL_EDGE_FLAG_ARRAY 0x8079
+
+#define GL_INDEX_ARRAY_POINTER 0x8091
+
+#define GL_EDGE_FLAG_ARRAY_POINTER 0x8093
+
+#define GL_INDEX_ARRAY_STRIDE 0x8086
+
+#define GL_INDEX_ARRAY_TYPE 0x8085
+
+#define GL_EDGE_FLAG_ARRAY_STRIDE 0x808C
+
+#define GL_RENDER 0x1c00
+#define GL_SELECT 0x1c02
+#define GL_FEEDBACK 0x1c01
+#define GL_SELECTION_BUFFER_POINTER 0x0df3
+#define GL_FEEDBACK_BUFFER_POINTER 0x0df0
+
+#define GL_COMPILE 0x1300
+#define GL_COMPILE_AND_EXECUTE 0x1301

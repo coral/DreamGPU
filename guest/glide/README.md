@@ -14,9 +14,10 @@ DREAMGPU_BUILD=guest cargo build --release
 ```
 
 The source lock pins OpenGLide and SGI mipmap code. The builder retains source
-and licenses, produces a DLL/probe hash manifest and audits imports. Ship the
-corresponding DreamGPU `dgpugl.dll` in the game's folder alongside `glide2x.dll`.
-Do not install over the operating system's OpenGL library. The translator's
+and licenses, produces a DLL/probe hash manifest and audits imports. The system
+installer owns global `glide2x.dll` and `dgpugl.dll` deployment; application-local
+probe directories are diagnostic fixtures, not the product installation model.
+The operating system's OpenGL library remains the normal ICD loader. The translator's
 actual packed pixel formats are converted by the bounded DreamGPU frontend;
 unsupported global GL extensions are not advertised to satisfy a string gate.
 The donor's optional annotation overlay is removed; DreamGPU owns instrumentation.
@@ -58,3 +59,7 @@ The texture database preserves the donor's address-overlap and palette-hash inva
 Glide math builds for Pentium III SSE1 (`-msse -mno-sse2 -mfpmath=sse`), including source-built mipmap helpers. This removes much of the translator's x87 extended-precision work under TCG without fast-math. Binary32 operations round differently from x87 excess-precision intermediates; this is not a bit-identical arithmetic claim. The guest OS must preserve SSE state (`CR4.OSFXSR`), and SIMD exceptions remain masked. The frontend's guest packing and x87 calling ABI are unchanged. Public pixel checks include normalized fractional alpha as well as texture-plus-local-color addition and multiplicative blending.
 
 With negotiated secondary color, local RGB is added after texturing and before blending. The donor fallback instead drew a second unconditionally additive pass, so fully transparent geometry or a multiplicative lightmap could incorrectly brighten the destination. The public probe distinguishes these equations using known pixels, rather than treating a brighter game screenshot as a correctness oracle. Glide fog-coordinate support remains a separate unsupported capability; no fog acceptance is claimed by these blending checks.
+
+See [Glide provider scope](../../docs/glide-support.md) for the separate Glide1/3
+source inventory and required compatibility work. Neither API is advertised by
+the current Glide2x package.

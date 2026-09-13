@@ -13,6 +13,7 @@ typedef struct {
 } JGL_NAME;
 typedef struct {
     ULONG References, Count, Next;
+    BOOL NativeLists;
     JGL_NAME Entries[JGL_NAME_SLOTS];
 } JGL_NAMES;
 

@@ -180,6 +180,8 @@
  */
 #define DG_GL_FUNCTION_INLINE_DATA 0x80000000
 #define DG_GL_FUNCTION_QUERY 0x40000000
+/* Private scalar record: preserve deferred GL_COMPILE errors without executing invalid input. */
+#define DG_GL_RECORD_ERROR 4095
 #define DG_GL_FUNCTION_KIND_MASK 0xc0000000
 #define DG_GL_DATA_FUNCTION 32
 #define DG_GL_DATA_BYTES 36
@@ -217,14 +219,23 @@
 #define DG_GL_ARRAY_NORMAL 4
 #define DG_GL_ARRAY_TEXCOORD 8
 #define DG_GL_ARRAY_SECONDARY 16
-#define DG_GL_ARRAY_MASK 31
+#define DG_GL_ARRAY_INDEX 32
+#define DG_GL_ARRAY_EDGE 64
+#define DG_GL_ARRAY_MASK 127
+#define DG_GL_VERTEX_INDEX 80 /* one double */
+#define DG_GL_VERTEX_EDGE 88  /* one canonical boolean byte, seven zero bytes */
+#define DG_GL_VERTEX_EXTENDED_BYTES 96
 /* Existing vertices remain64bytes; secondary color appends RGB and zero pad. */
 #define DG_GL_VERTEX_SECONDARY 64
 #define DG_GL_VERTEX_SECONDARY_PAD 76
 #define DG_GL_VERTEX_SECONDARY_BYTES 80
 #define DG_GL_VERTEX_SIZE(mask)                                                                    \
-    (((mask) & DG_GL_ARRAY_SECONDARY) ? DG_GL_VERTEX_SECONDARY_BYTES : DG_GL_VERTEX_BYTES)
+    (((mask) & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE))                                             \
+         ? DG_GL_VERTEX_EXTENDED_BYTES                                                             \
+         : (((mask) & DG_GL_ARRAY_SECONDARY) ? DG_GL_VERTEX_SECONDARY_BYTES : DG_GL_VERTEX_BYTES))
 #define DG_GL_MAX_VERTICES 65536
+#define DG_GL_MAX_EVAL_ORDER 8
+#define DG_GL_MAX_CAPTURE_VALUES 16384
 #define DG_GL_MAX_INDICES 262144
 
 /* QUERY must be the sole record in its batch. Payload is function,arg0,arg1,

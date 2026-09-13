@@ -41,15 +41,15 @@ static bool LightingColor(GLenum pname) {
 static void Lighting(bool material, GLenum target, GLenum pname, const GLint *values, bool scalar) {
     // Material is explicitly legal inside Begin/End; the existing vector path
     // enforces that exception. Other state must reject before reading values.
-    if (!material && !JglReady())
+    if (!material && !JglCommandReady())
         return;
     unsigned count = LightingCount(material, target, pname);
     if (!count || (scalar && count != 1)) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     GLfloat converted[4];
@@ -82,24 +82,24 @@ static void APIENTRY AliasMaterialiv(GLenum face, GLenum pname, const GLint *val
     icd_state::Lighting(true, face, pname, values, false);
 }
 static void APIENTRY AliasTexGend(GLenum coordinate, GLenum pname, GLdouble value) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (icd_state::TexGenCount(coordinate, pname) != 1) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     glTexGendv(coordinate, pname, &value);
 }
 static void APIENTRY AliasTexGeniv(GLenum coordinate, GLenum pname, const GLint *values) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     unsigned count = icd_state::TexGenCount(coordinate, pname);
     if (!count) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (!values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     GLdouble converted[4];

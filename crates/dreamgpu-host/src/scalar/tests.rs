@@ -184,3 +184,70 @@ fn copy_pixels_signed_coordinates_bounds_and_begin_guard() {
     assert_eq!(state, 1);
     assert!(take().is_empty());
 }
+unsafe extern "C" fn edge(v: u8) {
+    note(&[v as u64]);
+}
+#[test]
+fn index_double_and_edge_flag_are_legal_inside_begin_without_float_conversion() {
+    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    api.dg_glIndexd = Some(depth);
+    api.dg_glEdgeFlag = Some(edge);
+    let mut state = 1;
+    let value = 16777217.25f64.to_bits();
+    assert_eq!(
+        run(
+            &api,
+            &mut state,
+            FEnum_glIndexd,
+            &[value as u32, (value >> 32) as u32]
+        ),
+        Ok(())
+    );
+    assert_eq!(take(), [value]);
+    assert_eq!(run(&api, &mut state, FEnum_glEdgeFlag, &[7]), Ok(()));
+    assert_eq!(take(), [1]);
+    assert_eq!(run(&api, &mut state, FEnum_glIndexd, &[1]), Err(1));
+    assert_eq!(
+        run(
+            &api,
+            &mut state,
+            FEnum_glAccum,
+            &[GL_RETURN, 1f32.to_bits()]
+        ),
+        Err(4)
+    );
+    assert!(take().is_empty());
+}
+unsafe extern "C" fn mesh1(mode: u32, first: i32, last: i32) {
+    note(&[mode as u64, first as u32 as u64, last as u32 as u64]);
+}
+#[test]
+fn evaluator_mesh_observes_begin_texture_admission_before_native_draw() {
+    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    api.dg_glEvalMesh1 = Some(mesh1);
+    let mut state = 0;
+    let args: Vec<u8> = [GL_LINE, 0, 3]
+        .into_iter()
+        .flat_map(u32::to_le_bytes)
+        .collect();
+    assert_eq!(
+        unsafe {
+            execute(
+                &api,
+                &mut state,
+                hook,
+                core::ptr::dangling_mut(),
+                FEnum_glEvalMesh1,
+                &args,
+            )
+        },
+        Err(11)
+    );
+    assert_eq!(take(), [200, FEnum_glBegin as u64]);
+    assert_eq!(
+        run(&api, &mut state, FEnum_glEvalMesh1, &[GL_LINE, 0, 3]),
+        Ok(())
+    );
+    assert_eq!(take(), [200, FEnum_glBegin as u64, GL_LINE as u64, 0, 3]);
+    assert_eq!(state, 0);
+}

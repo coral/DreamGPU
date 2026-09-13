@@ -50,6 +50,9 @@ pub struct ContextState {
     pub attrib_depth: u32,
     pub attrib: [Attrib; STACK],
     pub image: crate::pixel_image::State,
+    pub capture: crate::selection::State,
+    pub lists: *mut crate::lists::State,
+    pub list_mode: u32,
 }
 impl ContextState {
     const EMPTY: Self = Self {
@@ -64,6 +67,9 @@ impl ContextState {
         attrib_depth: 0,
         attrib: [Attrib::EMPTY; STACK],
         image: crate::pixel_image::State::EMPTY,
+        capture: crate::selection::State::EMPTY,
+        lists: null_mut(),
+        list_mode: 0,
     };
 }
 
@@ -162,6 +168,8 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
         state.write(ContextState::EMPTY);
     }
     unsafe { crate::pixel_image::release(&*memory, &mut old.image) };
+    unsafe { crate::selection::release(&*memory, &mut old.capture) };
+    unsafe { crate::lists::release(&*memory, old.lists) };
     assert!(old.attrib_depth as usize <= STACK);
     for saved in &old.attrib[..old.attrib_depth as usize] {
         unsafe {

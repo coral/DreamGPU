@@ -2,11 +2,21 @@
  * D3D7 HAL fixed-work acceptance through the pinned Wine DirectDraw interface.
  */
 #define WIN32_LEAN_AND_MEAN
+#define CINTERFACE
 #define COBJMACROS
 #define INITGUID
 #include <windows.h>
+#include "entry.h"
 #include <ddraw.h>
 #include <d3d.h>
+#ifdef DG_SYSTEM_D3D
+#include "system-loader.h"
+#define DG_LOG_PATH "C:\\DGSYS7.LOG"
+#define DG_PROBE_NAME "sysd3d7"
+#else
+#define DG_LOG_PATH "C:\\DGD3D7.LOG"
+#define DG_PROBE_NAME "d3d7"
+#endif
 
 static HANDLE LogFile;
 static IDirectDraw7 *draw;
@@ -17,12 +27,6 @@ static IDirectDrawClipper *clipper;
 static HWND window;
 static BOOL failed;
 static unsigned int(WINAPI *ProbeGlError)(void);
-void *memset(void *destination, int value, unsigned int count) {
-    volatile BYTE *out = destination;
-    while (count--)
-        *out++ = (BYTE)value;
-    return destination;
-}
 static void Log(const char *text) {
     DWORD written;
     WriteFile(LogFile, text, lstrlenA(text), &written, NULL);
@@ -53,16 +57,14 @@ static LRESULT CALLBACK WindowProc(HWND w, UINT message, WPARAM a, LPARAM b) {
 }
 static void Run(void) {
     typedef HRESULT(WINAPI * CreateDraw)(GUID *, void **, REFIID, IUnknown *);
-    union {
-        FARPROC generic;
-        CreateDraw factory;
-    } entry;
     HMODULE gl, runtime;
+#ifndef DG_SYSTEM_D3D
     char path[MAX_PATH];
-    WNDCLASSA klass = {0};
+#endif
+    WNDCLASSA klass = {};
     RECT bounds = {0, 0, 320, 240}, client;
     POINT origin = {0, 0};
-    DDSURFACEDESC2 desc = {0}, locked = {0};
+    DDSURFACEDESC2 desc = {}, locked = {};
     D3DVIEWPORT7 viewport = {0, 0, 320, 240, 0, 1};
     struct Vertex {
         float x, y, z, rhw;
@@ -74,6 +76,14 @@ static void Run(void) {
     const UINT region_y[5] = {0, 92, 0, 224, 224};
     const DWORD region_color[5] = {0x102030, 0xff0000, 0x00ff00, 0x00ffff, 0xffff00};
     UINT region, x, y;
+#ifdef DG_SYSTEM_D3D
+    Log("STAGE ordinary system DirectDraw loader");
+    runtime = system_loader::load("ddraw.dll", Log);
+    gl = nullptr;
+    if (!Check(runtime != nullptr, "FAIL system DirectDraw loader or private neighbor",
+               GetLastError()))
+        return;
+#else
     Log("STAGE explicit application-local DreamGPU OpenGL loader");
     gl = LoadLibraryA("C:\\SIERRA\\Half-Life\\dgpugl.dll");
     if (!Check(gl != NULL, "FAIL load DreamGPU OpenGL", GetLastError()))
@@ -84,21 +94,28 @@ static void Run(void) {
     if (!Check(lstrcmpiA(path, "C:\\SIERRA\\Half-Life\\dgpugl.dll") == 0,
                "FAIL system OpenGL fallback is forbidden", 0))
         return;
-    ProbeGlError = (void *)GetProcAddress(gl, "glGetError");
+    ProbeGlError = Entry<decltype(ProbeGlError)>(gl, "glGetError");
     runtime = LoadLibraryA("C:\\SIERRA\\Half-Life\\winedd.dll");
     if (!Check(runtime != NULL, "FAIL load Wine DirectDraw interface", GetLastError()))
         return;
     if (!Check(GetModuleHandleA("dgpugl.dll") == gl, "FAIL Wine OpenGL module identity", 0))
         return;
-    entry.generic = GetProcAddress(runtime, "DirectDrawCreateEx");
-    if (!Check(entry.generic != NULL, "FAIL DirectDraw factory", GetLastError()))
+#endif
+    const auto create = Entry<CreateDraw>(runtime, "DirectDrawCreateEx");
+    if (!Check(create != nullptr, "FAIL DirectDraw factory", GetLastError()))
         return;
     Log("STAGE create DirectDraw7 and Direct3D7");
-    if (!HR(entry.factory(NULL, (void **)&draw, &IID_IDirectDraw7, NULL),
-            "FAIL DirectDraw7 creation") ||
-        !HR(IDirectDraw7_QueryInterface(draw, &IID_IDirect3D7, (void **)&d3d),
+    if (!HR(create(NULL, (void **)&draw, IID_IDirectDraw7, NULL), "FAIL DirectDraw7 creation") ||
+        !HR(IDirectDraw7_QueryInterface(draw, IID_IDirect3D7, (void **)&d3d),
             "FAIL Direct3D7 query"))
         return;
+#ifdef DG_SYSTEM_D3D
+    if (!Check(system_loader::object(draw->lpVtbl, "winedd.dll"),
+               "FAIL actual system Wine DirectDraw object/dependencies", 0))
+        return;
+    gl = GetModuleHandleA("dgpugl.dll");
+    ProbeGlError = Entry<decltype(ProbeGlError)>(gl, "glGetError");
+#endif
     klass.lpfnWndProc = WindowProc;
     klass.hInstance = GetModuleHandleA(NULL);
     klass.lpszClassName = "DreamGPUD3D7Probe";
@@ -116,9 +133,9 @@ static void Run(void) {
     if (!HR(IDirectDraw7_SetCooperativeLevel(draw, window, DDSCL_NORMAL), "FAIL cooperative level"))
         return;
     {
-        DDSCAPS2 caps = {0};
+        DDSCAPS2 caps = {};
         DWORD total = 0, available = 0;
-        DDSURFACEDESC2 mode = {0};
+        DDSURFACEDESC2 mode = {};
         caps.dwCaps = DDSCAPS_VIDEOMEMORY;
         mode.dwSize = sizeof(mode);
         if (HR(IDirectDraw7_GetAvailableVidMem(draw, &caps, &total, &available),
@@ -156,7 +173,7 @@ static void Run(void) {
         Number("GL error before HAL", ProbeGlError());
     Log("STAGE create HAL render target and device");
     if (!HR(IDirectDraw7_CreateSurface(draw, &desc, &target, NULL), "FAIL render target") ||
-        !HR(IDirect3D7_CreateDevice(d3d, &IID_IDirect3DHALDevice, target, &device),
+        !HR(IDirect3D7_CreateDevice(d3d, IID_IDirect3DHALDevice, target, &device),
             "FAIL HAL device") ||
         !HR(IDirect3DDevice7_SetViewport(device, &viewport), "FAIL viewport"))
         return;
@@ -186,7 +203,7 @@ static void Run(void) {
     /* Distinct far-edge colors detect clipping of the desktop-sized primary
      * through a smaller window backing, including clamped-edge replication. */
     for (region = 2; region < 5; ++region) {
-        D3DRECT edge = {0};
+        D3DRECT edge = {};
         edge.x1 = (LONG)region_x[region];
         edge.y1 = (LONG)region_y[region];
         edge.x2 = edge.x1 + 16;
@@ -255,19 +272,16 @@ static void Run(void) {
                             typedef void(WINAPI * ReadPixels)(int, int, int, int, unsigned int,
                                                               unsigned int, void *);
                             typedef unsigned int(WINAPI * GetError)(void);
-                            CurrentDC current =
-                                (CurrentDC)(void *)GetProcAddress(gl, "wglGetCurrentDC");
-                            ReadBuffer buffer =
-                                (ReadBuffer)(void *)GetProcAddress(gl, "glReadBuffer");
-                            ReadPixels pixels =
-                                (ReadPixels)(void *)GetProcAddress(gl, "glReadPixels");
-                            GetError error = (GetError)(void *)GetProcAddress(gl, "glGetError");
+                            CurrentDC current = Entry<CurrentDC>(gl, "wglGetCurrentDC");
+                            ReadBuffer buffer = Entry<ReadBuffer>(gl, "glReadBuffer");
+                            ReadPixels pixels = Entry<ReadPixels>(gl, "glReadPixels");
+                            GetError error = Entry<GetError>(gl, "glGetError");
                             HWND fg = GetForegroundWindow(),
                                  active = current ? WindowFromDC(current()) : NULL;
                             POINT point = {(int)xx, (int)yy};
                             RECT bounds;
                             DWORD pid = 0;
-                            BYTE rgba[4] = {0};
+                            BYTE rgba[4] = {};
                             HDC screen;
                             Number("owned HWND", (DWORD)window);
                             Number("foreground HWND", (DWORD)fg);
@@ -301,10 +315,10 @@ static void Run(void) {
         ReleaseDC(window, dc);
     }
 }
-void WINAPI WinMainCRTStartup(void) {
+extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
     LogFile =
-        CreateFileA("C:\\DGD3D7.LOG", GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
+        CreateFileA(DG_LOG_PATH, GENERIC_WRITE, FILE_SHARE_READ, NULL, CREATE_ALWAYS, 0, NULL);
     if (LogFile == INVALID_HANDLE_VALUE)
         ExitProcess(2);
     Run();
@@ -323,7 +337,8 @@ void WINAPI WinMainCRTStartup(void) {
     if (window)
         DestroyWindow(window);
     if (!failed)
-        Log("PASS automated d3d7: Wine HAL triangle, 1280 exact GPU pixels, 1280 exact front "
+        Log("PASS automated " DG_PROBE_NAME
+            ": Wine HAL triangle, 1280 exact GPU pixels, 1280 exact front "
             "pixels including far edges and "
             "clean release");
     CloseHandle(LogFile);

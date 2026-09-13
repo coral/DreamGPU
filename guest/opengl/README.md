@@ -2,12 +2,16 @@
 
 This directory contains the runtime `dgpugl.dll` implementation. Build support is
 in `support/guest/cmake/opengl.cmake`; the public probe source is in `tools/opengl/`.
-The builder produces the frontend and `dgwgl.exe`. It is the evolving WGL
-frontend for the versioned NT driver channel. It currently exposes the implemented
-scalar OpenGL inventory, context ownership, thread transfer, window binding,
-bounded texture uploads and typed state queries. It is not a complete OpenGL implementation or registered Windows
-ICD yet, and reports a development version (0.0), without advertising a complete GL version. Do not replace a guest's
-system OpenGL DLL with this intermediate package.
+The builder produces the frontend, the `dgpuicd.dll` Windows ICD and diagnostic
+programs. The ICD implements all 336 GL1.1 dispatch slots, including context/thread
+ownership, display lists, evaluators, selection, bounded texture/pixel transfers
+and typed queries. It reports `1.1 DreamGPU`. `icd-coverage.json` records the four
+known native-provider edge cases; dispatch coverage is not a formal conformance
+certification.
+
+The system installer registers the ICD with the DreamGPU display driver.
+Applications continue loading the operating system's `opengl32.dll`; the
+installer owns the DreamGPU frontend and ICD in the system directory.
 
 Build on a host with the i686 MinGW compiler:
 
@@ -20,6 +24,10 @@ NT driver must use the same `dg-escape.h` version. `support/guest/opengl/generat
 checked-in implemented scalar exports; ordinary builds do not invoke it, and all pointer arguments are copied before entering the
 immutable command channel. Drawing batches are bounded by the driver contract.
 
+## Private frontend diagnostics and historical evidence
+
+The following private-library probe is a developer diagnostic. Normal programs
+use the installed system ICD; they do not need this deployment step.
 Place the DLL beside the diagnostic EXE in a disposable guest and run the EXE.
 The diagnostic dynamically loads the DLL and uses public WGL/OpenGL entrypoints;
 it never calls the private transport itself. It checks two contexts/windows,
@@ -48,13 +56,16 @@ checks that SwapBuffers exchanges them. The host must capture each stage.
 F5 is a bounded five-second textured-quad throughput check, with uploads and
 state queries outside its timed loop. Its result is not game FPS.
 
-Pending frontend work includes client-array entrypoints, remaining query coverage,
-shared-window drawable semantics, sharing and complete GL/ICD coverage. Native
-transport/renderer tests alone do not establish game compatibility.
+Client arrays, typed queries, sharing and all GL1.1 dispatch entries are now
+implemented. The measured native-provider edge cases and unsupported
+`DrvCopyContext` remain explicit. Native transport/renderer tests alone do not
+establish game compatibility.
 
 Retail Half-Life 1.0 (build 742) now reaches and renders its opening tram scene
-through this frontend on Windows 2000 on macOS and Linux. Select the custom mini-driver in
-the game's own video menu; do not replace the system OpenGL library. The
+through this frontend on Windows 2000 on macOS and Linux. Those historical runs
+used the game's custom mini-driver option. The maintained normal launcher now
+selects the retail engine's `default` OpenGL driver, which loads system
+`opengl32.dll`; it does not pass a custom `-gldrv` argument. The
 original CUE/BIN disc supplies the game's track metadata. The first real-game
 failure was its request for 32 depth bits: pixel-format selection now returns
 the closest available RGBA8/D24S8 format and describes its actual sizes.
@@ -131,8 +142,8 @@ contract enables `GL_EXT_secondary_color` and its required
 `GL_EXT_separate_specular_color` dependency. All17 secondary-color entrypoints
 are exported, including integer normalization, float bit-preserving scalar and
 vector calls, and guest-local array descriptors. `glLightModeliv` joins the
-existing scalar/float-vector lighting setters. The reported base GL version
-remains the implemented development subset.
+existing scalar/float-vector lighting setters. The reported base GL version is 1.1; these extensions are advertised only when
+the host provides their required contract.
 
 Packed draws preserve the existing64-byte vertex format. A secondary array adds
 bit16 to the attribute mask and uses80-byte vertices: RGB floats at byte64 and
@@ -160,68 +171,43 @@ Current build and evidence navigation: [guest runtime](../README.md),
 [guest tools](../../tools/README.md), and [execution evidence](../../docs/progress.md).
 Historical benchmark paths above belong to the original Juke evidence tree.
 
-## System-loader development adapter
+## System OpenGL provider
 
-`dgpuicd.dll` is a separate diagnostic build of the same frontend core with the
-Windows ICD calling interface. It is staged under `diagnostics/icd`, never
-registered by the production installer while `icd-coverage.json` says
-`production_registration_ready: false`. The existing `dgpugl.dll` route and its
-protocol are unchanged. This separation is a temporary validation artifact,
-not a second shipping renderer.
+Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside
+`dgpugl.dll`, which the Wine/OpenGLide providers use. Both share the same frontend
+and host protocol. The single production NT and Win98 display drivers expose ICD
+discovery; there is no separate non-ICD shipping driver or diagnostic DLL path.
+Installer transaction readiness is tracked separately from API coverage.
 
 The checked-in `icd-slots.inc` follows the pinned ReactOS 336-slot OpenGL 1.1
 layout, with provenance in the file. [icd-coverage.json](icd-coverage.json) records
-the exact current supported, adapted, partial and explicitly unsupported entries.
-Adapters include numeric color/normal/rectangle variants, fixed-state aliases,
-double-precision raster positions, client arrays and pixel operations added after
-the first loader proof. Tests check that this inventory matches the actual table.
+the current contract and retained native-provider limitations. Actual-source
+sanitizer tests and native pixel tests cover numeric aliases, client arrays,
+pixel transfer/streaming, textures, evaluators, selection/feedback, and display
+lists. Lists preserve logical resource ownership and deferred compile-time error
+semantics. Native Mesa extreme integer-transfer, fractional negative zoom, and
+legacy texture-border failures remain explicit limitations; passing transport
+does not erase those findings.
 
-Bitmap and DrawPixels assemble one immutable image before native drawing, with a
-shared 64 MiB staging budget, checked stream ordering and teardown on failure.
-Packed index pixels are expanded within that budget when needed by the native
-driver. Transfer/map state and depth/stencil copies have exact-pixel checks on
-both hosts. Known native Mesa extreme integer-transfer, fractional negative zoom
-and legacy texture-border failures remain recorded as partial coverage;
-successful transport tests do not hide those rendering limitations.
-Unsupported calls set `GL_INVALID_OPERATION`, report Windows
-`ERROR_CALL_NOT_IMPLEMENTED`, and record the slot through
-`DgIcdUnsupportedSlot`; every slot has the correct function type. The adapter
-continues to report `0.0 DreamGPU development`, not GL 1.1 conformance. Context
-copy and unadvertised layer planes also fail explicitly. No incomplete slot is a
-NULL pointer or successful no-op.
+The NT `drivers/nt5/dgpudisp.dll` supports bounded `OPENGL_GETINFO` replies:
+520 bytes for the pinned ReactOS layout or 532 bytes for the actual Windows2000
+loader, UTF-16 `DGPUICD` at offset 8, interface version 2 and driver version 1.
+It provides RGBA8/D24S8 pixel-format DDIs and ownership-checked swaps; GDI window
+tracking is created under the `WNDOBJ_SETUP` engine lock. NT registration uses
+`OpenGLDrivers\DGPUICD` with `Dll=dgpuicd.dll`, `Version=2`, `DriverVersion=1`,
+and `Flags=1`.
 
-The matching diagnostic NT display binary is built as `dgpudisp_icd`, with output
-`diagnostics/icd/drivers/nt5/dgpudisp.dll`. Only that binary enables the bounded
-`OPENGL_GETINFO` reply: 520 bytes for the pinned ReactOS layout or 532 bytes
-for the actual Windows 2000 loader, UTF-16 `DGPUICD` at offset 8, interface
-version 2 and driver version 1. Both accepted extents are completely initialized.
-The diagnostic driver also provides its actual RGBA8/D24S8 pixel-format DDIs;
-GDI supplies the window identity for ownership-checked swaps through the existing
-ordered presentation transport. Window tracking is created only under the
-`WNDOBJ_SETUP` escape's engine lock.
+Win98 `drivers/win98/dgpumini.drv` uses the checked donor `Control` patch and a
+270-byte Win16 ANSI descriptor, verified with the actual Watcom compiler. Its
+registration is the `DGPUICD` named value in the Win98 `OpenGLDrivers` key. This
+is a different ABI from the NT wide-name response. The VxD remains shared with
+the existing transport and rendering implementation.
 
-A disposable Windows 2000 cold fixture passed the normal Microsoft loader path:
-system-directory `opengl32.dll`, GDI hardware format 1, registered system-directory
-`dgpuicd.dll`, 8,192 exact red/green pixels and two swaps. The diagnostic registry
-receipt uses a newly created `OpenGLDrivers\DGPUICD` subkey with `Dll`, `Version=2`,
-`DriverVersion=1`, and `Flags=1`. The first 520-byte-only implementation was
-rejected before DLL loading by Windows 2000; actual loader ABI inspection isolated
-the 532-byte request. This is a bounded loader/pixel proof, not permission to
-register the incomplete implementation on an existing installation. Win98's
-separate `Control` layout/registration is not enabled by this NT implementation.
-Its diagnostic display driver instead builds from a checked donor patch in an
-independent object tree, with a 270-byte Win16 ANSI descriptor verified by the
-actual Watcom compiler. A disposable Win98 fixture also passes normal Microsoft
-system loading, 8,192 exact pixels and two swaps. Its Win32 discovery probe uses
-ExtEscape with the ANSI output size; ordinary Escape did not return the driver
-descriptor. The fixed diagnostic bootstrap preserves the prior registration and
-does not enable production installation.
-
-`tests/guest/opengl/test_icd.py` compiles the actual adapter under ASan/UBSan,
-checks the ABI order against the pinned donor, exercises real aliases and checks
-context/callback/error transitions. `tests/guest/nt/test_icd_info.py` checks the
-actual loader reply's size, bounds, zeroed string tail and overlapping input.
-Normal-loader rendering must be tested with `DGSYSGL.EXE`, linked through the
-system APIs and run without private API DLLs beside it. A pass proves the tested
-pixel operations only; remaining slots and complete visual/game correctness
-are separate requirements.
+Independent Windows2000 and Win98 fixtures passed ordinary Microsoft system
+OpenGL loading, 8,192 exact red/green pixels and two swaps. The fixed diagnostic
+bootstrap separately proved restoration of prior registry state; those frozen
+receipts retain their original artifact paths. Current normal-loader checks use
+`DGSYSGL.EXE` without private API DLLs beside the executable or in its working
+directory. Full installer completion additionally requires exact file/registry
+ownership, driver activation, reboot continuation, and the other system-provider
+checks; a DLL copy alone is not an installed-state receipt.

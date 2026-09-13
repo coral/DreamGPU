@@ -5,7 +5,9 @@ import os
 import subprocess
 import tempfile
 ROOT = Path(__file__).resolve().parents[3]
-source = r'''#include <cassert>
+source = r'''#define JglCommandError JglSetError
+#define JglCommandReady JglReady
+#include <cassert>
 #include <cstdint>
 #include <cstring>
 #include <limits>

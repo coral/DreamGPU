@@ -129,3 +129,62 @@ fn vertex_layout_indices_and_restore_on_gpu_error() {
     );
     assert!(SEEN.with(|v| v.borrow().contains(&(9, 3))));
 }
+unsafe extern "C" fn index_get(_: u32, p: *mut f64) {
+    unsafe {
+        *p = 16777217.25;
+    }
+}
+unsafe extern "C" fn edge_get(_: u32, p: *mut u8) {
+    unsafe {
+        *p = 1;
+    }
+}
+unsafe extern "C" fn index_restore(v: f64) {
+    note(12, v.to_bits() as usize);
+}
+unsafe extern "C" fn edge_restore(v: u8) {
+    note(13, v as usize);
+}
+unsafe extern "C" fn edge_pointer(stride: i32, p: *const core::ffi::c_void) {
+    note(5, stride as usize);
+    note(6, p as usize);
+}
+#[test]
+fn extended_arrays_restore_exact_current_index_edge_and_pointer_state_on_error() {
+    let mut api = api();
+    api.dg_glGetDoublev = Some(index_get);
+    api.dg_glGetBooleanv = Some(edge_get);
+    api.dg_glIndexd = Some(index_restore);
+    api.dg_glEdgeFlag = Some(edge_restore);
+    api.dg_glIndexPointer = Some(normal);
+    api.dg_glEdgeFlagPointer = Some(edge_pointer);
+    let data = [0u8; 288];
+    let args = [
+        GL_TRIANGLES,
+        0,
+        3,
+        DG_GL_ARRAY_POSITION | DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE,
+        0,
+        0,
+        0,
+        0,
+    ];
+    ERROR.with(|v| *v.borrow_mut() = GL_INVALID_OPERATION);
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArrays, &args, &data) },
+        Ok(GL_INVALID_OPERATION)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    assert!(seen.contains(&(6, data.as_ptr() as usize + 80)));
+    assert!(seen.contains(&(6, data.as_ptr() as usize + 88)));
+    assert_eq!(
+        &seen[seen.len() - 2..],
+        &[(12, 16777217.25f64.to_bits() as usize), (13, 1)]
+    );
+    api.dg_glIndexPointer = None;
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArrays, &args, &data) },
+        Err(3)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
+}

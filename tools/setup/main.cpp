@@ -4,13 +4,18 @@
 // PCI enumeration follows the bounded CM_Get_Device_IDA approach already used
 // by our tools/win9x/driver32.cpp; no third-party implementation copied.
 #define WIN32_LEAN_AND_MEAN
+#define USE_SP_DRVINFO_DATA_V1 1
 #include <windows.h>
 #include <setupapi.h>
 #include <cfgmgr32.h>
 #include "policy.h"
 #include "sha256.h"
 #include "payload.h"
-#include "lifecycle-runtime.h"
+#include "system-runtime.h"
+#include "driver-runtime.h"
+#include "global-runtime.h"
+#include "stage-store.h"
+#include "setup-lock.h"
 namespace {
 class Handle {
     HANDLE h_;
@@ -27,28 +32,6 @@ class Handle {
         return h_;
     }
 };
-class SetupLock {
-    HANDLE handle_ = nullptr;
-    bool owned_ = false;
-
-  public:
-    explicit SetupLock(setup::Os os) {
-        handle_ = CreateMutexA(nullptr, TRUE,
-                               os == setup::Os::nt5 ? "Global\\DreamGPU.Setup" : "DreamGPU.Setup");
-        owned_ = handle_ && GetLastError() != ERROR_ALREADY_EXISTS;
-    }
-    SetupLock(const SetupLock &) = delete;
-    SetupLock &operator=(const SetupLock &) = delete;
-    ~SetupLock() {
-        if (owned_)
-            ReleaseMutex(handle_);
-        if (handle_)
-            CloseHandle(handle_);
-    }
-    bool acquired() const {
-        return owned_;
-    }
-};
 class Devices {
     HDEVINFO value_;
 
@@ -62,7 +45,7 @@ class Devices {
         if (value_ != INVALID_HANDLE_VALUE)
             SetupDiDestroyDeviceInfoList(value_);
     }
-    bool exactly_one() const {
+    bool exactly_one(bool allow_absent = false) const {
         if (value_ == INVALID_HANDLE_VALUE)
             return false;
         unsigned matches = 0;
@@ -70,7 +53,8 @@ class Devices {
             SP_DEVINFO_DATA item = {};
             item.cbSize = sizeof(item);
             if (!SetupDiEnumDeviceInfo(value_, i, &item))
-                return GetLastError() == ERROR_NO_MORE_ITEMS && matches == 1;
+                return GetLastError() == ERROR_NO_MORE_ITEMS &&
+                       (matches == 1 || (allow_absent && matches == 0));
             char id[256] = {};
             if (CM_Get_Device_IDA(item.DevInst, id, sizeof(id) - 1, 0) == CR_SUCCESS &&
                 setup::pci(id, sizeof(id)))
@@ -113,130 +97,7 @@ bool all_payloads(unsigned os) {
     }
     return count != 0;
 }
-struct Node {
-    char path[MAX_PATH];
-    bool directory;
-};
-class Store {
-    char root_[MAX_PATH] = {}, final_[MAX_PATH] = {};
-    Node nodes_[2048] = {};
-    unsigned count_ = 0;
-    bool created_ = false;
-    bool add(const char *path, bool dir) {
-        if (count_ >= 2048)
-            return false;
-        lstrcpyA(nodes_[count_].path, path);
-        nodes_[count_++].directory = dir;
-        return true;
-    }
-    bool safe_directory(const char *p) {
-        DWORD a = GetFileAttributesA(p);
-        return a != INVALID_FILE_ATTRIBUTES && (a & FILE_ATTRIBUTE_DIRECTORY) &&
-               !(a & FILE_ATTRIBUTE_REPARSE_POINT);
-    }
-
-  public:
-    bool begin() {
-        if (created_)
-            return false;
-        unsigned n = GetWindowsDirectoryA(root_, MAX_PATH);
-        if (!n || n > MAX_PATH - 24 || !safe_directory(root_))
-            return false;
-        lstrcpyA(final_, root_);
-        lstrcatA(final_, "\\DreamGPU");
-        if (GetFileAttributesA(final_) != INVALID_FILE_ATTRIBUTES ||
-            GetLastError() != ERROR_FILE_NOT_FOUND)
-            return false;
-        lstrcatA(root_, "\\DGSETUP.NEW");
-        // CREATE_NEW-style root acquisition: never adopt someone else's tree.
-        if (!CreateDirectoryA(root_, nullptr))
-            return false;
-        created_ = true;
-        return true;
-    }
-    bool write(const char *relative, const BYTE *data, DWORD bytes,
-               const char *expected = nullptr) {
-        if (!created_ || !setup::safe_path(relative))
-            return false;
-        char path[MAX_PATH];
-        if (lstrlenA(root_) + lstrlenA(relative) + 2 >= MAX_PATH)
-            return false;
-        lstrcpyA(path, root_);
-        lstrcatA(path, "\\");
-        unsigned start = lstrlenA(path);
-        lstrcatA(path, relative);
-        for (unsigned i = start; path[i]; i++) {
-            if (path[i] != '/')
-                continue;
-            path[i] = 0;
-            if (!safe_directory(path)) {
-                if (count_ >= 2048 || !CreateDirectoryA(path, nullptr))
-                    return false;
-                add(path, true);
-            }
-            path[i] = '\\';
-        }
-        if (count_ >= 2048)
-            return false;
-        Handle file(CreateFileA(path, GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
-                                FILE_ATTRIBUTE_NORMAL, nullptr));
-        if (file.get() == INVALID_HANDLE_VALUE)
-            return false;
-        add(path, false);
-        DWORD written = 0;
-        if (!WriteFile(file.get(), data, bytes, &written, nullptr) || written != bytes ||
-            !FlushFileBuffers(file.get()))
-            return false;
-        if (SetFilePointer(file.get(), 0, nullptr, FILE_BEGIN) == INVALID_SET_FILE_POINTER)
-            return false;
-        setup::Sha256 hash;
-        BYTE buffer[4096];
-        DWORD got = 0, total = 0;
-        do {
-            if (!ReadFile(file.get(), buffer, sizeof(buffer), &got, nullptr))
-                return false;
-            if (got > bytes - total)
-                return false;
-            hash.update(buffer, got);
-            total += got;
-        } while (got);
-        if (total != bytes)
-            return false;
-        if (expected) {
-            char actual[65];
-            hash.finish(actual);
-            if (lstrcmpA(actual, expected))
-                return false;
-        }
-        return true;
-    }
-    bool commit() {
-        return created_ && MoveFileA(root_, final_);
-    }
-    bool rollback() {
-        if (!created_)
-            return true;
-        // Keep failed entries in the ownership ledger; callers receive incomplete
-        // rollback instead of an invented restored-state result.
-        bool ok = true;
-        for (unsigned i = count_; i; i--) {
-            Node &n = nodes_[i - 1];
-            if (!n.path[0])
-                continue;
-            if (n.directory ? RemoveDirectoryA(n.path) : DeleteFileA(n.path))
-                n.path[0] = 0;
-            else
-                ok = false;
-        }
-        if (ok && RemoveDirectoryA(root_)) {
-            created_ = false;
-            count_ = 0;
-            return true;
-        }
-        return false;
-    }
-};
-Store storage;
+setup::staging::Store storage;
 void receipt(const char *text) {
     DWORD bytes;
     HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
@@ -244,27 +105,40 @@ void receipt(const char *text) {
         WriteFile(out, text, lstrlenA(text), &bytes, nullptr);
     OutputDebugStringA(text);
 }
-unsigned stage(unsigned os) {
-    setup::Transaction transaction(storage);
-    if (!transaction.begin())
+unsigned stage(unsigned os, bool cancel = false) {
+    setup::lifecycle::Win32Store inspector;
+    setup::lifecycle::Image executing;
+    char self[MAX_PATH];
+    DWORD length = GetModuleFileNameA(nullptr, self, sizeof(self));
+    if (!length || length >= sizeof(self) || !inspector.inspect_file(self, executing) ||
+        !executing.exists || !storage.reset(static_cast<setup::Os>(os), executing.sha))
         return 24;
-    const char pending[] = "{\"schema\":1,\"state\":\"staging\",\"system_activated\":false,"
-                           "\"ownership\":\"fresh_directory\"}\r\n";
-    bool ok =
-        storage.write("PREPARE.json", reinterpret_cast<const BYTE *>(pending), sizeof(pending) - 1);
+    static constexpr char pending[] =
+        "{\"schema\":1,\"state\":\"staging\",\"system_activated\":false,"
+        "\"ownership\":\"fresh_directory\"}\r\n";
+    static constexpr char complete[] =
+        "{\"schema\":1,\"state\":\"staged\",\"system_activated\":false,"
+        "\"provider\":\"not_ready\"}\r\n";
+    if (!storage.add("PREPARE.json", reinterpret_cast<const BYTE *>(pending), sizeof(pending) - 1))
+        return 24;
     for (const auto &p : payloads) {
-        if (!ok || p.os != os)
+        if (p.os != os)
             continue;
-        Blob b = {};
-        ok = resource(p, b) && storage.write(p.path, b.data, b.bytes, p.sha);
+        Blob blob{};
+        if (!resource(p, blob) || !storage.add(p.path, blob.data, blob.bytes, p.sha))
+            return 24;
     }
-    const char complete[] = "{\"schema\":1,\"state\":\"staged\",\"system_activated\":false,"
-                            "\"provider\":\"not_ready\"}\r\n";
-    ok = ok && storage.write("RESULT.json", reinterpret_cast<const BYTE *>(complete),
-                             sizeof(complete) - 1);
-    if (ok && transaction.commit())
-        return setup::lifecycle::prepare_shared(static_cast<setup::Os>(os), payloads) ? 10 : 27;
-    return transaction.rollback() ? 25 : 26;
+    if (!storage.add("RESULT.json", reinterpret_cast<const BYTE *>(complete),
+                     sizeof(complete) - 1) ||
+        !storage.begin(cancel))
+        return 24;
+    if (cancel)
+        return storage.cancel() ? 17 : 26;
+    // A flushed binding owns partial files across process death. Preserve that
+    // recovery state on I/O failure; never claim rollback of an uncertain write.
+    if (!storage.copy() || !storage.commit() || !storage.finish())
+        return 26;
+    return setup::lifecycle::ensure_prepared(static_cast<setup::Os>(os), payloads) ? 10 : 27;
 }
 unsigned run(bool stage_only, int action) {
     OSVERSIONINFOA version = {};
@@ -275,19 +149,111 @@ unsigned run(bool stage_only, int action) {
         setup::select_os(version.dwPlatformId, version.dwMajorVersion, version.dwMinorVersion);
     if (os == setup::Os::unsupported)
         return 20;
+    // Wait for ownership before observing mutable device/journal state. The
+    // startup executor may finish a phase while this continuation is waiting.
+    setup::SetupLock lock(os, 90000);
+    if (!lock.acquired())
+        return 28;
+    const auto global_presence = setup::global::presence();
+    // A recorded removal can temporarily leave no present PCI devnode.
+    // Component journals still verify the exact original device identity and
+    // ownership before recovery; new installation always requires one adapter.
+    const bool recovery =
+        action == 0 || action == 1 || action == 2 || action == 5 || action == 6 || action == 8 ||
+        (action < 0 && !stage_only && global_presence == setup::global::Presence::present);
     Devices devices;
-    if (!devices.exactly_one())
+    if (!devices.exactly_one(recovery))
         return 21;
     if (!all_payloads(static_cast<unsigned>(os)))
         return 22;
-    // Descriptors are deliberately false until system ICD/D3D implementations
-    // are integrated and independently verified. Staging is never installation.
-    SetupLock lock(os);
-    if (!lock.acquired())
-        return 28;
+    const auto staging_presence = setup::staging::pending();
+    if (staging_presence == setup::staging::Presence::error)
+        return 29;
+    if (staging_presence == setup::staging::Presence::present) {
+        if (global_presence != setup::global::Presence::absent)
+            return 29;
+        const bool cancel = action == 1 || action == 2 ||
+                            setup::staging::cancelling() == setup::staging::Presence::present;
+        if (!cancel && action != -1 && action != 0)
+            return 29;
+        if (!cancel && !stage_only && !setup::providers(os).ready())
+            return 30;
+        const unsigned staged = stage(static_cast<unsigned>(os), cancel);
+        if (staged != 10 || stage_only)
+            return staged;
+    }
+    auto global_action = [&](setup::global::Request request) -> unsigned {
+        if (global_presence == setup::global::Presence::absent &&
+            request == setup::global::Request::start) {
+            if (!setup::providers(os).ready())
+                return 30;
+            // Resume an owned staging commit interrupted before its initial
+            // component journal. Preparation verifies its durable before-images;
+            // never adopt an arbitrary directory or discard a corrupt journal.
+            if (!setup::lifecycle::ensure_prepared(os, payloads))
+                return 27;
+        }
+        setup::global::Intent intent = setup::global::Intent::install;
+        const auto result = setup::global::act(os, request, payloads, intent);
+        using setup::lifecycle::Result;
+        if (result == Result::provider_not_ready)
+            return 30;
+        if (result == Result::pending_reboot)
+            return 11;
+        if (result == Result::conflict)
+            return 29;
+        if (result != Result::complete)
+            return 26;
+        return intent == setup::global::Intent::rollback    ? 12
+               : intent == setup::global::Intent::uninstall ? 13
+                                                            : 0;
+    };
+    if (global_presence == setup::global::Presence::error)
+        return 29;
+    if (global_presence == setup::global::Presence::present && !stage_only) {
+        auto request = setup::global::Request::resume;
+        if (action < 0)
+            request = setup::global::Request::start;
+        if (action == 1 || action == 6)
+            request = setup::global::Request::rollback;
+        if (action == 2)
+            request = setup::global::Request::uninstall;
+        if (action == 3)
+            request = setup::global::Request::upgrade;
+        if (action == 7)
+            request = setup::global::Request::repair;
+        if (action == 8)
+            request = setup::global::Request::recover;
+        return global_action(request);
+    }
+    if (action == 7 || action == 8)
+        return 29; // Repair requires an owned complete-system installation.
+    if (action >= 4) {
+        auto result = setup::driver::act(os, action - 4, payloads);
+        using setup::driver::Result;
+        if (result == Result::verified)
+            return 14;
+        if (result == Result::restored)
+            return 15;
+        if (result == Result::pending_reboot)
+            return 16;
+        return result == Result::conflict ? 29 : result == Result::invalid ? 31 : 26;
+    }
     if (action >= 0) {
-        auto result =
-            setup::lifecycle::act(os, static_cast<setup::lifecycle::Action>(action), payloads);
+        if (action == 0) {
+            setup::lifecycle::Win32Store owner;
+            static setup::lifecycle::Journal journal;
+            if (setup::lifecycle::verified_owner(owner)) {
+                if (owner.load(journal)) {
+                    if (setup::lifecycle::is_system_journal(journal))
+                        return global_action(setup::global::Request::start);
+                } else {
+                    return global_action(setup::global::Request::start);
+                }
+            }
+        }
+        auto result = setup::lifecycle::system_act(
+            os, static_cast<setup::lifecycle::Action>(action), payloads);
         using setup::lifecycle::Result;
         if (result == Result::provider_not_ready)
             return 30;
@@ -299,9 +265,139 @@ unsigned run(bool stage_only, int action) {
             return 29;
         return 26;
     }
-    if (!stage_only)
+    if (stage_only)
+        return stage(static_cast<unsigned>(os));
+    if (!setup::providers(os).ready())
         return 30;
-    return stage(static_cast<unsigned>(os));
+    char root[MAX_PATH];
+    if (!setup::lifecycle::owner_path(root))
+        return 24;
+    DWORD attributes = GetFileAttributesA(root);
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+        if (GetLastError() != ERROR_FILE_NOT_FOUND)
+            return 24;
+        unsigned result = stage(static_cast<unsigned>(os));
+        if (result != 10)
+            return result;
+    }
+    return global_action(setup::global::Request::start);
+}
+template <class Function> bool api(Function &function, HMODULE module, const char *name) {
+    FARPROC address = GetProcAddress(module, name);
+    if (!address)
+        return false;
+    static_assert(sizeof(address) == sizeof(function));
+    CopyMemory(&function, &address, sizeof(function));
+    return true;
+}
+bool restart_windows() {
+    OSVERSIONINFOA version{};
+    version.dwOSVersionInfoSize = sizeof(version);
+    if (!GetVersionExA(&version))
+        return false;
+    if (version.dwPlatformId == VER_PLATFORM_WIN32_NT) {
+        // Resolve NT security APIs only on NT. The unified executable remains
+        // loadable on Win98 without adding NT-only loader requirements.
+        HMODULE advapi = GetModuleHandleA("advapi32.dll");
+        decltype(&OpenProcessToken) open = nullptr;
+        decltype(&LookupPrivilegeValueA) lookup = nullptr;
+        decltype(&AdjustTokenPrivileges) adjust = nullptr;
+        if (!advapi || !api(open, advapi, "OpenProcessToken") ||
+            !api(lookup, advapi, "LookupPrivilegeValueA") ||
+            !api(adjust, advapi, "AdjustTokenPrivileges"))
+            return false;
+        HANDLE raw = nullptr;
+        if (!open(GetCurrentProcess(), TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY, &raw))
+            return false;
+        Handle token(raw);
+        TOKEN_PRIVILEGES privileges{};
+        privileges.PrivilegeCount = 1;
+        privileges.Privileges[0].Attributes = SE_PRIVILEGE_ENABLED;
+        if (!lookup(nullptr, "SeShutdownPrivilege", &privileges.Privileges[0].Luid))
+            return false;
+        SetLastError(ERROR_SUCCESS);
+        if (!adjust(token.get(), FALSE, &privileges, 0, nullptr, nullptr) ||
+            GetLastError() != ERROR_SUCCESS)
+            return false;
+    }
+    return ExitWindowsEx(EWX_REBOOT, 0) != FALSE;
+}
+void show_result(unsigned code) {
+    if (code == 11 || code == 16) {
+        const int choice =
+            MessageBoxA(nullptr,
+                        "DreamGPU needs to restart Windows to continue. Setup will resume "
+                        "automatically.\r\n\r\nRestart now?",
+                        "DreamGPU setup", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+        if (choice == IDYES && !restart_windows())
+            MessageBoxA(
+                nullptr,
+                "Windows could not restart automatically. Restart Windows to continue setup.",
+                "DreamGPU setup", MB_OK | MB_ICONWARNING);
+        return;
+    }
+    const char *message =
+        "DreamGPU could not finish setup. The saved installation state can be resumed by running "
+        "setup again. Use /rollback to restore the previous installation.";
+    UINT icon = MB_ICONWARNING;
+    switch (code) {
+        case 0:
+            message = "DreamGPU is installed. OpenGL, Glide 2 and Direct3D are ready for "
+                      "applications system-wide.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 10:
+            message = "DreamGPU files have been staged. The GPU has not been activated.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 12:
+            message = "The previous installation has been restored.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 13:
+            message = "DreamGPU has been removed and the previous system drivers restored.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 14:
+            message = "The display driver was verified. This diagnostic does not activate the "
+                      "complete GPU system.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 15:
+            message = "The previous display driver was restored.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 17:
+            message = "Unfinished DreamGPU setup files have been removed.";
+            icon = MB_ICONINFORMATION;
+            break;
+        case 20:
+            message = "This installer supports 32-bit Windows 98, Windows 2000 and Windows XP.";
+            break;
+        case 21:
+            message = "Setup could not identify a single DreamGPU adapter. Check this virtual "
+                      "machine's GPU configuration.";
+            break;
+        case 22:
+            message = "The installer payload failed its integrity check. Obtain an intact DreamGPU "
+                      "installer.";
+            break;
+        case 23:
+            message = "The setup command is invalid. Run dreamgpu.exe to install, or use "
+                      "/continue, /upgrade, /repair, /rollback, /uninstall or /recover.";
+            break;
+        case 28:
+            message = "DreamGPU setup is already running.";
+            break;
+        case 29:
+            message = "Setup stopped because a file, driver or pending system operation conflicts "
+                      "with its saved state. Resolve the conflict before continuing.";
+            break;
+        case 30:
+            message = "This development build does not yet enable complete system installation.";
+            break;
+    }
+    MessageBoxA(nullptr, message, "DreamGPU setup", MB_OK | icon);
 }
 } // namespace
 extern "C" void WINAPI WinMainCRTStartup() {
@@ -322,10 +418,10 @@ extern "C" void WINAPI WinMainCRTStartup() {
             ++command;
         if (!*command)
             break;
-        char arg[16];
+        char arg[24];
         unsigned n = 0;
         while (*command && *command != ' ' && *command != '\t') {
-            if (n < 15)
+            if (n < 23)
                 arg[n++] = *command;
             else
                 valid = false;
@@ -334,13 +430,23 @@ extern "C" void WINAPI WinMainCRTStartup() {
         arg[n] = 0;
         if (!lstrcmpiA(arg, "/stage"))
             staging = true;
-        else if (!lstrcmpiA(arg, "/continue") || !lstrcmpiA(arg, "/rollback") ||
-                 !lstrcmpiA(arg, "/uninstall") || !lstrcmpiA(arg, "/upgrade")) {
+        else if (!lstrcmpiA(arg, "/driver-install") || !lstrcmpiA(arg, "/driver-resume") ||
+                 !lstrcmpiA(arg, "/driver-restore")) {
+            if (action >= 0)
+                valid = false;
+            action = !lstrcmpiA(arg, "/driver-install")  ? 4
+                     : !lstrcmpiA(arg, "/driver-resume") ? 5
+                                                         : 6;
+        } else if (!lstrcmpiA(arg, "/continue") || !lstrcmpiA(arg, "/rollback") ||
+                   !lstrcmpiA(arg, "/uninstall") || !lstrcmpiA(arg, "/upgrade") ||
+                   !lstrcmpiA(arg, "/repair") || !lstrcmpiA(arg, "/recover")) {
             if (action >= 0)
                 valid = false;
             action = !lstrcmpiA(arg, "/continue")    ? 0
                      : !lstrcmpiA(arg, "/rollback")  ? 1
                      : !lstrcmpiA(arg, "/uninstall") ? 2
+                     : !lstrcmpiA(arg, "/repair")    ? 7
+                     : !lstrcmpiA(arg, "/recover")   ? 8
                                                      : 3;
         } else if (!lstrcmpiA(arg, "/silent"))
             silent = true;
@@ -354,6 +460,22 @@ extern "C" void WINAPI WinMainCRTStartup() {
         case 0:
             result = "{\"schema\":1,\"exit_code\":0,\"status\":\"activated\",\"system_activated\":"
                      "true}\r\n";
+            break;
+        case 14:
+            result = "{\"schema\":1,\"exit_code\":14,\"status\":\"driver_verified\",\"driver_"
+                     "verified\":true,\"system_activated\":false}\r\n";
+            break;
+        case 15:
+            result = "{\"schema\":1,\"exit_code\":15,\"status\":\"driver_restored\",\"system_"
+                     "activated\":false}\r\n";
+            break;
+        case 16:
+            result = "{\"schema\":1,\"exit_code\":16,\"status\":\"driver_pending_reboot\",\"system_"
+                     "activated\":false}\r\n";
+            break;
+        case 31:
+            result = "{\"schema\":1,\"exit_code\":31,\"status\":\"driver_capture_invalid\","
+                     "\"system_activated\":false}\r\n";
             break;
         case 11:
             result = "{\"schema\":1,\"exit_code\":11,\"status\":\"pending_reboot\",\"system_"
@@ -404,8 +526,12 @@ extern "C" void WINAPI WinMainCRTStartup() {
             result = "{\"schema\":1,\"exit_code\":25,\"status\":\"stage_failed_rolled_back\","
                      "\"system_activated\":false}\r\n";
             break;
+        case 17:
+            result = "{\"schema\":1,\"exit_code\":17,\"status\":\"stage_cancelled\",\"system_"
+                     "activated\":false}\r\n";
+            break;
         case 26:
-            result = "{\"schema\":1,\"exit_code\":26,\"status\":\"rollback_incomplete\",\"system_"
+            result = "{\"schema\":1,\"exit_code\":26,\"status\":\"operation_incomplete\",\"system_"
                      "activated\":false}\r\n";
             break;
         case 30:
@@ -415,7 +541,6 @@ extern "C" void WINAPI WinMainCRTStartup() {
     }
     receipt(result);
     if (!silent)
-        MessageBoxA(nullptr, result, "DreamGPU setup",
-                    MB_OK | (code == 10 ? MB_ICONINFORMATION : MB_ICONERROR));
+        show_result(code);
     ExitProcess(code);
 }

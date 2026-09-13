@@ -3,13 +3,13 @@
  * forwarding +commands. Its original launcher maps EngineType1=software,
  * 2=OpenGL,3=Direct3D; -gl does not replace this persisted selector.
  * Select only the existing authorized Half-Life installation and verify the
- * exact native minidriver setting before a benchmark can launch.
+ * ordinary system OpenGL setting before a benchmark can launch.
  */
 #ifndef DG_RETAIL_SETTINGS_H
 #define DG_RETAIL_SETTINGS_H
 static const char *ConfigureRetailGl(void) {
     static const char path[] = "Software\\Valve\\Half-Life\\Settings";
-    static const char driver[] = "dgpugl.dll";
+    static const char driver[] = "default";
     HKEY key;
     DWORD value = 0, type = 0, bytes = sizeof(value), i;
     char actual[sizeof(driver)];
@@ -22,16 +22,10 @@ static const char *ConfigureRetailGl(void) {
         error = "retail-engine-setting-invalid";
         goto done;
     }
-    /* This launcher unconditionally prepends gldrv\\ to EngineGLDriver.
-     * Keep its private minidriver identical to the installed common frontend,
-     * including after a package update; no Windows system DLL is replaced. */
-    value = GetFileAttributesA("C:\\SIERRA\\Half-Life\\gldrv");
-    if (value == INVALID_FILE_ATTRIBUTES || !(value & FILE_ATTRIBUTE_DIRECTORY) ||
-        !CopyFileA("C:\\SIERRA\\Half-Life\\dgpugl.dll", "C:\\SIERRA\\Half-Life\\gldrv\\dgpugl.dll",
-                   FALSE)) {
-        error = "retail-minidriver-install-failed";
-        goto done;
-    }
+    /* Retail742 hl.exe selector at 0x443680 maps the literal "default"
+     * to a null driver name. hw.dll at 0x10072880 then loads opengl32.dll
+     * through the normal Windows loader. Other names receive gldrv\\.
+     * Evidence: target/follow-through/half-life-system-loader-v1. */
     /* Keep resolution/window preferences; the fixed command supplies
      * -windowed. No renderer binary, game data or unrelated settings change. */
     value = 2;

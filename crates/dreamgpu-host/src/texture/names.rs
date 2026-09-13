@@ -18,12 +18,14 @@ impl Entry {
 #[repr(C)]
 pub struct Namespace {
     pub refs: u32,
+    pub lists: *mut crate::lists::Namespace,
     pub entries: [Entry; SLOTS],
 }
 impl Default for Namespace {
     fn default() -> Self {
         Self {
             refs: 0,
+            lists: core::ptr::null_mut(),
             entries: [Entry::EMPTY; SLOTS],
         }
     }
@@ -171,6 +173,7 @@ pub unsafe extern "C" fn dreamgpu_texture_namespace_unref(
                 unref(&*memory, t);
             }
         }
+        crate::lists::namespace_release(&*memory, (*ns).lists);
         ((*memory).free)((*memory).opaque, ns.cast());
     }
 }

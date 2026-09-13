@@ -3,7 +3,9 @@
 
 Does not install/register display drivers or change registry hives. The source
 must be stopped and hash-pinned. Guest SetupAPI installation and cold activation
-are separate gates. Only the exact existing benchmark WIN.INI entry is migrated.
+are separate gates. Only the exact existing benchmark WIN.INI entry is migrated. Optional removals
+name application provider DLLs with their exact previous SHA256; absence is
+verified on the independent copy and recorded. Windows/WinNT paths are refused.
 """
 
 # Keep this CLI runnable by its file path as well as through the scripts package.
@@ -18,6 +20,7 @@ import json
 from pathlib import Path, PurePosixPath
 import struct
 import subprocess
+from scripts.fixtures import app_removals, guest_tools
 
 
 def digest(path):
@@ -52,6 +55,7 @@ def migrate_startup(data):
 
 def stage(manifest_path, output, qemu_img):
     data = json.loads(Path(manifest_path).read_text())
+    probe_helpers = guest_tools.validate(data)
     source = Path(data['source']).resolve(strict=True)
     if digest(source) != data['source_sha256']:
         raise ValueError('Stopped source identity differs')
@@ -65,10 +69,11 @@ def stage(manifest_path, output, qemu_img):
             raise ValueError('Require unique bounded absolute FAT paths')
         if str(guest).casefold().startswith('/windows/'):
             raise ValueError('Application staging cannot replace Windows files or registry hives')
-        if local.stat().st_size > 16 * 1024 * 1024 or digest(local) != entry['sha256']:
+        if local.stat().st_size > 32 * 1024 * 1024 or digest(local) != entry['sha256']:
             raise ValueError('Application file identity/bound differs')
         destinations.add(str(guest).casefold())
         files.append((local, str(guest), entry['sha256']))
+    removals = app_removals.parse(data.get('removals', []), destinations)
     if '/dgpuben.exe' not in destinations:
         raise ValueError('Explicit source-built runner is required')
     info = json.loads(command(qemu_img, 'info', '--output=json', '--backing-chain', source))
@@ -79,7 +84,9 @@ def stage(manifest_path, output, qemu_img):
     output.mkdir(parents=True, exist_ok=False)
     raw = output / 'stage.raw'
     report = {'schema': 1, 'state': 'staging', 'source': str(source),
-              'source_sha256': data['source_sha256'], 'files': [], 'driver_registration_changed': False}
+              'source_sha256': data['source_sha256'], 'files': [], 'removals': [],
+              'probe_helpers': probe_helpers,
+              'driver_registration_changed': False}
     try:
         command(qemu_img, 'convert', '-O', 'raw', source, raw)
         with raw.open('rb') as stream:
@@ -88,6 +95,7 @@ def stage(manifest_path, output, qemu_img):
                 raise ValueError('Require a primary FAT32 partition')
             offset = struct.unpack_from('<I', mbr, 454)[0] * 512
         volume = str(raw) + '@@' + str(offset)
+        app_removals.apply(removals, app_removals.Fat(volume, command), report['removals'])
         before = command('mtype', '-i', volume, '::/WINDOWS/WIN.INI')
         after = migrate_startup(before)
         (output / 'WIN.INI.before').write_bytes(before)

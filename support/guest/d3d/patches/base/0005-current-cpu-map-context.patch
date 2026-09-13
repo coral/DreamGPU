@@ -1,0 +1,21 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -35,6 +35,7 @@
+ #endif
+ 
+ #include "dg-wine-row-copy.h"
++#include "dg-wine-map-policy.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(d3d_surface);
+ WINE_DECLARE_DEBUG_CHANNEL(d3d_perf);
+@@ -2894,7 +2895,9 @@
+         if (surface->resource.usage & WINED3DUSAGE_DYNAMIC)
+             WARN_(d3d_perf)("Mapping a dynamic surface without WINED3D_MAP_DISCARD.\n");
+ 
+-        if (surface->resource.device->d3d_initialized)
++        if (surface->resource.device->d3d_initialized
++                && !dg_wine_cpu_map_is_current(surface->resource.usage,
++                    surface->locations, surface->resource.map_binding))
+             context2 = context_acquire(surface->resource.device, NULL);
+         
+         if (context2)

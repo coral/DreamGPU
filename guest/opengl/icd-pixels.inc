@@ -42,26 +42,26 @@ static bool Integer(GLenum pname, GLint *value) {
     return true;
 }
 static void Set(ULONG function, GLenum map, GLsizei count, const void *values, ULONG unit) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!Map(map)) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (count < 1 || (ULONG)count > MapLimit ||
         (map <= GL_PIXEL_MAP_I_TO_A && ((ULONG)count & ((ULONG)count - 1))) || !values) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     GLint maximum;
     if (!Integer(GL_MAX_PIXEL_MAP_TABLE, &maximum))
         return;
     if (maximum < 1 || maximum > (GLint)MapLimit) {
-        JglSetError(GL_INVALID_OPERATION);
+        JglCommandError(GL_INVALID_OPERATION);
         return;
     }
     if (count > maximum) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     ULONG args[2] = {map, (ULONG)count};
@@ -110,16 +110,16 @@ static void Get(ULONG function, GLenum map, void *values, bool narrow) {
 }
 } // namespace dg_icd_pixels
 static void APIENTRY AliasPixelZoom(GLfloat x, GLfloat y) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     GLfloat values[2] = {x, y};
     JglScalarVector(FEnum_glPixelZoom, 2, values);
 }
 static void APIENTRY AliasPixelTransferf(GLenum pname, GLfloat value) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!dg_icd_pixels::Transfer(pname)) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     ULONG words[2] = {pname, 0};
@@ -127,10 +127,10 @@ static void APIENTRY AliasPixelTransferf(GLenum pname, GLfloat value) {
     JglScalarVector(FEnum_glPixelTransferf, 2, words);
 }
 static void APIENTRY AliasPixelTransferi(GLenum pname, GLint value) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (!dg_icd_pixels::Transfer(pname)) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     ULONG words[2] = {pname, (ULONG)value};
@@ -156,14 +156,14 @@ static void APIENTRY AliasGetPixelMapusv(GLenum map, GLushort *values) {
 }
 
 static void APIENTRY AliasCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type) {
-    if (!JglReady())
+    if (!JglCommandReady())
         return;
     if (type != GL_COLOR && type != GL_DEPTH && type != GL_STENCIL) {
-        JglSetError(GL_INVALID_ENUM);
+        JglCommandError(GL_INVALID_ENUM);
         return;
     }
     if (width < 0 || height < 0) {
-        JglSetError(GL_INVALID_VALUE);
+        JglCommandError(GL_INVALID_VALUE);
         return;
     }
     if (!width || !height)

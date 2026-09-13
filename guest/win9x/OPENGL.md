@@ -282,31 +282,30 @@ the real Linux Win98 gate passes with `win98-bulk-v1`.
 Bulk evidence (`benchmarks/retro-gpu/win98-bulk.json`, historical Juke evidence) pins the exact
 package and output; this is a correctness result, not a game FPS claim.
 
-## Diagnostic system ICD discovery
+## System ICD discovery
 
-Cargo also builds a separate `diagnostics/icd/drivers/win98/dgpumini.drv`.
-`prepare.rs` copies the already prepared VMDISP tree into `vmdisp9x-icd`,
-applies the hash-checked `support/guest/win9x/patches/icd.json` transaction,
-and adds `dg-icd16.h`. CMake keeps all Watcom scratch objects in that separate
-tree. The diagnostic pair uses the exact production VxD; the production
-`control.c` and driver are not patched by this transaction.
+The single production `drivers/win98/dgpumini.drv` includes the checked
+`support/guest/win9x/patches/icd.json` transaction and `dg-icd16.h` in its prepared
+VMDISP source. CMake builds that source once; there is no separate diagnostic
+driver tree or non-ICD package. The VxD and flat C++ rendering policies remain
+the same implementation.
 
-The diagnostic `Control(OPENGL_GETINFO)` returns version 2, driver version 1 and
-ANSI name `DGPUICD`, matching the proposed Win98 registry value under
+`Control(OPENGL_GETINFO)` returns version 2, driver version 1, and ANSI name
+`DGPUICD`, matching the Win98 registry value under
 `HKLM\Software\Microsoft\Windows\CurrentVersion\OpenGLDrivers`.
 Its ABI follows pinned VMDISP `control.c` at
 `718b3d51a1532fe1ba2e133cf76186f1a609d35e`: two 32-bit fields and 262 ANSI bytes,
-270 bytes total. Watcom compile-time checks verify that layout against the
-donor struct and verify a 32-bit far output pointer with 16-bit near pointers.
-The donor's 532-byte buffer comment does not describe this struct and must not
-be confused with NT's wide-name response. Null and segment-crossing output
-ranges reject before `_fmemcpy`; caller buffer capacity is a loader ABI
-precondition because `Control` supplies no length.
+270 bytes total. Watcom compile-time checks verify the donor layout and a 32-bit
+far output pointer with 16-bit near pointers. The donor's 532-byte comment does
+not describe this struct and must not be confused with NT's wide-name response.
+Null and segment-crossing output ranges reject before `_fmemcpy`; caller buffer
+capacity is a loader ABI precondition because `Control` supplies no length.
 
-`tests/guest/win9x/test_icd16.py` tests the actual writer under sanitizers,
-including segment endpoints and untouched trailing bytes, and applies the
-actual checked donor patch. The pinned Watcom diagnostic target builds. These
-are source/build gates; this diagnostic adapter does not establish system
-loader activation or complete OpenGL coverage, and does not register an ICD.
-The small C helper is retained specifically for Watcom's 16-bit far-pointer ABI;
-it contains no allocated resources or flat rendering policy.
+`tests/guest/win9x/test_icd16.py` exercises the actual writer under sanitizers,
+including segment endpoints and untouched trailing bytes. The production Watcom
+target builds, and a frozen independent Win98 fixture passed normal Microsoft
+system loading with 8,192 exact pixels and two swaps. Registry restoration was
+verified separately. The C helper remains specifically for Watcom's 16-bit
+far-pointer ABI; it contains no allocated resources or flat rendering policy.
+API coverage, retained native-provider limitations, and installation transaction
+readiness remain explicit in the OpenGL documentation and installer receipts.
