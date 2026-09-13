@@ -1,0 +1,21 @@
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -94,6 +94,8 @@
+  * Slower GL version which extracts info about each vertex in turn
+  */
+ 
++#include "dg-wine-vertex-array.h"
++
+ /* Context activation is done by the caller. */
+ static void drawStridedSlow(const struct wined3d_device *device, struct wined3d_context *context,
+         const struct wined3d_stream_info *si, UINT NumVertexes, GLenum glPrimType,
+@@ -117,6 +119,9 @@
+     UINT num_untracked_materials;
+     DWORD tex_mask = 0;
+ 
++    if (dg_wine_draw_transformed(device, context, si, NumVertexes, glPrimType, idxData, idxSize, startIdx))
++        return;
++
+     TRACE_(d3d_perf)("Using slow vertex array code\n");
+ 
+     /* Variable Initialization */

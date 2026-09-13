@@ -129,7 +129,27 @@ unsafe fn close(s: *mut Resources, p: &Platform, client: u32) {
     }
 }
 
+#[derive(Default)]
+pub(crate) struct Lookup {
+    key: Option<(u32, u32, u32)>,
+    indices: (usize, usize),
+}
+
 unsafe fn execute(s: *mut Resources, p: &Platform, r: &[u8], pw: u32, ph: u32) -> Result<(), u32> {
+    unsafe { execute_cached(s, p, r, pw, ph, &mut Lookup::default()) }
+}
+
+// A cache lives for one immutable batch. Scalar/data/query callbacks can mutate
+// native GL resources but cannot create/delete this context/drawable registry.
+// Every lifecycle/presentation/unknown opcode invalidates before its callback.
+pub(crate) unsafe fn execute_cached(
+    s: *mut Resources,
+    p: &Platform,
+    r: &[u8],
+    pw: u32,
+    ph: u32,
+    lookup: &mut Lookup,
+) -> Result<(), u32> {
     if r.len() < 32 {
         return Err(BATCH);
     }
@@ -143,8 +163,24 @@ unsafe fn execute(s: *mut Resources, p: &Platform, r: &[u8], pw: u32, ph: u32) -
     let context_id = word(12)?;
     let drawable_id = word(16)?;
     let flags = word(20)?;
-    let ci = unsafe { context(s, client, context_id) };
-    let di = unsafe { drawable(s, client, drawable_id) };
+    let reusable = matches!(op, 6 | 10 | 11);
+    let key = (client, context_id, drawable_id);
+    let cached = reusable && lookup.key == Some(key);
+    if !cached {
+        lookup.key = None;
+    }
+    let ci = if cached {
+        Some(lookup.indices.0)
+    } else {
+        unsafe { context(s, client, context_id) }
+    };
+    // Draw commands use the context's associated drawable below, not the
+    // optional header identity. Avoid searching both versions on every record.
+    let di = if reusable {
+        None
+    } else {
+        unsafe { drawable(s, client, drawable_id) }
+    };
     let code = |n| if n == 0 { Ok(()) } else { Err(n) };
     match op {
         9 => {
@@ -253,7 +289,11 @@ unsafe fn execute(s: *mut Resources, p: &Platform, r: &[u8], pw: u32, ph: u32) -
         6 | 7 | 10 | 11 => {
             let ci = ci.ok_or(CONTEXT)?;
             let associated = unsafe { (*s).contexts[ci].drawable };
-            let di = unsafe { drawable(s, client, associated) }.ok_or(DRAWABLE)?;
+            let di = if cached {
+                lookup.indices.1
+            } else {
+                unsafe { drawable(s, client, associated) }.ok_or(DRAWABLE)?
+            };
             let (id, width, height) = unsafe {
                 (
                     (*s).drawables[di].id,
@@ -263,6 +303,10 @@ unsafe fn execute(s: *mut Resources, p: &Platform, r: &[u8], pw: u32, ph: u32) -
             };
             if drawable_id != 0 && drawable_id != id {
                 return Err(DRAWABLE);
+            }
+            if reusable {
+                lookup.key = Some(key);
+                lookup.indices = (ci, di);
             }
             if op == 7 && flags & 16 != 0 && (word(32)? != width || word(36)? != height) {
                 return Err(DRAWABLE);

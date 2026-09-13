@@ -15,6 +15,11 @@ this repository is on that build path.
 These are build component selectors. Runtime graphics paths and performance
 behavior do not depend on them.
 
+Use the native runtime and guest installer from the same build. Current guest
+frontends send packed 16-bit texture pixels directly and require the matching
+native support; the updated native runtime also accepts older byte-pixel packets.
+
+
 Native QEMU defaults to x86_64, i386, PPC and m68k system binaries. An explicit
 `DREAMGPU_QEMU_TARGETS` comma-separated list narrows the native target set.
 `DREAMGPU_NATIVE_DEBUG=1` retains QEMU debugging information;

@@ -1,0 +1,680 @@
+--- a/src/mesa/main/mtypes.h
++++ b/src/mesa/main/mtypes.h
+@@ -801,6 +801,14 @@
+     * as well as image copies.
+     */
+    struct st_compressed_data* compressed_data;
++
++   /* Compatibility 1D border image: native-format texels, including both
++    * independently writable border texels. Uploaded to a GPU sampling atlas.
++    * This is image storage, not GL_TEXTURE_BORDER_COLOR or query shadow state.
++    */
++   uint8_t *border_data;
++   size_t border_bytes;
++   struct pipe_transfer border_transfer;
+ };
+ 
+ 
+--- a/src/mesa/main/teximage.c
++++ b/src/mesa/main/teximage.c
+@@ -3224,7 +3224,7 @@
+       /* check that the texture won't take too much memory, etc */
+       sizeOK = st_TestProxyTexImage(ctx, proxy_target(target),
+                                     0, level, texFormat, 1,
+-                                    width, height, depth);
++                                    (target == GL_TEXTURE_1D || target == GL_PROXY_TEXTURE_1D) && border && width >= 2 ? width - 2 : width, height, depth);
+    }
+ 
+    if (_mesa_is_proxy_texture(target)) {
+@@ -3267,7 +3267,7 @@
+        * reliable but slightly incorrect hardware rendering instead of
+        * rarely-tested software fallback rendering.
+        */
+-      if (border) {
++      if (border && target != GL_TEXTURE_1D) {
+          strip_texture_border(target, &width, &height, &depth, unpack,
+                               &unpack_no_border);
+          border = 0;
+@@ -4633,13 +4633,13 @@
+ 
+    if (!st_TestProxyTexImage(ctx, proxy_target(target),
+                              0, level, texFormat, 1,
+-                             width, height, 1)) {
++                             target == GL_TEXTURE_1D && border ? width - 2 : width, height, 1)) {
+       _mesa_error(ctx, GL_OUT_OF_MEMORY,
+                   "glCopyTexImage%uD(image too large)", dims);
+       return;
+    }
+ 
+-   if (border) {
++   if (border && target != GL_TEXTURE_1D) {
+       x += border;
+       width -= border * 2;
+       if (dims == 2) {
+--- a/src/mesa/main/ff_fragment_shader.c
++++ b/src/mesa/main/ff_fragment_shader.c
+@@ -87,6 +87,9 @@
+       GLuint enabled:1;
+       GLuint source_index:4;   /**< TEXTURE_x_INDEX */
+       GLuint shadow:1;
++      GLuint border_width;
++      GLuint border_max_level;
++      GLenum border_wrap, border_min, border_mag;
+ 
+       /***
+        * These are taken from struct gl_tex_env_combine_packed
+@@ -276,6 +279,15 @@
+       key->unit[i].source_index = texObj->TargetIndex;
+ 
+       const struct gl_sampler_object *samp = _mesa_get_samplerobj(ctx, i);
++      const struct gl_texture_image *im = _mesa_base_tex_image(texObj);
++      if (im && im->border_data) {
++         key->unit[i].border_width = im->Width2;
++         key->unit[i].border_max_level = texObj->_MipmapComplete ?
++            texObj->_MaxLevel - texObj->Attrib.BaseLevel : 0;
++         key->unit[i].border_wrap = samp->Attrib.WrapS;
++         key->unit[i].border_min = samp->Attrib.MinFilter;
++         key->unit[i].border_mag = samp->Attrib.MagFilter;
++      }
+       if (samp->Attrib.CompareMode == GL_COMPARE_R_TO_TEXTURE) {
+          const GLenum format = _mesa_texture_base_format(texObj);
+          key->unit[i].shadow = (format == GL_DEPTH_COMPONENT ||
+@@ -742,6 +754,125 @@
+ /**
+  * Generate instruction for getting a texture source term.
+  */
++/* Fetch a true image texel, including independent left/right borders.
++ * Coordinates address the private atlas, never invoke its sampler filtering.
++ */
++static nir_def *
++border_fetch(struct texenv_fragment_program *p, unsigned unit, nir_def *level,
++             nir_def *size, nir_def *index, bool repeat, bool edge)
++{
++   nir_builder *b = p->b;
++   nir_def *row = nir_imul_imm(b, level, 2);
++   if (repeat) {
++      index = nir_imod(b, index, size);
++   } else if (edge) {
++      index = nir_iclamp(b, index, nir_imm_int(b, 0), nir_iadd_imm(b, size, -1));
++   } else {
++      nir_def *left = nir_ilt_imm(b, index, 0);
++      nir_def *right = nir_ige(b, index, size);
++      row = nir_iadd(b, row, nir_b2i32(b, nir_ior(b, left, right)));
++      index = nir_bcsel(b, left, nir_imm_int(b, 0),
++                 nir_bcsel(b, right, nir_imm_int(b, 1), index));
++   }
++   nir_variable *var = p->sampler_vars[unit];
++   if (!var) {
++      var = nir_variable_create(b->shader, nir_var_uniform,
++         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
++         ralloc_asprintf(b->shader, "border_sampler_%u", unit));
++      var->data.binding = unit;
++      var->data.explicit_binding = true;
++      p->sampler_vars[unit] = var;
++   }
++   nir_deref_instr *deref = nir_build_deref_var(b, var);
++   nir_tex_instr *tex = nir_tex_instr_create(b->shader, 3);
++   tex->op = nir_texop_txf;
++   tex->dest_type = nir_type_float32;
++   tex->texture_index = unit;
++   tex->sampler_index = unit;
++   tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
++   tex->coord_components = 2;
++   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &deref->def);
++   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_coord, nir_vec2(b, index, row));
++   tex->src[2] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
++   nir_def_init(&tex->instr, &tex->def, 4, 32);
++   nir_builder_instr_insert(b, &tex->instr);
++   return &tex->def;
++}
++
++static nir_def *
++border_sample_level(struct texenv_fragment_program *p, unsigned unit,
++                    nir_def *s, nir_def *level, bool linear)
++{
++   nir_builder *b = p->b;
++   unsigned width = p->state->unit[unit].border_width;
++   GLenum wrap = p->state->unit[unit].border_wrap;
++   bool repeat = wrap == GL_REPEAT;
++   bool edge = wrap == GL_CLAMP_TO_EDGE || wrap == GL_MIRRORED_REPEAT ||
++               wrap == GL_MIRROR_CLAMP_TO_EDGE_EXT;
++   bool outside = wrap == GL_CLAMP_TO_BORDER || wrap == GL_MIRROR_CLAMP_TO_BORDER_EXT;
++   if (wrap == GL_MIRRORED_REPEAT)
++      s = nir_fsub(b, nir_imm_float(b, 1), nir_fabs(b,
++         nir_fadd_imm(b, nir_fmul_imm(b, nir_ffract(b, nir_fmul_imm(b, s, .5f)), 2), -1)));
++   else if (wrap == GL_MIRROR_CLAMP_EXT || wrap == GL_MIRROR_CLAMP_TO_EDGE_EXT ||
++            wrap == GL_MIRROR_CLAMP_TO_BORDER_EXT)
++      s = nir_fabs(b, s);
++   nir_def *size = nir_imax(b, nir_ushr(b, nir_imm_int(b, width), level),
++                          nir_imm_int(b, 1));
++   if (repeat)
++      s = nir_ffract(b, s);
++   else if (outside)
++      s = nir_fclamp(b, s, nir_imm_float(b, -1), nir_imm_float(b, 2));
++   else
++      s = nir_fsat(b, s); /* GL_CLAMP: clamp before forming filter footprint. */
++   nir_def *u = nir_fmul(b, s, nir_i2f32(b, size));
++   if (!linear) {
++      nir_def *i = nir_f2i32(b, nir_ffloor(b, u));
++      /* NEAREST at clamped s=1 selects the final interior texel. */
++      if (!repeat && !outside)
++         i = nir_imin(b, i, nir_iadd_imm(b, size, -1));
++      return border_fetch(p, unit, level, size, i, repeat, edge);
++   }
++   u = nir_fadd_imm(b, u, -0.5f);
++   nir_def *i = nir_f2i32(b, nir_ffloor(b, u));
++   nir_def *a = border_fetch(p, unit, level, size, i, repeat, edge);
++   nir_def *c = border_fetch(p, unit, level, size, nir_iadd_imm(b, i, 1), repeat, edge);
++   return nir_flrp(b, a, c, nir_ffract(b, u));
++}
++
++static nir_def *
++load_border_texture(struct texenv_fragment_program *p, unsigned unit,
++                    nir_def *coords)
++{
++   nir_builder *b = p->b;
++   GLenum min = p->state->unit[unit].border_min;
++   bool mag_linear = p->state->unit[unit].border_mag == GL_LINEAR;
++   bool min_linear = min == GL_LINEAR || min == GL_LINEAR_MIPMAP_NEAREST ||
++                     min == GL_LINEAR_MIPMAP_LINEAR;
++   bool mip = min != GL_NEAREST && min != GL_LINEAR;
++   bool mip_linear = min == GL_NEAREST_MIPMAP_LINEAR || min == GL_LINEAR_MIPMAP_LINEAR;
++   float crossover = mag_linear &&
++      (min == GL_NEAREST_MIPMAP_NEAREST || min == GL_NEAREST_MIPMAP_LINEAR) ? .5f : 0;
++   nir_def *s = nir_fdiv(b, nir_channel(b, coords, 0), nir_channel(b, coords, 3));
++   nir_def *u = nir_fmul_imm(b, s, p->state->unit[unit].border_width);
++   nir_def *rho = nir_fmax(b, nir_fabs(b, nir_ddx(b, u)), nir_fabs(b, nir_ddy(b, u)));
++   nir_def *lambda = nir_flog2(b, rho);
++   nir_def *mag = border_sample_level(p, unit, s, nir_imm_int(b, 0), mag_linear);
++   nir_def *lod = nir_fclamp(b, lambda, nir_imm_float(b, 0),
++      nir_imm_float(b, p->state->unit[unit].border_max_level));
++   nir_def *lev = mip ? nir_f2i32(b, mip_linear ? nir_ffloor(b, lod) :
++                     nir_fceil(b, nir_fadd_imm(b, lod, -.5f))) : nir_imm_int(b, 0);
++   nir_def *value = border_sample_level(p, unit, s, lev, min_linear);
++   if (mip_linear) {
++      nir_def *next = nir_imin(b, nir_iadd_imm(b, lev, 1),
++                        nir_imm_int(b, p->state->unit[unit].border_max_level));
++      nir_def *other = border_sample_level(p, unit, s, next, min_linear);
++      value = nir_flrp(b, value, other, nir_ffract(b, lod));
++   }
++   BITSET_SET(b->shader->info.textures_used, unit);
++   BITSET_SET(b->shader->info.samplers_used, unit);
++   return nir_bcsel(b, nir_fle_imm(b, lambda, crossover), mag, value);
++}
++
+ static void
+ load_texture(struct texenv_fragment_program *p, GLuint unit)
+ {
+@@ -760,6 +891,11 @@
+    if (!p->state->unit[unit].enabled) {
+       p->src_texture[unit] = nir_imm_zero(p->b, 4, 32);
+       return ;
++   }
++
++   if (p->state->unit[unit].border_width) {
++      p->src_texture[unit] = load_border_texture(p, unit, texcoord);
++      return;
+    }
+ 
+    bool tex_is_array = false;
+--- a/src/mesa/state_tracker/st_texture.c
++++ b/src/mesa/state_tracker/st_texture.c
+@@ -298,6 +298,17 @@
+ 
+    DBG("%s \n", __func__);
+ 
++   if (stImage->border_data) {
++      if (y || z || h != 1 || d != 1 || x > stImage->Width ||
++          w > stImage->Width - x)
++         return NULL;
++      assert(!stImage->border_transfer.usage);
++      stImage->border_transfer.usage = usage;
++      stImage->border_transfer.stride =
++         _mesa_format_row_stride(stImage->TexFormat, stImage->Width);
++      *transfer = &stImage->border_transfer;
++      return stImage->border_data + x * _mesa_get_format_bytes(stImage->TexFormat);
++   }
+    if (!stImage->pt)
+       return NULL;
+ 
+@@ -333,6 +344,42 @@
+    struct gl_texture_object *stObj = stImage->TexObject;
+    struct pipe_transfer **transfer;
+ 
++   if (stImage->border_data) {
++      if (stImage->border_transfer.usage & PIPE_MAP_WRITE) {
++         /* Update the existing GPU image in place. Other shared contexts may
++          * still have a sampler view bound to it; replacing the resource for
++          * a subimage write would leave those views sampling stale texels.
++          */
++         struct pipe_resource *atlas = stObj->pt;
++         unsigned first = stObj->validated_first_level;
++         unsigned level = stImage->Level;
++         const struct gl_texture_image *base_image = first < MAX_TEXTURE_LEVELS ?
++            stObj->Image[0][first] : NULL;
++         if (atlas && base_image && atlas->target == PIPE_TEXTURE_2D &&
++             level >= first && level <= stObj->validated_last_level &&
++             atlas->format == st_mesa_format_to_pipe_format(st, stImage->TexFormat) &&
++             stImage->Width2 <= atlas->width0 &&
++             stImage->Width2 == u_minify(base_image->Width2, level - first) &&
++             2 * (level - first) + 1 < atlas->height0) {
++            unsigned bpp = _mesa_get_format_bytes(stImage->TexFormat);
++            struct pipe_box box;
++            u_box_2d(0, 2 * (level - first), stImage->Width2, 1, &box);
++            pipe->texture_subdata(pipe, atlas, 0, 0, &box,
++                                 stImage->border_data + bpp, stImage->Width2 * bpp, 0);
++            u_box_2d(0, 2 * (level - first) + 1, 1, 1, &box);
++            pipe->texture_subdata(pipe, atlas, 0, 0, &box,
++                                 stImage->border_data, bpp, 0);
++            box.x = 1;
++            pipe->texture_subdata(pipe, atlas, 0, 0, &box,
++                                 stImage->border_data + (stImage->Width - 1) * bpp, bpp, 0);
++         } else {
++            stObj->needs_validation = true;
++         }
++         BITSET_SET(st->ctx->NewDriverState, ST_NEW_FS_SAMPLER_VIEWS);
++      }
++      stImage->border_transfer.usage = 0;
++      return;
++   }
+    if (stObj->Immutable)
+       slice += stObj->Attrib.MinLayer;
+    transfer = &stImage->transfer[slice + stImage->Face].transfer;
+--- a/src/mesa/state_tracker/st_cb_texture.c
++++ b/src/mesa/state_tracker/st_cb_texture.c
+@@ -475,6 +475,12 @@
+       pipe_resource_reference(&stImage->pt, NULL);
+    }
+ 
++   if (stImage->border_data) {
++      free(stImage->border_data);
++      util_border_storage_release(stImage->border_bytes);
++   }
++   stImage->border_bytes = 0;
++   stImage->border_data = NULL;
+    free(stImage->transfer);
+    stImage->transfer = NULL;
+    stImage->num_transfers = 0;
+@@ -1189,6 +1195,23 @@
+ 
+    stObj->needs_validation = true;
+ 
++   if (texImage->Border && stObj->Target == GL_TEXTURE_1D) {
++      assert(!_mesa_is_format_compressed(texImage->TexFormat));
++      size_t bytes = _mesa_format_row_stride(texImage->TexFormat, width);
++      if (!util_border_storage_reserve(bytes)) {
++         _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border storage budget");
++         return false;
++      }
++      texImage->border_data = calloc(1, bytes);
++      if (texImage->border_data)
++         texImage->border_bytes = bytes;
++      else
++         util_border_storage_release(bytes);
++      if (!texImage->border_data)
++         _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border image storage");
++      return texImage->border_data != NULL;
++   }
++
+    compressed_tex_fallback_allocate(st, stImage);
+    const bool allowAllocateToStObj = !stObj->pt ||
+                                      stObj->pt->last_level == 0 ||
+@@ -2670,6 +2693,8 @@
+           texImage->TexFormat != MESA_FORMAT_ETC1_RGB8);
+ 
+    st_flush_bitmap_cache(st);
++   if (texImage->border_data)
++      goto cpu_transfer;
+    if (st->force_compute_based_texture_transfer)
+       goto non_blit_transfer;
+ 
+@@ -2910,7 +2935,7 @@
+             unpack.Invert = GL_TRUE;
+          }
+ 
+-         if (stImage->pt->target == PIPE_TEXTURE_1D_ARRAY) {
++         if (stImage->TexObject->Target == GL_TEXTURE_1D_ARRAY) {
+             dstRowStride = transfer->layer_stride;
+          }
+          else {
+@@ -3011,6 +3036,9 @@
+    assert(!_mesa_is_format_etc2(texImage->TexFormat) &&
+           !_mesa_is_format_astc_2d(texImage->TexFormat) &&
+           texImage->TexFormat != MESA_FORMAT_ETC1_RGB8);
++
++   if (stImage->border_data && rb && rb->texture)
++      goto fallback;
+ 
+    if (!rb || !rb->texture || !stImage->pt) {
+       debug_printf("%s: null rb or stImage\n", __func__);
+@@ -3148,6 +3176,73 @@
+  * the texture object should be ready for rendering.
+  * \return GL_TRUE for success, GL_FALSE for failure (out of mem)
+  */
++/* Each mip owns a full CPU image. GPU rows 2*l contain its interior;
++ * rows 2*l+1 contain its two border texels. Resource mip levels are not used:
++ * Gallium halves resource dimensions, which cannot represent N/2^l + 2.
++ * Only compatibility 1D images use this path. All filtering remains on GPU.
++ */
++static bool
++finalize_border_1d(struct gl_context *ctx, struct pipe_context *pipe,
++                   struct gl_texture_object *obj)
++{
++   struct st_context *st = st_context(ctx);
++   unsigned base = obj->Attrib.BaseLevel;
++   if (base >= MAX_TEXTURE_LEVELS || obj->lastLevel < base ||
++       obj->lastLevel >= MAX_TEXTURE_LEVELS)
++      return false;
++   const struct gl_texture_image *first = obj->Image[0][base];
++   if (!first || !first->Width2)
++      return false;
++   unsigned levels = obj->lastLevel - base + 1;
++   for (unsigned l = 0; l < levels; ++l) {
++      const struct gl_texture_image *im = obj->Image[0][base+l];
++      if (!im || !im->border_data || im->Border != 1 ||
++          im->Width2 != u_minify(first->Width2, l) ||
++          im->Width != im->Width2 + 2 || im->TexFormat != first->TexFormat)
++         return false;
++   }
++   enum pipe_format fmt = st_mesa_format_to_pipe_format(st, first->TexFormat);
++   unsigned bpp = _mesa_get_format_bytes(first->TexFormat);
++   uint64_t bytes = (uint64_t)MAX2(first->Width2, 2) * (2 * levels) * bpp;
++   if (bytes > SIZE_MAX || !util_border_storage_reserve(bytes)) {
++      _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border atlas budget");
++      return false;
++   }
++   struct pipe_resource *atlas = st_texture_create(st, PIPE_TEXTURE_2D, fmt, 0,
++       MAX2(first->Width2, 2), 2 * levels, 1, 1, 0, 0,
++       PIPE_BIND_SAMPLER_VIEW, false, PIPE_COMPRESSION_FIXED_RATE_NONE);
++   if (!atlas) {
++      util_border_storage_release(bytes);
++      _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border sampling image");
++      return false;
++   }
++   if (!util_border_resource_register(atlas, bytes)) {
++      pipe_resource_reference(&atlas, NULL);
++      util_border_storage_release(bytes);
++      _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border atlas ownership");
++      return false;
++   }
++   for (unsigned l = 0; l < levels; ++l) {
++      const struct gl_texture_image *im = obj->Image[0][base+l];
++      struct pipe_box box;
++      u_box_2d(0, 2*l, im->Width2, 1, &box);
++      pipe->texture_subdata(pipe, atlas, 0, 0, &box,
++                            im->border_data + bpp, im->Width2*bpp, 0);
++      u_box_2d(0, 2*l+1, 1, 1, &box);
++      pipe->texture_subdata(pipe, atlas, 0, 0, &box, im->border_data, bpp, 0);
++      box.x = 1;
++      pipe->texture_subdata(pipe, atlas, 0, 0, &box,
++                            im->border_data + (im->Width-1)*bpp, bpp, 0);
++   }
++   pipe_resource_reference(&obj->pt, atlas);
++   pipe_resource_reference(&atlas, NULL);
++   st_texture_release_all_sampler_views(st, obj);
++   obj->needs_validation = false;
++   obj->validated_first_level = base;
++   obj->validated_last_level = obj->lastLevel;
++   return true;
++}
++
+ GLboolean
+ st_finalize_texture(struct gl_context *ctx,
+                     struct pipe_context *pipe,
+@@ -3174,7 +3269,10 @@
+     * changed.  But if the GL_BASE_LEVEL or GL_MAX_LEVEL change to something we
+     * haven't looked at, then we do need to look at those new images.
+     */
++   const struct gl_texture_image *base_image = _mesa_base_tex_image(tObj);
+    if (!tObj->needs_validation &&
++       (!base_image || !base_image->border_data ||
++        tObj->Attrib.BaseLevel == tObj->validated_first_level) &&
+        tObj->Attrib.BaseLevel >= tObj->validated_first_level &&
+        tObj->lastLevel <= tObj->validated_last_level) {
+       return GL_TRUE;
+@@ -3189,6 +3287,8 @@
+                                        [tObj->Attrib.BaseLevel]);
+    if (!firstImage)
+       return false;
++   if (firstImage->border_data)
++      return finalize_border_1d(ctx, pipe, tObj);
+ 
+    /* If both firstImage and tObj point to a texture which can contain
+     * all active images, favour firstImage.  Note that because of the
+--- a/src/mesa/state_tracker/st_sampler_view.c
++++ b/src/mesa/state_tracker/st_sampler_view.c
+@@ -525,6 +525,11 @@
+    assert(templ.u.tex.first_layer <= templ.u.tex.last_layer);
+    assert(templ.u.tex.first_level <= templ.u.tex.last_level);
+    templ.target = gl_target_to_pipe(texObj->Target);
++   if (_mesa_base_tex_image(texObj)->border_data) {
++      templ.target = PIPE_TEXTURE_2D;
++      templ.u.tex.first_level = templ.u.tex.last_level = 0;
++      templ.u.tex.first_layer = templ.u.tex.last_layer = 0;
++   }
+ 
+    templ.swizzle_r = GET_SWZ(swizzle, 0);
+    templ.swizzle_g = GET_SWZ(swizzle, 1);
+@@ -566,11 +571,12 @@
+       assert(texObj->pt == view->texture);
+       assert(!check_sampler_swizzle(st, texObj, view, glsl130_or_later));
+       assert(format == view->format);
+-      assert(gl_target_to_pipe(texObj->Target) == view->target);
+-      assert(texObj->level_override >= 0 ||
++      assert((_mesa_base_tex_image(texObj)->border_data ? PIPE_TEXTURE_2D :
++              gl_target_to_pipe(texObj->Target)) == view->target);
++      assert(_mesa_base_tex_image(texObj)->border_data || texObj->level_override >= 0 ||
+              texObj->Attrib.MinLevel +
+              texObj->Attrib.BaseLevel == view->u.tex.first_level);
+-      assert(texObj->level_override >= 0 || last_level(texObj) == view->u.tex.last_level);
++      assert(_mesa_base_tex_image(texObj)->border_data || texObj->level_override >= 0 || last_level(texObj) == view->u.tex.last_level);
+       assert(texObj->layer_override >= 0 ||
+              texObj->Attrib.MinLayer == view->u.tex.first_layer);
+       assert(texObj->layer_override >= 0 || last_layer(texObj) == view->u.tex.last_layer);
+--- a/src/mesa/main/draw_validate.c
++++ b/src/mesa/main/draw_validate.c
+@@ -72,6 +72,18 @@
+     */
+    ctx->DrawGLError = GL_INVALID_OPERATION;
+ 
++   bool programmable = ctx->VertexProgram.Enabled || ctx->FragmentProgram.Enabled;
++   for (unsigned stage = 0; stage < MESA_SHADER_STAGES; ++stage)
++      programmable |= shader->CurrentProgram[stage] != NULL;
++   if (programmable) {
++      for (unsigned unit = 0; unit < ctx->Const.MaxCombinedTextureImageUnits; ++unit) {
++         const struct gl_texture_object *obj = ctx->Texture.Unit[unit]._Current;
++         if (obj && obj->Image[0][obj->Attrib.BaseLevel] &&
++             obj->Image[0][obj->Attrib.BaseLevel]->border_data)
++            return;
++      }
++   }
++
+    if (!ctx->DrawBuffer ||
+        ctx->DrawBuffer->_Status != GL_FRAMEBUFFER_COMPLETE_EXT) {
+       ctx->DrawGLError = GL_INVALID_FRAMEBUFFER_OPERATION;
+--- a/src/mesa/main/state.c
++++ b/src/mesa/main/state.c
+@@ -46,6 +46,7 @@
+ #include "program/prog_parameter.h"
+ #include "shaderobj.h"
+ #include "state.h"
++#include "draw_validate.h"
+ #include "stencil.h"
+ #include "texenvprogram.h"
+ #include "texobj.h"
+@@ -636,6 +637,8 @@
+    }
+ 
+  out:
++   if (new_state & (_NEW_TEXTURE_OBJECT | _NEW_TEXTURE_STATE | _NEW_PROGRAM))
++      _mesa_update_valid_to_render_state(ctx);
+    new_prog_state |= update_program_constants(ctx);
+ 
+    ctx->NewState |= new_prog_state;
+--- a/src/mesa/state_tracker/st_atom_texture.c
++++ b/src/mesa/state_tracker/st_atom_texture.c
+@@ -68,6 +68,16 @@
+    texObj = ctx->Texture.Unit[texUnit]._Current;
+    assert(texObj);
+ 
++   const struct gl_texture_image *im = _mesa_base_tex_image(texObj);
++   if (im && im->border_data) {
++      bool programmable = ctx->VertexProgram.Enabled || ctx->FragmentProgram.Enabled;
++      for (unsigned stage = 0; stage < MESA_SHADER_STAGES; ++stage)
++         programmable |= ctx->_Shader->CurrentProgram[stage] != NULL;
++      if (programmable) {
++         _mesa_error(ctx, GL_INVALID_OPERATION, "private GL1.1 border image with programmable shader");
++         return NULL;
++      }
++   }
+    GLenum target = texObj->Target;
+ 
+    if (unlikely(target == GL_TEXTURE_BUFFER))
+--- a/src/gallium/auxiliary/util/u_helpers.c
++++ b/src/gallium/auxiliary/util/u_helpers.c
+@@ -34,6 +34,7 @@
+ #include "util/os_time.h"
+ #include "util/perf/cpu_trace.h"
+ #include <inttypes.h>
++#include "util/simple_mtx.h"
+ 
+ /**
+  * This function is used to copy an array of pipe_vertex_buffer structures,
+@@ -590,3 +591,99 @@
+ 
+    return out;
+ }
++
++/* Border CPU images and GPU atlases have a separate 64 MiB process budget.
++ * Registry entries belong to exact pipe_resource identities, never templates.
++ * Final resource release (including cached views in other contexts) alone
++ * retires atlas credit. No work is added to texture sampling or map/unmap.
++ */
++#define BORDER_STORAGE_LIMIT (64u * 1024u * 1024u)
++#define BORDER_RESOURCE_BUCKETS 1024u
++struct border_resource_entry {
++   struct border_resource_entry *next;
++   uintptr_t resource;
++   size_t bytes;
++};
++static simple_mtx_t border_storage_mutex = SIMPLE_MTX_INITIALIZER;
++static size_t border_storage_bytes;
++static unsigned border_resource_count;
++static struct border_resource_entry *border_resources[BORDER_RESOURCE_BUCKETS];
++
++bool
++util_border_storage_reserve(size_t bytes)
++{
++   simple_mtx_lock(&border_storage_mutex);
++   bool ok = bytes <= BORDER_STORAGE_LIMIT - border_storage_bytes;
++   if (ok)
++      border_storage_bytes += bytes;
++   simple_mtx_unlock(&border_storage_mutex);
++   return ok;
++}
++
++void
++util_border_storage_release(size_t bytes)
++{
++   simple_mtx_lock(&border_storage_mutex);
++   assert(bytes <= border_storage_bytes);
++   border_storage_bytes -= bytes;
++   simple_mtx_unlock(&border_storage_mutex);
++}
++
++bool
++util_border_resource_register(struct pipe_resource *resource, size_t bytes)
++{
++   if (!util_border_storage_reserve(sizeof(struct border_resource_entry)))
++      return false;
++   struct border_resource_entry *entry = malloc(sizeof(*entry));
++   if (!entry) {
++      util_border_storage_release(sizeof(*entry));
++      return false;
++   }
++   unsigned bucket = ((uintptr_t)resource >> 6) % BORDER_RESOURCE_BUCKETS;
++   entry->resource = (uintptr_t)resource;
++   entry->bytes = bytes;
++   simple_mtx_lock(&border_storage_mutex);
++   for (struct border_resource_entry *old = border_resources[bucket]; old; old = old->next) {
++      if (old->resource == (uintptr_t)resource) {
++         simple_mtx_unlock(&border_storage_mutex);
++         free(entry);
++         util_border_storage_release(sizeof(*entry));
++         return false;
++      }
++   }
++   entry->next = border_resources[bucket];
++   border_resources[bucket] = entry;
++   p_atomic_inc(&border_resource_count);
++   simple_mtx_unlock(&border_storage_mutex);
++   return true;
++}
++
++void *
++util_border_resource_detach(uintptr_t resource)
++{
++   if (!p_atomic_read(&border_resource_count))
++      return NULL;
++   unsigned bucket = ((uintptr_t)resource >> 6) % BORDER_RESOURCE_BUCKETS;
++   simple_mtx_lock(&border_storage_mutex);
++   struct border_resource_entry **at = &border_resources[bucket];
++   while (*at && (*at)->resource != resource)
++      at = &(*at)->next;
++   struct border_resource_entry *entry = *at;
++   if (entry) {
++      *at = entry->next;
++      p_atomic_dec(&border_resource_count);
++   }
++   simple_mtx_unlock(&border_storage_mutex);
++   return entry;
++}
++
++void
++util_border_resource_retire(void *token)
++{
++   struct border_resource_entry *entry = token;
++   if (!entry)
++      return;
++   size_t bytes = entry->bytes + sizeof(*entry);
++   free(entry);
++   util_border_storage_release(bytes);
++}
+--- a/src/gallium/auxiliary/util/u_helpers.h
++++ b/src/gallium/auxiliary/util/u_helpers.h
+@@ -36,6 +36,12 @@
+ #ifdef __cplusplus
+ extern "C" {
+ #endif
++
++bool util_border_storage_reserve(size_t bytes);
++void util_border_storage_release(size_t bytes);
++bool util_border_resource_register(struct pipe_resource *resource, size_t bytes);
++void *util_border_resource_detach(uintptr_t resource);
++void util_border_resource_retire(void *token);
+ 
+ void util_set_vertex_buffers_mask(struct pipe_vertex_buffer *dst,
+                                   uint32_t *enabled_buffers,
+--- a/src/gallium/auxiliary/util/u_inlines.h
++++ b/src/gallium/auxiliary/util/u_inlines.h
+@@ -41,6 +41,7 @@
+ #include "util/u_upload_mgr.h"
+ #include "util/box.h"
+ #include "util/u_math.h"
++#include "util/u_helpers.h"
+ 
+ 
+ #ifdef __cplusplus
+@@ -180,7 +181,12 @@
+    do {
+       struct pipe_resource *next = res->next;
+ 
++      /* Detach identity before freeing the address. Retire this exact token
++       * afterward, even if destruction reenters or another thread reuses it.
++       */
++      void *retirement = util_border_resource_detach((uintptr_t)res);
+       res->screen->resource_destroy(res->screen, res);
++      util_border_resource_retire(retirement);
+       res = next;
+    } while (pipe_reference_described(res ? &res->reference : NULL,
+                                      NULL,

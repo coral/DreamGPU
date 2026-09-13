@@ -14,7 +14,7 @@ inline DWORD GetModuleFileNameA(void *, char *out, DWORD size) {
 using namespace setup;
 using namespace setup::lifecycle;
 constexpr char Owner[] = "C:\\WINDOWS\\DreamGPU";
-constexpr char RunKey[] = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+constexpr char RunKey[] = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 static Image value(const char *s) {
     Image out;
     out.exists = 1;
@@ -188,7 +188,7 @@ int main() {
         assert(resume.prepare() && resume.arm());
         fake_win32::keys[fake_win32::canon(RunKey)]["dreamgpu.runtime"] = {REG_SZ, {'f', 0}};
         assert(!resume.arm() && !resume.finish());
-        // Windows consuming the owned RunOnce command is expected, not a conflict.
+        // An externally removed owned startup command can still be retired safely.
         fake_win32::keys[fake_win32::canon(RunKey)].erase("dreamgpu.runtime");
         assert(resume.finish());
     }
@@ -212,7 +212,7 @@ int main() {
     }
     printf("PASS actual runtime boot bridge: %u staging failure points, typed "
            "journal "
-           "tails/ownership/deletion; RunOnce %u mutation boundaries with exact "
+           "tails/ownership/deletion; Run %u mutation boundaries with exact "
            "prior recovery\n",
            prepare_points, resume_points);
 }

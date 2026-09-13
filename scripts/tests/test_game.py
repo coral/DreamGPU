@@ -16,6 +16,27 @@ spec=importlib.util.spec_from_file_location('dg_game',(Path(__file__).resolve().
 game=importlib.util.module_from_spec(spec);spec.loader.exec_module(game)
 
 class GameAcceptanceTests(unittest.TestCase):
+    def test_performance_keeps_missing_old_clock_alignment_explicit(self):
+        counters={'elapsed_us':2_000_000,'gl':{'records':1000,'operations':[{'op':7,'count':100}]}}
+        result=game.performance_summary({'boundaries':{'MEASURING':{'host_monotonic_seconds':1}}},{},counters)
+        self.assertEqual(result['submission']['presents_per_second'],50)
+        self.assertEqual(result['submission']['records_per_present'],10)
+        self.assertEqual(result['gpu_streams'],[])
+        self.assertIn('missing',result['frame_window'])
+
+    def test_frame_pacing_uses_measured_window_and_unique_stream_frames(self):
+        bounds={'boundaries':{'MEASURING':{'host_trace_us':1_000_000},'MEASURED':{'host_trace_us':2_000_000}}}
+        def event(ts, stream, generation):return dict(name='gpu.drawable.received',ts=ts,id=stream,value=generation)
+        capture={'dropped':0,'start_us':0,'end_us':3_000_000,'samples':[
+            event(900_000,1,0),event(1_000_000,1,1),event(1_001_000,1,1),
+            event(1_010_000,1,2),event(1_030_000,1,3),event(1_040_000,2,1),event(2_000_000,1,4)]}
+        result=game.performance_summary(bounds,capture)
+        first=result['gpu_streams'][0]
+        self.assertEqual((first['frames'],first['frames_per_second']),(3,3))
+        self.assertEqual((first['interval_ms_p50'],first['interval_ms_p95']),(10,20))
+        capture['dropped']=1
+        self.assertEqual(game.performance_summary(bounds,capture)['gpu_streams'],[])
+
     def test_discovers_actual_anonymous_qemu_dg_gpu_counter_properties(self):
         entries=[[],[{'name':'device[1]','type':'child<dreamgpu>'}],
                  [{'name':'diagnostic-counters','type':'bool'},{'name':'diagnostic-stats','type':'string'}]]

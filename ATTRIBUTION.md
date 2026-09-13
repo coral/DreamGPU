@@ -31,6 +31,26 @@ label is not a replacement for its per-file notices.
 | [JHRobotics](https://github.com/JHRobotics/patcher9x) · `vendor/patcher9x` | `b6e30d4b5a396dcd453b6c8e6733fd5b5cbce59e` | Pinned Win9x patching/reference tooling; not a grant for patched Windows binaries. | MIT with nested support exceptions. [LICENSE](vendor/patcher9x/LICENSE). |
 | [Wine contributors and Silicon Graphics](https://github.com/wine-mirror/wine) · `vendor/wine-glu` | `8f8792fc857ba609b13c6d63839034e0576b0c9f` | Only the SGI mipmap implementation is used by the Glide build. | Used dlls/glu32/mipmap.c: SGI Free Software License B 2.0. Whole Wine repository has other licenses. [Exact source notice](vendor/wine-glu/dlls/glu32/mipmap.c). |
 
+## Pinned Linux graphics provider and launcher
+
+[Mesa](https://gitlab.freedesktop.org/mesa/mesa)26.1.8 is an additional native
+source dependency downloaded by Cargo, rather than a git submodule. The exact
+release archive, SHA256, modified paths and checked patch identities are in
+[support/native/mesa/source.json](support/native/mesa/source.json). It provides
+private hardware OpenGL execution for the Linux QEMU child. Mesa's core library
+uses MIT terms; GLX and other components retain SGI and other per-file terms.
+The pinned archive's `docs/license.rst`, complete `licenses/` tree and source
+headers remain authoritative. The runtime package retains these notices and
+records separately copied host libraries by package/artifact identity. DreamGPU
+patches do not replace original Mesa notices.
+
+The standalone Rust native launcher has its own locked Cargo graph, inventoried
+in [cargo-native-launcher.json](support/attribution/cargo-native-launcher.json).
+It is separate from the workspace graph below; its recorded dependency license
+expressions and notices must accompany the actual linked launcher distribution.
+See [the provider recipe](support/native/mesa/README.md) for source preparation
+and the exact supported graphics contract.
+
 ## Nested source and copied dependencies
 
 | Dependency | Source / pinned revision | License and scope |

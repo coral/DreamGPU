@@ -36,7 +36,7 @@ class Win32Store final {
     char resume_installer_[MAX_PATH]{}, resume_sha_[68]{};
     Os os_ = Os::unsupported;
     UnboundStore unbound_, package_;
-    bool generation_ = false, package_ready_ = false;
+    bool generation_ = false, package_ready_ = false, managed_startup_ = false;
     ServiceStore service_;
     bool unbound_ready_ = false;
     bool unbound_helpers(const Journal &j) {
@@ -62,7 +62,7 @@ class Win32Store final {
 
     const char *stage_ = "init";
     static const char *run_key(const Journal &j) {
-        return j.os == Os::win98 && j.version >= 3
+        return (j.os == Os::win98 && j.version == 3) || (j.os == Os::nt5 && j.version == 4)
                    ? "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
                    : "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
     }
@@ -512,8 +512,7 @@ class Win32Store final {
     template <class Payloads> bool capture(Journal &j, const Payloads &payloads) {
         j = {};
         j.os = os_;
-        if (os_ == Os::win98)
-            j.version = 3;
+        j.version = os_ == Os::win98 ? 3 : 4;
         bool owned = false;
         stage_ = "capture original binding";
         if (!node(j.original))
@@ -1017,6 +1016,9 @@ class Win32Store final {
         }
         return true;
     }
+    void managed_startup(bool enabled) {
+        managed_startup_ = enabled;
+    }
     bool continuation(const char *executable, const char *sha) {
         if (!bounded(executable, MAX_PATH) || !hash(sha) || !hash_match(executable, sha))
             return false;
@@ -1026,13 +1028,19 @@ class Win32Store final {
         return true;
     }
     bool arm_resume(const Journal &j, bool) {
+        // GLOBAL has checked its durable exact G/R registration before invoking
+        // this managed component. It owns reboot continuation, not an older D exe.
+        if (managed_startup_)
+            return true;
+        if (j.version < 3)
+            return false; // Historical RunOnce is retirement-only in new code.
         if (!hash_match(resume_installer_[0] ? resume_installer_ : installer_,
                         resume_installer_[0] ? resume_sha_ : j.installer_sha))
             return false;
         bool ours, prior, missing;
         if (!resume_value(j, ours, prior, missing) || (!ours && !prior && !missing))
             return false;
-        // A persistent Win98 Run entry must not be rewritten from itself.
+        // A persistent Run entry must not be rewritten from itself.
         if (ours) {
             Key key;
             return !RegOpenKeyExA(HKEY_LOCAL_MACHINE, run_key(j), 0, KEY_SET_VALUE, &key.h) &&

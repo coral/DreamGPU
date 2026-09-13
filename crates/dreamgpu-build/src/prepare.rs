@@ -326,6 +326,12 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
         root.join("guest/d3d/wine-map-policy.h"),
         wine.join("wined3d/dg-wine-map-policy.h"),
     )?;
+    for name in ["vertex-pack", "vertex-array"] {
+        copy(
+            root.join(format!("guest/d3d/wine-{name}.h")),
+            wine.join(format!("wined3d/dg-wine-{name}.h")),
+        )?;
+    }
     copy(
         wine.join("ddraw/surface.c"),
         work.join("surface-diagnostic.c"),

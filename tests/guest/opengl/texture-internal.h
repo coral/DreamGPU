@@ -46,6 +46,8 @@ typedef struct {
 BOOL JglReady(void);
 void JglSetError(GLenum);
 BOOL JglData(ULONG, const ULONG *, ULONG, const void *, ULONG);
+BOOL JglQuery(ULONG, const ULONG *, ULONG, void *, ULONG, ULONG *);
+BOOL JglCompiling(void);
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);

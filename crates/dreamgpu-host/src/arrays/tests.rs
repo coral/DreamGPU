@@ -5,6 +5,7 @@ fn note(op: u32, value: usize) {
     SEEN.with(|v| v.borrow_mut().push((op, value)));
 }
 unsafe extern "C" fn get(pname: u32, out: *mut f32) {
+    note(14, pname as usize);
     let count = if pname == GL_CURRENT_NORMAL { 3 } else { 4 };
     for i in 0..count {
         unsafe {
@@ -102,16 +103,24 @@ fn vertex_layout_indices_and_restore_on_gpu_error() {
                 .collect::<Vec<_>>(),
             vec![stride; offsets.len()]
         );
-        let restored = &seen[seen.len() - 5..];
+        let mut expected = vec![(11, GL_CURRENT_COLOR as usize)];
+        if attributes & DG_GL_ARRAY_SECONDARY != 0 {
+            expected.push((11, GL_CURRENT_SECONDARY_COLOR as usize));
+        }
+        expected.extend([
+            (11, GL_CURRENT_NORMAL as usize),
+            (11, GL_CURRENT_TEXTURE_COORDS as usize),
+        ]);
         assert_eq!(
-            restored,
-            [
-                (2, 0),
-                (11, GL_CURRENT_COLOR as usize),
-                (11, GL_CURRENT_SECONDARY_COLOR as usize),
-                (11, GL_CURRENT_NORMAL as usize),
-                (11, GL_CURRENT_TEXTURE_COORDS as usize)
-            ]
+            seen.iter()
+                .copied()
+                .filter(|v| v.0 == 11)
+                .collect::<Vec<_>>(),
+            expected
+        );
+        assert!(
+            seen.iter().position(|v| v.0 == 2).unwrap()
+                < seen.iter().position(|v| v.0 == 11).unwrap()
         );
         let truncated = &data[..data.len() - 1];
         assert_eq!(
@@ -187,4 +196,60 @@ fn extended_arrays_restore_exact_current_index_edge_and_pointer_state_on_error()
         Err(3)
     );
     assert!(SEEN.with(|v| v.borrow().is_empty()));
+}
+
+#[test]
+fn sparse_game_arrays_do_not_query_restore_or_point_at_disabled_attributes() {
+    for (mask, expected) in [
+        (DG_GL_ARRAY_POSITION, vec![]),
+        (
+            DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR | DG_GL_ARRAY_TEXCOORD,
+            vec![GL_CURRENT_COLOR, GL_CURRENT_TEXTURE_COORDS],
+        ),
+        (
+            DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR | DG_GL_ARRAY_SECONDARY | DG_GL_ARRAY_TEXCOORD,
+            vec![
+                GL_CURRENT_COLOR,
+                GL_CURRENT_SECONDARY_COLOR,
+                GL_CURRENT_TEXTURE_COORDS,
+            ],
+        ),
+    ] {
+        SEEN.with(|v| v.borrow_mut().clear());
+        ERROR.with(|v| *v.borrow_mut() = 0);
+        let stride = if mask & DG_GL_ARRAY_SECONDARY != 0 {
+            80
+        } else {
+            64
+        };
+        let data = vec![0; stride * 3];
+        assert_eq!(
+            unsafe {
+                draw(
+                    &api(),
+                    FEnum_glDrawArrays,
+                    &[GL_TRIANGLES, 0, 3, mask, 0, 0, 0, 0],
+                    &data,
+                )
+            },
+            Ok(0)
+        );
+        let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+        let queries = seen
+            .iter()
+            .filter(|v| v.0 == 14)
+            .map(|v| v.1 as u32)
+            .collect::<Vec<_>>();
+        let restored = seen
+            .iter()
+            .filter(|v| v.0 == 11)
+            .map(|v| v.1 as u32)
+            .collect::<Vec<_>>();
+        assert_eq!(queries, expected);
+        assert_eq!(restored, expected);
+        assert_eq!(seen.iter().filter(|v| v.0 == 6).count(), expected.len() + 1);
+        assert_eq!(seen.iter().filter(|v| v.0 == 1).count(), 1);
+        assert_eq!(seen.iter().filter(|v| v.0 == 2).count(), 1);
+        assert_eq!(seen.iter().filter(|v| v.0 == 7).count(), 1);
+    }
 }

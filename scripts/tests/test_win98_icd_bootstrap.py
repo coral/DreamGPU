@@ -26,11 +26,7 @@ inline int lstrcmpiA(const char*a,const char*b){return fake_win32::canon(a).comp
 static unsigned delete_calls;
 inline LONG CountedDelete(HKEY key,const char*path){++delete_calls;return RegDeleteKeyA(key,path);}
 #define RegDeleteKeyA CountedDelete
-inline LONG RegQueryInfoKeyA(HKEY key,void*,void*,void*,DWORD*subkeys,void*,void*,DWORD*values,void*,void*,void*,void*){
- auto path=fake_win32::key_handles[key];*subkeys=0;*values=DWORD(fake_win32::keys[path].size());
- for(auto& entry:fake_win32::keys) if(entry.first.starts_with(path+"\\")) ++*subkeys;
- return 0;
-}
+
 '''
         main = r'''
 int main(){ (void)Inspect;

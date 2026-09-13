@@ -376,7 +376,12 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
         }
     }
     if one && !image {
+        let mut width = 0;
         let mut border = 0;
+        gl!(
+            a,
+            dg_glGetTexLevelParameteriv(GL_TEXTURE_1D, level as i32, GL_TEXTURE_WIDTH, &mut width)
+        );
         gl!(
             a,
             dg_glGetTexLevelParameteriv(
@@ -386,14 +391,26 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
                 &mut border
             )
         );
-        let offset = i64::from(words[2] as i32);
-        let width = i64::from(unsafe { (*t).widths[level] });
-        if !(0..=1).contains(&border)
-            || offset < -i64::from(border)
-            || offset + i64::from(w) > width - i64::from(border)
-        {
-            return DG_GL_ERROR_TEXTURE;
+        let error = gl!(a, dg_glGetError());
+        if error != 0 {
+            unsafe { query::store(errors, error) };
+            return DG_GL_ERROR_HOST;
         }
+        if !(0..=1).contains(&border)
+            || width < 2 * border
+            || width as u32 > DG_GL_MAX_TEXTURE_DIMENSION + 2
+        {
+            return DG_GL_ERROR_HOST;
+        }
+        let offset = i64::from(words[2] as i32);
+        if width != 0
+            && (offset < -i64::from(border) || offset + i64::from(w) > i64::from(width - border))
+        {
+            unsafe { query::store(errors, GL_INVALID_VALUE) };
+            return 0;
+        }
+        // Width zero does not distinguish an undefined array from a defined
+        // empty image. The native copy call selects its actual GL error.
     }
     if one && image {
         gl!(
@@ -445,7 +462,7 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     let e = gl!(a, dg_glGetError());
     if e != 0 {
         unsafe { query::store(errors, e) };
-        return DG_GL_ERROR_TEXTURE;
+        return if one { 0 } else { DG_GL_ERROR_TEXTURE };
     }
     let mut defined_width = w;
     let mut defined_allocation = allocation;
@@ -580,15 +597,28 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
 ) -> u32 {
     let m = unsafe { &*memory };
     let a = unsafe { &*m.api };
+    let one = unsafe { (*t).target } == GL_TEXTURE_1D;
     if w == 0
         || h == 0
-        || w > DG_GL_MAX_TEXTURE_DIMENSION
+        || w > DG_GL_MAX_TEXTURE_DIMENSION + if one { 2 } else { 0 }
         || h > DG_GL_MAX_TEXTURE_DIMENSION
         || level > DG_GL_MAX_TEXTURE_LEVEL
     {
         return GL_INVALID_VALUE;
     }
-    if unsafe { (*t).target } == GL_TEXTURE_1D {
+    if one {
+        let Some(get_level) = a.dg_glGetTexLevelParameteriv else {
+            return GL_INVALID_OPERATION;
+        };
+        let mut border = 0;
+        unsafe { get_level(GL_TEXTURE_1D, level as i32, GL_TEXTURE_BORDER, &mut border) };
+        let error = gl!(a, dg_glGetError());
+        if error != 0 {
+            return error;
+        }
+        if !(0..=1).contains(&border) || w < 2 * border as u32 {
+            return GL_INVALID_OPERATION;
+        }
         let _transfer = match unsafe { crate::pixels::Neutral::new(a) } {
             Ok(v) => v,
             Err(_) => return GL_INVALID_OPERATION,
@@ -601,7 +631,7 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
             dg_glTexSubImage1D(
                 GL_TEXTURE_1D,
                 level as i32,
-                0,
+                -border,
                 w as i32,
                 GL_RGBA,
                 GL_UNSIGNED_BYTE,

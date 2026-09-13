@@ -46,7 +46,7 @@ static void init(Store &store, Journal &j) {
     files[canon("C:\\WINDOWS\\DreamGPU")].directory = true;
     files[canon("C:\\WINDOWS\\DreamGPU\\setup.exe")].bytes = {'p', 'e'};
     files[canon("C:\\WINDOWS\\SYSTEM\\ddraw.dll")].bytes = {'o', 'l', 'd'};
-    keys[canon("Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce")];
+    keys[canon("Software\\Microsoft\\Windows\\CurrentVersion\\Run")];
     resources[100] = {'n', 'e', 'w'};
     j = {};
     j.generation = 1;

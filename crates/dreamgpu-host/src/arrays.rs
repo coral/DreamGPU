@@ -85,12 +85,26 @@ unsafe fn draw(
     let mut texcoord = [0.0f32; 4];
     let mut secondary = [0.0f32; 4];
     unsafe {
-        api.dg_glGetFloatv.unwrap()(GL_CURRENT_COLOR, color.as_mut_ptr());
-        api.dg_glGetFloatv.unwrap()(GL_CURRENT_SECONDARY_COLOR, secondary.as_mut_ptr());
-        api.dg_glGetFloatv.unwrap()(GL_CURRENT_NORMAL, normal.as_mut_ptr());
-        api.dg_glGetFloatv.unwrap()(GL_CURRENT_TEXTURE_COORDS, texcoord.as_mut_ptr());
-        if extended {
+        // GL modifies current values only for enabled arrays. Preserve those
+        // values; disabled packet attributes require no native query or restore.
+        // Khronos glDrawArrays reference, "Attributes that aren't modified
+        // remain well defined."
+        if attributes & DG_GL_ARRAY_COLOR != 0 {
+            api.dg_glGetFloatv.unwrap()(GL_CURRENT_COLOR, color.as_mut_ptr());
+        }
+        if attributes & DG_GL_ARRAY_SECONDARY != 0 {
+            api.dg_glGetFloatv.unwrap()(GL_CURRENT_SECONDARY_COLOR, secondary.as_mut_ptr());
+        }
+        if attributes & DG_GL_ARRAY_NORMAL != 0 {
+            api.dg_glGetFloatv.unwrap()(GL_CURRENT_NORMAL, normal.as_mut_ptr());
+        }
+        if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
+            api.dg_glGetFloatv.unwrap()(GL_CURRENT_TEXTURE_COORDS, texcoord.as_mut_ptr());
+        }
+        if attributes & DG_GL_ARRAY_INDEX != 0 {
             api.dg_glGetDoublev.unwrap()(GL_CURRENT_INDEX, &mut index);
+        }
+        if attributes & DG_GL_ARRAY_EDGE != 0 {
             api.dg_glGetBooleanv.unwrap()(GL_EDGE_FLAG, &mut edge);
         }
         api.dg_glPushClientAttrib.unwrap()(GL_CLIENT_VERTEX_ARRAY_BIT);
@@ -108,23 +122,29 @@ unsafe fn draw(
                 api.dg_glDisableClientState.unwrap()(cap);
             }
         }
-        api.dg_glColorPointer.unwrap()(
-            4,
-            GL_FLOAT,
-            stride as i32,
-            data.as_ptr().add(DG_GL_VERTEX_COLOR as usize).cast(),
-        );
-        api.dg_glNormalPointer.unwrap()(
-            GL_FLOAT,
-            stride as i32,
-            data.as_ptr().add(DG_GL_VERTEX_NORMAL as usize).cast(),
-        );
-        api.dg_glTexCoordPointer.unwrap()(
-            4,
-            GL_FLOAT,
-            stride as i32,
-            data.as_ptr().add(DG_GL_VERTEX_TEXCOORD as usize).cast(),
-        );
+        if attributes & DG_GL_ARRAY_COLOR != 0 {
+            api.dg_glColorPointer.unwrap()(
+                4,
+                GL_FLOAT,
+                stride as i32,
+                data.as_ptr().add(DG_GL_VERTEX_COLOR as usize).cast(),
+            );
+        }
+        if attributes & DG_GL_ARRAY_NORMAL != 0 {
+            api.dg_glNormalPointer.unwrap()(
+                GL_FLOAT,
+                stride as i32,
+                data.as_ptr().add(DG_GL_VERTEX_NORMAL as usize).cast(),
+            );
+        }
+        if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
+            api.dg_glTexCoordPointer.unwrap()(
+                4,
+                GL_FLOAT,
+                stride as i32,
+                data.as_ptr().add(DG_GL_VERTEX_TEXCOORD as usize).cast(),
+            );
+        }
         if attributes & DG_GL_ARRAY_SECONDARY != 0 {
             api.dg_glSecondaryColorPointer.unwrap()(
                 3,
@@ -168,12 +188,22 @@ unsafe fn draw(
         }
         let error = api.dg_glGetError.unwrap()();
         api.dg_glPopClientAttrib.unwrap()();
-        api.dg_glColor4fv.unwrap()(color.as_ptr());
-        api.dg_glSecondaryColor3fv.unwrap()(secondary.as_ptr());
-        api.dg_glNormal3fv.unwrap()(normal.as_ptr());
-        api.dg_glTexCoord4fv.unwrap()(texcoord.as_ptr());
-        if extended {
+        if attributes & DG_GL_ARRAY_COLOR != 0 {
+            api.dg_glColor4fv.unwrap()(color.as_ptr());
+        }
+        if attributes & DG_GL_ARRAY_SECONDARY != 0 {
+            api.dg_glSecondaryColor3fv.unwrap()(secondary.as_ptr());
+        }
+        if attributes & DG_GL_ARRAY_NORMAL != 0 {
+            api.dg_glNormal3fv.unwrap()(normal.as_ptr());
+        }
+        if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
+            api.dg_glTexCoord4fv.unwrap()(texcoord.as_ptr());
+        }
+        if attributes & DG_GL_ARRAY_INDEX != 0 {
             api.dg_glIndexd.unwrap()(index);
+        }
+        if attributes & DG_GL_ARRAY_EDGE != 0 {
             api.dg_glEdgeFlag.unwrap()(edge);
         }
         Ok(error)

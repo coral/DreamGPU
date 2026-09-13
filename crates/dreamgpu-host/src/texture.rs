@@ -120,12 +120,20 @@ unsafe fn upload(
     if level > DG_GL_MAX_TEXTURE_LEVEL as usize
         || w == 0
         || h == 0
-        || w > DG_GL_MAX_TEXTURE_DIMENSION
+        || w > DG_GL_MAX_TEXTURE_DIMENSION + if one { 2 } else { 0 }
         || h > DG_GL_MAX_TEXTURE_DIMENSION
     {
         return Err(11);
     }
-    let allocation = u64::from(w) * u64::from(h) * 4;
+    // Preserve ordinary 8-bit storage admission. Only the newly admitted
+    // high-precision 1D formats need an eight-byte native texel allowance.
+    let texel_bytes =
+        if one && matches!(a[2], GL_RGB10 | GL_RGB12 | GL_RGB16 | GL_RGBA12 | GL_RGBA16) {
+            8
+        } else {
+            4
+        };
+    let allocation = u64::from(w) * u64::from(h) * texel_bytes;
     let old = unsafe { (*texture).levels[level] };
     let new_total = if image {
         let n = unsafe { *total }
@@ -138,7 +146,7 @@ unsafe fn upload(
         n
     } else {
         let (width, height) = unsafe { ((*texture).widths[level], (*texture).heights[level]) };
-        if a[2] > width || a[3] > height || w > width - a[2] || h > height - a[3] {
+        if !one && (a[2] > width || a[3] > height || w > width - a[2] || h > height - a[3]) {
             return Err(11);
         }
         unsafe { *total }
@@ -153,11 +161,54 @@ unsafe fn upload(
         || api.dg_glWaitSync.is_none()
         || api.dg_glDeleteSync.is_none()
         || api.dg_glFenceSync.is_none()
+        || (one && api.dg_glGetTexLevelParameteriv.is_none())
     {
         return Err(3);
     }
     unsafe {
         wait(api, texture, serial);
+    }
+    let mut sub_start = 0;
+    if one && !image {
+        let mut width = 0;
+        let mut border = 0;
+        unsafe {
+            api.dg_glGetTexLevelParameteriv.unwrap()(
+                a[0],
+                level as i32,
+                GL_TEXTURE_WIDTH,
+                &mut width,
+            );
+            api.dg_glGetTexLevelParameteriv.unwrap()(
+                a[0],
+                level as i32,
+                GL_TEXTURE_BORDER,
+                &mut border,
+            );
+        }
+        let error = unsafe { api.dg_glGetError.unwrap()() };
+        if error != 0 {
+            unsafe { *gl_error = error };
+            return Err(11);
+        }
+        let offset = i64::from(a[2] as i32);
+        if !(0..=1).contains(&border)
+            || width < 2 * border
+            || width as u32 > DG_GL_MAX_TEXTURE_DIMENSION + 2
+        {
+            return Err(11);
+        }
+        if width != 0
+            && (offset < -i64::from(border) || offset + i64::from(w) > i64::from(width - border))
+        {
+            // Valid wire command, invalid current GL image rectangle. Consume
+            // it without mutation and preserve the context for later commands.
+            unsafe { *gl_error = GL_INVALID_VALUE };
+            return Ok(());
+        }
+        // Width zero does not distinguish an undefined native array from a
+        // defined empty image. Let the actual native API select its GL error.
+        sub_start = -border;
     }
     let stores = [
         GL_UNPACK_ALIGNMENT,
@@ -174,7 +225,11 @@ unsafe fn upload(
     }
     for (i, key) in stores.iter().enumerate() {
         unsafe {
-            api.dg_glPixelStorei.unwrap()(*key, if i == 0 { 1 } else { 0 });
+            // Captured component words are little-endian regardless of the
+            // client's swap state. Byte payloads ignore native byte swapping.
+            let value =
+                i32::from(i == 0 || (*key == GL_UNPACK_SWAP_BYTES && cfg!(target_endian = "big")));
+            api.dg_glPixelStorei.unwrap()(*key, value);
         }
     }
     let pixels = if bytes == 0 {
@@ -189,7 +244,7 @@ unsafe fn upload(
                 level as i32,
                 a[2] as i32,
                 w as i32,
-                0,
+                a[5] as i32,
                 a[6],
                 a[7],
                 pixels,
@@ -232,8 +287,43 @@ unsafe fn upload(
     }
     let mut error = unsafe { api.dg_glGetError.unwrap()() };
     let allocated = error == 0 && image;
-    if allocated && bytes == 0 {
-        error = unsafe { zero(opaque, texture, level as u32, w, h) };
+    let mut defined_width = w;
+    let mut defined_allocation = allocation;
+    let mut defined_total = new_total;
+    if allocated && one {
+        let mut width = 0;
+        let mut border = 0;
+        unsafe {
+            api.dg_glGetTexLevelParameteriv.unwrap()(
+                a[0],
+                level as i32,
+                GL_TEXTURE_WIDTH,
+                &mut width,
+            );
+            api.dg_glGetTexLevelParameteriv.unwrap()(
+                a[0],
+                level as i32,
+                GL_TEXTURE_BORDER,
+                &mut border,
+            );
+            error = api.dg_glGetError.unwrap()();
+        }
+        if error != 0 || !(0..=1).contains(&border) || width < 2 * border || width as u32 > w {
+            // Keep the conservative allocation charge if native allocation
+            // succeeded but its dimensions could not be established. No
+            // requested dimensions are exposed as an actual native image.
+            defined_width = 0;
+            if error == 0 {
+                error = GL_INVALID_OPERATION;
+            }
+        } else {
+            defined_width = width as u32;
+            defined_allocation = u64::from(defined_width) * texel_bytes;
+            defined_total = new_total - allocation + defined_allocation;
+        }
+    }
+    if allocated && error == 0 && bytes == 0 && defined_width != 0 {
+        error = unsafe { zero(opaque, texture, level as u32, defined_width, h) };
     }
     for (i, key) in stores.iter().enumerate() {
         unsafe {
@@ -242,9 +332,9 @@ unsafe fn upload(
     }
     if allocated {
         unsafe {
-            *total = new_total;
-            (*texture).levels[level] = allocation;
-            (*texture).widths[level] = w;
+            *total = defined_total;
+            (*texture).levels[level] = defined_allocation;
+            (*texture).widths[level] = defined_width;
             (*texture).heights[level] = h;
             if error != 0 {
                 (*texture).undefined_levels |= 1 << level;
@@ -262,10 +352,10 @@ unsafe fn upload(
         unsafe {
             *gl_error = error;
         }
-        return Err(11);
+        return if one && !allocated { Ok(()) } else { Err(11) };
     }
     if !image
-        && a[2] == 0
+        && a[2] as i32 == sub_start
         && a[3] == 0
         && w == unsafe { (*texture).widths[level] }
         && h == unsafe { (*texture).heights[level] }

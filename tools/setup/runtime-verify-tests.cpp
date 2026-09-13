@@ -125,11 +125,19 @@ static Journal initial() {
     mutation = 0;
     return j;
 }
-static void repair_verification() {
+static void repair_verification(Os os, bool cache) {
     unsigned failures = 0;
     for (unsigned failure = 0; failure <= failures; ++failure) {
         auto previous = initial();
         auto &item = previous.items[0];
+        const char *changed_path =
+            cache ? "C:\\WINDOWS\\SYSBCKUP\\ddraw.dll" : "C:\\WINDOWS\\SYSTEM\\ddraw.dll";
+        if (cache) {
+            strcpy(item.path, "SYSBCKUP\\ddraw.dll");
+            fake_win32::files[fake_win32::canon(changed_path)].bytes = {'n', 'e', 'w'};
+        }
+        for (auto &payload : payloads)
+            payload.os = unsigned(os);
         previous.state = State::activated;
         item.phase = Phase::applied;
         item.original_generation = 1;
@@ -140,7 +148,7 @@ static void repair_verification() {
         native_alias::hash(original, item.original.sha);
         item.before = item.original;
         assert(valid(previous));
-        VerifiedRuntimeStore store(Os::nt5, payloads);
+        VerifiedRuntimeStore store(os, payloads);
         assert(store.init("C:\\WINDOWS\\DreamGPU") && store.verify_activation(previous));
         assert(child_test::resumed == 6);
         Journal next = previous;
@@ -149,9 +157,14 @@ static void repair_verification() {
         next.items[0].phase = Phase::prepared;
         next.items[0].before = item.original;
         assert(store.create_generation(2));
-        fake_win32::files[fake_win32::canon("C:\\WINDOWS\\SYSTEM\\ddraw.dll")].bytes = {'o', 'l',
-                                                                                        'd'};
+        fake_win32::files[fake_win32::canon(changed_path)].bytes = {'o', 'l', 'd'};
         fake_win32::mutation = 0;
+        if (cache) {
+            VerifiedRuntimeStore wrong_os(Os::nt5, payloads);
+            assert(wrong_os.init("C:\\WINDOWS\\DreamGPU"));
+            assert(!wrong_os.seed_repair(previous, next, 0x0c));
+            assert(!fake_win32::mutation);
+        }
         assert(!store.seed_repair(previous, next, 0x10));
         assert(!fake_win32::mutation && child_test::resumed == 6);
         if (!failure) {
@@ -175,19 +188,19 @@ static void repair_verification() {
         fake_win32::fail = 0;
         assert(store.seed_repair(previous, next, 0x0c));
         assert(!store.verify_activation(next)); // OS bytes are never an API proof.
-        fake_win32::files[fake_win32::canon("C:\\WINDOWS\\SYSTEM\\ddraw.dll")].bytes = {'n', 'e',
-                                                                                        'w'};
+        fake_win32::files[fake_win32::canon(changed_path)].bytes = {'n', 'e', 'w'};
         assert(store.verify_activation(next) && child_test::resumed == 8);
         assert(child_test::applications[6].ends_with("DGSYS6.EXE"));
         assert(child_test::applications[7].ends_with("DGSYS7.EXE"));
         assert(store.verify_activation(next) && child_test::resumed == 8);
     }
     printf("PASS repair proof seeding: %u mutation failure/recovery points, only D3D6/7 rerun "
-           "for known-original DDRAW, no repeated completed proof\n",
-           failures);
+           "for known-original %s DDRAW, no repeated completed proof\n",
+           failures, cache ? "Win98 cache" : "NT public");
 }
 int main() {
-    repair_verification();
+    repair_verification(Os::nt5, false);
+    repair_verification(Os::win98, true);
     unsigned points;
     {
         auto j = initial();

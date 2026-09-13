@@ -101,8 +101,8 @@ static BOOLEAN BochsInitializeSuitableModeInfo(_In_ PBOCHS_DEVICE_EXTENSION Devi
             continue;
         if (BochsAvailableResolutions[i].YResolution > DeviceExtension->MaxYResolution)
             continue;
-        if (BochsAvailableResolutions[i].XResolution * BochsAvailableResolutions[i].YResolution *
-                4 >
+        if ((ULONGLONG)BochsAvailableResolutions[i].XResolution *
+                BochsAvailableResolutions[i].YResolution * 4 >
             DeviceExtension->VramSize64K * 64 * 1024)
             continue;
         DeviceExtension->AvailableModeInfo[ModeCount++] = BochsAvailableResolutions[i];
@@ -120,7 +120,10 @@ static BOOLEAN BochsInitializeSuitableModeInfo(_In_ PBOCHS_DEVICE_EXTENSION Devi
 CODE_SEG("PAGE")
 static BOOLEAN BochsGetControllerInfo(_Inout_ PBOCHS_DEVICE_EXTENSION DeviceExtension) {
     USHORT Version;
-    WCHAR ChipType[5];
+    static const WCHAR ChipType[] = L"DreamGPU";
+    static const WCHAR AdapterString[] = L"DreamGPU accelerated display adapter";
+    static const WCHAR DacType[] = L"Integrated digital output";
+    static const WCHAR BiosString[] = L"DreamGPU virtual display interface";
     ULONG SizeInBytes;
 
     /* Detect DISPI version */
@@ -164,15 +167,22 @@ static BOOLEAN BochsGetControllerInfo(_Inout_ PBOCHS_DEVICE_EXTENSION DeviceExte
     VideoDebugPrint((Info, "Bochs: capabilities %dx%d (%d MB)\n", DeviceExtension->MaxXResolution,
                      DeviceExtension->MaxYResolution, DeviceExtension->VramSize64K * 64 / 1024));
 
-    /* Store information in registry */
-#define HEX(c) (((c) >= 0 && (c) <= 9) ? (c) + L'0' : (c) - 10 + L'A')
-    ChipType[0] = HEX((Version >> 12) & 0xf);
-    ChipType[1] = HEX((Version >> 8) & 0xf);
-    ChipType[2] = HEX((Version >> 4) & 0xf);
-    ChipType[3] = HEX(Version & 0xf);
-    ChipType[4] = UNICODE_NULL;
+    // VBE describes the framebuffer, not the host texture allocation budget.
+    // Never advertise or admit a mode beyond the actual PCI BAR allocation.
+    const ULONG Aperture64K = DeviceExtension->FrameBuffer.RangeLength / (64 * 1024);
+    if (!Aperture64K || !DeviceExtension->VramSize64K)
+        return FALSE;
+    if (DeviceExtension->VramSize64K > Aperture64K)
+        DeviceExtension->VramSize64K = (USHORT)Aperture64K;
+
     VideoPortSetRegistryParameters(DeviceExtension, (PWSTR)L"HardwareInformation.ChipType",
-                                   ChipType, sizeof(ChipType));
+                                   (PVOID)ChipType, sizeof(ChipType));
+    VideoPortSetRegistryParameters(DeviceExtension, (PWSTR)L"HardwareInformation.AdapterString",
+                                   (PVOID)AdapterString, sizeof(AdapterString));
+    VideoPortSetRegistryParameters(DeviceExtension, (PWSTR)L"HardwareInformation.DacType",
+                                   (PVOID)DacType, sizeof(DacType));
+    VideoPortSetRegistryParameters(DeviceExtension, (PWSTR)L"HardwareInformation.BiosString",
+                                   (PVOID)BiosString, sizeof(BiosString));
     SizeInBytes = DeviceExtension->VramSize64K * 64 * 1024;
     VideoPortSetRegistryParameters(DeviceExtension, (PWSTR)L"HardwareInformation.MemorySize",
                                    &SizeInBytes, sizeof(SizeInBytes));

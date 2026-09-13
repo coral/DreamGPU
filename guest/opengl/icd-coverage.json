@@ -5,26 +5,32 @@
   "aliases": 190,
   "unimplemented": [],
   "production_registration_ready": true,
-  "partial": [
+  "partial": [],
+  "resolved_native_limitations": [
     {
       "slot": 248,
       "name": "glPixelTransferi",
-      "limitation": "Exact GLint bits reach native GL; Linux Mesa26.1.8 INDEX_OFFSET at INT_MAX reads back INT_MIN through native float conversion. Extreme-range state correctness remains unresolved; no fabricated shadow state."
+      "previous_system_provider_behavior": "Exact GLint bits reach native GL; Linux Mesa26.1.8 INDEX_OFFSET at INT_MAX reads back INT_MIN through native float conversion. Extreme-range state correctness remains unresolved; no fabricated shadow state.",
+      "resolution": "The default pinned private Mesa provider implements the corrected native behavior; focused actual GPU oracles pass. See support/native/mesa/README.md and source.json."
     },
     {
       "slot": 257,
       "name": "glDrawPixels",
-      "limitation": "One immutable native draw and exact unpack/transfer semantics implemented. Linux Mesa negative fractional pixel zoom misses three pixels in the retained oracle, independently reproduced through direct EGL without DreamGPU; this native rasterization limitation remains unresolved."
+      "previous_system_provider_behavior": "One immutable native draw and exact unpack/transfer semantics implemented. Linux Mesa negative fractional pixel zoom misses three pixels in the retained oracle, independently reproduced through direct EGL without DreamGPU; this native rasterization limitation remains unresolved.",
+      "resolution": "The default pinned private Mesa provider implements the corrected native behavior; focused actual GPU oracles pass. See support/native/mesa/README.md and source.json."
     },
     {
       "slot": 323,
       "name": "glCopyTexImage1D",
-      "limitation": "Full GL1.1 base/sized formats and border0/1 are forwarded to the actual native API. Linux Mesa silently drops a requested border: width6/border1 becomes native width4/border0 with no GL error, reproduced through direct EGL; Mac exact border pixels pass. Native width is recorded honestly; no fabricated border state."
+      "previous_system_provider_behavior": "Full GL1.1 base/sized formats and border0/1 are forwarded to the actual native API. Linux Mesa silently drops a requested border: width6/border1 becomes native width4/border0 with no GL error, reproduced through direct EGL; Mac exact border pixels pass. Native width is recorded honestly; no fabricated border state.",
+      "resolution": "The default pinned private Mesa provider implements the corrected native behavior; focused actual GPU oracles pass. See support/native/mesa/README.md and source.json."
     },
     {
       "slot": 325,
       "name": "glCopyTexSubImage1D",
-      "limitation": "Copies validate the actual native level width/border before submission. Linux Mesa drops borders when CopyTexImage1D defines the source level, so border texel copies remain unavailable there; borderless copies use the actual native API. Mac bordered copies pass."
+      "previous_system_provider_behavior": "Copies validate the actual native level width/border before submission. Linux Mesa drops borders when CopyTexImage1D defines the source level, so border texel copies remain unavailable there; borderless copies use the actual native API. Mac bordered copies pass.",
+      "resolution": "The default pinned private Mesa provider implements the corrected native behavior; focused actual GPU oracles pass. See support/native/mesa/README.md and source.json."
     }
-  ]
+  ],
+  "provider_scope": "Implemented DreamGPU GL1.1 fixed-function contract, not formal GL certification or general Mesa programmable-border conformance. Native programmable shaders with bordered images are rejected. Bounded resource admission remains explicit."
 }

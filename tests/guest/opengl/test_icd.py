@@ -25,8 +25,12 @@ assert coverage["existing"] == sum(n.startswith("gl") for n in implementations)
 assert coverage["aliases"] == sum(n.startswith("Alias") for n in implementations)
 assert coverage["production_registration_ready"]
 assert not coverage["unimplemented"]
-assert [(item["slot"], item["name"]) for item in coverage["partial"]] == [(248, "glPixelTransferi"), (257, "glDrawPixels"), (323, "glCopyTexImage1D"), (325, "glCopyTexSubImage1D")]
-assert all(item["limitation"] for item in coverage["partial"])
+assert not coverage["partial"]
+assert [(item["slot"], item["name"]) for item in coverage["resolved_native_limitations"]] == [
+    (248, "glPixelTransferi"), (257, "glDrawPixels"),
+    (323, "glCopyTexImage1D"), (325, "glCopyTexSubImage1D")]
+assert all(item["resolution"] and item["previous_system_provider_behavior"]
+           for item in coverage["resolved_native_limitations"])
 # Compare the checked-in ABI against the actual pinned donor, not our own initializer.
 donor = subprocess.check_output([
     "git", "-C", str(ROOT / "vendor/reactos"), "show",

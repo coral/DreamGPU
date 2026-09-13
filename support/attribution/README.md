@@ -21,6 +21,9 @@ uninitialized, without invented license evidence.
   superset (267 external packages at this update). Includes direct workspace
   declarations, transitive edges, raw declared license expressions, repository
   URLs, authors, registry checksums, available VCS pins and collected notices.
+- `cargo-native-launcher.json`: the separate locked native-launcher Cargo graph,
+  with the same package, dependency, notice and checksum metadata. Use
+  `python3 tools/licensing/inventory.py --launcher-only` to refresh just this graph.
 - `repositories.json`: parent gitlinks, observed checkout revisions, repository
   URLs, initialization state, root notice hashes and every QEMU Meson wrap.
   A declared or initialized dependency is not necessarily compiled or shipped.
@@ -35,3 +38,7 @@ graph, OS packages, firmware binaries or compiler runtime internals. Root licens
 files alone are not a per-file license audit. Keep the selected release's source,
 patches, build receipts and full applicable notices. Refresh this inventory after
 source-pin or lockfile changes; immutable historical receipts should stay intact.
+
+Mesa is a pinned source archive, not one of the eight gitlinks. Its exact archive
+and per-file patch identities live in `../native/mesa/source.json`; native runtime
+receipts retain the source license tree and copied platform-library inventory.

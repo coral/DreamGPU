@@ -246,10 +246,11 @@ typedef struct DreamGpuGlApi {
                  : DG_API_FramebufferRenderbuffer) dg_glFramebufferRenderbuffer;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
-    .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer, .dg_glFeedbackBuffer = glFeedbackBuffer,                  \
-    .dg_glRenderMode = glRenderMode, .dg_glInitNames = glInitNames, .dg_glLoadName = glLoadName,   \
-    .dg_glPushName = glPushName, .dg_glPopName = glPopName, .dg_glPassThrough = glPassThrough,     \
-    .dg_glMap1d = glMap1d, .dg_glMap1f = glMap1f, .dg_glMap2d = glMap2d, .dg_glMap2f = glMap2f,    \
+    .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
+    .dg_glFeedbackBuffer = glFeedbackBuffer, .dg_glRenderMode = glRenderMode,                      \
+    .dg_glInitNames = glInitNames, .dg_glLoadName = glLoadName, .dg_glPushName = glPushName,       \
+    .dg_glPopName = glPopName, .dg_glPassThrough = glPassThrough, .dg_glMap1d = glMap1d,           \
+    .dg_glMap1f = glMap1f, .dg_glMap2d = glMap2d, .dg_glMap2f = glMap2f,                           \
     .dg_glMapGrid1d = glMapGrid1d, .dg_glMapGrid2d = glMapGrid2d,                                  \
     .dg_glEvalCoord1d = glEvalCoord1d, .dg_glEvalCoord2d = glEvalCoord2d,                          \
     .dg_glEvalPoint1 = glEvalPoint1, .dg_glEvalPoint2 = glEvalPoint2,                              \

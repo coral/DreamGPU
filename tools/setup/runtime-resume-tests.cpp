@@ -28,25 +28,25 @@ static auto &value(const char *key, const char *name) {
 static void pending_startup(Os os) {
     Win32Store store;
     initial(store);
-    const char *key = os == Os::win98 ? Run : Once;
-    const char *other = os == Os::win98 ? Once : Run;
+    const char *key = Run;
+    const char *other = Once;
     value(key, "unrelated") = {REG_SZ, {'u', 0}};
     value(other, "DreamGPU.Runtime") = {REG_SZ, {'f', 0}};
     RuntimeResume resume(store, 1, os);
     assert(resume.prepare() && resume.arm());
     const auto command = value(key, "DreamGPU.Runtime").bytes;
-    // Model three boots with the real registration policy. RunOnce consumes
-    // the value before calling the child; persistent Run keeps the same value.
+    // Model three boots with persistent Run retaining exactly the same value.
     for (unsigned boot = 0; boot < 3; ++boot) {
-        if (os == Os::nt5)
-            fake_win32::keys[fake_win32::canon(key)].erase("dreamgpu.runtime");
+
         RuntimeResume child(store, 1, os);
         assert(child.prepare());
         fake_win32::mutation = 0;
         assert(child.arm());
-        // Win98 performs only a flush, never RegSetValueEx from its own Run
-        // callback. NT performs one Set and one flush after consumption.
-        assert(fake_win32::mutation == (os == Os::win98 ? 1u : 2u));
+        // Neither OS recreates a startup command from its own callback.
+        assert(fake_win32::mutation == 1u);
+        RuntimeResume observer(store, 1, os);
+        auto writes = fake_win32::mutation;
+        assert(observer.armed() && fake_win32::mutation == writes);
         assert(value(key, "DreamGPU.Runtime").bytes == command);
         assert(value(other, "DreamGPU.Runtime").bytes == std::vector<BYTE>({'f', 0}));
     }
@@ -66,12 +66,28 @@ static void prior_and_legacy() {
     assert(value(Run, "DreamGPU.Runtime").type == REG_DWORD);
     assert(value(Run, "DreamGPU.Runtime").bytes == std::vector<BYTE>({7, 0, 9, 0}));
     initial(store);
-    // V1 has the exact legacy Win98 layout as well as the NT layout. It must
-    // never be reinterpreted as a captured baseline from a different key.
+    // Build the actual historical V1 receipt, preserving its RunOnce baseline.
+    struct Legacy {
+        uint32_t magic = 0x52474744, version = 1, generation = 1;
+        Image before{}, installer{};
+    } record;
+    value(Once, "DreamGPU.Runtime") = {REG_SZ, {'o', 0}};
+    record.before = string_value("o");
+    assert(store.inspect_file("C:\\setup.exe", record.installer));
+    char path[MAX_PATH], program[MAX_PATH];
+    assert(store.private_path(path, "\\T00000001\\RESUME.JRN") &&
+           store.private_path(program, "\\T00000001\\setup.exe") &&
+           store.retain_program("C:\\setup.exe", program, record.installer));
+    DurableRecord<Legacy> disk(path);
+    Legacy previous;
+    bool exists;
+    const auto valid = [](const Legacy &) { return true; };
+    assert(disk.load(previous, exists, valid) && !exists && disk.save(record, valid));
     RuntimeResume legacy(store, 1, Os::nt5);
-    assert(legacy.prepare() && legacy.arm());
+    assert(legacy.prepare());
     const auto files = fake_win32::files;
     const auto once = value(Once, "DreamGPU.Runtime").bytes;
+    assert(!legacy.arm()); // New code never recreates a consumed RunOnce callback.
     RuntimeResume incompatible(store, 1, Os::win98);
     assert(!incompatible.prepare());
     assert(value(Once, "DreamGPU.Runtime").bytes == once);
@@ -79,11 +95,15 @@ static void prior_and_legacy() {
     for (const auto &[name, file] : files)
         assert(fake_win32::files.at(name).bytes == file.bytes);
     assert(legacy.finish());
+    record.version = 3;
+    assert(disk.save(record, valid));
+    RuntimeResume mixed(store, 1, Os::nt5);
+    assert(!mixed.prepare() && !mixed.armed());
 }
 int main() {
     pending_startup(Os::win98);
     pending_startup(Os::nt5);
     prior_and_legacy();
-    puts("PASS actual startup adapter: Win98 persistent next-boot registration, NT RunOnce, "
+    puts("PASS actual startup adapter: Win98 persistent next-boot registration, NT persistent Run, "
          "prior/foreign values and legacy receipt refusal");
 }

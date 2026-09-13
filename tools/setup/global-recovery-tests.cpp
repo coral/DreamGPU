@@ -2,7 +2,7 @@
 #define main ExistingGlobalTests
 #include "global-runtime-tests.cpp"
 #undef main
-constexpr char NtRun[] = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+constexpr char NtRun[] = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
 static Result nt(Request request) {
     Intent intent{};
     auto result = act(Os::nt5, request, 0, intent);

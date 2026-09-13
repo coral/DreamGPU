@@ -68,11 +68,13 @@ template <size_t N> inline bool empty(const char (&value)[N]) {
 }
 // V2 preserves V1's byte layout; only the formerly boolean binding field gains
 // an explicit unbound kind. Old V1 records accept only stock/owned bindings.
-// V3 has the same layout and uses persistent Run for Win98 continuations.
+// V3 uses persistent Run on Win98; V4 does so on NT. Layout is unchanged.
 // Earlier journals retain their RunOnce baseline for exact terminal cleanup.
 inline bool valid(const Journal &j) {
-    if (j.magic != 0x31424744 || (j.version != 1 && j.version != 2 && j.version != 3) ||
+    if (j.magic != 0x31424744 ||
+        (j.version != 1 && j.version != 2 && j.version != 3 && j.version != 4) ||
         (j.os != Os::win98 && j.os != Os::nt5) || uint32_t(j.phase) > uint32_t(Phase::restored) ||
+        (j.version == 3 && j.os != Os::win98) || (j.version == 4 && j.os != Os::nt5) ||
         j.count > 16 || uint32_t(j.original_binding) > uint32_t(Binding::unbound) ||
         (j.original_binding == Binding::unbound && (j.version < 2 || j.os != Os::nt5)) ||
         j.resume_existed > 1 || j.resume_bytes > sizeof(j.resume_value) || !hash(j.installer_sha) ||

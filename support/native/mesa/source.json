@@ -6,7 +6,8 @@
   "sha256": "b320f65874fd9653ac6c0bd1616605387344e1247411a50c797b5f3fb9dc0b55",
   "patches": {
     "patches/0001-integer-pixel-transfer.patch": "1033f75b98ed6cf7b46dc2b38d7184a847e78d831edfbac75caaf7afe4a1c8ce",
-    "patches/0002-fractional-pixel-raster.patch": "f6976cf36a615b5e8ae5093adee7c3cf0a1588e47e97f63d2940c39576d77216"
+    "patches/0002-fractional-pixel-raster.patch": "f6976cf36a615b5e8ae5093adee7c3cf0a1588e47e97f63d2940c39576d77216",
+    "patches/0003-legacy-1d-border-images.patch": "b32acf3a93c1535347213ab98e5845d6a54425a4aa65b6068ee58a6dc0d3e3ff"
   },
   "files": {
     "src/mesa/main/pixel.c": {
@@ -24,6 +25,54 @@
     "src/mesa/state_tracker/st_cb_drawpixels.h": {
       "before": "2cf769bdbb95288a073331308acf73e9ce93d5275438884c52d12cfc9110b6a5",
       "after": "39084d21dc05ee13b52a833e06fa9e71342c2330414f1011f6f4ffc34b88e468"
+    },
+    "src/mesa/main/mtypes.h": {
+      "before": "700744951f994dbd8117fc0345a7ebce42f37a0a197b11bab30351614d01a67e",
+      "after": "86a87ccd2bccc9df55f424a68dcaaf8e68f0b71f63d64e88e67c876020a10ace"
+    },
+    "src/mesa/main/teximage.c": {
+      "before": "d00fb2944cebb7553953f4ffb9e288482d967738ec53e3aed323ddeb69949cc4",
+      "after": "bbfd8abbdc317e277f2d1c1362064c650d68daa6231f46ca2ac14230c6d3b42c"
+    },
+    "src/mesa/main/ff_fragment_shader.c": {
+      "before": "75d4d5da2c4fa404615d31695db6d323eee3281cc29265dfb0a8b64ebf3fe5cc",
+      "after": "e1e5a777769417afbea94a4c326832626675020061fa81dfabdb9d6516025c58"
+    },
+    "src/mesa/state_tracker/st_texture.c": {
+      "before": "76690b6b838315d5e34350d8bfe0f1b9333b8afb685e5cedab4ad1ff63549850",
+      "after": "88008d219a60435031b56ab39e5e7d17cac4443bbe6f63d72df35291b0c31357"
+    },
+    "src/mesa/state_tracker/st_cb_texture.c": {
+      "before": "b56ccecf65ed6d31ff4f1dc78fbc691ce93e461e467e91eaaaee32728bdc3ad4",
+      "after": "604c9b76445451736ef7e1b6b3cc50f7d005701ec71b61a2542802ec99de7386"
+    },
+    "src/mesa/state_tracker/st_sampler_view.c": {
+      "before": "875d1a0bcf78f7625e92cc00c23c8f316b0704445de8c05a8cd599332e6f0c0c",
+      "after": "460da5700c2f0821788a4b72c8ac29777a29a7080df47c8f2c2ae2b2dd447084"
+    },
+    "src/mesa/main/draw_validate.c": {
+      "before": "0867fb0a72415894c9fe33368eef6b5f3002b1cea623d2ff87d0a4ca165cc4be",
+      "after": "526691ee5fd7bad071b97bdab5287b45747f34c10821662de3b6527fc51cd91d"
+    },
+    "src/mesa/main/state.c": {
+      "before": "4e09ff3bae80a4b4849f2dca8f9248d80e52f7af7e98d1a731d92148c88491c1",
+      "after": "c4563fb0a33efbc52e1ff9770ba8ca9b0d03fb6c5434927eb3d13daabdc4fc04"
+    },
+    "src/mesa/state_tracker/st_atom_texture.c": {
+      "before": "3c4dc14e7d4f96758d376a41d2c3ec7ac66430f0d6be2030bcf60ad6b4adb1e0",
+      "after": "bcb31af8683bbd42778a1410dc46f856050f38877aadd9594682f1a1696a5580"
+    },
+    "src/gallium/auxiliary/util/u_helpers.c": {
+      "before": "8e258d7184195bcefdfae743f8465f350b2382e3ffc6be60e6092dc2cfd6084e",
+      "after": "37dabf4769ab329da16194db5b325519978dc6d048e7d87fbd3ee371cf96aaaa"
+    },
+    "src/gallium/auxiliary/util/u_helpers.h": {
+      "before": "6a0bb61668b70bd7254a6dab0b6b98a67654abe36203e67bf8f078d4b5a77b7a",
+      "after": "65693aa377f270d9f6f765eab83216c6065f5bbfe278d685991bdce3aa770733"
+    },
+    "src/gallium/auxiliary/util/u_inlines.h": {
+      "before": "2646f611e8f2666ab177f8f03d3d9e6f208891e1c72efae76aedb8df81302277",
+      "after": "1fab6800b71594608429b6678a05be932f65ff5cdf1ff9c3b774ae0f9a434f5d"
     }
   },
   "subprojects": {

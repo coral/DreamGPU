@@ -386,7 +386,8 @@ ULONG APIENTRY DrvGetModes(IN HANDLE hDriver, IN ULONG cjSize, OUT DEVMODEW *pdm
     OutputSize = 0;
     ModeInfoPtr = ModeInfo;
 
-    while (ModeCount-- > 0) {
+    ULONG RemainingModes = cjSize / sizeof(DEVMODEW);
+    while (ModeCount-- > 0 && RemainingModes) {
         if (ModeInfoPtr->Length == 0) {
             ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
             continue;
@@ -408,6 +409,7 @@ ULONG APIENTRY DrvGetModes(IN HANDLE hDriver, IN ULONG cjSize, OUT DEVMODEW *pdm
         ModeInfoPtr = (PVIDEO_MODE_INFORMATION)(((ULONG_PTR)ModeInfoPtr) + ModeInfoSize);
         pdm = (LPDEVMODEW)(((ULONG_PTR)pdm) + sizeof(DEVMODEW));
         OutputSize += sizeof(DEVMODEW);
+        --RemainingModes;
     }
 
     EngFreeMem(ModeInfo);

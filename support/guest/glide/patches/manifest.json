@@ -8,6 +8,10 @@
     {
       "file": "0001-dreamgpu-openglide.patch",
       "sha256": "e3487c94bac32b6aeff809e7015e3a90ff5917921f3cafbdc1bca9a9e5d28e26"
+    },
+    {
+      "file": "0002-texture-content-reuse.patch",
+      "sha256": "0ba98c0bbf05d2ffbb2ab80da4e9dc1cda93010439fc65343f9bd8c3957ff41b"
     }
   ],
   "files": {
@@ -33,15 +37,15 @@
     },
     "PGTexture.cpp": {
       "before_sha256": "5f79f966cf4866413a0479e0d00c6a9b886b06d5e7add3d96273e17e0eadc481",
-      "after_sha256": "e92366f7a6d0d7fb540d7408f40e59159da6dd8a9b4f35fb815cbb548bd340f2"
+      "after_sha256": "711b0f9c656209b84dbc740220e46e7af8e6f1783d71daba73ae7f9f6c9bce2e"
     },
     "TexDB.cpp": {
       "before_sha256": "26a2eb3530acbd6779d3b8bb30619613a353215483aab9dea3f080766ca5f4ba",
-      "after_sha256": "0e14d91c9145454f5dc027f94f6d9f938a5d103557614dbac9a74782451d2faa"
+      "after_sha256": "600be4d5eee1d4751d3d0d4cc1299d408c90a21496f4e864a387b495b8a80aee"
     },
     "TexDB.h": {
       "before_sha256": "daf1f7574475245b8430c59c9381117ac727471b1b5e68e86b78ef4720b6bc57",
-      "after_sha256": "6358a7ce8a949de7a106da89ee946661eda46072759bae08297421caf5f6b13a"
+      "after_sha256": "a490afbecdde45d0818a0c9738b54eddeaa2be06d4c7cd63a88c9282ae776b4a"
     },
     "dg-mipmap.c": {
       "before_sha256": "0dbac15e4938e20a586f3399af37e0cb8404d82e52ff21d9266dc2802dc4a500",

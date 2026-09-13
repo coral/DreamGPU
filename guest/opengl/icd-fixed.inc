@@ -120,7 +120,8 @@ static void APIENTRY AliasGetPolygonStipple(GLubyte *mask) {
     if (!JglReady())
         return;
     dg_icd_images::Layout l;
-    if (!dg_icd_images::DescribeStore(32, 32, GL_COLOR_INDEX, GL_BITMAP, mask, &l, JglPack(), false))
+    if (!dg_icd_images::DescribeStore(32, 32, GL_COLOR_INDEX, GL_BITMAP, mask, &l, JglPack(),
+                                      false))
         return;
     BYTE pattern[128];
     ULONG args[3] = {}, bytes = 0;

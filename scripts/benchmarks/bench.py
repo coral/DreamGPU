@@ -191,6 +191,49 @@ def probe_submission_verification(capture, samples):
                 reason=None if verified else 'GPU-submitted probe counters do not match the complete verified replay')
 
 
+def probe_frame_stages(capture):
+    """Decompose only the exact CPU frame whose pixels contain each probe ACK.
+
+    Publication includes guest execution and producer refresh. Acquisition is
+    the frame worker; ACK observation is later renderer preparation. None is a
+    photon timestamp or an isolated native execution duration.
+    """
+    unavailable = {'verified': False, 'rows': []}
+    if not capture.get('probe_sequence_ids') or capture['dropped']:
+        return unavailable
+    stages = collections.defaultdict(list)
+    for sample in sorted(capture['samples'], key=lambda item: item['ts']):
+        name = sample['name']
+        if name == 'input.received' and sample.get('value') != 1:
+            continue
+        if name in ('input.received', 'frame.published', 'frame.acquired', 'probe.ack'):
+            stages[name, sample['id']].append(sample)
+    inputs = {key[1]: values for key, values in stages.items()
+              if key[0] == 'input.received' and key[1]}
+    if not inputs or any(len(values) != 1 for values in inputs.values()):
+        return unavailable
+    rows = []
+    for sequence, values in sorted(inputs.items()):
+        started = values[0]['ts']
+        ack = next((item for item in stages['probe.ack', sequence]
+                    if item['ts'] >= started), None)
+        if not ack or not ack.get('value'):
+            return unavailable
+        generation = ack['value']
+        published, acquired = (stages[name, generation]
+                               for name in ('frame.published', 'frame.acquired'))
+        if len(published) != 1 or len(acquired) != 1:
+            return unavailable
+        emitted, claimed = published[0]['ts'], acquired[0]['ts']
+        if not started <= emitted <= claimed <= ack['ts']:
+            return unavailable
+        rows.append({'sequence': sequence, 'generation': generation,
+                     'input_to_publication_us': emitted - started,
+                     'publication_to_acquisition_us': claimed - emitted,
+                     'acquisition_to_ack_us': ack['ts'] - claimed})
+    return {'verified': True, 'rows': rows}
+
+
 def summarize(capture):
     samples = samples_with_probe_submissions(capture)
     submission_verification = probe_submission_verification(capture, samples)
@@ -234,6 +277,7 @@ def summarize(capture):
                 latency[f'{begin}_to_{end}'].append(stages[end]-stages[begin])
     return dict(seconds=seconds, dropped=capture['dropped'],
                 probe_submission_verification=submission_verification,
+                probe_frame_stages=probe_frame_stages(capture),
                 duration_us={name: distribution(values) for name, values in durations.items()},
                 latency_us={name: distribution(values) for name, values in latency.items()},
                 events=dict(events), rate_hz={name: n/seconds for name, n in events.items()},

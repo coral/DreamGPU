@@ -115,7 +115,9 @@ template <class Payloads> class VerifiedRuntimeStore : public Win32Store {
             if (a.kind == Kind::file && !a.name[0] && a.original.exists &&
                 same(a.before, a.original))
                 for (unsigned k = 0; k < 3; ++k)
-                    if (destination_equal(a.path, public_runtime[k], sizeof(a.path)))
+                    if (destination_equal(a.path, public_runtime[k], sizeof(a.path)) ||
+                        (os_ == Os::win98 &&
+                         destination_equal(a.path, win98_runtime_cache[k], sizeof(a.path))))
                         runtime = k;
             if (runtime == 3)
                 return false;

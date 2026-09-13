@@ -163,9 +163,7 @@ static void capture_and_restore(Os os, bool own) {
         else
             assert(it != fake_win32::files.end() && digest(it->second.bytes) == f.sha);
     }
-    auto key = fake_win32::keys.find(os == Os::win98
-                                         ? "software\\microsoft\\windows\\currentversion\\run"
-                                         : "software\\microsoft\\windows\\currentversion\\runonce");
+    auto key = fake_win32::keys.find("software\\microsoft\\windows\\currentversion\\run");
     assert(key == fake_win32::keys.end() || !key->second.count("dreamgpu.driver"));
 }
 static unsigned failure_path(Os os, bool own, unsigned fail) {
@@ -369,7 +367,27 @@ static void child_process_ownership() {
     assert(!store.load(pending, true));
     driver_fake::live = driver_fake::leave_running = false;
 }
+static void managed_legacy_driver_startup() {
+    setup_case(Os::nt5, true);
+    Win32Store store;
+    Journal j;
+    assert(store.init(Os::nt5, root) && store.capture(j, payloads));
+    assert(j.version == 4);
+    // Reconstruct the compatible older NT schema with an absent prior RunOnce.
+    // Managed GLOBAL already owns its separate authenticated Run registration.
+    j.version = 2;
+    assert(!j.resume_existed && valid(j) && store.persist(j));
+    const auto mutations = fake_win32::mutation;
+    assert(!store.arm_resume(j, true) && fake_win32::mutation == mutations);
+    store.managed_startup(true);
+    assert(store.arm_resume(j, true) && fake_win32::mutation == mutations);
+    assert(!fake_win32::keys["software\\microsoft\\windows\\currentversion\\runonce"].count(
+        "dreamgpu.driver"));
+    assert(!fake_win32::keys["software\\microsoft\\windows\\currentversion\\run"].count(
+        "dreamgpu.driver"));
+}
 int main() {
+    managed_legacy_driver_startup();
     child_process_ownership();
     identical_driver_rollback(Os::nt5);
     identical_driver_rollback(Os::win98);
@@ -465,10 +483,8 @@ int main() {
             bad = j;
             memset(bad.files[1].path, 'a', sizeof(bad.files[1].path));
             assert(!valid(bad));
-            // A foreign RunOnce owner is never overwritten during continuation.
-            const char *runkey = os == Os::win98
-                                     ? "software\\microsoft\\windows\\currentversion\\run"
-                                     : "software\\microsoft\\windows\\currentversion\\runonce";
+            // A foreign startup owner is never overwritten during continuation.
+            const char *runkey = "software\\microsoft\\windows\\currentversion\\run";
             fake_win32::keys[runkey]["dreamgpu.driver"] = {REG_SZ, {'x', 0}};
             assert(!store.arm_resume(j, false));
             fake_win32::keys[runkey].clear();

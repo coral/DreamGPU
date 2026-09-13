@@ -715,9 +715,11 @@ fn one_dimensional_copy_preserves_border_signed_offsets_and_failed_allocation() 
                 bad.as_ptr(),
             )
         },
-        DG_GL_ERROR_TEXTURE
+        0
     );
     assert_eq!(t.version, version);
+    assert_eq!(errors, 1 << (GL_INVALID_VALUE - GL_INVALID_ENUM));
+    N.with(|v| assert_eq!(v.borrow().copies.len(), 2));
     N.with(|v| v.borrow_mut().fail_copy = true);
     assert_eq!(
         unsafe {
@@ -732,7 +734,7 @@ fn one_dimensional_copy_preserves_border_signed_offsets_and_failed_allocation() 
                 args.as_ptr(),
             )
         },
-        DG_GL_ERROR_TEXTURE
+        0
     );
     assert_eq!((total, t.widths[0], t.version), (48, 6, version));
     assert_ne!(errors, 0);
@@ -782,4 +784,49 @@ fn one_dimensional_metadata_tracks_native_border_stripping_without_fabricating_s
         (total, t.levels[0], t.widths[0], t.heights[0]),
         (32, 32, 4, 1)
     );
+}
+
+unsafe extern "C" fn zero_sub_1d(
+    target: u32,
+    level: i32,
+    offset: i32,
+    width: i32,
+    format: u32,
+    kind: u32,
+    data: *const core::ffi::c_void,
+) {
+    assert_eq!(
+        (target, level, offset, width, format, kind),
+        (GL_TEXTURE_1D, 0, -1, 2050, GL_RGBA, GL_UNSIGNED_BYTE)
+    );
+    assert!(
+        unsafe { core::slice::from_raw_parts(data.cast::<u8>(), width as usize * 4) }
+            .iter()
+            .all(|&v| v == 0)
+    );
+    N.with(|v| v.borrow_mut().tiles.push((offset as u32, width as u32)));
+}
+#[test]
+fn one_dimensional_zero_covers_both_borders_with_bounded_temporary_storage() {
+    let mut a = api();
+    a.dg_glGetTexLevelParameteriv = Some(border_1d);
+    a.dg_glTexSubImage1D = Some(zero_sub_1d);
+    let mut alloc = Allocator::default();
+    let m = memory(&a, &mut alloc);
+    let t = Texture {
+        name: 7,
+        target: GL_TEXTURE_1D,
+        ..Texture::default()
+    };
+    N.with(|v| *v.borrow_mut() = Native::default());
+    assert_eq!(unsafe { dreamgpu_texture_zero(&m, &t, 0, 2050, 1) }, 0);
+    assert_eq!(N.with(|v| v.borrow().tiles.clone()), [(u32::MAX, 2050)]);
+    assert!(alloc.live.is_empty());
+    assert_eq!(alloc.max, 8200);
+    alloc.fail = true;
+    assert_eq!(
+        unsafe { dreamgpu_texture_zero(&m, &t, 0, 2050, 1) },
+        GL_OUT_OF_MEMORY
+    );
+    assert_eq!(N.with(|v| v.borrow().tiles.len()), 1);
 }

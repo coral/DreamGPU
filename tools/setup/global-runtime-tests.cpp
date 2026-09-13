@@ -635,7 +635,33 @@ static void rollback_removal() {
            "refusal\n",
            total);
 }
+static void managed_driver_requires_arm() {
+    initial();
+    NativeComponents::driver_pause = true;
+    assert(invoke(Request::start) == Result::pending_reboot);
+    lifecycle::Win32Store owner;
+    assert(lifecycle::verified_owner(owner));
+    char path[MAX_PATH];
+    assert(journal_path(path));
+    DurableRecord<Record> disk(path);
+    Record record;
+    bool exists;
+    assert(disk.load(record, exists, valid_record) && exists);
+    const int payload = 0;
+    Win32Store<int> component(owner, disk, record, payload);
+    const auto calls = NativeComponents::driver_calls;
+    fake_win32::keys[fake_win32::canon(RunKey)].erase("dreamgpu.setup");
+    const auto mutations = fake_win32::mutation;
+    assert(component.driver_apply(record.flow.intent) == Result::conflict);
+    assert(NativeComponents::driver_calls == calls && fake_win32::mutation == mutations);
+    auto wrong = lifecycle::string_value("foreign");
+    fake_win32::keys[fake_win32::canon(RunKey)]["dreamgpu.setup"] = {
+        REG_SZ, {wrong.value, wrong.value + wrong.size}};
+    assert(component.driver_apply(record.flow.intent) == Result::conflict &&
+           NativeComponents::driver_calls == calls);
+}
 int main() {
+    managed_driver_requires_arm();
     rollback_removal();
     repair_flow();
     repair_failures();
@@ -651,7 +677,7 @@ int main() {
     rollback_after_driver_publication();
     reinstall_before_target_rollback();
     fail_closed();
-    printf("PASS actual global Win32 adapter: epoch/frozen installer, prior RunOnce, provider "
+    printf("PASS actual global Win32 adapter: epoch/frozen installer, prior startup, provider "
            "provenance, exact generation resume, terminal readonly and readiness gates\n");
     return 0;
 }

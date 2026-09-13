@@ -8,7 +8,8 @@
 #define DREAMGPU_UT_ENGINE_EXIT_H
 #include "../setup/sha256.h"
 static const char RetailExitModule[] = "C:\\UT99\\System\\Window.dll";
-static const char RetailExitSha[] = "bb60585ebcfc1b16e4424c5ce20bdea29512d16f1b770b4da7e9502110f8754c";
+static const char RetailExitSha[] =
+    "bb60585ebcfc1b16e4424c5ce20bdea29512d16f1b770b4da7e9502110f8754c";
 static OwnedHandle LockRetailExitModule(void) {
     OwnedHandle file{CreateFileA(RetailExitModule, GENERIC_READ, FILE_SHARE_READ, NULL,
                                  OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, NULL)};

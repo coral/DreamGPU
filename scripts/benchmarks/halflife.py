@@ -377,7 +377,7 @@ def main():
         command.add_argument("--timeout", type=float, default=180, help="Seconds after STARTED; guest also has a bounded deadline and cleanup")
     run.add_argument("--sample-fixture", type=Path, help="Linux: arm bounded perf recording of this fixture's exact QEMU/Juke before resuming the owned game; input is fixture/run.json")
     run.add_argument("--gpu-fixture", type=Path,
-                     help="Record native GL counters and presented GPU frames between acknowledged launch boundaries of this exact fixture; requires new renderer-proof runner")
+                     help="Record native GL counters and presented GPU frames between acknowledged launch boundaries; input is fixture/run.json and requires the renderer-proof runner")
     args = parser.parse_args()
     try:
         if args.command == "command":

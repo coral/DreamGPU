@@ -310,20 +310,33 @@ mod tests {
         assert!(start().is_err());
         with_input(42, || {
             assert_eq!(input_id(), 42);
-            event("input.received", input_id(), 0);
+            event("test.capture.received", input_id(), 0);
         });
         assert_eq!(input_id(), 0);
-        std::thread::spawn(|| event("input.consumed", 42, 0))
+        std::thread::spawn(|| event("test.capture.consumed", 42, 0))
             .join()
             .unwrap();
         let capture = stop().unwrap();
-        assert_eq!(capture.samples.len(), 2);
-        assert_ne!(capture.samples[0].tid, capture.samples[1].tid);
-        assert!(capture.samples.iter().all(|s| s.id == 42));
+        // The recorder is process-wide: parallel transport tests legitimately
+        // emit events into this capture. Assert our unique flow, not their absence.
+        let flow: Vec<_> = capture
+            .samples
+            .iter()
+            .filter(|s| s.name.starts_with("test.capture."))
+            .collect();
+        assert_eq!(flow.len(), 2);
+        assert_eq!(flow[0].name, "test.capture.received");
+        assert_eq!(flow[1].name, "test.capture.consumed");
+        assert_ne!(flow[0].tid, flow[1].tid);
+        assert!(flow.iter().all(|s| s.id == 42));
         let old_session = session_id();
         start().unwrap();
-        event_for_session(old_session, "late.gpu.callback", 42, 0);
-        assert!(stop().unwrap().samples.is_empty());
+        event_for_session(old_session, "test.capture.late", 42, 0);
+        assert!(stop()
+            .unwrap()
+            .samples
+            .iter()
+            .all(|s| !s.name.starts_with("test.capture.")));
     }
 
     #[test]

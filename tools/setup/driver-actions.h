@@ -39,7 +39,7 @@ struct ReverseExecutor {
 // reused as the target of a failed upgrade.
 template <class Payloads>
 Result act_at(Os os, int action, const char *owner, const Payloads &payloads,
-              const ReverseExecutor *recovery = nullptr) {
+              const ReverseExecutor *recovery = nullptr, bool managed_startup = false) {
     if (action < 0 || action > 4)
         return Result::invalid;
     Lineage lineage;
@@ -161,6 +161,7 @@ Result act_at(Os os, int action, const char *owner, const Payloads &payloads,
             return Result::invalid;
         if (journal.child_pid)
             return Result::pending_reboot;
+        store.managed_startup(managed_startup);
         Engine engine(store, journal);
         Result result = reverse       ? engine.rollback()
                         : action == 0 ? engine.install()

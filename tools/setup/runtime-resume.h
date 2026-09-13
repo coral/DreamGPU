@@ -5,14 +5,14 @@
 #include "durable-record.h"
 namespace setup::lifecycle {
 // The prior startup value and installer identity are persisted before arming.
-// Win98 must use Run: re-creating a consumed RunOnce value from its own
-// continuation can keep Windows Setup processing it in the same boot. Run
-// survives until completion; an unchanged owned value is never rewritten.
-// NT retains RunOnce. Different present values remain ownership conflicts.
+// Both OS families use Run: recreating RunOnce from a pending/error callback
+// can keep startup executing that callback before Explorer. Historical receipts
+// retain their exact key meaning for retirement; they are never relabelled.
 enum class ResumeScope { runtime, global, recovery };
 class RuntimeResume {
     const char *key_path_ = nullptr;
     uint32_t record_version_ = 1;
+    Os os_ = Os::unsupported;
     const char *value_name_ = "DreamGPU.Runtime";
     struct Record {
         uint32_t magic = 0x52474744, version = 1, generation = 0;
@@ -52,7 +52,8 @@ class RuntimeResume {
         return store_.inspect_file(installer_, current) && same(current, record_.installer);
     }
     bool validate(const Record &r) const {
-        return r.magic == 0x52474744 && r.version == record_version_ &&
+        return r.magic == 0x52474744 &&
+               (r.version == record_version_ || (os_ == Os::nt5 && r.version == 1)) &&
                r.generation == record_.generation && valid_image(r.before, Kind::registry) &&
                r.installer.exists && valid_image(r.installer, Kind::file);
     }
@@ -63,11 +64,11 @@ class RuntimeResume {
         : store_(store) {
         if (os != Os::win98 && os != Os::nt5)
             return;
-        key_path_ = os == Os::win98 ? "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
-                                    : "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+        os_ = os;
+        key_path_ = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
         // Same durable layout; the version binds the captured baseline to its
         // registry key. A legacy Win98 receipt cannot be reinterpreted as Run.
-        record_.version = record_version_ = os == Os::win98 ? 2 : 1;
+        record_.version = record_version_ = os == Os::win98 ? 2 : 3;
         value_name_ = scope == ResumeScope::global     ? "DreamGPU.Setup"
                       : scope == ResumeScope::recovery ? "DreamGPU.Recovery"
                                                        : "DreamGPU.Runtime";
@@ -101,10 +102,18 @@ class RuntimeResume {
         DurableRecord<Record> log(record_path_);
         Record loaded;
         bool exists;
-        if (!log.load(loaded, exists, [this](const auto &r) { return validate(r); }))
+        uint32_t observed = 0;
+        if (!log.load(loaded, exists, [this, &observed](const auto &r) {
+                if (!validate(r) || (observed && observed != r.version))
+                    return false;
+                observed = r.version;
+                return true;
+            }))
             return false;
         if (exists) {
             record_ = loaded;
+            if (loaded.version == 1)
+                key_path_ = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
             if (installer_matches())
                 return true;
         }
@@ -128,7 +137,39 @@ class RuntimeResume {
         return same(executing, record_.installer) &&
                store_.retain_program(self, installer_, record_.installer);
     }
+    bool armed() {
+        if (!ready_)
+            return false;
+        DurableRecord<Record> log(record_path_);
+        Record loaded;
+        bool exists;
+        uint32_t observed = 0;
+        if (!log.load(
+                loaded, exists,
+                [this, &observed](const auto &r) {
+                    if (!validate(r) || (observed && observed != r.version))
+                        return false;
+                    observed = r.version;
+                    return true;
+                },
+                true) ||
+            !exists)
+            return false;
+        record_ = loaded;
+        if (record_.version == 1)
+            key_path_ = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+        Key key;
+        Image current;
+        return installer_matches() &&
+               RegOpenKeyExA(HKEY_LOCAL_MACHINE, key_path_, 0, KEY_QUERY_VALUE, &key.handle) ==
+                   ERROR_SUCCESS &&
+               read(key.handle, current) && same(current, desired_);
+    }
     bool arm() {
+        // Legacy RunOnce is readable/retirable, never re-created by new code.
+        // A changed executor must use authenticated recovery with its own Run receipt.
+        if (record_.version == 1)
+            return false;
         if (!ready_ || !validate(record_) || !installer_matches())
             return false;
         Key key;

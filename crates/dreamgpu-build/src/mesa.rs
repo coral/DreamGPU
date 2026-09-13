@@ -17,15 +17,31 @@ pub fn build(root: &Path, output: &Path) -> Result<PathBuf> {
         "private Mesa is a Linux provider"
     );
     let recipe = root.join("support/native/mesa");
-    let pin: Value = serde_json::from_slice(&fs::read(recipe.join("source.json"))?)?;
+    let pin_path = recipe.join("source.json");
+    let pin: Value = serde_json::from_slice(&fs::read(&pin_path)?)?;
     let version = pin["directory"].as_str().context("Mesa directory")?;
     ensure!(
         Path::new(version).components().count() == 1,
         "invalid Mesa directory"
     );
     fs::create_dir_all(output)?;
-    let output = fs::canonicalize(output)?;
+    let cache = fs::canonicalize(output)?;
+    // A changed checked patch set gets its own source and Meson build tree.
+    // Never reinterpret a previously accepted partially patched tree as the
+    // new recipe's raw preimage, or alter an older runtime's source evidence.
+    let output = cache.join(digest(&pin_path)?);
+    fs::create_dir_all(&output)?;
     let archive = output.join(format!("{version}.tar.xz"));
+    let cached_archive = cache.join(format!("{version}.tar.xz"));
+    if !archive.exists() && cached_archive.is_file() {
+        ensure!(
+            digest(&cached_archive)? == pin["sha256"],
+            "cached Mesa archive checksum mismatch"
+        );
+        if fs::hard_link(&cached_archive, &archive).is_err() {
+            fs::copy(&cached_archive, &archive)?;
+        }
+    }
     if !archive.exists() {
         let temporary = archive.with_extension("download");
         run(Command::new("curl")

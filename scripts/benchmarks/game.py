@@ -13,6 +13,7 @@ import hashlib
 import time
 import importlib.util
 import json
+import math
 from pathlib import Path
 import re
 import shlex
@@ -77,6 +78,48 @@ def write(path,value):
     path.write_text(json.dumps(value,indent=2)+'\n')
 
 
+def performance_summary(diagnostics, capture, counters=None):
+    """Use existing measurement data; never mix Python's Mac uptime clock with traces."""
+    result = {'scope': 'Submission throughput and received GPU frame pacing, not engine FPS or physical scanout',
+              'submission': None, 'gpu_streams': [], 'frame_window': 'unavailable'}
+    if counters and counters.get('elapsed_us', 0) > 0:
+        seconds = counters['elapsed_us'] / 1e6
+        gl = counters['gl']
+        presents = sum(row['count'] for row in gl['operations'] if row['op'] == 7)  # DG_GL_PRESENT
+        result['submission'] = {'seconds': seconds, 'presents': presents,
+                                'presents_per_second': presents / seconds,
+                                'records_per_second': gl['records'] / seconds,
+                                'records_per_present': gl['records'] / presents if presents else None}
+    bounds = diagnostics.get('boundaries', {})
+    start = bounds.get('MEASURING', {}).get('host_trace_us')
+    end = bounds.get('MEASURED', {}).get('host_trace_us')
+    if type(start) is not int or type(end) is not int or end <= start:
+        result['frame_window'] = 'missing CLOCK_MONOTONIC phase boundaries'
+        return result
+    if capture.get('dropped') != 0 or not capture.get('start_us', start) <= start < end <= capture.get('end_us', end):
+        result['frame_window'] = 'incomplete or dropped capture'
+        return result
+    window = [s for s in capture.get('samples', []) if start <= s['ts'] < end]
+    name = 'gpu.drawable.received' if any(s['name'] == 'gpu.drawable.received' for s in window) else 'frame.gpu_imported'
+    streams, seen = {}, set()
+    for sample in sorted(window, key=lambda s: s['ts']):
+        identity = sample['id'], sample['value']
+        if sample['name'] != name or identity in seen:
+            continue
+        seen.add(identity)
+        streams.setdefault(sample['id'], []).append(sample['ts'])
+    for identity, stamps in streams.items():
+        gaps = sorted((b-a) / 1000 for a, b in zip(stamps, stamps[1:]))
+        percentile = lambda p: gaps[max(0, math.ceil(len(gaps)*p)-1)] if gaps else None
+        result['gpu_streams'].append({'id': identity, 'event': name, 'frames': len(stamps),
+            'frames_per_second': len(stamps)*1e6/(end-start),
+            'interval_ms_p50': percentile(.5), 'interval_ms_p95': percentile(.95),
+            'interval_ms_max': gaps[-1] if gaps else None})
+    result['gpu_streams'].sort(key=lambda s: (-s['frames'], s['id']))
+    result['frame_window'] = 'measured phases in shared CLOCK_MONOTONIC domain'
+    return result
+
+
 def ensure_host_visible(socket,pid,evidence,timeout=5):
     """One owned activation request; observe visibility before starting guest work."""
     began=time.monotonic();deadline=began+timeout
@@ -134,7 +177,8 @@ def attempt(fixture,game,output,sample=False,*,phase_hook=None):
     sampler=MeasurementSample(state,output) if sample else None;profile=None
     def phase(kind):
         nonlocal screenshot,profile
-        boundary={'host_monotonic_seconds':time.monotonic()}
+        boundary={'host_monotonic_seconds':time.monotonic(),
+                  'host_trace_us':time.clock_gettime_ns(time.CLOCK_MONOTONIC)//1000}
         diagnostics['boundaries'][kind]=boundary
         if sampler and kind=='MEASURING':sampler.start()
         if sampler and kind=='MEASURED':profile=sampler.finish(boundary['host_monotonic_seconds'])
@@ -201,6 +245,7 @@ def attempt(fixture,game,output,sample=False,*,phase_hook=None):
     except Exception as error:errors.append('native trace: '+str(error))
     write(output/'host-capture.json',capture);(output/'native-rejections.log').write_text(native_text)
     verdict=evaluate(guest,capture,native_text)
+    summary=None
     if all('native' in diagnostics['boundaries'].get(kind,{}) for kind in ('MEASURING','MEASURED')):
         try:
             summary=summarize_counters(diagnostics['boundaries']['MEASURING']['native'],diagnostics['boundaries']['MEASURED']['native'])
@@ -214,7 +259,8 @@ def attempt(fixture,game,output,sample=False,*,phase_hook=None):
     if sampler:write(output/'sample.json',profile)
     report={'schema':1,'game':game,'fixture':str(fixture),'guest_result':str(output/'guest/run.json'),
             'verdict':verdict,'errors':errors,'diagnostics':diagnostics,'host_visibility':visibility,'rendered_screenshot':screenshot,
-            'native_trace_offsets':[before.st_size,native_end],'cpu_sample':profile}
+            'native_trace_offsets':[before.st_size,native_end],'cpu_sample':profile,
+            'performance':performance_summary(diagnostics,capture,summary)}
     write(output/'run.json',report)
     return report
 

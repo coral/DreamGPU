@@ -23,7 +23,6 @@ dreamgpu = { path = "../dreamgpu", features = ["presentation"] }
 
 ```sh
 cargo test --features presentation
-cargo run --features presentation --example viewer -- --smoke
 cargo run --features presentation --example viewer -- /tmp/dgpu.sock
 ```
 
@@ -37,6 +36,13 @@ cargo build --release                            # SDK and native QEMU
 DREAMGPU_BUILD=all cargo build --release          # also both Windows guest packages
 ```
 
+Guest compilation uses the [pinned x86-64 Linux toolchain](support/guest/toolchain/README.md).
+From macOS, select your configured SSH builder:
+
+```sh
+DREAMGPU_GUEST_HOST=your-builder DREAMGPU_BUILD=all cargo build --release
+```
+
 Outputs:
 
 - `target/qemu-build/`: native QEMU binaries and their source/binary manifest.
@@ -46,8 +52,8 @@ Outputs:
   implementations, with tools kept separate from runtime drivers.
 - `target/guest/dreamgpu.exe`: combined guest installer, with an adjacent
   `installer-manifest.json` recording payload identities. System-wide activation
-  is implemented, with full guest lifecycle acceptance in progress.
-  See [installer status](tools/setup/README.md) and the [remaining plan](docs/plan.md).
+  installs the system graphics providers inside the Windows guest.
+  See [installation](tools/setup/README.md) and the [graphics performance plan](docs/plan.md).
 
 ## Licensing
 

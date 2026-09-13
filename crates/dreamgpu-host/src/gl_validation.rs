@@ -100,6 +100,22 @@ pub(crate) fn texture_components(format: u32) -> u32 {
     }
 }
 
+pub(crate) fn texture_pixel_bytes(format: u32, kind: u32) -> u32 {
+    match kind {
+        GL_UNSIGNED_BYTE => texture_components(format),
+        GL_UNSIGNED_SHORT_5_6_5 if format == GL_RGB => 2,
+        GL_UNSIGNED_SHORT_4_4_4_4
+        | GL_UNSIGNED_SHORT_5_5_5_1
+        | GL_UNSIGNED_SHORT_4_4_4_4_REV
+        | GL_UNSIGNED_SHORT_1_5_5_5_REV
+            if matches!(format, GL_RGBA | GL_BGRA) =>
+        {
+            2
+        }
+        _ => 0,
+    }
+}
+
 pub(crate) fn index_bytes(kind: u32) -> u32 {
     match kind {
         GL_UNSIGNED_BYTE => 1,
@@ -646,23 +662,27 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let one = matches!(function, FEnum_glTexImage1D | FEnum_glTexSubImage1D);
     let w = a[if image { 3 } else { 4 }];
     let h = a[if image { 4 } else { 5 }];
-    let components = texture_components(a[6]);
+    let pixel_bytes = texture_pixel_bytes(a[6], a[7]);
     let allocate_only = image && data.is_empty();
     if a[0] != (if one { GL_TEXTURE_1D } else { GL_TEXTURE_2D })
         || (one && (h != 1 || (!image && a[3] != 0)))
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
         || w == 0
         || h == 0
-        || w > DG_GL_MAX_TEXTURE_DIMENSION
+        || w > DG_GL_MAX_TEXTURE_DIMENSION + if one { 2 } else { 0 }
         || h > DG_GL_MAX_TEXTURE_DIMENSION
-        || components == 0
-        || a[7] != GL_UNSIGNED_BYTE
+        || pixel_bytes == 0
         || (!allocate_only
-            && u64::from(w) * u64::from(h) * u64::from(components) != data.len() as u64)
+            && u64::from(w) * u64::from(h) * u64::from(pixel_bytes) != data.len() as u64)
         || (image
-            && (a[5] != 0
-                || !texture_internal_format(a[2])
-                || w > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
+            && (a[5] > u32::from(one)
+                || w < 2 * a[5]
+                || !(if one {
+                    (1..=4).contains(&a[2]) || copy_1d_internal_format(a[2])
+                } else {
+                    texture_internal_format(a[2])
+                })
+                || w - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
                 || h > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])))
     {
         DG_GL_ERROR_TEXTURE

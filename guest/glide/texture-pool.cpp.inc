@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-// Address/hash invalidation stays in TexDB::WipeRange. Retired records retain
-// only private GL storage; they are never visible to texture lookup.
+static void ForgetTextureState(TexDB::Record *r);
+
+// Address invalidation stays in TexDB::WipeRange. Retired records retain only
+// private GL storage; compact conversion state belongs to live records.
 void TexDB::Retire(Record *r) {
+    ForgetTextureState(r);
     if (m_upload == r)
         m_upload = NULL;
     unsigned int bytes = 0;
@@ -25,10 +28,19 @@ void TexDB::Retire(Record *r) {
             h = h > 1 ? h / 2 : 1;
         }
     }
-    if (r->tex2Num || !bytes || m_poolCount >= 64 || bytes > 8 * 1024 * 1024 ||
-        m_poolBytes > 8 * 1024 * 1024 - bytes) {
+    if (r->tex2Num || !bytes || bytes > 8 * 1024 * 1024) {
         delete r;
         return;
+    }
+    while (m_pool && (m_poolCount >= 64 || m_poolBytes > 8 * 1024 * 1024 - bytes)) {
+        Record **oldest = &m_pool;
+        while ((*oldest)->next)
+            oldest = &(*oldest)->next;
+        Record *old = *oldest;
+        *oldest = NULL;
+        --m_poolCount;
+        m_poolBytes -= old->retainedBytes;
+        delete old;
     }
     r->retainedBytes = bytes;
     r->next = m_pool;
@@ -41,8 +53,8 @@ TexDB::Record *TexDB::Acquire(GrTexInfo *info, bool two) {
     if (!two)
         for (Record **p = &m_pool; *p; p = &(*p)->next) {
             Record *r = *p;
-            if (r->info.largeLod != info->largeLod || r->info.aspectRatio != info->aspectRatio ||
-                r->info.format != info->format)
+            if (r->info.largeLod != info->largeLod ||
+                r->info.aspectRatio != info->aspectRatio || r->info.format != info->format)
                 continue;
             *p = r->next;
             --m_poolCount;
@@ -54,8 +66,10 @@ TexDB::Record *TexDB::Acquire(GrTexInfo *info, bool two) {
 }
 
 void TexDB::ForgetStorage(GLuint name) {
-    if (m_upload && m_upload->texNum == name)
+    if (m_upload && m_upload->texNum == name) {
+        ForgetTextureState(m_upload);
         memset(m_upload->storage, 0, sizeof(m_upload->storage));
+    }
 }
 
 void TexDB::Upload(GLuint name, GLint level, GLint internal, GLsizei width, GLsizei height,
@@ -93,4 +107,69 @@ void TexDB::Parameters(GLuint name, GLint wrapS, GLint wrapT, GLint min, GLint m
             r->params[unit][i] = values[i];
         }
     }
+}
+
+// Actual writes invalidate overlapping live records. Only conversion state
+// must be compared on a live hit; raw texture bytes are never copied or hashed.
+static void ForgetTextureState(TexDB::Record *r) {
+    if (!r || !r->contentState)
+        return;
+    *r->contentBudget -= r->contentStateBytes;
+    free(r->contentState);
+    r->contentState = NULL;
+    r->contentStateBytes = 0;
+    r->contentBudget = NULL;
+}
+
+void TexDB::Write(FxU32 first, FxU32 end, void *destination, const void *source,
+                  unsigned int bytes) {
+    if (!bytes)
+        return;
+    if (memcmp(destination, source, bytes) == 0) {
+        ++m_identicalWrites;
+        return;
+    }
+    ++m_changedWrites;
+    WipeRange(first, end, 0);
+    memcpy(destination, source, bytes);
+}
+
+GrTexInfo *TexDB::FindState(FxU32 first, FxU32 end, GrTexInfo *info, const void *state,
+                            unsigned int stateBytes, GLuint *texture) {
+    ++m_contentLookups;
+    if (first >= end || (first >> 15) >= numberOfTexSections)
+        return NULL;
+    for (Record *r = m_first[first >> 15]; r; r = r->next) {
+        if (!r->Match(first, info, 0) || r->endAddress != end || !r->contentState ||
+            r->contentStateBytes != stateBytes)
+            continue;
+        if (memcmp(r->contentState, state, stateBytes) == 0) {
+            m_upload = r;
+            *texture = r->texNum;
+            return &r->info;
+        }
+        ++m_stateChanges;
+    }
+    ++m_contentMisses;
+    WipeRange(first, end, 0);
+    return NULL;
+}
+
+void TexDB::RememberState(const void *state, unsigned int stateBytes) {
+    Record *r = m_upload;
+    if (!r || r->tex2Num)
+        return;
+    ForgetTextureState(r);
+    // Bound exact active conversion keys independently of GPU texture storage.
+    // Retiring a record immediately releases its key for the next upload.
+    if (!stateBytes || stateBytes > 4096 || stateBytes > 8 * 1024 * 1024 - m_contentBytes)
+        return;
+    unsigned char *key = static_cast<unsigned char *>(malloc(stateBytes));
+    if (!key)
+        return;
+    memcpy(key, state, stateBytes);
+    r->contentState = key;
+    r->contentStateBytes = stateBytes;
+    r->contentBudget = &m_contentBytes;
+    m_contentBytes += stateBytes;
 }

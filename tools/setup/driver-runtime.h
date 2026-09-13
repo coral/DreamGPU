@@ -60,11 +60,12 @@ inline bool retire_reverse_resume(Os os) {
 // is incomplete. Default setup continues to report provider_not_ready; none of
 // these actions claims system OpenGL/Direct3D activation.
 template <class Payloads>
-Result act(Os os, int action, const Payloads &payloads, const ReverseExecutor *recovery = nullptr) {
+Result act(Os os, int action, const Payloads &payloads, const ReverseExecutor *recovery = nullptr,
+           bool managed_startup = false) {
     lifecycle::Win32Store owner;
     char root[MAX_PATH];
     if (!lifecycle::verified_owner(owner) || !lifecycle::owner_path(root))
         return Result::invalid;
-    return act_at(os, action, root, payloads, recovery);
+    return act_at(os, action, root, payloads, recovery, managed_startup);
 }
 } // namespace setup::driver

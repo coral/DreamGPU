@@ -2,7 +2,7 @@
 //! Accepted DMA batches, cancellation, and bounded completion ownership.
 use crate::{
     composition::State,
-    gl::{dreamgpu_gl_execute, Platform, Resources},
+    gl::{execute_cached, Lookup, Platform, Resources},
     gl_api::*,
 };
 use core::{ffi::c_void, ptr};
@@ -290,6 +290,7 @@ pub unsafe extern "C" fn dreamgpu_submission_run(
         let run = *run;
         let mut result = initial;
         let mut offset = 0;
+        let mut lookup = Lookup::default();
         while result == 0 && offset < bytes {
             if (run.cancelled)(run.opaque) != 0 {
                 return DG_GL_ERROR_GENERATION;
@@ -305,7 +306,17 @@ pub unsafe extern "C" fn dreamgpu_submission_run(
             if n < DG_GL_HEADER_BYTES as usize || n > bytes - offset {
                 return DG_GL_ERROR_BATCH;
             }
-            result = dreamgpu_gl_execute(resources, platform, record, n, w, h);
+            result = match execute_cached(
+                resources,
+                &*platform,
+                core::slice::from_raw_parts(record, n),
+                w,
+                h,
+                &mut lookup,
+            ) {
+                Ok(()) => 0,
+                Err(error) => error,
+            };
             (run.report)(run.opaque, record, result);
             offset += n;
         }

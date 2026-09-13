@@ -16,6 +16,25 @@ from scripts.benchmarks.bench import WebSocket, distribution, scenario_events, s
 
 
 class BenchTests(unittest.TestCase):
+    def test_probe_frame_stages_use_ack_generation_not_next_frame(self):
+        from scripts.benchmarks.bench import probe_frame_stages
+        def event(name, ts, identity, value=0):
+            return dict(name=name, ts=ts, id=identity, value=value)
+        samples = [event('input.received', 10, 1, 1),
+                   event('frame.published', 11, 7), event('frame.acquired', 12, 7),
+                   event('frame.published', 20, 8), event('frame.acquired', 25, 8),
+                   event('probe.ack', 30, 1, 8)]
+        capture = dict(samples=samples, dropped=0, probe_sequence_ids=True)
+        self.assertEqual(probe_frame_stages(capture), {'verified': True, 'rows': [
+            {'sequence': 1, 'generation': 8, 'input_to_publication_us': 10,
+             'publication_to_acquisition_us': 5, 'acquisition_to_ack_us': 5}]})
+        for invalid in (dict(capture, dropped=1), dict(capture, probe_sequence_ids=False),
+                        dict(capture, samples=samples[:3] + samples[4:]),
+                        dict(capture, samples=samples + [samples[0]]),
+                        dict(capture, samples=[dict(item, ts=31) if item['name'] == 'frame.acquired'
+                                               else item for item in samples])):
+            self.assertEqual(probe_frame_stages(invalid), {'verified': False, 'rows': []})
+
     def test_sibling_vm_cpu_is_summed_not_overwritten_by_paused_peer(self):
         from scripts.benchmarks.bench import cpu_summary
         processes = {1: {'executable': '/bundle/qemu-system-i386', 'cpu_seconds': .4},

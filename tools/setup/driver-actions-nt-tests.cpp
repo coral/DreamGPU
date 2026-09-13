@@ -105,7 +105,7 @@ static void nt_flow(bool remove_after_rollback) {
     ReverseExecutor recovery{"C:\\WINDOWS\\DreamGPU\\R00000003\\setup.exe", recovery_sha.c_str()};
     assert(act_at(Os::nt5, 1, root, payloads, &recovery) == Result::invalid); // no forward takeover
     assert(act_at(Os::nt5, 2, root, payloads) == Result::pending_reboot);
-    const auto run_key = fake_win32::canon("Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce");
+    const auto run_key = fake_win32::canon("Software\\Microsoft\\Windows\\CurrentVersion\\Run");
     const auto old_startup = fake_win32::keys.at(run_key).at("dreamgpu.driver");
     fake_win32::keys.at(run_key)["dreamgpu.driver"] = {REG_SZ,
                                                        {'f', 'o', 'r', 'e', 'i', 'g', 'n', 0}};

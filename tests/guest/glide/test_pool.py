@@ -10,6 +10,8 @@ s=patched_source('TexDB.cpp').replace('#include "GlOgl.h"','')
 h=patched_source('TexDB.h').replace('#include "sdk2_glide.h"','')
 harness=r'''
 #include <cassert>
+#include <cstdlib>
+static void GlideMsg(const char*,...) {}
 #include <cstring>
 #include <map>
 #include <vector>
@@ -74,7 +76,70 @@ int main(){
  db.Add(0,8,&info,0,&first,nullptr);bound=first;db.Upload(first,0,4,2,2,1,1,red.data());db.WipeRange(0,8,0);
  db.Add(128*1024,128*1024+8,&info,0,&first,nullptr);
  }
+
  assert(gpu.empty()&&creates==deletes);
+ {
+ TexDB db(32*1024*1024);
+ std::vector<unsigned char> memory(32*1024*1024,0);
+ GrTexInfo info={0,0,0,1,nullptr};unsigned a,b,found;
+ unsigned stateA[4]={1,2,3,4},stateB[4]={1,2,9,4};
+ std::vector<unsigned char> raw(16,11),other(16,22),pixelsA(16,31),pixelsB(16,47);
+ db.Write(0,16,memory.data(),raw.data(),16);
+ assert(!db.FindState(0,16,&info,stateA,sizeof(stateA),&found));
+ db.Add(0,16,&info,7,&a,nullptr);bound=a;db.Upload(a,0,4,2,2,1,1,pixelsA.data());
+ db.RememberState(stateA,sizeof(stateA));
+ unsigned before=images+subs;
+ for(int i=0;i<100;i++) {
+  db.Write(0,16,memory.data(),raw.data(),16);
+  assert(db.FindState(0,16,&info,stateA,sizeof(stateA),&found)&&found==a);
+ }
+ assert(images+subs==before&&gpu[a][0].data==pixelsA);
+ // Same donor hash does not hide different conversion state. Reuse allocation,
+ // then reconvert exact pixels; there is no speculative retired-content cache.
+ assert(!db.FindState(0,16,&info,stateB,sizeof(stateB),&found));
+ db.Add(0,16,&info,7,&b,nullptr);assert(b==a);bound=b;db.Upload(b,0,4,2,2,1,1,pixelsB.data());
+ db.RememberState(stateB,sizeof(stateB));
+ assert(!db.FindState(0,16,&info,stateA,sizeof(stateA),&found));
+ db.Add(0,16,&info,7,&b,nullptr);assert(b==a);bound=b;db.Upload(b,0,4,2,2,1,1,pixelsA.data());
+ db.RememberState(stateA,sizeof(stateA));assert(gpu[a][0].data==pixelsA);
+ // Actual writes invalidate even though the compact key is unchanged.
+ db.Write(0,16,memory.data(),other.data(),16);
+ assert(!db.FindState(0,16,&info,stateA,sizeof(stateA),&found));
+ db.Add(0,16,&info,7,&b,nullptr);assert(b==a);bound=b;db.Upload(b,0,4,2,2,1,1,pixelsB.data());
+ db.RememberState(stateA,sizeof(stateA));
+ db.Write(16,32,memory.data()+16,other.data(),16);
+ assert(db.FindState(0,16,&info,stateA,sizeof(stateA),&found)&&found==a);
+ db.Write(4,8,memory.data()+4,raw.data(),4);
+ assert(!db.FindState(0,16,&info,stateA,sizeof(stateA),&found));
+ db.Clear();assert(gpu.empty());
+ // Repeated misses must not consume 64 object slots or the 8MiB storage pool:
+ // reuse works equally for small textures and byte-cap-sized allocations.
+ for(unsigned width : {2u,256u}) {
+  std::vector<unsigned char> pixels(width*width*4,31);
+  unsigned created=creates,deleted=deletes,img=images;
+  for(unsigned i=0;i<200;i++) {
+   stateA[0]=i;assert(!db.FindState(0,16,&info,stateA,sizeof(stateA),&found));
+   db.Add(0,16,&info,7,&a,nullptr);bound=a;
+   db.Upload(a,0,4,width,width,1,1,pixels.data());db.RememberState(stateA,sizeof(stateA));
+   assert(gpu[a][0].data==pixels);
+  }
+  assert(creates==created+1&&deletes==deleted&&images==img+1);
+  db.Clear();assert(gpu.empty());
+ }
+ // Exact active keys remain bounded. Failed key admission never destroys an
+ // existing live GPU image or fabricates a state hit; retirement frees budget.
+ std::vector<unsigned char> key(4096,3);
+ for(unsigned i=0;i<2050;i++) {
+  db.Add(i*16,i*16+16,&info,7,&a,nullptr);bound=a;
+  db.Upload(a,0,4,2,2,1,1,pixelsA.data());db.RememberState(key.data(),key.size());
+ }
+ assert(gpu.size()==2050);
+ assert(db.FindState(0,16,&info,key.data(),key.size(),&found));
+ assert(!db.FindState(2049*16,2050*16,&info,key.data(),key.size(),&found));
+ db.Clear();assert(gpu.empty());
+ }
+
+ assert(creates==deletes);
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dg-pool-') as folder:

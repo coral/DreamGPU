@@ -1,6 +1,34 @@
 use super::*;
 
 #[test]
+fn programmable_shader_catalog_entries_are_not_host_command_capabilities() {
+    // The private provider's 1D border implementation targets fixed-function
+    // GL1.1. A guest bypassing the ICD cannot gain shader access just because
+    // the preserved upstream enumeration contains programmable API names.
+    for function in [
+        FEnum_glCreateShader,
+        FEnum_glCreateShaderObjectARB,
+        FEnum_glShaderSource,
+        FEnum_glShaderSourceARB,
+        FEnum_glCreateProgram,
+        FEnum_glCreateProgramObjectARB,
+        FEnum_glUseProgram,
+        FEnum_glUseProgramObjectARB,
+        FEnum_glUseProgramStages,
+        FEnum_glProgramStringARB,
+    ] {
+        assert_eq!(function_words(function), u32::MAX);
+        assert_eq!(
+            unsafe {
+                dreamgpu_gl_data_validate(function, core::ptr::null(), core::ptr::null(), u32::MAX)
+            },
+            DG_GL_ERROR_UNSUPPORTED
+        );
+        assert_eq!(query_validate(function, [0; 3]), DG_GL_ERROR_UNSUPPORTED);
+    }
+}
+
+#[test]
 fn function_classes_preserve_scalar_data_and_query_contracts() {
     for (f, n) in [
         (FEnum_glEnd, 0),
@@ -360,4 +388,113 @@ fn fixed_state_and_extended_arrays_reject_malformed_payloads() {
     assert_ne!(query_validate(FEnum_glGetPolygonStipple, [1, 0, 0]), 0);
     assert_eq!(function_words(FEnum_glIndexd), 2);
     assert_eq!(query_state_count(GL_ACCUM_CLEAR_VALUE), 4);
+}
+
+#[test]
+fn one_dimensional_border_upload_admission_checks_full_bytes_and_interior_limit() {
+    let mut a = [
+        GL_TEXTURE_1D,
+        0,
+        GL_RGBA16,
+        2050,
+        1,
+        1,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(data_validate(FEnum_glTexImage1D, &a, &[]), 0);
+    assert_eq!(data_validate(FEnum_glTexImage1D, &a, &[0; 8200]), 0);
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &a, &[0; 8192]),
+        DG_GL_ERROR_TEXTURE
+    );
+    a[5] = 0;
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &a, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    a[5] = 2;
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &a, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    a[5] = 1;
+    a[3] = 1;
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &a, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    a[3] = 6;
+    a[1] = 10;
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &a, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    a[1] = 0;
+    a[2] = 0x804e; // reserved hole between sized internal formats
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &a, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    let sub = [
+        GL_TEXTURE_1D,
+        0,
+        u32::MAX,
+        0,
+        6,
+        1,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(data_validate(FEnum_glTexSubImage1D, &sub, &[0; 24]), 0);
+    assert_eq!(
+        data_validate(FEnum_glTexSubImage1D, &sub, &[0; 23]),
+        DG_GL_ERROR_TEXTURE
+    );
+}
+
+#[test]
+fn packed_texture_words_require_exact_pairs_and_complete_payloads() {
+    for (format, kind) in [
+        (GL_RGB, GL_UNSIGNED_SHORT_5_6_5),
+        (GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4),
+        (GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1),
+        (GL_BGRA, GL_UNSIGNED_SHORT_4_4_4_4_REV),
+        (GL_BGRA, GL_UNSIGNED_SHORT_1_5_5_5_REV),
+    ] {
+        let mut a = [GL_TEXTURE_2D, 0, GL_RGBA8, 3, 2, 0, format, kind];
+        assert_eq!(data_validate(FEnum_glTexImage2D, &a, &[0; 12]), 0);
+        assert_eq!(data_validate(FEnum_glTexImage2D, &a, &[]), 0);
+        for bytes in [10, 11, 13, 24] {
+            assert_eq!(
+                data_validate(FEnum_glTexImage2D, &a, &vec![0; bytes]),
+                DG_GL_ERROR_TEXTURE
+            );
+        }
+        a = [GL_TEXTURE_2D, 0, 1, 2, 3, 2, format, kind];
+        assert_eq!(data_validate(FEnum_glTexSubImage2D, &a, &[0; 12]), 0);
+        assert_eq!(
+            data_validate(FEnum_glTexSubImage2D, &a, &[]),
+            DG_GL_ERROR_TEXTURE
+        );
+        a = [GL_TEXTURE_1D, 0, GL_RGBA8, 3, 1, 0, format, kind];
+        assert_eq!(data_validate(FEnum_glTexImage1D, &a, &[0; 6]), 0);
+    }
+    for (format, kind) in [
+        (GL_RGBA, GL_UNSIGNED_SHORT_5_6_5),
+        (GL_RGB, GL_UNSIGNED_SHORT_4_4_4_4),
+        (GL_ALPHA, GL_UNSIGNED_SHORT_5_5_5_1),
+        (GL_LUMINANCE, GL_UNSIGNED_SHORT),
+        (GL_RGBA, GL_UNSIGNED_INT),
+    ] {
+        let a = [GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, format, kind];
+        assert_eq!(
+            data_validate(FEnum_glTexImage2D, &a, &[]),
+            DG_GL_ERROR_TEXTURE
+        );
+        assert_eq!(
+            data_validate(FEnum_glTexImage2D, &a, &[0; 2]),
+            DG_GL_ERROR_TEXTURE
+        );
+    }
 }

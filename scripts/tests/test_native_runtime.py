@@ -19,7 +19,7 @@ class NativeRuntimeTests(unittest.TestCase):
         self.assertIsNone(checked_execution({},Path))
         with tempfile.TemporaryDirectory() as tmp:
             artifact,executable,_,_=self.make(Path(tmp))
-            self.assertEqual(checked_execution(artifact,Path)['path'],str(executable))
+            self.assertEqual(checked_execution(artifact,Path)['path'],str(executable.resolve()))
             executable.write_bytes(b'changed ELF')
             with self.assertRaisesRegex(ValueError,'member identity'):checked_execution(artifact,Path)
 

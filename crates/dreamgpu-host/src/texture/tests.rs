@@ -10,6 +10,11 @@ struct Mock {
     waits: u32,
     fences: u32,
     deletes: u32,
+    width: i32,
+    border: i32,
+    strip_border: bool,
+    query_error: u32,
+    offsets: Vec<i32>,
 }
 thread_local! { static MOCK: RefCell<Mock> = RefCell::new(Mock::default()); }
 fn index(key: u32) -> usize {
@@ -42,12 +47,17 @@ unsafe extern "C" fn image1(
     _: u32,
     _: i32,
     _: i32,
-    _: i32,
-    _: i32,
+    width: i32,
+    border: i32,
     _: u32,
     _: u32,
     pixels: *const c_void,
 ) {
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        v.width = width - if v.strip_border { 2 * border } else { 0 };
+        v.border = if v.strip_border { 0 } else { border };
+    });
     image(1, pixels);
 }
 unsafe extern "C" fn image2(
@@ -63,7 +73,22 @@ unsafe extern "C" fn image2(
 ) {
     image(2, pixels);
 }
-unsafe extern "C" fn sub1(_: u32, _: i32, _: i32, _: i32, _: u32, _: u32, pixels: *const c_void) {
+unsafe extern "C" fn sub1(
+    _: u32,
+    _: i32,
+    offset: i32,
+    _: i32,
+    _: u32,
+    _: u32,
+    pixels: *const c_void,
+) {
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        v.offsets.push(offset);
+        if v.width == 0 {
+            v.error = GL_INVALID_OPERATION;
+        }
+    });
     image(3, pixels);
 }
 unsafe extern "C" fn sub2(
@@ -99,9 +124,23 @@ unsafe extern "C" fn delete(_: *mut __GLsync) {
 unsafe extern "C" fn wait_sync(_: *mut __GLsync, _: u32, _: u64) {
     MOCK.with(|v| v.borrow_mut().waits += 1);
 }
+unsafe extern "C" fn level(_: u32, _: i32, key: u32, out: *mut i32) {
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        unsafe {
+            *out = if key == GL_TEXTURE_WIDTH {
+                v.width
+            } else {
+                v.border
+            };
+        }
+        v.error = v.query_error;
+    });
+}
 fn api() -> DreamGpuGlApi {
     let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
     api.dg_glGetIntegerv = Some(get);
+    api.dg_glGetTexLevelParameteriv = Some(level);
     api.dg_glPixelStorei = Some(store);
     api.dg_glGetError = Some(error);
     api.dg_glTexImage1D = Some(image1);
@@ -259,4 +298,160 @@ fn same_context_and_foreign_version_fence_ownership() {
         (7, 4, 3)
     );
     assert_eq!((t.writer_serial, t.waiter_serial, t.version), (4, 0, 4));
+}
+
+#[test]
+fn border_upload_native_dimensions_signed_bounds_and_full_precision_budget() {
+    let api = api();
+    let mut t = Texture {
+        target: GL_TEXTURE_1D,
+        ..Texture::default()
+    };
+    let mut total = 0;
+    MOCK.with(|v| *v.borrow_mut() = Mock::default());
+    let image = [
+        GL_TEXTURE_1D,
+        0,
+        GL_RGBA16,
+        6,
+        1,
+        1,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, image, 24),
+        (Ok(()), 0)
+    );
+    assert_eq!((t.widths[0], total), (6, 48));
+    assert_eq!(MOCK.with(|v| (v.borrow().width, v.borrow().border)), (6, 1));
+    let mut sub = [
+        GL_TEXTURE_1D,
+        0,
+        (-1i32) as u32,
+        0,
+        6,
+        1,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage1D, sub, 24),
+        (Ok(()), 0)
+    );
+    assert_eq!(MOCK.with(|v| v.borrow().offsets.clone()), [-1]);
+    sub[2] = 4;
+    sub[4] = 2;
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage1D, sub, 8),
+        (Ok(()), GL_INVALID_VALUE)
+    );
+    sub[2] = (-2i32) as u32;
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage1D, sub, 8),
+        (Ok(()), GL_INVALID_VALUE)
+    );
+    assert_eq!(MOCK.with(|v| v.borrow().offsets.len()), 1);
+    MOCK.with(|v| v.borrow_mut().zero_error = GL_OUT_OF_MEMORY);
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, image, 0),
+        (Err(11), GL_OUT_OF_MEMORY)
+    );
+    assert_eq!(t.undefined_levels, 1);
+    sub[2] = (-1i32) as u32;
+    sub[4] = 6;
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage1D, sub, 24),
+        (Ok(()), 0)
+    );
+    assert_eq!(t.undefined_levels, 0);
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        v.strip_border = true;
+        v.zero_error = 0;
+    });
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, image, 24),
+        (Ok(()), 0)
+    );
+    assert_eq!((t.widths[0], total), (4, 32)); // actual native image, never requested fake width
+    MOCK.with(|v| v.borrow_mut().query_error = GL_INVALID_OPERATION);
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, image, 24),
+        (Err(11), GL_INVALID_OPERATION)
+    );
+    assert_eq!((t.widths[0], total, t.undefined_levels), (0, 48, 1));
+    total = u64::from(DG_GL_MAX_TEXTURE_BYTES);
+    let mut larger = image;
+    larger[3] = 10;
+    let calls = MOCK.with(|v| v.borrow().uploads.len());
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, larger, 40).0,
+        Err(9)
+    );
+    assert_eq!(MOCK.with(|v| v.borrow().uploads.len()), calls);
+}
+
+#[test]
+fn ordinary_borderless_1d_retains_its_previous_storage_admission() {
+    let api = api();
+    let mut t = Texture {
+        target: GL_TEXTURE_1D,
+        ..Texture::default()
+    };
+    let mut total = u64::from(DG_GL_MAX_TEXTURE_BYTES) - 16;
+    MOCK.with(|v| *v.borrow_mut() = Mock::default());
+    let image = [
+        GL_TEXTURE_1D,
+        0,
+        GL_RGBA8,
+        4,
+        1,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, image, 16),
+        (Ok(()), 0)
+    );
+    assert_eq!(t.levels[0], 16);
+    assert_eq!(total, u64::from(DG_GL_MAX_TEXTURE_BYTES));
+}
+
+#[test]
+fn undefined_native_array_uses_its_actual_error_without_poisoning_later_uploads() {
+    let api = api();
+    let mut t = Texture {
+        target: GL_TEXTURE_1D,
+        ..Texture::default()
+    };
+    let mut total = 0;
+    MOCK.with(|v| *v.borrow_mut() = Mock::default());
+    let sub = [GL_TEXTURE_1D, 0, 0, 0, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage1D, sub, 4),
+        (Ok(()), GL_INVALID_OPERATION)
+    );
+    assert_eq!((t.version, total), (0, 0));
+    assert_eq!(MOCK.with(|v| v.borrow().offsets.len()), 1); // actual native error, not width shadow
+    let image = [
+        GL_TEXTURE_1D,
+        0,
+        GL_RGBA8,
+        4,
+        1,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage1D, image, 16),
+        (Ok(()), 0)
+    );
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage1D, sub, 4),
+        (Ok(()), 0)
+    );
+    assert_eq!((t.version, total), (2, 16));
 }

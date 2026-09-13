@@ -212,3 +212,113 @@ fn failed_binding_and_truncated_data_do_not_dispatch() {
         Err(BATCH)
     );
 }
+
+#[test]
+fn batch_lookup_matches_uncached_dispatch_across_owner_changes_and_reused_slots() {
+    let mut direct = Resources::default();
+    let mut cached = Resources::default();
+    let mut dm = Mock::default();
+    let mut cm = Mock::default();
+    let dp = platform(&mut dm);
+    let cp = platform(&mut cm);
+    let mut lookup = Lookup::default();
+    let mut records = vec![];
+    for owner in [1, 2] {
+        records.extend([
+            record(1, owner, 10, 0, 0, &[0]),
+            record(3, owner, 0, 20, 0, &[640, 480]),
+            record(5, owner, 10, 20, 0, &[]),
+        ]);
+    }
+    for owner in [1, 1, 2, 2, 1] {
+        for _ in 0..32 {
+            records.push(record(6, owner, 10, 20, 0, &[123, 1]));
+            records.push(record(11, owner, 10, 20, 0, &[123, 1]));
+        }
+    }
+    records.extend([
+        record(4, 1, 10, 20, 0, &[]),
+        record(6, 1, 10, 20, 0, &[123]),     // deleted drawable
+        record(3, 1, 0, 20, 0, &[640, 480]), // same numeric identity
+        record(5, 1, 10, 20, 0, &[]),
+        record(6, 1, 10, 20, 0, &[123]),
+        record(2, 1, 10, 20, 0, &[]),
+        record(6, 1, 10, 20, 0, &[123]), // deleted context
+        record(1, 1, 10, 0, 0, &[0]),
+        record(5, 1, 10, 20, 0, &[]),
+        record(6, 1, 10, 20, 0, &[123]),
+        record(6, 3, 10, 20, 0, &[123]), // foreign client
+        record(6, 2, 10, 20, 0, &[123]),
+    ]);
+    for r in records {
+        assert_eq!(
+            unsafe { execute_cached(&mut cached, &cp, &r, 640, 480, &mut lookup) },
+            unsafe { execute(&mut direct, &dp, &r, 640, 480) },
+        );
+        assert_eq!(cm.calls, dm.calls);
+        for i in 0..MAX {
+            assert_eq!(cached.contexts[i].native, direct.contexts[i].native);
+            assert_eq!(cached.drawables[i].native, direct.drawables[i].native);
+        }
+    }
+}
+
+#[test]
+#[ignore = "manual native command-dispatch throughput measurement; no GPU or VM"]
+fn measure_batch_lookup_throughput() {
+    unsafe extern "C" fn empty_current(_: *mut c_void, c: u32, d: u32) -> u32 {
+        std::hint::black_box((c, d));
+        0
+    }
+    unsafe extern "C" fn empty_call(_: *mut c_void, c: u32, f: u32, _: *const u8) -> u32 {
+        std::hint::black_box((c, f));
+        0
+    }
+    let mut mock = Mock::default();
+    let mut p = platform(&mut mock);
+    p.make_current = empty_current;
+    p.call = empty_call;
+    for slot in [0, 15, 31] {
+        let mut s = Resources::default();
+        s.contexts[slot] = Context {
+            client: 1,
+            id: 10,
+            drawable: 20,
+            native: std::ptr::dangling_mut(),
+        };
+        s.drawables[slot] = Drawable {
+            client: 1,
+            id: 20,
+            width: 640,
+            height: 480,
+            native: std::ptr::dangling_mut(),
+            ..Drawable::EMPTY
+        };
+        let record = record(6, 1, 10, 20, 0, &[123, 1]);
+        for cached in [false, true, true, false] {
+            let mut lookup = Lookup::default();
+            let start = std::time::Instant::now();
+            for _ in 0..2_000_000 {
+                let result = unsafe {
+                    if cached {
+                        execute_cached(
+                            std::hint::black_box(&mut s),
+                            &p,
+                            &record,
+                            640,
+                            480,
+                            &mut lookup,
+                        )
+                    } else {
+                        execute(std::hint::black_box(&mut s), &p, &record, 640, 480)
+                    }
+                };
+                assert_eq!(result, Ok(()));
+            }
+            println!(
+                "slot={slot} cached={cached} records=2000000 elapsed_ns={}",
+                start.elapsed().as_nanos()
+            );
+        }
+    }
+}

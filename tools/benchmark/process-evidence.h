@@ -21,7 +21,8 @@ static void DgEvidenceHex(char *buffer, DWORD capacity, DWORD *bytes, DWORD valu
     DgEvidenceText(buffer, capacity, bytes, text);
 }
 static const char *DgEvidenceModule(const char *name) {
-    static const char *names[] = {"hl.exe", "hw.dll", "sw.dll", "dgpugl.dll", "dgpuicd.dll", "opengl32.dll"};
+    static const char *names[] = {"hl.exe",     "hw.dll",      "sw.dll",
+                                  "dgpugl.dll", "dgpuicd.dll", "opengl32.dll"};
     unsigned i, j;
     for (i = 0; i < sizeof(names) / sizeof(names[0]); ++i) {
         for (j = 0; names[i][j]; ++j) {

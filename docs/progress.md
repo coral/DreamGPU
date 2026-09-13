@@ -1,3 +1,10 @@
+> **Scope reset — September 13, 2026:** The user rejected the agent-added rollback,
+> perfect-uninstall, unattended-installation and smoke-test campaigns. They are
+> cancelled. The authoritative milestones are now in [plan.md](plan.md): working
+> accelerated games, Mac Direct3D/Glide/OpenGL performance, accurate adapter
+> capacity, and the XP Display Settings/Properties crash. Earlier outstanding
+> checklists below are historical and must not restart cancelled work.
+
 # DreamGPU execution ledger
 
 Started September 12, 2026. Plan: [plan.md](plan.md).
@@ -1489,3 +1496,310 @@ pass on the Framework's radeonsi hardware. Cargo/private runtime integration is
 in progress; no system Mesa replacement or global library-path change is used.
 Legacy 1D borders remain a separate unaccepted implementation until sampling,
 copy, query and lifetime oracles pass.
+
+### Automated installer UI acceptance
+
+Owned-control diagnostics established that Windows2000's sole MB_OK control is
+ID2 rather than ID1. Corrected helper452485 checks the sole visible button's
+class, owner, ID and exact OK label, posts the actual command, observes process
+exit0 and verifies terminal GLOBAL activation. It passes16 actual Win32 adapter
+sanitizer cases, GCC16 C++23/PE4 plus analyzer, and target-aware LLVM22 tidy.
+
+The guest produced a successful receipt; the controller initially expected
+`sysui` instead of the real `/continue` operation's `sysresume` receipt. The fixed
+parser requires dialog action, exact installer exit and continuation receipt to
+agree. Its26-test controller suite passes. Reprocessing the preserved successful
+bytes closes this gate without repeating the guest operation. Evidence:
+`target/follow-through/installer-ui-v1/ui-acceptance.json`.
+
+### Default private Linux Mesa runtime accepted
+
+Cargo now builds the pinned Mesa provider and an immutable runtime containing
+its actual QEMU ELF, linked libraries, vendor descriptions, source-package
+identities and notices. Linux `native_dir` is `qemu-build/bin`; Rust launchers
+authenticate their runtime before replacing themselves with the real QEMU ELF.
+Ninja's original outputs remain unchanged. Relocation, byte/symlink tampering,
+actual process ownership and standalone BIOS boot/clean quit are tested. Juke's
+Vulkan environment is unaffected.
+
+Final launcherdd6efd / runtime8ece47 passes44 launcher/fixture/sampler checks,
+Cargo native builds, both Rust Clippy gates and three native GPU gates with no
+manual provider environment: exact extreme integer transfer, fractional/negative
+pixel zoom, and normal drawable export/release. Evidence and frozen inputs:
+`target/follow-through/gl11-runtime-v1/acceptance.json`. Hardware acceptance is
+Framework AMD radeonsi; other compiled hardware drivers are not runtime-tested.
+The private provider is not a replacement system display-driver installation.
+The border-texture proof remains separately reviewed and is not in this receipt.
+
+### Final verification and desktop trace decomposition
+
+Strict Mac workspace/all-target/all-feature Clippy and formatting pass. All212
+host automation tests pass (two platform-specific skips) after removing a stale
+registry test overload and fixing the runtime identity test's expected canonical
+Mac `/private/var` path. Neither fix changes production registry or process logic.
+
+The benchmark summarizer now joins probe counters to the exact acknowledged
+frame generation and records input→publication→acquisition→ACK stages. Missing,
+ambiguous, dropped or out-of-order chains yield no derived stage result. Its24
+source tests pass. Reprocessing the saved final-native matched captures preserves
+all16 chains per scenario in `dirty-fence-v1/matched-frame-stages.json`.
+
+The installed-minus-before mean publication delay is +1.024ms fill, +1.883ms
+copy, +0.495ms scroll and +1.127ms repaint. Frame-worker acquisition stays near
+60–80µs; later renderer preparation is similar or lower after installation.
+Publication includes guest execution and producer refresh, so this identifies
+which portion needs investigation without claiming it is GPU execution time.
+The earlier native copy trace remains the actual native-work measurement.
+No new benchmark run or speculative copy-path change was made for this analysis.
+
+### NT startup ownership correction
+
+The attempted corrected-executor recovery had not run when a private W2K guest
+stalled before Explorer. Actual vCPU PCs at60/100s mapped to frozen7afe file
+hashing and SHA256 compression. The old continuation was repeatedly executing;
+a missing login key was not the cause, and fixture-only autologon did not fix it.
+Original failed disks and unchanged journal/log identities remain preserved.
+
+Candidate292be uses persistent NT Run/schema3 for new GLOBAL startup receipts,
+while historical schema1 remains RunOnce with exact retirement semantics. GLOBAL
+owns component startup only after verifying its own durable arm; missing/foreign
+registration blocks driver mutation. New standalone NT driver journals use
+Run/version4; legacy key before-images are not reinterpreted. The combined source
+passes fault gates, GCC16 analyzer and LLVM22 tidy and is frozen on both hosts
+under `system-installer-startup-owner-v1/inputs`. Actual recovery now passes on an independent predecessor copy: terminal rollback12, exact18 original provider images, two prior driver files and OEM2 binding restored, pending queues consumed, and all DreamGPU startup registrations removed. A subsequent baseline uninstall returns13 after one clean boot and preserves the original OEM inventory. Both final disks are cleanly stopped. Win98 upgrade and immediate rollback also pass exact14-provider/two-driver/cache audits. A separate controlled SYSBCKUP-only repair reaches failure26 and remains under investigation; these successful lifecycle results do not close that repair gate.
+
+
+### Desktop source and configuration comparison
+
+`desktop-state-audit-v1/assessment.json` records a read-only comparison of the
+stopped before/installed fixtures. All48 nonempty miniport function bodies and
+all PE sections match. The original17 display-hook mappings and GDI hot paths
+match; changes cover ICD hooks, driver hook count, and associated binding code.
+All220 service startup configurations match. Scoped video, priority and startup
+settings do not identify a cause for the saved publication delay. Actual runtime
+background activity remains unmeasured. The first disassembly extractor was
+rejected for empty instruction arrays; the corrected receipt validates nonempty
+bodies and symbol cardinality. No speculative driver change follows this audit.
+
+The next discriminating performance trace must separate input delivery, guest
+handler/work, native 2D completion and refresh publication without adding disk or
+serial I/O inside the measured guest work. Existing measurements remain valid;
+this source comparison does not establish universal desktop parity.
+
+
+User observation during Mac XP UT acceptance: Direct3D shading/shadows looked
+better than Glide but perceived performance was poor. Added a deferred profiling
+and optimization pass to plan.md; no pivot or FPS claim. Mac XP D3D and Glide
+ordinary-provider/engine-exit acceptance passes on native0b105f, followed by
+clean guest shutdown (`xp-normal-system-games-v1/macos-shutdown.json`).
+
+
+### Windows 98 cache repair accepted
+
+The controlled SYSBCKUP-only drift case caught a missing cache-path predicate in
+`seed_repair`: assessment and capture allowed the exact known-original cache,
+but verifier seeding omitted it. The narrow allowlist fix keeps NT cache refusal.
+Actual verifier fault tests fail before the fix and pass afterward. Candidate
+17e68b repairs the independent drifted Win98 copy after one clean boot, with all
+14 providers, two drivers and caches audited. VERIFY.JRN advances completed mask
+51→63: only affected Direct3D6/7 proofs rerun, retaining valid unrelated proofs.
+The failed292 case and original source remain preserved. Final combined guest
+frontend packaging follows; this receipt identifies installer17e68b only.
+
+
+### Final source quality sweep
+
+Both Mac texture-control GPU oracles pass on frozen native0b105f, including
+actual border uploads, split signed updates and exact readback. All118 Rust host
+tests and strict workspace Clippy pass. Complete maintained C/C++ formatting
+passes after five whitespace-only fixes, mirrored before final package capture.
+
+The full parallel workspace suite exposed a test isolation defect: the global
+trace recorder legitimately captures transport events from other concurrent
+tests. The flow test now checks its uniquely named cross-thread events and
+rejects stale-session events without assuming unrelated event absence. No
+production recorder behavior changes. The corrected full workspace suite passes,
+as do216 host automation tests (two platform-specific skips). Exact logs are
+under `gl11-border-macos-v1/`.
+
+
+### Scope correction applied
+
+All three agents stopped installer acceptance/recovery and conformance campaigns.
+No unfinished recovery source edits existed beyond accepted0aaf; that investigation
+was read-only. All owned installer/game VMs are stopped or merely staged. Removed
+the unused new border diagnostic and CMake target, and the unfinished desktop QPC
+header/probe changes/decoder/tests. Completed production graphics fixes and saved
+profiles remain. The final grouped Mac native build completed; no further
+conformance runs are scheduled.
+
+New assignments: NT adapter metadata and Properties crash; Mac UT Direct3D
+profiling/optimization; shared native OpenGL/Glide performance. The D3D performance
+pass is now active priority, superseding its earlier deferred status.
+
+## Game performance after the scope reset (September 13)
+
+The existing Mac UT Direct3D workload was sampled once during its measurement
+phase. CPU0 spends 1,066/1,192 samples executing TCG while the native renderer
+waits for work in 1,065/1,172 samples. This points to guest-side translation and
+command production as the first substantial improvement, not GPU saturation.
+Evidence: `target/follow-through/mac-ut-d3d-perf-v1/profile/qemu.sample.txt`.
+
+The native implementation now avoids a cancellation mutex per command, reuses
+validated context/drawable lookup within batches, and restores only the current
+attributes affected by an array packet. Focused checks and the Linux build pass.
+The isolated cancellation timing is not a game FPS result; the changed game
+candidate will include the WineD3D vertex-array improvement.
+
+Existing game automation now summarizes submission throughput and received GPU
+frame intervals from its existing counters and traces. Phase boundaries use the
+same `CLOCK_MONOTONIC` clock as native traces: Python's Mac monotonic clock has a
+different sleep offset. Old captures without matching boundaries remain usable
+for counter totals but are not misrepresented as measured frame pacing. Saved
+Mac baseline counter summaries are 55.25 D3D and 15.71 Glide presents/second; these
+are submission rates, not engine-reported FPS or physical display measurements.
+No unchanged baseline was replayed.
+
+### Changed native OpenGL game on Linux
+
+The direct Half-Life `jrgperf` timedemo completed once: 379 frames, 1.996 seconds,
+**189.844 engine-reported FPS**. The actual process loaded system
+`opengl32.dll`, `dgpugl.dll` and `dgpuicd.dll`; native draw commands and GPU
+drawable presentation were recorded without capture drops. This proves the
+accelerated game route and gives a current throughput result. It is not a
+matched speedup claim against an unchanged baseline. The unchanged Windows 2000
+game image used the existing renderer-proof runner, without new helper setup.
+
+The Linux candidate contains the native command/array improvements and actual
+64 MiB framebuffer default. Its ELF is `8c5444e6…`, immutable runtime
+`68d75f2a…`. Mac candidate `97c1a2de…` contains the same source changes.
+Evidence: `target/follow-through/game-opengl-performance-v1/game/run.json`.
+
+### Performance candidates: measured results, including rejected changes
+
+- Corrected Mac WineD3D candidate `80362e92…` uses 99,800 array draws instead
+  of the scalar vertex workload. Commands per present fell about 72%, and the
+  measured transport bytes fell from 115.1 MB to 80.3 MB. Its sampled result is
+  55.42 presents/s; this is not a demonstrated improvement over the saved
+  unsampled 55.25 presents/s. The remaining guest CPU cost needs guest-PC
+  attribution. An earlier candidate did not engage because Wine's synthetic
+  multitexture flag was mistaken for actual multiple texture units; its failed
+  result is retained instead of replaying the baseline.
+- Glide `b92389bf…` rendered correctly on Mac XP and Linux Win98, but the cache
+  was rejected as a performance candidate. Mac throughput was 15.01 presents/s
+  versus the saved 15.71; texture allocation/deletion increased sharply. The
+  actual log records only 115 retained-image hits in 7,821 misses, so raw snapshot
+  hashing/storage is being removed rather than expanded. The next change keeps
+  identical-download/range improvements and restores efficient storage reuse.
+- The Linux Win98 run recorded 102.61 received GPU frames/s with correct full
+  client rendering, no capture drops and no native GL rejections. Its selected
+  old benchmark helper failed the post-measurement capture/exit handshake, so
+  the automated overall result remains failed. One in-engine console `quit`
+  and the existing guest shutdown helper closed it normally; no game replay
+  was used for cleanup. Use the already-built current helper in the next
+  changed-candidate image. This is not a driver crash or a new lifecycle task.
+
+Evidence: `wine-vertex-perf-v1/`, `glide-texture-performance-v1/`,
+`glide-texture-game-linux-v1/` under `target/follow-through/`.
+
+### Accepted simpler Glide and packaged game results
+
+The corrected Glide implementation removes raw snapshots, FNV hashing and
+retired-content searching. It keeps exact active conversion keys, identical
+download skips, precise invalidation, and compatible GL storage reuse. Mac XP
+presentation throughput increased from 15.71 to19.80/s (+26%). TexSubImage updates
+per present fell from132.5 to104.4; the measured run allocated413 textures and
+deleted none. Full rendering and normal game exit passed.
+
+The actual packaged Win98 Glide binary passed its current helper on Linux:
+1,385 measured native GPU frames in about10 seconds (138.50/s), median7.757ms,
+p9510.156ms, no rejects or capture drops. It allocated435 textures and deleted
+none. Normal game exit and OS shutdown completed. This uses KVM and is not a
+Mac/TCG speed comparison. Evidence: `glide-texture-game-linux-v2/acceptance.json`.
+
+The current WineD3D array/surface path also passed on Linux XP using KVM:3,640
+measured native frames in10.0027 seconds (363.90/s), median2.587ms,p953.719ms.
+The authoritative frame shows full rendering with the existing shading and
+effects. Evidence: `wine-vertex-game-linux-v1/game/run.json`.
+
+The combined Cargo guest build passed and delivered `target/guest/dreamgpu.exe`
+and both OS packages on both hosts. Installer SHA`d2366fd9…`; accepted NT display
+and miniport binaries are included. Receipt:
+`system-installer-performance-v1/inputs/acceptance.json`. No extra installer
+lifecycle or smoke campaign was performed.
+
+The next Direct3D target comes from complete guest-PC sampling: byte-copy and
+byte-fill helpers account for47.4% of frontend instructions (331.5 million
+of698.8 million). The earlier37% estimate counted only their hottest loop blocks
+and omitted entry/tail work. These are instruction counts, not cycle shares.
+Memory helpers are the next production optimization; separate Glide attribution
+and exact x87 feasibility work remain bounded performance investigations.
+
+
+### Accepted Mac Direct3D memory/CPU improvement
+
+The grouped integer word/chunk memory helpers and guarded x87 PC24 arithmetic
+passed the normal Mac UT Direct3D run at **65.07 presents/s**, up from the saved
+55.42 (+17.4%). Native received-frame median/p95 gaps fell from18.299/23.233ms to
+16.109/20.181ms. This is submission/frame-delivery throughput, not engine FPS or
+physical scanout. The textured/shaded scene remained intact; normal game exit
+and Windows shutdown completed. No unchanged baseline was repeated.
+
+The CPU change is restricted to basic x86 arithmetic with exact binary32
+operands and interior-normal results at the game's existing24-bit precision and
+nearest-even rounding. Result bits and current-operation exception flags match
+the original software arithmetic; all other cases fall back. Generic SoftFloat,
+transcendentals and game precision remain unchanged. The actual-source
+comparison passed1,050,704 cases. Bounded memory accesses passed sanitizer and
+i686 machine-code checks without SSE or x87 in the helpers.
+
+Evidence: `guest-memory-performance-v1/acceptance.json`,
+`x87-pc24-candidate-v1/manifest.json`. Candidate native`ea3b189f…` and frontend
+`6a633248…` are measured together; no per-fix speedup is inferred.
+
+The remaining Glide target is now measured: packed16 expansion accounts for
+40.25% of recorded guest instructions. The existing packet format can carry
+those pixels directly, eliminating guest expansion and reducing transfer bytes.
+This change is being integrated with the accepted CPU/memory work before final
+outputs are refreshed.
+
+
+### Packed texture forwarding: Linux game result and refreshed outputs
+
+The paired packed16 frontend/native passed the normal Win98 UT Glide workload
+on Linux/KVM at184.31 presents/s, up from138.50 (+33.1%). Median/p95 received-frame
+gaps fell from7.757/10.156ms to5.536/7.327ms. Full640×480 rendering, native command
+acceptance and normal game exit passed; Windows then shut down normally. This
+is measured frame delivery, not engine FPS or physical scanout. The changed
+frontend includes the accepted word/chunk helpers. Evidence:
+`packed16-game-linux-v1/acceptance.json`.
+
+The combined Cargo builds passed and refreshed `target/guest/dreamgpu.exe`
+(SHA`c2b4bae4…`) and both Windows packages on Mac/Linux. Paired frontend`a277e72a…`
+uses direct packed16 pixels and requires updated native support. Linux native
+ELF`db8437f8…`/runtime`dd28aaaf…` includes the guardedPC24 helper and packed16
+validation. All480 frozen payload files match the standard outputs on bothhosts.
+Receipt: `system-installer-performance-v2/inputs`. No installer lifecycle work.
+
+
+### Packed texture forwarding: Mac result
+
+The paired Mac Glide candidate passed at **33.99 presents/s**, up from19.80
+(+71.7%), and more than twice the original15.71. It sent50.61 texture updates
+per present instead of104.41, and688,157 bytes per present instead of991,945
+(30.6% less). The changed group contains packed16 forwarding, word/chunk memory
+helpers and guardedPC24 arithmetic; individual speedups are not inferred. Actual
+system-provider use, full game rendering/capture and normal engine exit passed.
+Receipt: `packed-texture-performance-v1/macos-game/run.json`.
+
+These measured improvements are enabled by default. Mac native`7eccc017…` and
+frontend`a277e72a…` form the final paired build. Mac remains below high-refresh
+rates; these results do not claim200FPS or eliminate TCG cost. The scoped plan
+milestones are complete with this limitation recorded. Strict workspace Clippy
+passes on bothhosts; three test iterator expressions were updated for the newer
+Linux Clippy lint without changing runtime behavior. Final logs:
+`target/follow-through/performance-final-clippy.log` on eachhost.
+
+Mac Glide also completed normal Windows shutdown; all task-owned VMs/builds
+are stopped. Final grouped receipt, mirrored on bothhosts:
+`packed-texture-performance-v1/macos-acceptance.json`.

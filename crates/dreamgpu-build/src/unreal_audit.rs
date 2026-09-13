@@ -19,9 +19,9 @@ GetCurrentThreadId GetModuleHandleA GetProcAddress Process32First Process32Next 
 GetWindowThreadProcessId IsWindowVisible Module32First Module32Next OpenEventA
 PostMessageA ReadFile SendMessageTimeoutA SetErrorMode SetEvent SetFileAttributesA
 SetFilePointer SetForegroundWindow SetLastError ShowWindowAsync Sleep
-TerminateProcess WaitForSingleObject WriteFile CreateWindowExA DefWindowProcA
+TerminateProcess Thread32First Thread32Next WaitForSingleObject WriteFile CreateWindowExA DefWindowProcA
 DestroyWindow DispatchMessageA GetAsyncKeyState GetCursorPos GetMessageExtraInfo
-GetSystemMetrics MsgWaitForMultipleObjects PeekMessageA RegisterClassA SendInput
+GetSystemDirectoryA GetSystemMetrics MsgWaitForMultipleObjects PeekMessageA RegisterClassA SendInput
 SetCursorPos ShowWindow TranslateMessage UnregisterClassA WindowFromPoint";
 
 fn imports(details: &str) -> Result<Vec<String>> {
@@ -188,6 +188,19 @@ mod tests {
         ] {
             assert!(imports(&rejected).is_err());
         }
+    }
+    #[test]
+    fn accepts_legacy_system_path_and_thread_snapshot_imports() {
+        // Normal-loader validation and owned-process teardown use these Win95+
+        // Kernel32 APIs; no newer process-inspection import is admitted.
+        let imports_text = "DLL Name: KERNEL32.dll\n vma: Ordinal Hint Member-Name Bound-To\n 1000 <none> 0040 GetSystemDirectoryA\n 1004 <none> 0041 Thread32First\n 1008 <none> 0042 Thread32Next\n\n";
+        assert_eq!(
+            imports(imports_text).unwrap(),
+            ["GetSystemDirectoryA", "Thread32First", "Thread32Next"]
+        );
+        assert!(
+            imports(&imports_text.replace("Thread32First", "QueryFullProcessImageNameA")).is_err()
+        );
     }
     #[test]
     fn examines_decoded_operands_not_symbol_names_and_rejects_vector_code() {

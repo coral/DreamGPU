@@ -1,0 +1,179 @@
+--- a/PGTexture.cpp
++++ b/PGTexture.cpp
+@@ -76,7 +76,7 @@
+     m_valid = false;
+     m_chromakey_mode = GR_CHROMAKEY_DISABLE;
+     m_tex_memory_size = mem_size;
+-    m_memory = new FxU8[ mem_size ];
++    m_memory = new FxU8[ mem_size ]();
+     m_ncc_select = GR_NCCTABLE_NCC0;
+ 
+ #ifdef OGL_DEBUG
+@@ -136,14 +136,14 @@
+     }
+     else
+     {
+-        if ( mip_offset <= m_tex_memory_size )
+-        {
+-            memcpy( m_memory + mip_offset - mip_size, info->data, mip_size );
++        if ( mip_offset >= startAddress && mip_offset >= mip_size && mip_offset <= m_tex_memory_size )
++        {
++            m_db->Write(mip_offset - mip_size, mip_offset,
++                        m_memory + mip_offset - mip_size, info->data, mip_size);
+         }
+         
+-        // Any texture based on memory crossing this range
+-        // is now out of date
+-        m_db->WipeRange( startAddress, mip_offset, 0 );
++        // Write invalidates only bytes that actually changed. Identical mip
++        // downloads leave the already converted GPU texture usable.
+     }
+ 
+ #ifdef OGL_DEBUG
+@@ -186,15 +186,18 @@
+                                         info->format );
+     FxU32 mip_offset = startAddress + TextureMemRequired( evenOdd, info );
+  
+-    if ( mip_offset <= m_tex_memory_size )
++    if ( mip_offset >= startAddress && mip_offset >= mip_size && mip_offset <= m_tex_memory_size )
+     {
+         int stride = texInfo[ info->aspectRatio ][ info->smallLod ].width;
+         if (info->format >= GR_TEXFMT_16BIT)
+             stride *= 2;
+         FxU8 *mip_memory = m_memory + mip_offset - mip_size;
+-        memcpy( mip_memory + start * stride, info->data, (end - start + 1) * stride );
+-
+-        m_db->WipeRange( startAddress, mip_offset, 0 );
++        if (start >= 0 && end >= start &&
++            (unsigned int)end < mip_size / (unsigned int)stride) {
++            unsigned int first = mip_offset - mip_size + start * stride;
++            unsigned int bytes = (end - start + 1) * stride;
++            m_db->Write(first, first + bytes, mip_memory + start * stride, info->data, bytes);
++        }
+     }
+ }
+ 
+@@ -207,7 +210,9 @@
+     m_wAspect = texAspects[ info->aspectRatio ].w;
+     m_hAspect = texAspects[ info->aspectRatio ].h;
+ 
+-    m_valid = ( ( startAddress + TextureMemRequired( evenOdd, info ) ) <= m_tex_memory_size );
++    FxU32 size = TextureMemRequired(evenOdd, info);
++    m_valid = size != 0 && startAddress <= m_tex_memory_size &&
++              size <= m_tex_memory_size - startAddress;
+ }
+ 
+ void PGTexture::DownloadTable( GrTexTable_t type, FxU32 *data, int first, int count )
+@@ -320,10 +325,28 @@
+         break;
+     }
+ 
+-    // See if we already have an OpenGL texture to match this
+-    if ( m_db->Find( m_startAddress, &m_info, test_hash,
+-                     &texNum, use_two_textures ? &tex2Num : NULL,
+-                     pal_change_ptr ) )
++    // Live virtual-memory records compare exact mutable conversion inputs.
++    // Changed writes invalidate them; no raw snapshot or hash scan is needed.
++    FxU32 content_state[264] = {m_evenOdd, (FxU32)m_chromakey_mode,
++                               (FxU32)m_chromakey_value_565, (FxU32)m_info.smallLod,
++                               (FxU32)InternalConfig.EnableMipMaps};
++    unsigned int content_state_bytes = 5 * sizeof(FxU32);
++    if (m_info.format == GR_TEXFMT_P_8 || m_info.format == GR_TEXFMT_AP_88) {
++        memcpy(content_state + 5, m_palette, sizeof(m_palette));
++        content_state_bytes += sizeof(m_palette);
++    } else if (m_info.format == GR_TEXFMT_YIQ_422 || m_info.format == GR_TEXFMT_AYIQ_8422) {
++        static_assert(sizeof(GuNccTable) <= 259 * sizeof(FxU32), "NCC cache key bound");
++        memcpy(content_state + 5, &m_ncc[m_ncc_select], sizeof(GuNccTable));
++        content_state_bytes += sizeof(GuNccTable);
++    }
++    bool content_cache = !use_two_textures && !InternalConfig.EXT_paletted_texture &&
++                         !InternalConfig.BuildMipMaps && m_info.format != GR_TEXFMT_BGRA_8888;
++    bool found = content_cache
++        ? m_db->FindState(m_startAddress, m_startAddress + size, &m_info,
++                         content_state, content_state_bytes, &texNum) != NULL
++        : m_db->Find(m_startAddress, &m_info, test_hash, &texNum,
++                     use_two_textures ? &tex2Num : NULL, pal_change_ptr) != NULL;
++    if (found)
+     {
+         glBindTexture( GL_TEXTURE_2D, texNum );
+ 
+@@ -525,6 +548,8 @@
+             OGL_LOAD_CREATE_TEXTURE( 1, GL_LUMINANCE, GL_UNSIGNED_BYTE, m_tex_temp );
+             break;
+         }
++        if (content_cache)
++            m_db->RememberState(content_state, content_state_bytes);
+     }
+ 
+     m_db->Parameters(texNum, OpenGL.SClampMode, OpenGL.TClampMode, OpenGL.MinFilterMode, OpenGL.MagFilterMode);
+--- a/TexDB.cpp
++++ b/TexDB.cpp
+@@ -20,6 +20,9 @@
+ TexDB::TexDB( unsigned int MemorySize )
+ {
+     m_pool=NULL; m_upload=NULL; m_poolCount=0; m_poolBytes=0;
++    m_contentBytes=0;
++    m_identicalWrites=m_changedWrites=m_contentLookups=m_contentMisses=0;
++    m_stateChanges=0;
+     numberOfTexSections = MemorySize >> 15; // ( 32 * 1024 );
+ 
+     m_first = new Record*[ numberOfTexSections ];
+@@ -32,6 +35,8 @@
+ 
+ TexDB::~TexDB(void)
+ {
++    GlideMsg("DG_TEXTURE_STATE lookups=%u misses=%u identical_writes=%u changed_writes=%u state_bytes=%u state_changes=%u\n",
++             m_contentLookups, m_contentMisses, m_identicalWrites, m_changedWrites, m_contentBytes, m_stateChanges);
+     Clear();
+     delete[] m_first;
+ }
+@@ -185,6 +190,7 @@
+    memset(storage,0,sizeof(storage));
+    memset(paramsValid,0,sizeof(paramsValid));
+    retainedBytes=0;
++   contentState=NULL; contentStateBytes=0; contentBudget=NULL;
+    glGenTextures( 1, &texNum );
+ 
+    if ( two_tex )
+@@ -199,6 +205,9 @@
+ 
+ TexDB::Record::~Record( void )
+ {
++   if (contentBudget)
++       *contentBudget -= contentStateBytes;
++   free(contentState);
+    glDeleteTextures( 1, &texNum );
+ 
+    if ( tex2Num != 0 )
+--- a/TexDB.h
++++ b/TexDB.h
+@@ -34,12 +34,19 @@
+         GLint params[2][4];
+         bool paramsValid[2][4];
+         unsigned int retainedBytes;
++        unsigned char *contentState;
++        unsigned int contentStateBytes;
++        unsigned int *contentBudget;
+ 
+         Record( bool two_tex );
+         ~Record( void );
+         bool Match( FxU32 stt, GrTexInfo *inf, FxU32 h );
+     };
+ 
++    void Write(FxU32 first, FxU32 end, void *destination, const void *source, unsigned int bytes);
++    GrTexInfo *FindState(FxU32 first, FxU32 end, GrTexInfo *, const void *state,
++                        unsigned int stateBytes, GLuint *texture);
++    void RememberState(const void *state, unsigned int stateBytes);
+     void ForgetStorage(GLuint);
+     void Upload(GLuint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void *);
+     void Parameters(GLuint,GLint,GLint,GLint,GLint);
+@@ -55,6 +62,9 @@
+     Record ** m_first;
+     Record *m_pool, *m_upload;
+     unsigned int m_poolCount, m_poolBytes;
++    unsigned int m_contentBytes;
++    unsigned int m_identicalWrites, m_changedWrites, m_contentLookups, m_contentMisses;
++    unsigned int m_stateChanges;
+     void Retire(Record *);
+     Record *Acquire(GrTexInfo *,bool);
+ };

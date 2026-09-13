@@ -23,6 +23,10 @@
     {
       "file": "0005-current-cpu-map-context.patch",
       "sha256": "36095ca74e07f350309ae55fd7f7c1340d0009af1cfa1315f92c121c0315bdaa"
+    },
+    {
+      "file": "0006-transformed-vertex-arrays.patch",
+      "sha256": "69965ff61eeb65a08e51f124c5cb4bef3db7c2f3b815ddfa8a3152b231dae7e2"
     }
   ],
   "files": {
@@ -97,6 +101,10 @@
     "switcher/switcher.inc": {
       "before_sha256": "3ff73248fcaef76c87e1b40aa1d24e1caf1b95cff36e8c31367e1b35af27e530",
       "after_sha256": "38262116802194c4dc1ab705476cb787e8fec326e12a3f1dde88e22787c7cc4b"
+    },
+    "wined3d/drawprim.c": {
+      "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
+      "after_sha256": "bace9e3719f4d6a09370e724d11daab378d0184dc93e4396aabcd00ffd0e6ce1"
     }
   }
 }

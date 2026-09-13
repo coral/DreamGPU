@@ -40,11 +40,11 @@ def write(name, value):
     (OUTPUT/name).write_text(json.dumps(value, indent=2, sort_keys=True, ensure_ascii=False)+'\n')
 
 
-def cargo_inventory(metadata):
+def cargo_inventory(metadata, lockfile=ROOT/'Cargo.lock', output_name='cargo.json', command='cargo metadata --locked --all-features --format-version 1'):
     members = set(metadata['workspace_members'])
     resolved = {node['id']: node for node in metadata['resolve']['nodes']}
     packages = {p['id']: p for p in metadata['packages']}
-    lock = tomllib.loads((ROOT/'Cargo.lock').read_text())
+    lock = tomllib.loads(lockfile.read_text())
     checksums = {(p['name'], p['version'], p.get('source')): p.get('checksum')
                  for p in lock['package']}
     direct = []
@@ -79,8 +79,9 @@ def cargo_inventory(metadata):
                                          for p in sorted(notices) if p.is_file() and p.is_relative_to(directory)},
                         'resolved_features': resolved[package['id']]['features'],
                         'dependencies': dependencies})
-    write('cargo.json', {'schema': 1, 'cargo_lock_sha256': sha(ROOT/'Cargo.lock'),
-                        'command': 'cargo metadata --locked --all-features --format-version 1',
+    write(output_name, {'schema': 1, 'cargo_lock_sha256': sha(lockfile),
+                        'lockfile': lockfile.relative_to(ROOT).as_posix(),
+                        'command': command,
                         'scope': 'Resolved all-target, all-feature normal/build/dev dependency superset; not a binary bill of materials or compatibility determination',
                         'direct_dependencies': sorted(direct, key=lambda p: (p['workspace'], p['name'], str(p['kind']), str(p['target']))),
                         'packages': sorted(entries, key=lambda p: (p['name'], p['version']))})
@@ -128,7 +129,14 @@ def repository_inventory():
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--metadata', type=Path, help='Reuse a previously captured cargo metadata JSON')
+    parser.add_argument('--launcher-only', action='store_true', help='Refresh only the standalone native launcher Cargo workspace')
     args = parser.parse_args()
+    launcher = ROOT/'support/native/launcher/Cargo.toml'
+    launcher_command = 'cargo metadata --locked --all-features --format-version 1 --manifest-path support/native/launcher/Cargo.toml'
+    cargo_inventory(json.loads(run(*launcher_command.split())), launcher.with_name('Cargo.lock'), 'cargo-native-launcher.json', launcher_command)
+    if args.launcher_only:
+        print(OUTPUT/'cargo-native-launcher.json')
+        return
     metadata = json.loads(args.metadata.read_text() if args.metadata else run('cargo', 'metadata', '--locked', '--all-features', '--format-version', '1'))
     cargo_inventory(metadata)
     repository_inventory()

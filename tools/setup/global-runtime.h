@@ -96,7 +96,7 @@ struct NativeComponents {
                                         const Recovery *recovery = nullptr) {
         driver::ReverseExecutor executor{recovery ? recovery->executable() : nullptr,
                                          recovery ? recovery->sha() : nullptr};
-        return component(driver::act(os, action, payloads, recovery ? &executor : nullptr),
+        return component(driver::act(os, action, payloads, recovery ? &executor : nullptr, true),
                          action == 2 || action == 4);
     }
     static bool driver_recovery_ready(Os os) {
@@ -181,6 +181,11 @@ template <class Payloads> class Win32Store {
         return true;
     }
     lifecycle::Result driver_step(int action) {
+        lifecycle::RuntimeResume resume(owner_, record_.flow.epoch, record_.os,
+                                        recovery_ ? lifecycle::ResumeScope::recovery
+                                                  : lifecycle::ResumeScope::global);
+        if (!resume.armed())
+            return lifecycle::Result::conflict;
         auto result = NativeComponents::driver_act(record_.os, action, payloads_, recovery_);
         DriverIdentity current;
         bool owned = false;
