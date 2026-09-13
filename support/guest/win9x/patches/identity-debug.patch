@@ -1,0 +1,22 @@
+--- a/makefile.dreamgpu
++++ b/makefile.dreamgpu
+@@ -39,7 +39,7 @@
+ FLAGS += -DHWBLT
+ 
+ # Set DBGPRINT to add debug printf logging.
+-#DBGPRINT = 1
++DBGPRINT = 1
+ 
+ # Generate code for i486, otherwise is code generated for Pentium Pro
+ #I486 = 1
+--- a/vxd_main.c
++++ b/vxd_main.c
+@@ -262,7 +262,7 @@
+ 	// eax = 0x1C - dynamic exit
+ 	// eax = 0x23 - device IO control
+ 
+-#if 0
++#ifdef DBGPRINT
+ 	_asm
+ 	{
+ 		pushad

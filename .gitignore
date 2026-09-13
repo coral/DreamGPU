@@ -1,0 +1,95 @@
+# Rust and Cargo artifacts (also covers standalone workspace-member builds).
+target/
+# Keep Cargo.lock tracked: it pins this application's complete dependency graph.
+
+# CMake/native compiler outputs. Source CMakeLists.txt, presets and headers stay visible.
+/build/
+/out/
+/dist/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+CTestTestfile.cmake
+install_manifest.txt
+compile_commands.json
+.ninja_deps
+.ninja_log
+build.ninja
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.pdb
+*.dSYM/
+
+# Python automation environments and caches; scripts are source, not build recipes.
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+*.egg-info/
+
+# Private fixtures, original OS/game media, generated packages and runtime evidence.
+/.local/
+/files/
+/fixtures/
+/validation/
+/artifacts/
+/results/
+/profiles/
+/logs/
+/run.json
+/perf.data*
+*.qcow
+*.qcow2
+*.vmdk
+*.vdi
+*.vhd
+*.vhdx
+*.iso
+*.ISO
+*.utm/
+*.log
+*.profraw
+*.profdata
+# Raw .bin/.img files and .cue descriptions belong in files/ or fixtures/.
+# Do not blanket-ignore those extensions: checked-in protocol/test fixtures may use them.
+
+# Personal builder settings and credentials. Templates remain publishable.
+/.cargo/config
+/.cargo/config.toml
+CMakeUserPresets.json
+.env
+.env.*
+!.env.example
+!.env.sample
+!.env.template
+*.local.toml
+/.ssh/
+/docs/creds.md
+/creds.md
+
+# Editor/OS transient files. Shared project settings are not blanket-ignored.
+.DS_Store
+._*
+.Trashes/
+.Spotlight-V100/
+*~
+*.swp
+*.swo
+
+.vscode
+# Local editor configuration (may contain absolute workstation paths).
+/.vscode/settings.json

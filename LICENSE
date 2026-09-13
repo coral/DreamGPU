@@ -1,0 +1,26 @@
+DreamGPU project code is licensed under the GNU General Public License,
+version 2 or (at your option) any later version (SPDX: GPL-2.0-or-later).
+
+Copyright (c) 2026 DreamGPU contributors.
+Existing copyright holders retain their rights and notices.
+
+You may redistribute and/or modify DreamGPU project code under the terms of
+the GNU General Public License as published by the Free Software Foundation,
+either version 2 of the License, or (at your option) any later version.
+
+DreamGPU is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR
+A PARTICULAR PURPOSE. See LICENSES/GPL-2.0.txt and LICENSES/GPL-3.0.txt for the
+full license texts.
+
+This is the default license for independently authored project code, including
+unmarked source files. Existing third-party, generated, copied and derived files
+retain their applicable upstream terms and copyright notices. Choosing a later
+GPL version is possible only when the other components in that combination also
+permit it. This notice does not relicense vendored repositories or revoke license
+grants already made for earlier releases.
+
+ATTRIBUTION.md is the central repository/dependency inventory. docs/licensing.md
+explains the component boundaries and remaining provenance issues. LICENSES/MIT.txt
+is retained for historical/project-origin MIT material and applicable notices;
+it is not the default license for new DreamGPU code.

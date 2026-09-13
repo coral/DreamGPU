@@ -1,0 +1,72 @@
+{
+  "schema": 1,
+  "upstream": {
+    "wine9x": "8ab16c6c0930efc1f9138eddda7b3114d7f31e62"
+  },
+  "patches": [
+    {
+      "file": "0001-bounded-copy-diagnostics.patch",
+      "sha256": "10a34b4617965527bc239b61640b9e47818ccf9c3cb2bd2974d9cc5a4ef633ca"
+    }
+  ],
+  "files": {
+    "wined3d/context.c": {
+      "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
+      "after_sha256": "8f3e9341ce8715d884b35f6f3069a4c6c4d83b40f7930f910b0a7a135bf4bec7"
+    },
+    "wined3d/device.c": {
+      "before_sha256": "0a5880a762561579c5a93c36bc32ab51f5f441e4f290f1dbbe83b8064cebf3c4",
+      "after_sha256": "505e5318f9e9bf54d65923d8908f107d73c450a9c558c7a35522a163dd68d8de"
+    },
+    "wined3d/drawprim.c": {
+      "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
+      "after_sha256": "cb29848e6e7fc064a3206f2730c88cd554bcdd6809d72cd653cc2568060d60ad"
+    },
+    "wined3d/surface.c": {
+      "before_sha256": "19c10fd0f91cfce3f7cab369749db7bbac823dec5e5ef36172b4708131756247",
+      "after_sha256": "b39f905f9c4e97fe244c2c01e316c68888c590f80e158b20a83b7c0545272b48"
+    },
+    "wined3d/swapchain.c": {
+      "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
+      "after_sha256": "16a92ceda65770b2567dffa9c4da2142189ab590f91a03ee967273fe9a26bdf4"
+    },
+    "wined3d/texture.c": {
+      "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",
+      "after_sha256": "3d0b87705ec1de4397af5112c639f54de12e29a63972ce7394e5947f81d7ad93"
+    },
+    "wined3d/wined3d_private.h": {
+      "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
+      "after_sha256": "df79ae7e9935532ff88c17918578b50e8db66c7d5ee2107e31446c1036e0b261"
+    }
+  },
+  "source_ids": {
+    "1": "arb_program_shader.c",
+    "2": "ati_fragment_shader.c",
+    "3": "buffer.c",
+    "4": "context.c",
+    "5": "cs.c",
+    "6": "device.c",
+    "7": "directx.c",
+    "8": "drawprim.c",
+    "9": "gl_compat.c",
+    "10": "glsl_shader.c",
+    "11": "nvidia_texture_shader.c",
+    "12": "palette.c",
+    "13": "query.c",
+    "14": "resource.c",
+    "15": "sampler.c",
+    "16": "shader.c",
+    "17": "shader_sm1.c",
+    "18": "shader_sm4.c",
+    "19": "state.c",
+    "20": "stateblock.c",
+    "21": "surface.c",
+    "22": "swapchain.c",
+    "23": "texture.c",
+    "24": "utils.c",
+    "25": "vertexdeclaration.c",
+    "26": "view.c",
+    "27": "volume.c",
+    "28": "wined3d_main.c"
+  }
+}

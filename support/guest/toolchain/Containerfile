@@ -1,0 +1,21 @@
+# Fedora 44 amd64 image digest inspected from the official registry.
+FROM registry.fedoraproject.org/fedora:44@sha256:2648f667bd180801195d3f3a385cf0d2e390bd80611dbedac8275253c89cdbc7
+RUN dnf -y install \
+    mingw32-gcc-16.1.1-1.fc44.x86_64 \
+    mingw32-gcc-c++-16.1.1-1.fc44.x86_64 \
+    mingw32-libstdc++-16.1.1-1.fc44.x86_64 \
+    mingw32-libgcc-16.1.1-1.fc44.x86_64 \
+    mingw32-headers-13.0.0-3.fc44.noarch \
+    mingw32-crt-13.0.0-3.fc44.noarch \
+    mingw32-binutils-2.46.0-1.fc44.x86_64 \
+    mingw32-winpthreads-13.0.0-3.fc44.noarch \
+    mingw32-winpthreads-static-13.0.0-3.fc44.noarch \
+    python3 gcc gcc-c++ make cmake ninja-build rust cargo git-core patch tar xz which zip unzip findutils \
+    clang compiler-rt \
+    && dnf clean all
+RUN dnf -y install nasm-3.02-1.fc44.x86_64 && dnf clean all
+WORKDIR /src
+CMD ["cargo", "build", "--release"]
+
+ENV DREAMGPU_BUILD=guest
+CMD ["cargo", "build", "--release"]

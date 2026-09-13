@@ -1,0 +1,377 @@
+--- a/Makefile
++++ b/Makefile
+@@ -454,3 +454,7 @@
+ 	-$(RM) wined3d.dll
+ 	-cd pthread9x && $(MAKE) clean
+ endif
++
++$(wined3d_OBJS): CFLAGS += -DChoosePixelFormat=wglChoosePixelFormat -DDescribePixelFormat=wglDescribePixelFormat -DGetPixelFormat=wglGetPixelFormat -DSetPixelFormat=wglSetPixelFormat -DSwapBuffers=wglSwapBuffers
++
++WINED3D_LIBS := $(filter-out -lopengl32,$(WINED3D_LIBS)) -ldgpugl
+--- a/ddraw/surface.c
++++ b/ddraw/surface.c
+@@ -25,6 +25,7 @@
+ #include "wine/port.h"
+ 
+ #include "ddraw_private.h"
++#include "dg-wine-diagnostics.h"
+ 
+ WINE_DEFAULT_DEBUG_CHANNEL(ddraw);
+ 
+@@ -5696,13 +5697,13 @@
+     }
+ 
+     if (outer_unknown)
+-        return CLASS_E_NOAGGREGATION;
++        return dg_surface_failure(__LINE__, surface_desc, version, CLASS_E_NOAGGREGATION);
+ 
+     if (!surface)
+-        return E_POINTER;
++        return dg_surface_failure(__LINE__, surface_desc, version, E_POINTER);
+ 
+     if (!(texture = malloc(sizeof(*texture))))
+-        return E_OUTOFMEMORY;
++        return dg_surface_failure(__LINE__, surface_desc, version, E_OUTOFMEMORY);
+ 
+     texture->version = version;
+     texture->surface_desc = *surface_desc;
+@@ -5719,7 +5720,7 @@
+         {
+             WARN("Tried to create a primary surface with DDSCAPS_TEXTURE.\n");
+             free(texture);
+-            return DDERR_INVALIDCAPS;
++            return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+         }
+ 
+         if (flippable)
+@@ -5728,21 +5729,21 @@
+             {
+                 WARN("Tried to create a flippable primary surface without both DDSCAPS_FLIP and DDSCAPS_COMPLEX.\n");
+                 free(texture);
+-                return DDERR_INVALIDCAPS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+             }
+ 
+             if (!(desc->dwFlags & DDSD_BACKBUFFERCOUNT) || !desc->u5.dwBackBufferCount)
+             {
+                 WARN("Tried to create a flippable primary surface without any back buffers.\n");
+                 free(texture);
+-                return DDERR_INVALIDCAPS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+             }
+ 
+             if (!(ddraw->cooperative_level & DDSCL_EXCLUSIVE))
+             {
+                 WARN("Tried to create a flippable primary surface without DDSCL_EXCLUSIVE.\n");
+                 free(texture);
+-                return DDERR_NOEXCLUSIVEMODE;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_NOEXCLUSIVEMODE);
+             }
+         }
+     }
+@@ -5753,7 +5754,7 @@
+     {
+         WARN("Tried to create a surface in both system and video memory.\n");
+         free(texture);
+-        return DDERR_INVALIDCAPS;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+     }
+ 
+     if ((desc->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP_ALLFACES)
+@@ -5761,7 +5762,7 @@
+     {
+         WARN("Cube map faces requested without cube map flag.\n");
+         free(texture);
+-        return DDERR_INVALIDCAPS;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+     }
+ 
+     if ((desc->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP)
+@@ -5769,7 +5770,7 @@
+     {
+         WARN("Cube map without faces requested.\n");
+         free(texture);
+-        return DDERR_INVALIDPARAMS;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+     }
+ 
+     if ((desc->ddsCaps.dwCaps2 & DDSCAPS2_CUBEMAP)
+@@ -5782,14 +5783,14 @@
+         {
+             WARN("DDSCAPS2_TEXTUREMANAGE used without DDSCAPS_TEXTURE, returning DDERR_INVALIDCAPS.\n");
+             free(texture);
+-            return DDERR_INVALIDCAPS;
++            return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+         }
+         if (desc->ddsCaps.dwCaps & (DDSCAPS_VIDEOMEMORY | DDSCAPS_SYSTEMMEMORY))
+         {
+             WARN("DDSCAPS2_TEXTUREMANAGE used width DDSCAPS_VIDEOMEMORY "
+                     "or DDSCAPS_SYSTEMMEMORY, returning DDERR_INVALIDCAPS.\n");
+             free(texture);
+-            return DDERR_INVALIDCAPS;
++            return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+         }
+     }
+ 
+@@ -5797,7 +5798,7 @@
+     {
+         ERR("Failed to get display mode, hr %#x.\n", hr);
+         free(texture);
+-        return hr_ddraw_from_wined3d(hr);
++        return dg_surface_failure(__LINE__, surface_desc, version, hr_ddraw_from_wined3d(hr));
+     }
+ 
+     /* No pixelformat given? Use the current screen format. */
+@@ -5813,7 +5814,7 @@
+     {
+         WARN("Unsupported / unknown pixelformat.\n");
+         free(texture);
+-        return DDERR_INVALIDPIXELFORMAT;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPIXELFORMAT);
+     }
+ 
+     /* No width or no height? Use the screen size. */
+@@ -5823,7 +5824,7 @@
+         {
+             WARN("No width / height specified.\n");
+             free(texture);
+-            return DDERR_INVALIDPARAMS;
++            return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+         }
+ 
+         desc->dwFlags |= DDSD_WIDTH | DDSD_HEIGHT;
+@@ -5834,7 +5835,7 @@
+     if (!desc->dwWidth || !desc->dwHeight)
+     {
+         free(texture);
+-        return DDERR_INVALIDPARAMS;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+     }
+ 
+     if (desc->ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+@@ -5858,7 +5859,7 @@
+             {
+                 ERR("Failed to reset device.\n");
+                 free(texture);
+-                return hr_ddraw_from_wined3d(hr);
++                return dg_surface_failure(__LINE__, surface_desc, version, hr_ddraw_from_wined3d(hr));
+             }
+         }
+     }
+@@ -5889,7 +5890,7 @@
+                 if (!desc->u2.dwMipMapCount)
+                 {
+                     free(texture);
+-                    return DDERR_INVALIDPARAMS;
++                    return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+                 }
+             }
+             else
+@@ -5950,7 +5951,7 @@
+     {
+         WARN("System memory overlays are not allowed.\n");
+         free(texture);
+-        return DDERR_NOOVERLAYHW;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_NOOVERLAYHW);
+     }
+ 
+     if (desc->ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY)
+@@ -5991,14 +5992,14 @@
+         {
+             WARN("User memory surfaces should be in the system memory pool.\n");
+             free(texture);
+-            return DDERR_INVALIDCAPS;
++            return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDCAPS);
+         }
+ 
+         if (version < 4)
+         {
+             WARN("User memory surfaces not supported before version 4.\n");
+             free(texture);
+-            return DDERR_INVALIDPARAMS;
++            return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+         }
+ 
+         if (format_is_compressed(&desc->u4.ddpfPixelFormat))
+@@ -6007,14 +6008,14 @@
+             {
+                 WARN("Pitch specified on a compressed user memory surface.\n");
+                 free(texture);
+-                return DDERR_INVALIDPARAMS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+             }
+ 
+             if (!(desc->dwFlags & (DDSD_LINEARSIZE | DDSD_PITCH)))
+             {
+                 WARN("Compressed user memory surfaces should explicitly specify the linear size.\n");
+                 free(texture);
+-                return DDERR_INVALIDPARAMS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+             }
+ 
+             if ((desc->dwFlags & DDSD_LINEARSIZE)
+@@ -6023,7 +6024,7 @@
+             {
+                 WARN("Invalid linear size %u specified.\n", desc->u1.dwLinearSize);
+                 free(texture);
+-                return DDERR_INVALIDPARAMS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+             }
+         }
+         else
+@@ -6032,7 +6033,7 @@
+             {
+                 WARN("User memory surfaces should explicitly specify the pitch.\n");
+                 free(texture);
+-                return DDERR_INVALIDPARAMS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+             }
+ 
+             if (desc->u1.lPitch < wined3d_calculate_format_pitch(ddraw->wined3d, WINED3DADAPTER_DEFAULT,
+@@ -6040,7 +6041,7 @@
+             {
+                 WARN("Invalid pitch %u specified.\n", desc->u1.lPitch);
+                 free(texture);
+-                return DDERR_INVALIDPARAMS;
++                return dg_surface_failure(__LINE__, surface_desc, version, DDERR_INVALIDPARAMS);
+             }
+ 
+             pitch = desc->u1.lPitch;
+@@ -6058,7 +6059,7 @@
+     {
+         WARN("Range color keys not supported, returning DDERR_NOCOLORKEYHW.\n");
+         free(texture);
+-        return DDERR_NOCOLORKEYHW;
++        return dg_surface_failure(__LINE__, surface_desc, version, DDERR_NOCOLORKEYHW);
+     }
+ 
+     if (desc->ddsCaps.dwCaps & (DDSCAPS_OVERLAY))
+@@ -6089,7 +6090,7 @@
+     {
+         WARN("Failed to create wined3d texture, hr %#x.\n", hr);
+         free(texture);
+-        return hr_ddraw_from_wined3d(hr);
++        return dg_surface_failure(__LINE__, surface_desc, version, hr_ddraw_from_wined3d(hr));
+     }
+ 
+     resource = wined3d_texture_get_sub_resource(wined3d_texture, 0);
+@@ -6242,7 +6243,7 @@
+     else
+         IDirectDrawSurface_Release(&root->IDirectDrawSurface_iface);
+ 
+-    return hr;
++    return dg_surface_failure(__LINE__, surface_desc, version, hr);
+ }
+ 
+ void ddraw_surface_init(struct ddraw_surface *surface, struct ddraw *ddraw, struct ddraw_texture *texture,
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -381,7 +381,7 @@
+ 
+     /* We need a fake window as a hdc retrieved using GetDC(0) can't be used for much GL purposes. */
+     ctx->wnd = CreateWindowA(WINED3D_OPENGL_WINDOW_CLASS_NAME, "WineD3D fake window",
+-            WS_OVERLAPPEDWINDOW, 10, 10, 10, 10, NULL, NULL, wined3d_gethInstDLL(), NULL);
++            WS_POPUP, 0, 0, 32, 32, NULL, NULL, wined3d_gethInstDLL(), NULL);
+             //WS_OVERLAPPEDWINDOW|WS_VISIBLE, 0,0,640,480,0,0, wined3d_gethInstDLL(), 0);
+     if (!ctx->wnd)
+     {
+@@ -6262,7 +6262,7 @@
+ /* Dynamically load all GL core functions */
+ #ifdef USE_WIN32_OPENGL
+     {
+-        HMODULE mod_gl = GetModuleHandleA("opengl32.dll");
++        HMODULE mod_gl = GetModuleHandleA("dgpugl.dll");
+ # define USE_GL_FUNC(f) gl_info->gl_ops.gl.p_##f = (void *)GetProcAddress(mod_gl, #f);
+         ALL_WGL_FUNCS
+ # undef USE_GL_FUNC
+@@ -6368,6 +6368,8 @@
+         gl_info->float_polyoffset_scale = wined3d_adapter_find_polyoffset_scale(&caps_gl_ctx, GL_DEPTH32F_STENCIL8);
+ #endif
+ 
++    if (!strcmp((const char *)gl_info->gl_ops.gl.p_glGetString(GL_VENDOR), "DreamGPU"))
++        adapter->driver_info.vram_bytes = 64ULL * 1024 * 1024;
+     adapter->vram_bytes = adapter->driver_info.vram_bytes;
+     adapter->vram_bytes_used = 0;
+     TRACE("Emulating 0x%s bytes of video ram.\n", wine_dbgstr_longlong(adapter->vram_bytes));
+--- a/wined3d/resource.c
++++ b/wined3d/resource.c
+@@ -103,6 +103,11 @@
+ 
+         for (i = 0; (gl_type = gl_resource_types[type][i]) != WINED3D_GL_RES_TYPE_COUNT; i++)
+         {
++            if (gl_type == WINED3D_GL_RES_TYPE_TEX_RECT && !gl_info->supported[ARB_TEXTURE_RECTANGLE])
++                continue;
++            if (gl_type == WINED3D_GL_RES_TYPE_RB && !gl_info->supported[ARB_FRAMEBUFFER_OBJECT]
++                    && !gl_info->supported[EXT_FRAMEBUFFER_OBJECT])
++                continue;
+             if ((usage & WINED3DUSAGE_RENDERTARGET) && !(format->flags[gl_type] & WINED3DFMT_FLAG_RENDERTARGET))
+             {
+                 WARN("Format %s cannot be used for render targets.\n", debug_d3dformat(format->id));
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -29,6 +29,7 @@
+ #include "config.h"
+ #include "wine/port.h"
+ #include "wined3d_private.h"
++#include "dg-wine-blit-usage.h"
+ #ifdef VBOX_WITH_WINE_FIXES
+ # include <float.h>
+ #endif
+@@ -1699,7 +1700,14 @@
+     if (update_w == dst_w && update_h == dst_h)
+         wined3d_texture_prepare_texture(dst_surface->container, context, FALSE);
+     else
+-        surface_load_location(dst_surface, context, WINED3D_LOCATION_TEXTURE_RGB);
++    {
++        HRESULT hr = surface_load_location(dst_surface, context, WINED3D_LOCATION_TEXTURE_RGB);
++        if (FAILED(hr))
++        {
++            context_release(context);
++            return hr;
++        }
++    }
+     wined3d_texture_bind_and_dirtify(dst_surface->container, context, FALSE);
+ 
+     surface_get_memory(src_surface, &data, src_surface->locations);
+@@ -5658,6 +5666,9 @@
+             const struct wined3d_color_key *color_key = NULL;
+ 
+             TRACE("Color blit.\n");
++            /* Source-less raster operations belong to the existing fallback. */
++            if (!src_surface)
++                goto fallback;
+             if (flags & WINEDDBLT_KEYSRCOVERRIDE)
+             {
+                 color_key = &fx->ddckSrcColorkey;
+@@ -5674,8 +5685,7 @@
+                 blit_op = WINED3D_BLIT_OP_COLOR_BLIT_ALPHATEST;
+             }
+ #endif
+-            else if ((src_surface->locations & WINED3D_LOCATION_SYSMEM)
+-                    && !(dst_surface->locations & WINED3D_LOCATION_SYSMEM))
++            else if (dg_surface_needs_cpu_upload(src_surface, dst_surface))
+             {
+                 /* Upload */
+                 if (scale)
+@@ -5742,7 +5752,7 @@
+ 
+             blitter = wined3d_select_blitter(&device->adapter->gl_info, &device->adapter->d3d_info, blit_op,
+                     &src_rect, src_surface->resource.usage, src_surface->resource.pool, src_surface->resource.format,
+-                    &dst_rect, dst_surface->resource.usage, dst_surface->resource.pool, dst_surface->resource.format);
++                    &dst_rect, dg_surface_blit_usage(dst_surface), dst_surface->resource.pool, dst_surface->resource.format);
+             if (blitter)
+             {
+                 blitter->blit_surface(device, blit_op, filter, src_surface, &src_rect, dst_surface, &dst_rect, color_key);
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -1204,6 +1204,10 @@
+             GL_DEPTH_STENCIL,           GL_UNSIGNED_INT_24_8,             4,
+             WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL | WINED3DFMT_FLAG_SHADOW,
+             ARB_FRAMEBUFFER_OBJECT,     convert_s1_uint_d15_unorm},
++    {WINED3DFMT_D24_UNORM_S8_UINT,      GL_DEPTH_STENCIL, GL_DEPTH_STENCIL, 0,
++            GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 0,
++            WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL,
++            WINED3D_GL_EXT_NONE, NULL},
+     {WINED3DFMT_D24_UNORM_S8_UINT,      GL_DEPTH_COMPONENT24_ARB,         GL_DEPTH_COMPONENT24_ARB,               0,
+             GL_DEPTH_COMPONENT,         GL_UNSIGNED_INT,                  0,
+             WINED3DFMT_FLAG_TEXTURE | WINED3DFMT_FLAG_POSTPIXELSHADER_BLENDING | WINED3DFMT_FLAG_FILTERING

@@ -1,0 +1,67 @@
+[package]
+name = "dreamgpu"
+links = "dreamgpu"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Native retro GPU transport and presentation SDK"
+
+[workspace]
+resolver = "2"
+members = ["crates/dreamgpu-host", "crates/dreamgpu-build"]
+
+[features]
+default = ["transport"]
+transport = []
+presentation = ["dep:wgpu", "dep:bytemuck", "dep:objc2", "dep:objc2-metal", "dep:block2", "dep:ash"]
+
+[dependencies]
+thiserror = "2"
+tracing = "0.1"
+serde = { version = "1", features = ["derive"] }
+libc = "0.2"
+uuid = { version = "1", features = ["v4"] }
+crossbeam-queue = "0.3"
+wgpu = { version = "30", optional = true }
+bytemuck = { version = "1", features = ["derive"], optional = true }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = { version = "0.6", optional = true }
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "block2", "MTLAllocation", "MTLBuffer", "MTLDevice", "MTLPixelFormat", "MTLResource", "MTLTexture"], optional = true }
+block2 = { version = "0.6", optional = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+ash = { version = "0.38", optional = true }
+
+
+
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+libloading = "0.8"
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+
+[[test]]
+name = "desktop"
+required-features = ["presentation"]
+
+[dev-dependencies]
+winit = "0.30"
+
+[[example]]
+name = "viewer"
+required-features = ["presentation", "transport"]
+
+[[test]]
+name = "native_qemu"
+required-features = ["presentation", "transport"]
+
+[[test]]
+name = "linux-dmabuf"
+required-features = ["presentation"]
+
+[build-dependencies]
+dreamgpu-build = { path = "crates/dreamgpu-build" }

@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "upstream": {
+    "qemu-xtra": "b3deabc7da053ea2c4c61e8f2f21c41d702d7070",
+    "wine-glu": "8f8792fc857ba609b13c6d63839034e0576b0c9f"
+  },
+  "patches": [
+    {
+      "file": "0001-dreamgpu-openglide.patch",
+      "sha256": "e3487c94bac32b6aeff809e7015e3a90ff5917921f3cafbdc1bca9a9e5d28e26"
+    }
+  ],
+  "files": {
+    "grguSstGlide.cpp": {
+      "before_sha256": "4163297437f82424b77e559175fa8da3bf6a2522dc67b1104391fdf7bd167acd",
+      "after_sha256": "cdb7ecb157e58cf5f431dd7f4330ffe21fab77787ec4e77dc2ec1b05d8c31925"
+    },
+    "platform/windows/window.cpp": {
+      "before_sha256": "169d9262f9a91d2530cb11308c1e0ddc33d3c505ef870185c60139d4233de7db",
+      "after_sha256": "af4bc7fa67b1c3884475027ed2d070d48d5ff3b6c2bc48d5213a111d092823d0"
+    },
+    "GLutil.cpp": {
+      "before_sha256": "9a045648d961af31a6768116d50f122d3709319a6bc6844be65d45f1b4207f5b",
+      "after_sha256": "79eae41b1f8da576c314eb74e8e5ec7f62f2d5c26825f3ffed39a98cadc59307"
+    },
+    "GLExtensions.cpp": {
+      "before_sha256": "8cad12a722f409db6cf9cd644d51a9df20be2bba5bb862872fc655ca309a4987",
+      "after_sha256": "f11031469c0501d52ecee79bd4d8048b3771036fbf1cd192dcfa2fef2ec928f1"
+    },
+    "GLRender.cpp": {
+      "before_sha256": "586869fb645f1bebf8e0c4b94e3bf474a085974b699014382bccb42b3f7308c7",
+      "after_sha256": "ef9422043c254fec041553ebafc12e479bd8ca5d756750af62c74662a1a832a4"
+    },
+    "PGTexture.cpp": {
+      "before_sha256": "5f79f966cf4866413a0479e0d00c6a9b886b06d5e7add3d96273e17e0eadc481",
+      "after_sha256": "e92366f7a6d0d7fb540d7408f40e59159da6dd8a9b4f35fb815cbb548bd340f2"
+    },
+    "TexDB.cpp": {
+      "before_sha256": "26a2eb3530acbd6779d3b8bb30619613a353215483aab9dea3f080766ca5f4ba",
+      "after_sha256": "0e14d91c9145454f5dc027f94f6d9f938a5d103557614dbac9a74782451d2faa"
+    },
+    "TexDB.h": {
+      "before_sha256": "daf1f7574475245b8430c59c9381117ac727471b1b5e68e86b78ef4720b6bc57",
+      "after_sha256": "6358a7ce8a949de7a106da89ee946661eda46072759bae08297421caf5f6b13a"
+    },
+    "dg-mipmap.c": {
+      "before_sha256": "0dbac15e4938e20a586f3399af37e0cb8404d82e52ff21d9266dc2802dc4a500",
+      "after_sha256": "0e9cb8a442bc00568a6227aab5935d6b7e78b5a981b177890ba00d79f958e968"
+    }
+  }
+}

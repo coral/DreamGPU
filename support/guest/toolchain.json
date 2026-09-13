@@ -1,0 +1,36 @@
+{
+  "schema": 1,
+  "cross_compiler": {
+    "target": "i686-w64-mingw32",
+    "version": "16.1.1",
+    "validated_package": "Fedora MinGW 16.1.1-1.fc44",
+    "cxx_standard": "c++23",
+    "cpu": "pentium3",
+    "sse2": false,
+    "exceptions": false,
+    "rtti": false,
+    "runtime": "freestanding; audited explicit Windows imports; no libstdc++ deployment"
+  },
+  "legacy_adapter": {
+    "toolchain": "open-watcom",
+    "pin": "sources.lock.json:tools.open-watcom",
+    "purpose": "Win98 16-bit NE display entrypoints and existing LE VxD build"
+  },
+  "floating_point": {
+    "frontend_packet_marshalling": "integer-register bit copies preserve signaling NaNs and x87 status",
+    "user_mode_arithmetic": "existing SSE1 target attributes and ABI, never SSE2",
+    "kernel": "no SIMD or floating-point instructions"
+  },
+  "container": {
+    "recipe": "toolchain/Containerfile",
+    "base": "registry.fedoraproject.org/fedora:44@sha256:2648f667bd180801195d3f3a385cf0d2e390bd80611dbedac8275253c89cdbc7",
+    "nasm": "3.02-1.fc44",
+    "full_build": "cargo run --release -p dreamgpu-build -- guest --root . --output target/guest",
+    "scope": "Pinned cross compiler/API packages; native utility dependency closure is not bit-reproducible"
+  },
+  "packages": {
+    "win98": "packages/win98",
+    "nt5": "packages/windows2000-xp",
+    "application_libraries": "Shared graphics frontends; no Windows system DLL replacement"
+  }
+}

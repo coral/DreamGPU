@@ -1,0 +1,19 @@
+# libc on the supported hosts does not supply optional C11 Annex K *_s APIs.
+# Analyze actual bounds/lifetimes; do not ban every bounded memcpy/memset call.
+Checks: >-
+  -*,
+  clang-analyzer-*,
+  -clang-analyzer-optin.performance.Padding,
+  -clang-analyzer-security.insecureAPI.DeprecatedOrUnsafeBufferHandling,
+  bugprone-bool-pointer-implicit-conversion,
+  bugprone-dangling-handle,
+  bugprone-infinite-loop,
+  bugprone-misplaced-widening-cast,
+  bugprone-sizeof-expression,
+  bugprone-suspicious-memory-comparison,
+  bugprone-undefined-memory-manipulation,
+  bugprone-unused-raii,
+  bugprone-use-after-move,
+  performance-unnecessary-copy-initialization
+HeaderFilterRegex: '(^|/)(guest|tools)/|/source/(openglide/texture-pool.cpp.inc|wine9x/(ddraw/dg-wine-diagnostics.h|wined3d/dg-wine-blit-usage.h))|/crates/dreamgpu-host/|/(standard-headers/dreamgpu/|hw/display/dreamgpu[^/]*|ui/dreamgpu[^/]*)'
+FormatStyle: file

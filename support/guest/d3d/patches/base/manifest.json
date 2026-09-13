@@ -1,0 +1,38 @@
+{
+  "schema": 1,
+  "upstream": {
+    "wine9x": "8ab16c6c0930efc1f9138eddda7b3114d7f31e62"
+  },
+  "patches": [
+    {
+      "file": "0001-dreamgpu-wined3d.patch",
+      "sha256": "e219337f3fcb53fc10421319deec5d7542f2b89b72472fb344e87092e09579ec"
+    }
+  ],
+  "files": {
+    "Makefile": {
+      "before_sha256": "6875901ff10f425ea4af41e5d07486f06aff68ddd6b93840f74367f52917dd05",
+      "after_sha256": "d361f386478dc44f8f8cd90b10c3f1cde8a60b848821dc1d13e8de214ff4dbc6"
+    },
+    "ddraw/surface.c": {
+      "before_sha256": "2befc4bf776b67c5eb14918770e749e17d114359b970aecaa289745e67d84a1f",
+      "after_sha256": "852e71b6ccce84bd343f775ef47df6acd84830de0364f3a24db31f9bec3bc5c5"
+    },
+    "wined3d/directx.c": {
+      "before_sha256": "3bb18ad8cf7805122c5d124cfc84707b7f495f4eec8dc36b928ee33ec2318a2e",
+      "after_sha256": "2d90476d246663e7b7010db8553ab799d774a616763a9de9d3335c2994051587"
+    },
+    "wined3d/resource.c": {
+      "before_sha256": "bb5d96bd0ba31be8b24eaf172b5a927c6760b9e094b9ebb132d118f1447039d7",
+      "after_sha256": "794cf543e6f723accc996e814196664cd312c8fbd82b78633ba7dac57230f7b5"
+    },
+    "wined3d/surface.c": {
+      "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
+      "after_sha256": "9279a63e8ca80f6af73ad5b23f83f581bc4d1d33ab2b2da1b3ecfdc9eabd6549"
+    },
+    "wined3d/utils.c": {
+      "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
+      "after_sha256": "13663b3b47f8a524af91704eededc0c011d25cbd98dee86217bd11192e72cbb2"
+    }
+  }
+}

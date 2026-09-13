@@ -1,0 +1,19 @@
+{
+  "schema": 1,
+  "tools": {
+    "open-watcom": {
+      "release": "2025-03-01-Build",
+      "url": "https://github.com/open-watcom/open-watcom-v2/releases/download/2025-03-01-Build/ow-snapshot.tar.xz",
+      "sha256": "be75ec9f0cd9ee9ebf3af9a096092dd988f3c016599a415724c455d81205f71d"
+    }
+  },
+  "sources": {
+    "vmdisp9x": {"url": "https://github.com/JHRobotics/vmdisp9x.git", "commit": "718b3d51a1532fe1ba2e133cf76186f1a609d35e", "submodules": {"fixlink": "a2a74447daea3197255f3a4fb5cfb0c5a453dcc8"}},
+    "reactos": {"url": "https://github.com/reactos/reactos.git", "commit": "22fb3bb2c1d8196cf501edbb49b3814739f7b016", "sparse": ["win32ss/drivers/displays/framebuf", "win32ss/drivers/miniport/bochs", "sdk/include"]},
+    "qemu-3dfx": {"url": "https://github.com/startergo/qemu-3dfx-arch.git", "commit": "5d40e054a1bc8c4b00c41c533c6b84afd9cdc30b", "submodules": {"wrappers/extra": "80b73df4e2752ec01a359a362c44a82bba419128"}},
+    "wine9x": {"url": "https://github.com/JHRobotics/wine9x.git", "commit": "8ab16c6c0930efc1f9138eddda7b3114d7f31e62", "submodules": {"nocrt": "d4c45d2acd0c6d5f656e71501d6c779719a640fb", "pthread9x": "9c1ec5a655849f99f1e9c4e3b04609f446c92551"}},
+    "qemu-xtra": {"url": "https://github.com/kjliew/qemu-xtra.git", "commit": "b3deabc7da053ea2c4c61e8f2f21c41d702d7070"},
+    "patcher9x": {"url": "https://github.com/JHRobotics/patcher9x.git", "commit": "b6e30d4b5a396dcd453b6c8e6733fd5b5cbce59e", "submodules": {"nocrt": "0a09a82802ee75717ce055ea7bfafcd3584dd6b0"}},
+    "wine-glu": {"url": "https://github.com/wine-mirror/wine.git", "commit": "8f8792fc857ba609b13c6d63839034e0576b0c9f", "sparse": ["dlls/glu32"]}
+  }
+}

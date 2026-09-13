@@ -1,0 +1,11 @@
+[package]
+name = "dreamgpu-build"
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+description = "Cargo build orchestration for DreamGPU native and guest components"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+sha2 = "0.10"

@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: GPL-2.0-or-later
+set(frontend_sources frontend query texture compatibility readback arrays secondary fixed transport transport9-window)
+set(frontend_units "${DREAMGPU_GUEST}/nt/memory.cpp")
+foreach(unit IN LISTS frontend_sources)
+  list(APPEND frontend_units "${DREAMGPU_GUEST}/opengl/${unit}.cpp")
+endforeach()
+# scalar.inc and frontend.def are reviewed, committed generated inputs. The
+# compiler never runs a generator or modifies the source checkout.
+add_library(dgpugl SHARED ${frontend_units} "${DREAMGPU_GUEST}/opengl/frontend.def")
+dreamgpu_user(dgpugl)
+target_link_options(dgpugl PRIVATE -Wl,--entry,_DllMain@12)
+target_link_libraries(dgpugl PRIVATE kernel32 user32 gdi32 gcc)
+set_target_properties(dgpugl PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/application")
+install(TARGETS dgpugl RUNTIME DESTINATION application COMPONENT ${DREAMGPU_GUEST_OS})

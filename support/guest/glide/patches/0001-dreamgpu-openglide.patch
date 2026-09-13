@@ -1,0 +1,669 @@
+--- a/grguSstGlide.cpp
++++ b/grguSstGlide.cpp
+@@ -325,13 +325,13 @@
+     InitOpenGL( );
+ 
+ #define PADDING         ((page_size << 2) - 1)
+-#define PAGE_ALIGN(x)   ((((intptr_t)x) + page_size - 1) & page_mask)
++#define PAGE_ALIGN(x)   ((((intptr_t)(x)) + page_size - 1) & page_mask)
+     intptr_t page_size = getpagesize();
+     intptr_t page_mask = ~(page_size - 1);
+     OpenGL.oneBuf = new char[ (OpenGL.WindowTotalPixels * 10) + PADDING ];
+     OpenGL.tmpBuf = (FxU32 *)PAGE_ALIGN(OpenGL.oneBuf);
+-    Glide.DstBuffer.Address = (FxU16 *)PAGE_ALIGN(OpenGL.tmpBuf + (OpenGL.WindowTotalPixels << 2));
+-    Glide.SrcBuffer.Address = (FxU16 *)PAGE_ALIGN(Glide.DstBuffer.Address + (OpenGL.WindowTotalPixels << 2));
++    Glide.DstBuffer.Address = (FxU16 *)PAGE_ALIGN(OpenGL.tmpBuf + OpenGL.WindowTotalPixels);
++    Glide.SrcBuffer.Address = (FxU16 *)PAGE_ALIGN(Glide.DstBuffer.Address + (OpenGL.WindowTotalPixels << 1));
+     Glide.LFBTextureSize = 2 << int_log2(Glide.WindowWidth > Glide.WindowHeight ? (Glide.WindowWidth-1) : (Glide.WindowHeight-1));
+ 
+     glGenTextures( 1, &Glide.LFBTexture );
+@@ -434,6 +434,7 @@
+         InternalConfig.NoSplash = true;
+     }
+ 
++    GlideMsg("DG_GLIDE_OPEN_COMPLETE\n");
+     return FXTRUE;
+ }
+ 
+--- a/platform/windows/window.cpp
++++ b/platform/windows/window.cpp
+@@ -26,6 +26,7 @@
+ #include <GL/wgl.h>
+ 
+ static HDC   hDC;
++static unsigned DgSwapState;
+ static HGLRC hRC;
+ static HWND  hWND;
+ static struct
+@@ -91,37 +92,6 @@
+     }
+ 
+     return hWnd;
+-}
+-
+-static int *iattribs_fb(const int do_msaa)
+-{
+-    static int ia[] = {
+-        WGL_DRAW_TO_WINDOW_ARB, 1,
+-        WGL_SUPPORT_OPENGL_ARB, 1,
+-        WGL_DOUBLE_BUFFER_ARB, 1,
+-        WGL_PIXEL_TYPE_ARB, WGL_TYPE_RGBA_ARB,
+-        WGL_ACCELERATION_ARB, WGL_FULL_ACCELERATION_ARB,
+-        WGL_COLOR_BITS_ARB, 32,
+-        WGL_DEPTH_BITS_ARB, 24,
+-        WGL_ALPHA_BITS_ARB, 8,
+-        WGL_STENCIL_BITS_ARB, 8,
+-        WGL_SAMPLE_BUFFERS_ARB, 0,
+-        WGL_SAMPLES_ARB, 0,
+-        0,0,
+-    };
+-    for (int i = 0; ia[i]; i+=2) {
+-        switch(ia[i]) {
+-            case WGL_SAMPLE_BUFFERS_ARB:
+-                ia[i+1] = (do_msaa)? 1:0;
+-                break;
+-            case WGL_SAMPLES_ARB:
+-                ia[i+1] = (do_msaa)? do_msaa:0;
+-                break;
+-            default:
+-                break;
+-        }
+-    }
+-    return ia;
+ }
+ 
+ bool InitialiseOpenGLWindow(FxU wnd, int x, int y, int width, int height)
+@@ -228,84 +198,41 @@
+     pfd.cAlphaBits   = 8;
+     pfd.cStencilBits = 8;
+ 
+-    HWND tmpWnd = CreateGlideWindow("dummy", 320, 200, 0);
+-    HDC tmpDC = GetDC(tmpWnd);
+-    SetPixelFormat(tmpDC, ChoosePixelFormat(tmpDC, &pfd), &pfd);
+-    HGLRC tmpGL = wglCreateContext(tmpDC);
+-    wglMakeCurrent(tmpDC, tmpGL);
+-
+-    BOOL (WINAPI *p_wglGetPixelFormatAttribivARB)(HDC, int, int, UINT, const int *, int *) =
+-        (BOOL (WINAPI *)(HDC, int, int, UINT, const int *, int *))wglGetProcAddress("wglGetPixelFormatAttribivARB");
+-    BOOL (WINAPI *p_wglChoosePixelFormatARB)(HDC, const int *, const float *, UINT, int *, UINT *) =
+-        (BOOL (WINAPI *)(HDC, const int *, const float *, UINT, int *, UINT *))wglGetProcAddress("wglChoosePixelFormatARB");
+-
+-    wglMakeCurrent(NULL, NULL);
+-    wglDeleteContext(tmpGL);
+-    ReleaseDC(tmpWnd, tmpDC);
+-    DestroyWindow(tmpWnd);
+-    UnregisterClass("dummy", GetModuleHandle(0));
+-
+-    if ( !( PixFormat = GetPixelFormat(hDC))) {
+-        if (p_wglChoosePixelFormatARB) {
+-            static const float fa[] = {0, 0};
+-            int *ia = iattribs_fb(UserConfig.SamplesMSAA);
+-            int pi[64]; UINT nFmts = 0;
+-            BOOL status = p_wglChoosePixelFormatARB(hDC, ia, fa, 64, pi, &nFmts);
+-            if (UserConfig.SamplesMSAA && !nFmts) {
+-                ia = iattribs_fb(0);
+-                status = p_wglChoosePixelFormatARB(hDC, ia, fa, 64, pi, &nFmts);
+-            }
+-            PixFormat = (status && nFmts)? pi[0]:0;
+-        }
+-
+-        if (!PixFormat) {
+-            fprintf(stderr, "Warn: Fallback to legacy OpenGL context creation\n");
+-            if ( !( PixFormat = ChoosePixelFormat( hDC, &pfd ) ) )
+-            {
+-                MessageBox( NULL, "ChoosePixelFormat() failed:  "
+-                            "Cannot find a suitable pixel format.", "Error", MB_OK );
+-                exit( 1 );
+-            }
+-        }
+-
+-        // the window must have WS_CLIPCHILDREN and WS_CLIPSIBLINGS for this call to
+-        // work correctly, so we SHOULD set this attributes, not doing that yet
+-        if ( !SetPixelFormat( hDC, PixFormat, &pfd ) )
+-        {
+-            MessageBox( NULL, "SetPixelFormat() failed:  "
+-                        "Cannot set format specified.", "Error", MB_OK );
+-            exit( 1 );
+-        }
+-    }
+-    else
+-        SetPixelFormat( hDC, PixFormat, NULL );
+-
+-    DescribePixelFormat( hDC, PixFormat, sizeof( PIXELFORMATDESCRIPTOR ), &pfd );
+-    GlideMsg( "ColorBits	= %d\n", pfd.cColorBits );
+-    GlideMsg( "DepthBits	= %d\n", pfd.cDepthBits );
+-
+-    if (p_wglGetPixelFormatAttribivARB) {
+-        static const int iattr[] = {
+-            WGL_AUX_BUFFERS_ARB,
+-            WGL_SAMPLE_BUFFERS_ARB,
+-            WGL_SAMPLES_ARB,
+-            WGL_FRAMEBUFFER_SRGB_CAPABLE_ARB,
+-        };
+-        int cattr[4];
+-        p_wglGetPixelFormatAttribivARB(hDC, PixFormat, 0, 4, iattr, cattr);
+-        cattr[3] = (cattr[3] && UserConfig.FramebufferSRGB)? 1:0;
+-        UserConfig.FramebufferSRGB = cattr[3] != 0;
+-        fprintf(stderr, "Info: PixFmt 0x%02x nAux %d nSamples %d %d %s\n", PixFormat,
+-            cattr[0], cattr[1], cattr[2], (cattr[3])? "sRGB":"");
+-    }
+-
++    GlideMsg("DG_WGL_FORMAT_BEGIN\n");
++    if (!hDC) { Error("DG_WGL_GET_DC error=%lu\n", GetLastError()); return false; }
++    PixFormat = GetPixelFormat(hDC);
++    if (!PixFormat) {
++        PixFormat = ChoosePixelFormat(hDC, &pfd);
++        if (!PixFormat || !SetPixelFormat(hDC, PixFormat, &pfd)) {
++            Error("DG_WGL_SET_FORMAT error=%lu\n", GetLastError());
++            ReleaseDC(hWND, hDC); hDC = NULL; return false;
++        }
++    }
++    if (!DescribePixelFormat(hDC, PixFormat, sizeof(pfd), &pfd)) {
++        Error("DG_WGL_DESCRIBE_FORMAT error=%lu\n", GetLastError());
++        ReleaseDC(hWND, hDC); hDC = NULL; return false;
++    }
++    GlideMsg("ColorBits = %d DepthBits = %d\n", pfd.cColorBits, pfd.cDepthBits);
++    UserConfig.FramebufferSRGB = false;
+     if ( pfd.cDepthBits > 16 )
+     {
+         UserConfig.PrecisionFix = false;
+     }
+ 
+-    hRC = wglCreateContext( hDC );
+-    wglMakeCurrent( hDC, hRC );
++    GlideMsg("DG_WGL_CREATE_BEGIN\n");
++    hRC = wglCreateContext(hDC);
++    if (!hRC) {
++        Error("DG_WGL_CREATE error=%lu\n", GetLastError());
++        ReleaseDC(hWND, hDC); hDC = NULL; return false;
++    }
++    GlideMsg("DG_WGL_BIND_BEGIN\n");
++    if (!wglMakeCurrent(hDC, hRC)) {
++        Error("DG_WGL_BIND error=%lu\n", GetLastError());
++        wglDeleteContext(hRC); hRC = NULL;
++        ReleaseDC(hWND, hDC); hDC = NULL; return false;
++    }
++    DgSwapState = 0;
++    GlideMsg("DG_WGL_BOUND\n");
+ 
+     if (UserConfig.FramebufferSRGB)
+         glEnable(GL_FRAMEBUFFER_SRGB);
+@@ -437,7 +364,12 @@
+ 
+ void SwapBuffers()
+ {
+-    SwapBuffers(hDC);
++    if (!SwapBuffers(hDC)) {
++        if (DgSwapState != 2) Error("DG_PRESENT_FAILED error=%lu\n", GetLastError());
++        DgSwapState = 2; return;
++    }
++    if (DgSwapState != 1) GlideMsg("DG_FIRST_PRESENT_ACCEPTED\n");
++    DgSwapState = 1;
+ }
+ 
+ #endif // !C_USE_SDL && WIN32
+--- a/GLutil.cpp
++++ b/GLutil.cpp
+@@ -378,126 +378,8 @@
+     }
+ }
+ 
+-static struct {
+-    uint64_t last;
+-    uint32_t fcount;
+-    float ftime;
+-    int base;
+-} fxstats;
+-
+-static void fgFontGenList(int first, int count, uint32_t listBase)
+-{
+-    const SFG_Font *font = &fgFontFixed8x13;
+-    int org_alignment;
+-    glGetIntegerv(GL_UNPACK_ALIGNMENT, &org_alignment);
+-    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+-    for (int i = first; i < (first + count); i++) {
+-        const unsigned char *face = font->Characters[i];
+-        glNewList(listBase++, GL_COMPILE);
+-        glBitmap(
+-            face[ 0 ], font->Height,
+-            font->xorig, font->yorig,
+-            ( float )( face [ 0 ] ), 0.0,
+-            ( face + 1 )
+-        );
+-        glEndList();
+-    }
+-    glPixelStorei(GL_UNPACK_ALIGNMENT, org_alignment);
+-}
+-
+-static void drawstr(const char *str, const int colors)
+-{
+-    glPushMatrix();
+-    glPushAttrib(
+-        GL_COLOR_BUFFER_BIT |
+-        GL_DEPTH_BUFFER_BIT |
+-        GL_STENCIL_BUFFER_BIT |
+-        GL_LIGHTING_BIT |
+-        GL_SCISSOR_BIT |
+-        GL_TEXTURE_BIT |
+-        GL_TRANSFORM_BIT |
+-        GL_VIEWPORT_BIT |
+-        GL_CURRENT_BIT);
+-    glLoadIdentity();
+-    glMatrixMode(GL_PROJECTION);
+-    glPushMatrix();
+-    glLoadIdentity();
+-    gluOrtho2D(0, OpenGL.WindowWidth, 0, OpenGL.WindowHeight);
+-
+-    glDisable(GL_ALPHA_TEST);
+-    glDisable(GL_DEPTH_TEST);
+-    glDisable(GL_STENCIL_TEST);
+-    glDisable(GL_BLEND);
+-    glDisable(GL_LIGHTING);
+-    glDisable(GL_TEXTURE_2D);
+-
+-    glEnable(GL_SCISSOR_TEST);
+-    glScissor((OpenGL.WindowOffset+11), 6, 11 + (8 * strlen(str)), 14);
+-    glClearColor(0.f, 0.f, 0.f, 0.f);
+-    glClear(GL_COLOR_BUFFER_BIT);
+-
+-    glListBase(fxstats.base);
+-    glColor3ubv((const GLubyte *)&colors);
+-    glRasterPos2i(13, 8);
+-    glCallLists(strlen(str), GL_UNSIGNED_BYTE, str);
+-
+-    glPopMatrix();
+-    glPopAttrib();
+-    glPopMatrix();
+-}
+-
+-#ifndef NANOSECONDS_PER_SECOND
+-#define NANOSECONDS_PER_SECOND get_ticks_per_sec()
+-static uint64_t get_ticks_per_sec(void) { return 1000000000LL; }
+-#endif
+-static uint64_t get_ticks_monotonic(void)
+-{
+-    struct timespec tp;
+-    if (clock_gettime(CLOCK_MONOTONIC, &tp))
+-        return -1;
+-    return (tp.tv_sec * NANOSECONDS_PER_SECOND) + tp.tv_nsec;
+-
+-}
+-void annotate_last(void)
+-{
+-    if (fxstats.base)
+-        glDeleteLists(fxstats.base, 256);
+-    fxstats.base = 0;
+-    fxstats.fcount = 0;
+-    fxstats.last = 0;
+-}
+-
+-void annotate_stat(void)
+-{
+-    static char stats_line[] = "xxxx frames in xxx.x seconds xxx.x FPS";
+-    uint64_t curr;
+-    int i;
+-
+-    if (UserConfig.Annotate) {
+-        if (fxstats.last == 0) {
+-            if (fxstats.fcount == 0) {
+-                fxstats.base = glGenLists(256);
+-                fgFontGenList(0, 255, fxstats.base);
+-                snprintf(stats_line, sizeof(stats_line), "%s", "Init ...");
+-            }
+-            fxstats.fcount = 0;
+-            fxstats.ftime = 0;
+-            fxstats.last = get_ticks_monotonic();
+-            return;
+-        }
+-        curr = get_ticks_monotonic();
+-        fxstats.fcount++;
+-        fxstats.ftime += (curr - fxstats.last) * (1.f / NANOSECONDS_PER_SECOND);
+-        fxstats.last = curr;
+-        i = (int)fxstats.ftime;
+-        if (i && ((i % 5) == 0)) {
+-            fxstats.last = 0;
+-            snprintf(stats_line, sizeof(stats_line), "%-4u frames in %-4.1f seconds %-5.1f FPS",
+-                fxstats.fcount, fxstats.ftime, fxstats.fcount / fxstats.ftime);
+-        }
+-        drawstr(stats_line, 0x00FFFFFF);
+-    }
+-}
++void annotate_last(void) {}
++void annotate_stat(void) {}
+ 
+ FX_ENTRY void FX_CALL setConfig(FxU32 flags, void *magic)
+ {
+--- a/GLExtensions.cpp
++++ b/GLExtensions.cpp
+@@ -44,12 +44,12 @@
+ stExtensionSupport glNecessaryExt[] =
+ {
+ #ifdef __darwin__
+-    { "GL_APPLE_packed_pixels",         OGL_EXT_REQUIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
++    { "GL_APPLE_packed_pixels",         OGL_EXT_DESIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
+ #else
+-    { "GL_EXT_packed_pixels",           OGL_EXT_REQUIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
++    { "GL_EXT_packed_pixels",           OGL_EXT_DESIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
+ #endif
+-    { "GL_EXT_abgr",                    OGL_EXT_REQUIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
+-    { "GL_EXT_bgra",                    OGL_EXT_REQUIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
++    { "GL_EXT_abgr",                    OGL_EXT_DESIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
++    { "GL_EXT_bgra",                    OGL_EXT_DESIRED,   &dummyExtVariable,                  &dummyExtVariable2 },
+     { "GL_EXT_secondary_color",         OGL_EXT_DESIRED,    &dummyExtVariable,                  &InternalConfig.EXT_secondary_color },
+     { "GL_ARB_multitexture",            OGL_EXT_DESIRED,    &UserConfig.ARB_multitexture,       &InternalConfig.ARB_multitexture },
+     { "GL_EXT_fog_coord",               OGL_EXT_DESIRED,    &dummyExtVariable,                  &InternalConfig.EXT_fog_coord },
+@@ -324,7 +324,7 @@
+         ++index;
+     }
+     // The above loop leaves InternalConfig.BuildMipMaps set to the negation of its correct value.
+-    InternalConfig.BuildMipMaps = !InternalConfig.BuildMipMaps;
++    InternalConfig.BuildMipMaps = InternalConfig.EnableMipMaps && !InternalConfig.BuildMipMaps;
+ 
+     GlideMsg( OGL_LOG_SEPARATE );
+ 
+@@ -338,6 +338,9 @@
+     {
+         InternalConfig.FogEnable    = (UserConfig.FogEnable)? true:false;
+     }
++    // DreamGPU supplies the tested core array ABI; no global extension claim.
++    InternalConfig.EXT_vertex_array = true;
++    GlideMsg("DG_CORE_VERTEX_ARRAYS\n");
+     GLExtensions( );
+ }
+ 
+--- a/GLRender.cpp
++++ b/GLRender.cpp
+@@ -119,7 +119,9 @@
+         p_glClientActiveTexture( GL_TEXTURE1_ARB );
+         glTexCoordPointer( 4, GL_FLOAT, 0, &OGLRender.TTexture[0] );
+     }
+-    p_glSecondaryColorPointerEXT( 3, GL_FLOAT, 4 * sizeof( GLfloat ), &OGLRender.TColor2[0] );
++    if (InternalConfig.EXT_secondary_color) {
++        p_glSecondaryColorPointerEXT( 3, GL_FLOAT, 4 * sizeof( GLfloat ), &OGLRender.TColor2[0] );
++    }
+     if ( InternalConfig.EXT_fog_coord )
+     {
+         p_glFogCoordPointerEXT( GL_FLOAT, 0, &OGLRender.TFog[0] );
+@@ -276,9 +278,9 @@
+ 
+         if ( InternalConfig.EXT_vertex_array )
+         {
+-            glColorPointer( 4, GL_FLOAT, 0, &OGLRender.TColor2 );
++            glColorPointer( 4, GL_FLOAT, 0, OGLRender.TColor2 );
+             glDrawArrays( GL_TRIANGLES, 0, OGLRender.NumberOfTriangles * 3 );
+-            glColorPointer( 4, GL_FLOAT, 0, &OGLRender.TColor );
++            glColorPointer( 4, GL_FLOAT, 0, OGLRender.TColor );
+         }
+         else
+         {
+--- a/PGTexture.cpp
++++ b/PGTexture.cpp
+@@ -16,18 +16,17 @@
+ #include "FormatConversion.h"
+ #include "OGLTables.h"
+ 
+-#define OGL_LOAD_CREATE_TEXTURE( compnum, compformat, comptype, texdata )   \
+-    {                                                                       \
+-        glTexImage2D( GL_TEXTURE_2D, texVals.lod, compnum,                  \
+-                    texVals.width, texVals.height,                          \
+-                    0, compformat, comptype, texdata );                     \
+-        if ( InternalConfig.BuildMipMaps )                                  \
+-        {                                                                   \
+-            gluBuild2DMipmaps( GL_TEXTURE_2D, compnum,                      \
+-                               texVals.width, texVals.height,               \
+-                               compformat, comptype, texdata );             \
+-        }                                                                   \
+-    }
++#define OGL_LOAD_CREATE_TEXTURE(compnum, compformat, comptype, texdata) \
++    do { \
++        if (InternalConfig.BuildMipMaps) { \
++            m_db->ForgetStorage(texNum); \
++            gluBuild2DMipmaps(GL_TEXTURE_2D, compnum, texVals.width, \
++                texVals.height, compformat, comptype, texdata); \
++        } else { \
++            m_db->Upload(texNum, texVals.lod, compnum, texVals.width, \
++                texVals.height, compformat, comptype, texdata); \
++        } \
++    } while (0)
+ 
+ 
+ void genPaletteMipmaps( FxU32 width, FxU32 height, FxU8 *data )
+@@ -128,11 +127,7 @@
+         m_db->Add( startAddress, mip_offset, info, 0, &texNum, NULL);
+ 
+         glBindTexture( GL_TEXTURE_2D, texNum );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, OpenGL.SClampMode );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, OpenGL.TClampMode );
+-    
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, OpenGL.MinFilterMode );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, OpenGL.MagFilterMode );
++        m_db->Parameters(texNum, OpenGL.SClampMode, OpenGL.TClampMode, OpenGL.MinFilterMode, OpenGL.MagFilterMode);
+ 
+         if ( InternalConfig.EnableMipMaps && !InternalConfig.BuildMipMaps )
+             glTexParameteri( GL_TEXTURE_2D, GL_GENERATE_MIPMAP_SGIS, true );
+@@ -358,11 +353,7 @@
+                    &texNum, use_two_textures ? &tex2Num : NULL );
+ 
+         glBindTexture( GL_TEXTURE_2D, texNum );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, OpenGL.SClampMode );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, OpenGL.TClampMode );
+-    
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, OpenGL.MinFilterMode );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, OpenGL.MagFilterMode );
++        m_db->Parameters(texNum, OpenGL.SClampMode, OpenGL.TClampMode, OpenGL.MinFilterMode, OpenGL.MagFilterMode);
+     
+         if( use_mipmap_ext )
+         {
+@@ -374,11 +365,7 @@
+             p_glActiveTextureARB( GL_TEXTURE1_ARB );
+ 
+             glBindTexture( GL_TEXTURE_2D, tex2Num );
+-            glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, OpenGL.SClampMode );
+-            glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, OpenGL.TClampMode );
+-        
+-            glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, OpenGL.MinFilterMode );
+-            glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, OpenGL.MagFilterMode );
++            m_db->Parameters(tex2Num, OpenGL.SClampMode, OpenGL.TClampMode, OpenGL.MinFilterMode, OpenGL.MagFilterMode);
+ 
+             if( use_mipmap_ext2 )
+             {
+@@ -478,7 +465,7 @@
+ 
+                 p_glActiveTextureARB( GL_TEXTURE1_ARB );
+ 
+-                OGL_LOAD_CREATE_TEXTURE( GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE, tex_temp2 );
++                { GLuint primary=texNum; texNum=tex2Num; OGL_LOAD_CREATE_TEXTURE( GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE, tex_temp2 ); texNum=primary; }
+ 
+                 p_glActiveTextureARB( GL_TEXTURE0_ARB );
+             }
+@@ -507,11 +494,7 @@
+             OGL_LOAD_CREATE_TEXTURE( GL_LUMINANCE4_ALPHA4, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, data );
+ #else
+             ConvertAI44toAP88( (FxU8*)data, (FxU16*)m_tex_temp, texVals.nPixels );
+-            glTexImage2D( GL_TEXTURE_2D, texVals.lod, 2, texVals.width, texVals.height, 0, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, m_tex_temp );
+-            if ( InternalConfig.BuildMipMaps )
+-            {
+-                gluBuild2DMipmaps( GL_TEXTURE_2D, 2, texVals.width, texVals.height, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, m_tex_temp );
+-            }
++            OGL_LOAD_CREATE_TEXTURE(2, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE, m_tex_temp);
+ #endif
+             break;
+             
+@@ -544,21 +527,13 @@
+         }
+     }
+ 
+-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, OpenGL.SClampMode );
+-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, OpenGL.TClampMode );
+-    
+-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, OpenGL.MinFilterMode );
+-    glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, OpenGL.MagFilterMode );
++    m_db->Parameters(texNum, OpenGL.SClampMode, OpenGL.TClampMode, OpenGL.MinFilterMode, OpenGL.MagFilterMode);
+     
+     if ( use_two_textures )
+     {
+         p_glActiveTextureARB( GL_TEXTURE1_ARB );
+         
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, OpenGL.SClampMode );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, OpenGL.TClampMode );
+-        
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, OpenGL.MinFilterMode );
+-        glTexParameteri( GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, OpenGL.MagFilterMode );
++        m_db->Parameters(tex2Num, OpenGL.SClampMode, OpenGL.TClampMode, OpenGL.MinFilterMode, OpenGL.MagFilterMode);
+         
+         p_glActiveTextureARB( GL_TEXTURE0_ARB );
+     }
+--- a/TexDB.cpp
++++ b/TexDB.cpp
+@@ -19,6 +19,7 @@
+ 
+ TexDB::TexDB( unsigned int MemorySize )
+ {
++    m_pool=NULL; m_upload=NULL; m_poolCount=0; m_poolBytes=0;
+     numberOfTexSections = MemorySize >> 15; // ( 32 * 1024 );
+ 
+     m_first = new Record*[ numberOfTexSections ];
+@@ -29,21 +30,9 @@
+     }
+ }
+ 
+-TexDB::~TexDB( void )
+-{
+-    Record * r;
+-
+-    for ( unsigned int i = 0; i < numberOfTexSections; i++ )
+-    {
+-        r = m_first[ i ];
+-        
+-        while ( r != NULL )
+-        {
+-            Record * tmp = r;
+-            r = r->next;
+-            delete tmp;
+-        }
+-    }
++TexDB::~TexDB(void)
++{
++    Clear();
+     delete[] m_first;
+ }
+ 
+@@ -57,6 +46,7 @@
+     {
+         if ( r->Match( startAddress, info, ( pal_change == NULL ) ? hash : 0 ) )
+         {
++            m_upload=r;
+             *pTexNum = r->texNum;
+ 
+             if ( pTex2Num )
+@@ -128,7 +118,7 @@
+ #ifdef OGL_UTEX
+                 GlideMsg( "Wipe tex %d\n", r->texNum );
+ #endif
+-                delete r;
++                Retire(r);
+             }
+             else
+             {
+@@ -140,7 +130,8 @@
+ 
+ void TexDB::Add( FxU32 startAddress, FxU32 endAddress, GrTexInfo *info, FxU32 hash, GLuint *pTexNum, GLuint *pTex2Num )
+ {
+-    Record  *r = new Record( pTex2Num != NULL );
++    Record  *r = Acquire(info,pTex2Num != NULL);
++    m_upload=r;
+     FxU32   sect;
+ 
+     sect = startAddress >> 15; // 32 * 1024
+@@ -183,12 +174,17 @@
+ 
+         m_first[ i ] = NULL;
+     }
++    while (m_pool) { Record *r=m_pool; m_pool=r->next; delete r; }
++    m_poolCount=0; m_poolBytes=0; m_upload=NULL;
+ }
+ 
+ // TexDB::Record Class implementation
+ 
+ TexDB::Record::Record( bool two_tex )
+ {
++   memset(storage,0,sizeof(storage));
++   memset(paramsValid,0,sizeof(paramsValid));
++   retainedBytes=0;
+    glGenTextures( 1, &texNum );
+ 
+    if ( two_tex )
+@@ -219,3 +215,5 @@
+             ( inf->format == info.format ) && 
+             ( ( hash == h ) || ( h == 0 ) ) );
+ }
++
++#include "texture-pool.cpp.inc"
+--- a/TexDB.h
++++ b/TexDB.h
+@@ -20,6 +20,7 @@
+ public:
+     void Clear( void );
+ 
++    struct Storage { bool valid; GLint internal; GLsizei width,height; };
+     struct Record
+     {
+         FxU32 startAddress;
+@@ -29,12 +30,19 @@
+         GLuint texNum;
+         GLuint tex2Num;
+         Record *next;
++        Storage storage[9];
++        GLint params[2][4];
++        bool paramsValid[2][4];
++        unsigned int retainedBytes;
+ 
+         Record( bool two_tex );
+         ~Record( void );
+         bool Match( FxU32 stt, GrTexInfo *inf, FxU32 h );
+     };
+ 
++    void ForgetStorage(GLuint);
++    void Upload(GLuint,GLint,GLint,GLsizei,GLsizei,GLenum,GLenum,const void *);
++    void Parameters(GLuint,GLint,GLint,GLint,GLint);
+     void Add( FxU32 startAddress, FxU32 endAddress, GrTexInfo *info, FxU32 hash, GLuint *pTexNum, GLuint *pTex2Num );
+     void WipeRange( FxU32 startAddress, FxU32 endAddress, FxU32 hash );
+     GrTexInfo * Find( FxU32 startAddress, GrTexInfo *info, FxU32 hash, 
+@@ -45,6 +53,10 @@
+ private:
+     unsigned int numberOfTexSections;
+     Record ** m_first;
++    Record *m_pool, *m_upload;
++    unsigned int m_poolCount, m_poolBytes;
++    void Retire(Record *);
++    Record *Acquire(GrTexInfo *,bool);
+ };
+ 
+ #endif
+--- a/dg-mipmap.c
++++ b/dg-mipmap.c
+@@ -1,3 +1,7 @@
++#include <windows.h>
++#include <GL/gl.h>
++#include <GL/glext.h>
++#include <GL/glu.h>
+ /*
+  * SGI FREE SOFTWARE LICENSE B (Version 2.0, Sept. 18, 2008)
+  * Copyright (C) 1991-2000 Silicon Graphics, Inc. All Rights Reserved.
+@@ -35,11 +39,11 @@
+ #include <limits.h>
+ #include <math.h>
+ 
+-#include "windef.h"
+-#include "winbase.h"
+-#include "wingdi.h"
+-#include "wine/wgl.h"
+-#include "wine/glu.h"
++
++
++
++
++
+ 
+ #define GLU_INVALID_OPERATION GLU_INVALID_VALUE  /* GLU_INVALID_OPERATION is missing on Windows */
+ 

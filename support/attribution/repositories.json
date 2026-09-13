@@ -1,0 +1,621 @@
+{
+  "guest_source_lock_sha256": "812ced8829b8637c2c5d18b147a7eff771f013f476dc9e5d2ec5c513f8d5714b",
+  "qemu_meson_wraps": [
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "anyhow-1.0.98",
+          "patch_directory": "anyhow-1-rs",
+          "source_filename": "anyhow-1.0.98.tar.gz",
+          "source_hash": "e16d2d3311acee920a9eb8d33b8cbc1787ce4a264e85f964c2404b969bdcd487",
+          "source_url": "https://crates.io/api/v1/crates/anyhow/1.0.98/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/anyhow-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "71a7d3ee5587705c0c5d27ffb9139f386356221755d14f7eead06e5f016383f4"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "arbitrary-int-1.2.7",
+          "patch_directory": "arbitrary-int-1-rs",
+          "source_filename": "arbitrary-int-1.2.7.tar.gz",
+          "source_hash": "c84fc003e338a6f69fbd4f7fe9f92b535ff13e9af8997f3b14b6ddff8b1df46d",
+          "source_url": "https://crates.io/api/v1/crates/arbitrary-int/1.2.7/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/arbitrary-int-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "f7afbb76405691789b99d41d5ae2e4b3d793dc1fb9573372a1d50f34236240fb"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "attrs-0.2.9",
+          "patch_directory": "attrs-0.2-rs",
+          "source_filename": "attrs-0.2.9.tar.gz",
+          "source_hash": "2a207d40f43de65285f3de0509bb6cb16bc46098864fce957122bbacce327e5f",
+          "source_url": "https://crates.io/api/v1/crates/attrs/0.2.9/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/attrs-0.2-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "f6a17bc031e97623f3bad29b9242f71d3a11b8992501f00192b803b4f57eb670"
+    },
+    {
+      "configuration": {
+        "wrap-git": {
+          "depth": "1",
+          "patch_directory": "berkeley-softfloat-3",
+          "revision": "b64af41c3276f97f0e181920400ee056b9c88037",
+          "url": "https://gitlab.com/qemu-project/berkeley-softfloat-3.git"
+        }
+      },
+      "path": "vendor/qemu/subprojects/berkeley-softfloat-3.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "f5b245e02a2f9400d7cfcc4a10860ed8c6d088577cf753ce6fe161e475a7d9ff"
+    },
+    {
+      "configuration": {
+        "wrap-git": {
+          "depth": "1",
+          "patch_directory": "berkeley-testfloat-3",
+          "revision": "e7af9751d9f9fd3b47911f51a5cfd08af256a9ab",
+          "url": "https://gitlab.com/qemu-project/berkeley-testfloat-3.git"
+        }
+      },
+      "path": "vendor/qemu/subprojects/berkeley-testfloat-3.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "b4d204e9f59e671c1c636259d8521b9c7f29116cc4b9ff6598e8e635f0359bef"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "bilge-0.2.0",
+          "patch_directory": "bilge-0.2-rs",
+          "source_filename": "bilge-0.2.0.tar.gz",
+          "source_hash": "dc707ed8ebf81de5cd6c7f48f54b4c8621760926cdf35a57000747c512e67b57",
+          "source_url": "https://crates.io/api/v1/crates/bilge/0.2.0/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/bilge-0.2-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "85d182e6404eb16887056b6d1ef8e491561539436ef692cb70479daf7db71afe"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "bilge-impl-0.2.0",
+          "patch_directory": "bilge-impl-0.2-rs",
+          "source_filename": "bilge-impl-0.2.0.tar.gz",
+          "source_hash": "feb11e002038ad243af39c2068c8a72bcf147acf05025dcdb916fcc000adb2d8",
+          "source_url": "https://crates.io/api/v1/crates/bilge-impl/0.2.0/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/bilge-impl-0.2-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "571c4ba805e18587694a3e587182dae061177425da964baddc636ef1d6e8d903"
+    },
+    {
+      "configuration": {
+        "wrap-git": {
+          "depth": "1",
+          "revision": "b6910bec11614980a21e46fbccc35934b671bd81",
+          "url": "https://gitlab.com/qemu-project/dtc.git"
+        }
+      },
+      "path": "vendor/qemu/subprojects/dtc.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "932ca47fc50a6932207a6fc82e15d07d848e93c4ff9abcd0cc34c15f40a30885"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "either-1.12.0",
+          "patch_directory": "either-1-rs",
+          "source_filename": "either-1.12.0.tar.gz",
+          "source_hash": "3dca9240753cf90908d7e4aac30f630662b02aebaa1b58a3cadabdb23385b58b",
+          "source_url": "https://crates.io/api/v1/crates/either/1.12.0/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/either-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "b88eb965bd13649319233adc12871917a4da434921a72e3f26452c2335c68905"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "foreign-0.3.1",
+          "patch_directory": "foreign-0.3-rs",
+          "source_filename": "foreign-0.3.1.tar.gz",
+          "source_hash": "17ca1b5be8c9d320daf386f1809c7acc0cb09accbae795c2001953fa50585846",
+          "source_url": "https://crates.io/api/v1/crates/foreign/0.3.1/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/foreign-0.3-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "930d678ccc0faef9b29369ee1b9f4ef2e5c0ef186a1012ba4946fc872d6dd22f"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "glib-sys-0.21.2",
+          "patch_directory": "glib-sys-0.21-rs",
+          "source_filename": "glib-sys-0.21.2.tar.gz",
+          "source_hash": "d09d3d0fddf7239521674e57b0465dfbd844632fec54f059f7f56112e3f927e1",
+          "source_url": "https://crates.io/api/v1/crates/glib-sys/0.21.2/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/glib-sys-0.21-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "18941548a38e69cc39243a2ef15cc28c2ebce2e673a5af25199f1ce287de93ca"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "itertools-0.11.0",
+          "patch_directory": "itertools-0.11-rs",
+          "source_filename": "itertools-0.11.0.tar.gz",
+          "source_hash": "b1c173a5686ce8bfa551b3563d0c2170bf24ca44da99c7ca4bfdab5418c3fe57",
+          "source_url": "https://crates.io/api/v1/crates/itertools/0.11.0/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/itertools-0.11-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "56a556d79240600c2ea526d49629a2097b2628ba6c759231a77386e8b6cba190"
+    },
+    {
+      "configuration": {
+        "wrap-git": {
+          "depth": "1",
+          "revision": "f5772a62ec52591ff6870b7e8ef32482371f22c6",
+          "url": "https://gitlab.com/qemu-project/keycodemapdb.git"
+        }
+      },
+      "path": "vendor/qemu/subprojects/keycodemapdb.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "306b37c10ce735432220c08c6832dc67c0a306b88a0023c65937c90c638dba97"
+    },
+    {
+      "configuration": {
+        "provide": {
+          "blkio": "libblkio_dep"
+        },
+        "wrap-git": {
+          "revision": "f84cc963a444e4cb34813b2dcfc5bf8526947dc0",
+          "url": "https://gitlab.com/libblkio/libblkio"
+        }
+      },
+      "path": "vendor/qemu/subprojects/libblkio.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "575ae56cbf38bf357817698b949779dac37a0c09f43ce88a8690cbee06019507"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "libc-0.2.162",
+          "patch_directory": "libc-0.2-rs",
+          "source_filename": "libc-0.2.162.tar.gz",
+          "source_hash": "18d287de67fe55fd7e1581fe933d965a5a9477b38e949cfa9f8574ef01506398",
+          "source_url": "https://crates.io/api/v1/crates/libc/0.2.162/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/libc-0.2-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "e4fe58cbce2e8c494f6a8ae454c452d24de97f9fd658c160d687f0ac87f5d1f4"
+    },
+    {
+      "configuration": {
+        "wrap-git": {
+          "depth": "1",
+          "revision": "4d9f663450fa80ff375612dbbafe073700e3d3d8",
+          "url": "https://gitlab.com/qemu-project/libvfio-user.git"
+        }
+      },
+      "path": "vendor/qemu/subprojects/libvfio-user.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "b9d3a3cc09ad2580de76167f6d122bcfe3bdd75414697ae042e52a29f86595be"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "probe-0.5.2",
+          "patch_directory": "probe-0.5-rs",
+          "source_filename": "probe-0.5.2.tar.gz",
+          "source_hash": "136558b6e1ebaecc92755d0ffaf9421f519531bed30cc2ad23b22cb00965cc5e",
+          "source_url": "https://crates.io/api/v1/crates/probe/0.5.2/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/probe-0.5-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "9e656748758c9db84f9f87686848889b32c78f49fe10d2caad186acc73807b16"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "proc-macro-error-1.0.4",
+          "patch_directory": "proc-macro-error-1-rs",
+          "source_filename": "proc-macro-error-1.0.4.tar.gz",
+          "source_hash": "da25490ff9892aab3fcf7c36f08cfb902dd3e71ca0f9f9517bea02a73a5ce38c",
+          "source_url": "https://crates.io/api/v1/crates/proc-macro-error/1.0.4/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/proc-macro-error-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "911aed6a9a56cd9ded2576c8980e9cf00c09dd083d6c97b3c0eac451c42655e1"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "proc-macro-error-attr-1.0.4",
+          "patch_directory": "proc-macro-error-attr-1-rs",
+          "source_filename": "proc-macro-error-attr-1.0.4.tar.gz",
+          "source_hash": "a1be40180e52ecc98ad80b184934baf3d0d29f979574e439af5a55274b35f869",
+          "source_url": "https://crates.io/api/v1/crates/proc-macro-error-attr/1.0.4/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/proc-macro-error-attr-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "f24f38172d1a497c7d017b66e098b5ca50c416efb47cc85a0a77babfca6a7984"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "proc-macro2-1.0.95",
+          "patch_directory": "proc-macro2-1-rs",
+          "source_filename": "proc-macro2-1.0.95.0.tar.gz",
+          "source_hash": "02b3e5e68a3a1a02aad3ec490a98007cbc13c37cbe84a3cd7b8e406d76e7f778",
+          "source_url": "https://crates.io/api/v1/crates/proc-macro2/1.0.95/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/proc-macro2-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "3ffac54c061b6a4f6d18f141a8338724ec91d653173b48928d5f36d3f84517b9"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "quote-1.0.36",
+          "patch_directory": "quote-1-rs",
+          "source_filename": "quote-1.0.36.0.tar.gz",
+          "source_hash": "0fa76aaf39101c457836aec0ce2316dbdc3ab723cdda1c6bd4e6ad4208acaca7",
+          "source_url": "https://crates.io/api/v1/crates/quote/1.0.36/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/quote-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "122f42d2c9bc55865e95964fddd79b0e47b122df1170554fce49ac0e0d9d1dc9"
+    },
+    {
+      "configuration": {
+        "provide": {
+          "slirp": "libslirp_dep"
+        },
+        "wrap-git": {
+          "revision": "26be815b86e8d49add8c9a8b320239b9594ff03d",
+          "url": "https://gitlab.freedesktop.org/slirp/libslirp.git"
+        }
+      },
+      "path": "vendor/qemu/subprojects/slirp.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "aac02c4da0958a7d1066aa369bd79e5faf479988ba0c34f0c3d3f9f7d1ec5280"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "syn-2.0.104",
+          "patch_directory": "syn-2-rs",
+          "source_filename": "syn-2.0.104.0.tar.gz",
+          "source_hash": "17b6f705963418cdb9927482fa304bc562ece2fdd4f616084c50b7023b435a40",
+          "source_url": "https://crates.io/api/v1/crates/syn/2.0.104/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/syn-2-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "457232f12b621d46669a7887f76fb03501c2ad93e8f33e12bf4c751ddbee201c"
+    },
+    {
+      "configuration": {
+        "wrap-file": {
+          "directory": "unicode-ident-1.0.12",
+          "patch_directory": "unicode-ident-1-rs",
+          "source_filename": "unicode-ident-1.0.12.tar.gz",
+          "source_hash": "3354b9ac3fae1ff6755cb6db53683adb661634f67557942dea4facebec0fee4b",
+          "source_url": "https://crates.io/api/v1/crates/unicode-ident/1.0.12/download"
+        }
+      },
+      "path": "vendor/qemu/subprojects/unicode-ident-1-rs.wrap",
+      "scope": "QEMU-declared optional source fallback; not necessarily selected by this build",
+      "sha256": "73eed4a58c39cc41c3d536e673f62004402f5459b45cce7677eba1ea7d6eaf88"
+    }
+  ],
+  "schema": 1,
+  "submodules": [
+    {
+      "checkout_revision": "b21f8e87d4519ea01acb9a8d21161d551d0d2224",
+      "declared_gitlink": "b21f8e87d4519ea01acb9a8d21161d551d0d2224",
+      "initialized": true,
+      "notice_files": {
+        "COPYING": "dd3ce02338c3a48abb6ba59b48809f7108a8bd242cb0cc8be90daafa30707c28",
+        "COPYING.LIB": "31c90ce76b6f5aab90a205851e71d5c27e31c0aa3d7017a4383b98a6fe3f1faa",
+        "LICENSE": "139c64b7a9ae62858ff969aae622ecfcf4f1519655bd92d2e70a1a2fb615690e"
+      },
+      "path": "vendor/qemu",
+      "repository": "https://github.com/anderstorpsfestivalen/qemu.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "b52ca86e094d19b58e2304417787e96b940e39c6",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/seabios",
+      "repository": "https://gitlab.com/qemu-project/seabios.git/",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "47457c9078a217150aa1634f2657e6804fbde467",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/SLOF",
+      "repository": "https://gitlab.com/qemu-project/SLOF.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "4bd064de239dab2426b31c9789a1f4d78087dc63",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/ipxe",
+      "repository": "https://gitlab.com/qemu-project/ipxe.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "e5ac46dd24e6216c36aa80462af25457e7029440",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/openbios",
+      "repository": "https://gitlab.com/qemu-project/openbios.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "99d9b4dcf27d7fbcbadab71bdc88ef6531baf6bf",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/qemu-palcode",
+      "repository": "https://gitlab.com/qemu-project/qemu-palcode.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "840658b093976390e9537724f802281c9c8439f5",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/u-boot",
+      "repository": "https://gitlab.com/qemu-project/u-boot.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "785a5e3070a86e18521e62fe202b87209de30fa2",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/skiboot",
+      "repository": "https://gitlab.com/qemu-project/skiboot.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "90c488d5f4a407342247b9ea869df1c2d9c8e266",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/QemuMacDrivers",
+      "repository": "https://gitlab.com/qemu-project/QemuMacDrivers.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "6d6a72c218f6bf6b0e0b6a8bd26c5c67ba3ad2e0",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/seabios-hppa",
+      "repository": "https://gitlab.com/qemu-project/seabios-hppa.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "1e5f4a1607cc6713d27ffe48dd9de84e69cfc1c2",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/u-boot-sam460ex",
+      "repository": "https://gitlab.com/qemu-project/u-boot-sam460ex.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "4dfdca63a93497203f197ec98ba20e2327e4afe4",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/edk2",
+      "repository": "https://gitlab.com/qemu-project/edk2.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "74434f255873d74e56cc50aa762d1caf24c099f8",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/opensbi",
+      "repository": "https://gitlab.com/qemu-project/opensbi.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "8ca302e86d685fa05b16e2b208888243da319941",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/qboot",
+      "repository": "https://gitlab.com/qemu-project/qboot.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "1c8e9510b22c5b0fd7d7753f08042a4bcbd2939d",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/roms/vbootrom",
+      "repository": "https://gitlab.com/qemu-project/vbootrom.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": null,
+      "declared_gitlink": "5176e136ab11e275eb9f57c3d5c80e77af6507cb",
+      "initialized": false,
+      "notice_files": {},
+      "path": "vendor/qemu/tests/lcitool/libvirt-ci",
+      "repository": "https://gitlab.com/libvirt/libvirt-ci.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "718b3d51a1532fe1ba2e133cf76186f1a609d35e",
+      "declared_gitlink": "718b3d51a1532fe1ba2e133cf76186f1a609d35e",
+      "initialized": true,
+      "notice_files": {
+        "LICENSE": "e4900f554b4de46e0c5cdfe32c3af03e8e92d9e273e31fa81ef4ce508772f257"
+      },
+      "path": "vendor/vmdisp9x",
+      "repository": "https://github.com/JHRobotics/vmdisp9x.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "a2a74447daea3197255f3a4fb5cfb0c5a453dcc8",
+      "declared_gitlink": "a2a74447daea3197255f3a4fb5cfb0c5a453dcc8",
+      "initialized": true,
+      "notice_files": {
+        "licence.txt": "d30e98604e4f4e6fdae77f155443832560df071141735fcf0897a3b073c9d29a"
+      },
+      "path": "vendor/vmdisp9x/fixlink",
+      "repository": "https://github.com/JHRobotics/fixlink",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "22fb3bb2c1d8196cf501edbb49b3814739f7b016",
+      "declared_gitlink": "22fb3bb2c1d8196cf501edbb49b3814739f7b016",
+      "initialized": true,
+      "notice_files": {
+        "COPYING": "5dd08524bb37f07b4a6f548439ffcd8ec0444bc0ae92e0fe929ea70185cdbc62",
+        "COPYING.ARM": "3fc6cb979096f0bdd262f0bd6e92cdc9a388d3cfc79b38153c4cd9e73ebde118",
+        "COPYING.LIB": "42a43212349af1e133ee4d6c5324f474e79f4214d1a382135a5d78b90c8e88ea",
+        "COPYING3": "8ceb4b9ee5adedde47b31e975c1d90c73ad27b6b165a1dcd80c7c545eb65b903",
+        "COPYING3.LIB": "da7eabb7bafdf7d3ae5e9f223aa5bdc1eece45ac569dc21b3b037520b4464768"
+      },
+      "path": "vendor/reactos",
+      "repository": "https://github.com/reactos/reactos.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "5d40e054a1bc8c4b00c41c533c6b84afd9cdc30b",
+      "declared_gitlink": "5d40e054a1bc8c4b00c41c533c6b84afd9cdc30b",
+      "initialized": true,
+      "notice_files": {
+        "LICENSE": "8177f97513213526df2cf6184d8ff986c675afb514d4e68a404010521b880643"
+      },
+      "path": "vendor/qemu-3dfx",
+      "repository": "https://github.com/startergo/qemu-3dfx-arch.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "80b73df4e2752ec01a359a362c44a82bba419128",
+      "declared_gitlink": "80b73df4e2752ec01a359a362c44a82bba419128",
+      "initialized": true,
+      "notice_files": {
+        "LICENSE": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+      },
+      "path": "vendor/qemu-3dfx/wrappers/extra",
+      "repository": "https://github.com/startergo/qemu-xtra.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "8ab16c6c0930efc1f9138eddda7b3114d7f31e62",
+      "declared_gitlink": "8ab16c6c0930efc1f9138eddda7b3114d7f31e62",
+      "initialized": true,
+      "notice_files": {
+        "LICENSE": "be8a740665198a4a219d927ed19abb3876cb1137ce4f92f44337de84759da615"
+      },
+      "path": "vendor/wine9x",
+      "repository": "https://github.com/JHRobotics/wine9x.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "9c1ec5a655849f99f1e9c4e3b04609f446c92551",
+      "declared_gitlink": "9c1ec5a655849f99f1e9c4e3b04609f446c92551",
+      "initialized": true,
+      "notice_files": {
+        "licence.txt": "63263614cdd29f2f93cba85e992f041b31f9fc7b4033692f31269489a8a1b177"
+      },
+      "path": "vendor/wine9x/pthread9x",
+      "repository": "https://github.com/JHRobotics/pthread9x",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "d4c45d2acd0c6d5f656e71501d6c779719a640fb",
+      "declared_gitlink": "d4c45d2acd0c6d5f656e71501d6c779719a640fb",
+      "initialized": true,
+      "notice_files": {
+        "licence.txt": "b95245688b3e0a2cc21efe0244c5711505306437d74537c280bbedf6e9706c35"
+      },
+      "path": "vendor/wine9x/nocrt",
+      "repository": "https://github.com/JHRobotics/nocrt",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "b3deabc7da053ea2c4c61e8f2f21c41d702d7070",
+      "declared_gitlink": "b3deabc7da053ea2c4c61e8f2f21c41d702d7070",
+      "initialized": true,
+      "notice_files": {
+        "LICENSE": "dc626520dcd53a22f727af3ee42c770e56c97a64fe3adb063799d8ab032fe551"
+      },
+      "path": "vendor/qemu-xtra",
+      "repository": "https://github.com/kjliew/qemu-xtra.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "b6e30d4b5a396dcd453b6c8e6733fd5b5cbce59e",
+      "declared_gitlink": "b6e30d4b5a396dcd453b6c8e6733fd5b5cbce59e",
+      "initialized": true,
+      "notice_files": {
+        "LICENSE": "e4900f554b4de46e0c5cdfe32c3af03e8e92d9e273e31fa81ef4ce508772f257"
+      },
+      "path": "vendor/patcher9x",
+      "repository": "https://github.com/JHRobotics/patcher9x.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "0a09a82802ee75717ce055ea7bfafcd3584dd6b0",
+      "declared_gitlink": "0a09a82802ee75717ce055ea7bfafcd3584dd6b0",
+      "initialized": true,
+      "notice_files": {
+        "licence.txt": "b95245688b3e0a2cc21efe0244c5711505306437d74537c280bbedf6e9706c35"
+      },
+      "path": "vendor/patcher9x/nocrt",
+      "repository": "https://github.com/JHRobotics/nocrt",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    },
+    {
+      "checkout_revision": "8f8792fc857ba609b13c6d63839034e0576b0c9f",
+      "declared_gitlink": "8f8792fc857ba609b13c6d63839034e0576b0c9f",
+      "initialized": true,
+      "notice_files": {
+        "COPYING.LIB": "e237fa56668030e928551ddd60f05df5fe957f75eab874bbd017e085ed722e7c",
+        "LICENSE": "ae025f125a5d639f0f7abe5146efa1e3d7453cc10b744b2910806fa3f46626ef"
+      },
+      "path": "vendor/wine-glu",
+      "repository": "https://github.com/wine-mirror/wine.git",
+      "scope": "Declared source dependency; initialization does not prove it is linked or shipped. See ATTRIBUTION.md for reviewed license scope."
+    }
+  ]
+}

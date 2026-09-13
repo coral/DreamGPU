@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "upstream": {
+    "vmdisp9x": "718b3d51a1532fe1ba2e133cf76186f1a609d35e"
+  },
+  "patches": [
+    {
+      "file": "identity.patch",
+      "sha256": "7130f105e5eae15a3c0a918a22379e84f99ce5b87ac5fa2914dc9486bab3ee01"
+    }
+  ],
+  "files": {
+    "control.c": {
+      "before_sha256": "96c76b324f9c8ee8fb1fc147f3102f1d90fee91fc5bc773ceefd12b8b82e6c37",
+      "after_sha256": "6cf30d7f21627337d85044246ed2853f583fd36a2509e204dd73b9e814b03795",
+      "normalize_lf": true
+    },
+    "dg-blit16.c": {
+      "before_sha256": "6ed01dad10327f2ae013e8d03eff905d4bb119a84cd9fd67181342b29084d19c",
+      "after_sha256": "4b1691284903130bfc362af0485b474a84e6b58ba760140e7f05b5ad1ab410a3"
+    },
+    "dg-vxd.c": {
+      "before_sha256": "161db1707e20e35d1041b43bffe8a801198ac01b0663d1f75a742161aef46aa0",
+      "after_sha256": "1d99fca462415010813f0263f1e741e174bf562c92893aedfa2f6a3b751ea621"
+    },
+    "enable.c": {
+      "before_sha256": "79daf9ce580aab89a257b4cc7a9a0d752b5453497041c62753414efbfb67d563",
+      "after_sha256": "c27325fe64f97b331720467b7fa4b556c831f1a74b2823a0f57829337ba9e67d"
+    },
+    "vxd_main.c": {
+      "before_sha256": "2275644e8f19e1b12dc10e0161f287420f8ed22ac630faf5e68fd8c15e5886ea",
+      "after_sha256": "53f1723cac815e9482380c9a6df7aed1f1b5a7721caa4c69968fb534c580792a"
+    }
+  }
+}

@@ -1,0 +1,681 @@
+--- a/dbgprint.c
++++ b/dbgprint.c
+@@ -43,7 +43,9 @@
+ 
+ 
+ /* Backdoor logging I/O ports. */
+-#if defined(COM2)
++#if defined(DG_DEBUGCON)
++# define INFO_PORT 0xE9
++#elif defined(COM2)
+ # define INFO_PORT   0x2F8 /* COM2 I/O */
+ #elif defined(COM3)
+ # define INFO_PORT   0x3E8 /* COM3 I/O */
+@@ -55,7 +57,9 @@
+ # define INFO_PORT   0x3F8 /* default COM1 I/O */
+ #endif
+ 
++#ifndef DG_DEBUGCON
+ #define FULL_SERIAL
++#endif
+ /* ^ inicialize serial and waiting for transmit same way as with real HW serial
+  *   if defined. VirtualBox usually require it.
+  */
+--- a/dg-cursor.h
++++ b/dg-cursor.h
+@@ -4,7 +4,7 @@
+  */
+ #ifndef DG9_CURSOR_H
+ #define DG9_CURSOR_H
+-#include "cursor.h"
++#include "dreamgpu-cursor.h"
+ #define DG9_CURSOR_BEGIN 1
+ #define DG9_CURSOR_DATA 2
+ #define DG9_CURSOR_COMMIT 3
+--- a/dibcall.c
++++ b/dibcall.c
+@@ -55,6 +55,9 @@
+ 
+ #pragma code_seg( _TEXT )
+ 
++extern WORD DgNativeBlt(DWORD,DWORD,DWORD,DWORD);
++BOOL Dg9CursorPrepareNative16(void) { DgNativeBlt(0x200,0,0,0); DIB_SetCursorExt(NULL,lpDriverPDevice); return TRUE; }
++#include "dg-cursor16.c"
+ void WINAPI __loadds MoveCursor(int absX, int absY)
+ {	
+ 	if(wEnabled)
+@@ -65,7 +68,9 @@
+ 		}
+ 		else
+ 		{
+-			DIB_MoveCursorExt(absX, absY, lpDriverPDevice);
++            WORD dg = Dg9CursorMove16(absX, absY);
++            if (dg == DG9_CURSOR_FAILED) DgNativeBlt(0x201,0,0,0);
++            if (dg == DG9_CURSOR_FALLBACK) { DgNativeBlt(0x200,0,0,0); DIB_MoveCursorExt(absX,absY,lpDriverPDevice); }
+ 		}
+ 	}
+ }
+@@ -116,7 +121,9 @@
+ 		}
+ 		else
+ 		{
+-			DIB_SetCursorExt(lpCursor, lpDriverPDevice);
++            WORD dg = Dg9CursorSet16(lpCursor);
++            if (dg == DG9_CURSOR_FAILED) { DgNativeBlt(0x201,0,0,0); return 0; }
++            if (dg == DG9_CURSOR_FALLBACK) { DgNativeBlt(0x200,0,0,0); DIB_SetCursorExt(lpCursor,lpDriverPDevice); }
+ 			return 1;
+ 		}
+ 		
+@@ -132,7 +139,9 @@
+ 	{
+ 		if(!mouse_vxd)
+ 		{
+-			DIB_CheckCursorExt(lpDriverPDevice);
++            WORD dg = Dg9CursorCheck16();
++            if (dg == DG9_CURSOR_FAILED) DgNativeBlt(0x201,0,0,0);
++            if (dg == DG9_CURSOR_FALLBACK) { DgNativeBlt(0x200,0,0,0); DIB_CheckCursorExt(lpDriverPDevice); }
+ 		}
+ 	}
+ }
+@@ -140,34 +149,8 @@
+ /* If there is no hardware screen-to-screen BitBlt, there's no point in
+  * this and we can just forward BitBlt to the DIB Engine.
+  */
+-#ifdef HWBLT
++#include "dg-blit16.c"
+ 
+-extern BOOL WINAPI (* BitBltDevProc)( LPDIBENGINE, WORD, WORD, LPPDEVICE, WORD, WORD,
+-                                      WORD, WORD, DWORD, LPBRUSH, LPDRAWMODE );
+-
+-/* See if a hardware BitBlt can be done. */
+-BOOL WINAPI __loadds BitBlt( LPDIBENGINE lpDestDev, WORD wDestX, WORD wDestY, LPPDEVICE lpSrcDev,
+-                    WORD wSrcX, WORD wSrcY, WORD wXext, WORD wYext, DWORD dwRop3,
+-                    LPBRUSH lpPBrush, LPDRAWMODE lpDrawMode )
+-{
+-    WORD    dstFlags = lpDestDev->deFlags;
+-
+-    /* The destination must be video memory and not busy. */
+-    if( (dstFlags & VRAM) && !(dstFlags & BUSY) ) {
+-        /* If palette translation is needed, only proceed if source
+-         * and destination device are identical.
+-         */
+-        if( !(dstFlags & PALETTE_XLAT) || (lpDestDev == lpSrcDev) ) {
+-            /* If there is a hardware acceleration callback, use it. */
+-            if( BitBltDevProc ) {
+-                return( BitBltDevProc( lpDestDev, wDestX, wDestY, lpSrcDev, wSrcX, wSrcY, wXext, wYext, dwRop3, lpPBrush, lpDrawMode ) );
+-            }
+-        }
+-    }
+-    return( DIB_BitBlt( lpDestDev, wDestX, wDestY, lpSrcDev, wSrcX, wSrcY, wXext, wYext, dwRop3, lpPBrush, lpDrawMode ) );
+-}
+-
+-#endif
+ 
+ #ifndef ETO_GLYPH_INDEX
+ #define ETO_GLYPH_INDEX 0x0010
+--- a/enable.c
++++ b/enable.c
+@@ -143,8 +143,11 @@
+ 
+ #pragma code_seg( _INIT )
+ 
++extern WORD DgNativeBlt(DWORD,DWORD,DWORD,DWORD);
++extern WORD Dg9CursorDisable16(void);
+ VOID WINAPI __loadds BeginAccess_VXD( LPPDEVICE lpDevice, WORD wLeft, WORD wTop, WORD wRight, WORD wBottom, WORD wFlags )
+ {
++    if (hda && *(volatile DWORD __far *)&hda->res0) DgNativeBlt(0x200, 0, 0, 0);
+ 	if(wFlags & CURSOREXCLUDE)
+ 	{
+ 		FBHDA_access_rect(wLeft, wTop, wRight+1, wBottom+1);
+@@ -457,6 +460,8 @@
+     WORD    wLastValidY    = wScreenY;
+     WORD    rc;
+ 
++    DgNativeBlt(0x200, 0, 0, 0);
++    if (Dg9CursorDisable16() == 2) DgNativeBlt(0x201,0,0,0);
+     dbg_printf( "ReEnable: lpDevice=%WP lpInfo=%WP wScreenX=%u wScreenY=%u\n", lpDevice, lpInfo, wScreenX, wScreenY );
+ 
+     /* Figure out the new mode. */
+@@ -507,6 +512,8 @@
+ {
+     LPDIBENGINE lpEng = lpDevice;
+ 
++    DgNativeBlt(0x200, 0, 0, 0);
++    if (Dg9CursorDisable16() == 2) DgNativeBlt(0x201,0,0,0);
+     dbg_printf( "Disable: lpDevice=%WP\n", lpDevice );
+ 
+     /* Start disabling and mark the PDevice busy. */
+--- a/init.c
++++ b/init.c
+@@ -188,7 +188,8 @@
+     parm [ax] value [bx];
+ 
+ /* Dummy pointer to get at the _TEXT segment. Is there any easier way? */
+-extern char __based( __segname( "_TEXT" ) ) *pText;
++static WORD current_code_selector(void);
++#pragma aux current_code_selector = "mov ax,cs" value [ax];
+ 
+ /* This is a standard DLL entry point. Note that DS is already set
+  * to point to this DLL's data segment on entry.
+@@ -201,7 +202,7 @@
+     dbg_printf( "DriverInit: ENTER\n" );
+ 
+     /* Lock the code segment. */
+-    GlobalSmartPageLock( (__segment)pText );
++    GlobalSmartPageLock(current_code_selector());
+ 
+     /* Query the entry point of the Virtual Display Device. */
+     VDDEntryPoint = (DWORD)int_2F_GetEP( 0x1684, VDD_ID );
+--- a/makefile.dreamgpu
++++ b/makefile.dreamgpu
+@@ -36,10 +36,10 @@
+ # FIXLINK_CC = gcc fixlink/fixlink.c -o fixlink
+ 
+ # Define HWBLT if BitBlt can be accelerated.
+-#FLAGS += -DHWBLT
++FLAGS += -DHWBLT
+ 
+ # Set DBGPRINT to add debug printf logging.
+-DBGPRINT = 1
++#DBGPRINT = 1
+ 
+ # Generate code for i486, otherwise is code generated for Pentium Pro
+ #I486 = 1
+@@ -93,7 +93,7 @@
+ VESAMINI_DRV_RC = wrc -q vesamini.res $@ && $(FIXLINK_EXE) -40 $@
+ !endif
+ 
+-all : vmwsmini.drv vmwsmini.vxd qemumini.drv qemumini.vxd boxvmini.drv boxvmini.vxd vesamini.drv vesamini.vxd
++all : vmwsmini.drv vmwsmini.vxd dgpumini.drv dgpumini.vxd boxvmini.drv boxvmini.vxd vesamini.drv vesamini.vxd
+ 
+ # Object files: PM16 RING-3
+ dbgprint.obj : dbgprint.c .autodepend
+@@ -103,7 +103,7 @@
+ 	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) $<
+ 
+ dibthunk.obj : dibthunk.asm
+-	wasm -q $(FLAGS) $<
++	wasm -q -fo=.obj $(FLAGS) $<
+ 
+ dddrv.obj : dddrv.c .autodepend
+ 	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) $<
+@@ -136,7 +136,7 @@
+ 	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) $<
+ 	
+ sswhook.obj : sswhook.asm
+-	wasm -q $(FLAGS) $<
++	wasm -q -fo=.obj $(FLAGS) $<
+ 
+ modes.obj : modes.c .autodepend
+ 	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) $<
+@@ -259,19 +259,19 @@
+ 	wrc -q -r -ad -bt=windows -fo=$@ -Ires -I$(%WATCOM)/h/win $(FLAGS) res/vesamini.rc
+ 
+ res/colortab.bin : res/colortab.c
+-	wcc -q $(INCS) $<
++	wcc -q -fo=.obj $(INCS) $<
+ 	wlink op quiet disable 1014, 1023 name $@ sys dos output raw file colortab.obj
+ 
+ res/config.bin : res/config.c
+-	wcc -q $(INCS) $<
++	wcc -q -fo=.obj $(INCS) $<
+ 	wlink op quiet disable 1014, 1023 name $@ sys dos output raw file config.obj
+ 
+ res/fonts.bin : res/fonts.c .autodepend
+-	wcc -q $(INCS) $<
++	wcc -q -fo=.obj $(INCS) $<
+ 	wlink op quiet disable 1014, 1023 name $@ sys dos output raw file fonts.obj
+ 
+ res/fonts120.bin : res/fonts120.c .autodepend
+-	wcc -q $(INCS) $<
++	wcc -q -fo=.obj $(INCS) $<
+ 	wlink op quiet disable 1014, 1023 name $@ sys dos output raw file fonts120.obj
+ 
+ # Libraries
+@@ -418,7 +418,7 @@
+ <<
+ 	$(VMWSMINI_DRV_RC)
+ 
+-qemumini.drv : $(OBJS) qemumini.res dibeng.lib $(FIXLINK_EXE)
++dgpumini.drv : $(OBJS) qemumini.res dibeng.lib $(FIXLINK_EXE)
+ 	wlink op quiet, start=DriverInit_ disable 2055 $(DBGFILE) @<<qemumini.lnk
+ system windows dll initglobal
+ file dibcall.obj
+@@ -433,8 +433,8 @@
+ file sswhook.obj
+ file modes.obj
+ file scrsw.obj
+-name qemumini.drv
+-option map=qemumini.map
++name dgpumini.drv
++option map=dgpumini-drv.map
+ library dibeng.lib
+ library clibs.lib
+ option modname=DISPLAY
+@@ -576,11 +576,11 @@
+ file vxd_wram.obj
+ file vxd_async.obj
+ file vxd_terror.obj
+-segment '_TEXT'  PRELOAD NONDISCARDABLE IOPL
+-segment '_DATA'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST2' PRELOAD NONDISCARDABLE IOPL
+-segment '_BSS'   PRELOAD NONDISCARDABLE IOPL
++segment '_TEXT'  PRELOAD NONDISCARDABLE
++segment '_DATA'  PRELOAD NONDISCARDABLE
++segment 'CONST'  PRELOAD NONDISCARDABLE
++segment 'CONST2' PRELOAD NONDISCARDABLE
++segment '_BSS'   PRELOAD NONDISCARDABLE
+ export VXD_DDB.1
+ <<
+ 	$(FIXLINK_EXE) -vxd32 $@
+@@ -588,12 +588,19 @@
+ # not working now
+ #	wrc -q vmws_vxd.res $@
+ 
+-qemumini.vxd : $(OBJS) $(FIXLINK_EXE)
++dgpumini.vxd : $(OBJS) $(FIXLINK_EXE)
+ 	wlink op quiet $(DBGFILE32) @<<qemumini.lnk
+ system win_vxd dynamic
+-option map=qemumini.map
++option map=dgpumini.map
+ option nodefaultlibs
+-name qemumini.vxd
++name dgpumini.vxd
++option modname=DREAMGPU
++file packet32.obj
++file owner32.obj
++file memory32.obj
++file cursor32.obj
++file channel32.obj
++file blt32.obj
+ file vxd_main_qemu.obj
+ file pci.obj
+ file vxd_fbhda.obj
+@@ -605,11 +612,11 @@
+ file vxd_wram.obj
+ file vxd_async.obj
+ file vxd_terror.obj
+-segment '_TEXT'  PRELOAD NONDISCARDABLE IOPL
+-segment '_DATA'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST2' PRELOAD NONDISCARDABLE IOPL
+-segment '_BSS'   PRELOAD NONDISCARDABLE IOPL
++segment '_TEXT'  PRELOAD NONDISCARDABLE
++segment '_DATA'  PRELOAD NONDISCARDABLE
++segment 'CONST'  PRELOAD NONDISCARDABLE
++segment 'CONST2' PRELOAD NONDISCARDABLE
++segment '_BSS'   PRELOAD NONDISCARDABLE
+ export VXD_DDB.1
+ <<
+ 	$(FIXLINK_EXE) -vxd32 $@
+@@ -631,11 +638,11 @@
+ file vxd_wram.obj
+ file vxd_async.obj
+ file vxd_terror.obj
+-segment '_TEXT'  PRELOAD NONDISCARDABLE IOPL
+-segment '_DATA'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST2' PRELOAD NONDISCARDABLE IOPL
+-segment '_BSS'   PRELOAD NONDISCARDABLE IOPL
++segment '_TEXT'  PRELOAD NONDISCARDABLE
++segment '_DATA'  PRELOAD NONDISCARDABLE
++segment 'CONST'  PRELOAD NONDISCARDABLE
++segment 'CONST2' PRELOAD NONDISCARDABLE
++segment '_BSS'   PRELOAD NONDISCARDABLE
+ export VXD_DDB.1
+ <<
+ 	$(FIXLINK_EXE) -vxd32 $@
+@@ -659,11 +666,11 @@
+ file vxd_wram.obj
+ file vxd_async.obj
+ file vxd_terror.obj
+-segment '_TEXT'  PRELOAD NONDISCARDABLE IOPL
+-segment '_DATA'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST'  PRELOAD NONDISCARDABLE IOPL
+-segment 'CONST2' PRELOAD NONDISCARDABLE IOPL
+-segment '_BSS'   PRELOAD NONDISCARDABLE IOPL
++segment '_TEXT'  PRELOAD NONDISCARDABLE
++segment '_DATA'  PRELOAD NONDISCARDABLE
++segment 'CONST'  PRELOAD NONDISCARDABLE
++segment 'CONST2' PRELOAD NONDISCARDABLE
++segment '_BSS'   PRELOAD NONDISCARDABLE
+ export VXD_DDB.1
+ <<
+ 	$(FIXLINK_EXE) -vxd32 $@
+--- a/pm16_calls_qemu.c
++++ b/pm16_calls_qemu.c
+@@ -1,2 +1,4 @@
+ #define QEMU
+ #include "pm16_calls.c"
++
++#include "dg-call16.c"
+--- a/vxd.h
++++ b/vxd.h
+@@ -16,7 +16,7 @@
+ #define VXD_DEVICE_NAME "VMWSVXD"
+ #elif defined(QEMU)
+ #define VXD_DEVICE_ID VXD_DEVICE_VMDISP9X_ID
+-#define VXD_DEVICE_NAME "QEMUVXD"
++#define VXD_DEVICE_NAME "DREAMGPU"
+ #elif defined(VESA)
+ #define VXD_DEVICE_ID VXD_DEVICE_VMDISP9X_ID
+ #define VXD_DEVICE_NAME "VESAVXD"
+--- a/vxd_fbhda.c
++++ b/vxd_fbhda.c
+@@ -37,6 +37,7 @@
+ #include "vxd_gamma.h"
+ 
+ FBHDA_t *hda = NULL;
++static BOOL hda_owned = FALSE;
+ ULONG hda_sem = 0;
+ LONG fb_lock_cnt = 0;
+ DWORD gamma_quirk = 0;
+@@ -46,7 +47,13 @@
+ BOOL FBHDA_init_hw()
+ {
+ 	//hda = (FBHDA_t *)_PageAllocate(RoundToPages(sizeof(FBHDA_t)), PG_SYS, 0, 0, 0x0, 0x100000, NULL, PAGEFIXED);
+-	hda = (FBHDA_t *)&wram->extradata[0];
++	if (hda) return TRUE;
++	hda_owned = !wram;
++	if (wram)
++		hda = (FBHDA_t *)&wram->extradata[0];
++	else
++		hda = (FBHDA_t *)_PageAllocate(RoundToPages(sizeof(FBHDA_t)),
++		    PG_SYS, 0, 0, PAGE_ALLOC_MIN, PAGE_ALLOC_MAX, NULL, PAGEFIXED);
+ 
+ 	if(hda)
+ 	{
+@@ -61,7 +68,9 @@
+ 		hda_sem = Create_Semaphore(1);
+ 		if(hda_sem == 0)
+ 		{
+-			_PageFree(hda, 0);
++			if (hda_owned) _PageFree(hda, 0);
++			hda = NULL;
++			hda_owned = FALSE;
+ 			return FALSE;
+ 		}
+ 
+@@ -74,15 +83,11 @@
+ 
+ void FBHDA_release_hw()
+ {
+-	if(hda)
+-	{
+-		_PageFree(hda, 0);
+-	}
+-
+-	if(hda_sem)
+-	{
+-		Destroy_Semaphore(hda_sem);
+-	}
++	if (hda_sem) Destroy_Semaphore(hda_sem);
++	hda_sem = 0;
++	if (hda && hda_owned) _PageFree(hda, 0);
++	hda = NULL;
++	hda_owned = FALSE;
+ }
+ 
+ FBHDA_t *FBHDA_setup()
+--- a/vxd_main.c
++++ b/vxd_main.c
+@@ -107,6 +107,13 @@
+ DWORD ThisVM = 0;
+ void *DeviceCTX = NULL;
+ DWORD is_qemu = FALSE;
++#ifdef QEMU
++#include "dg-memory-vxd.c"
++#include "dg-gl-vxd.c"
++#include "dg-window-vxd.c"
++#include "dg-cursor-vxd.c"
++#endif
++
+ 
+ void __stdcall port_info(DWORD p_eax, DWORD p_ecx, DWORD p_edx)
+ {
+@@ -272,6 +279,7 @@
+ 		control_1: 
+ 		cmp eax,Device_Init
+ 		jnz control_2
++			pushad
+ 			push ebx ; VM handle
+ 		  call Device_Init_proc
+ 			popad
+@@ -301,7 +309,10 @@
+ 			jmp Device_IO_Control_entry
+ 		control_5:
+ 		cmp eax,System_Exit
++		je dg_device_exit
++		cmp eax,Sys_Dynamic_Device_Exit
+ 		jnz control_6
++		dg_device_exit:
+ 			pushad
+ 			push ebx ; VM handle
+ 		  call Device_Exit_proc
+@@ -348,6 +359,13 @@
+ }
+ 
+ /* process V86/PM16 calls */
++#ifdef QEMU
++WORD DgVxdBlt(PCRS_32 state);
++WORD Dg9WindowBlt(PCRS_32 state);
++WORD Dg9CursorGate(PCRS_32 state);
++void Dg9PrimaryAccess(void);
++void DgVxdShutdown(void);
++#endif
+ WORD __stdcall VXD_API_Proc(PCRS_32 state)
+ {
+ 	WORD rc = 0xFFFF;
+@@ -358,7 +376,13 @@
+ 	
+ 	switch(service)
+ 	{
+-		case VXD_PM16_VERSION:
++		#ifdef QEMU
++case 0x4a00: rc = DgVxdBlt(state); break;
++case 0x4a01: rc = Dg9WindowBlt(state); break;
++case 0x4a02: rc = Dg9CursorGate(state); break;
++case 0x4a03: Dg9PrimaryAccess(); rc = 1; break;
++#endif
++case VXD_PM16_VERSION:
+ 			rc = (VXD_MAJOR_VER << 8) | VXD_MINOR_VER;
+ 			break;
+ 		case VXD_PM16_VMM_VERSION:
+@@ -717,7 +741,7 @@
+ 	critical_section_enter();
+ 	dbg_printf(dbg_Device_Init_proc);
+ 
+-	VMMCall(_Allocate_Device_CB_Area);
++
+  	ThisVM = VM;
+  	DeviceCTX = _GetCurrentContext();
+ 
+@@ -798,6 +822,11 @@
+ 	DWORD *inBuf  = (DWORD*)params->lpInBuffer;
+ 	DWORD *outBuf = (DWORD*)params->lpOutBuffer;
+ 	DWORD rc = 1;
++#ifdef QEMU
++	if (Dg9WindowControl(params, &rc)) return rc;
++	if (Dg9GlControl(params, &rc)) return rc;
++#endif
++
+ 	
+ 	//Begin_Critical_Section(0);
+ 	
+@@ -1051,6 +1080,9 @@
+ /* shutdown procedure */
+ void Device_Exit_proc(DWORD VM)
+ {
++#ifdef QEMU
++DgVxdShutdown();
++#endif
+ #ifdef SVGA
+ 	SVGA_HW_disable();
+ #endif
+@@ -1102,6 +1134,10 @@
+ 
+ void __stdcall win32_destroy_process_proc(DWORD pid)
+ {
++#ifdef QEMU
++	Dg9BootProcessExit();
++#endif
++
+ 	dbg_printf("DESTROY_PROCESS: %lX\n", pid);
+ 	
+ #ifdef SVGA
+--- a/vxd_mouse.c
++++ b/vxd_mouse.c
+@@ -50,6 +50,7 @@
+ 
+ void *mouse_buffer()
+ {
++	if (!wram) return NULL;
+ 	if(mouse_buffer_mem == NULL)
+ 	{
+ 		mouse_buffer_mem = (void*)_PageAllocate(RoundToPages(MOUSE_BUFFER_SIZE), PG_SYS, 0, 0, PAGE_ALLOC_MIN, PAGE_ALLOC_MAX, NULL, PAGEFIXED|PAGEUSEALIGN);
+@@ -74,7 +75,7 @@
+ 	
+ 	//dbg_printf(dbg_mouse_load);
+ 	
+-	if(!mouse_buffer_mem) return FALSE;
++	if(!wram || !mouse_buffer_mem) return FALSE;
+ 		
+ #ifdef SVGA
+ 	if(SVGA_mouse_hw())
+@@ -143,6 +144,7 @@
+ 
+ void mouse_move(int x, int y)
+ {
++	if (!wram) return ;
+ 	//dbg_printf(dbg_mouse_move, x, y);
+ 	
+ #ifdef SVGA
+@@ -169,6 +171,7 @@
+ 
+ void mouse_show()
+ {
++	if (!wram) return ;
+ 	//dbg_printf(dbg_mouse_show);
+ 	
+ #ifdef SVGA
+@@ -187,6 +190,7 @@
+ 
+ void mouse_hide()
+ {
++	if (!wram) return ;
+ 	//dbg_printf(dbg_mouse_hide);
+ 	
+ #ifdef SVGA
+@@ -206,6 +210,7 @@
+ 
+ void mouse_invalidate()
+ {
++	if (!wram) return ;
+ 	//dbg_printf(dbg_mouse_invalidate);
+ 	
+ #ifdef SVGA
+@@ -228,7 +233,7 @@
+ 	LONG my;
+ 	LONG mw;
+ 	LONG mh;
+-	
++	if (!wram) return FALSE;
+ 	if(wram->regs.s.cursor_visible)
+ 	{
+ 		mw = wram->regs.s.cursor_w;
+--- a/vxd_vbe.c
++++ b/vxd_vbe.c
+@@ -1,3 +1,4 @@
++#include "gpu.h"
+ /**************************************************************************
+ 
+ Copyright (c) 2024 Jaroslav Hensl <emulator@emulace.cz>
+@@ -48,7 +49,7 @@
+ #define PCI_VENDOR_ID_INNOTEK           0x80EE
+ #define PCI_DEVICE_ID_VBOX_VGA          0xBEEF
+ #define PCI_VENDOR_ID_BOCHSVBE          0x1234
+-#define PCI_DEVICE_ID_BOCHSVBE          0x1111
++#define PCI_DEVICE_ID_BOCHSVBE          0x1113
+ 
+ /* (max) 256MB VRAM: max 8K in 16:10 */
+ #define RES_MAX_X 8192
+@@ -105,26 +106,24 @@
+ #endif
+ }
+ 
++#ifdef QEMU
++static void DgVxdInitialize(PCIAddress *address, volatile DWORD *registers);
++#endif
+ DWORD VBE_get_LFB()
+ {
+-	PCIAddress pciAddr;
+-	
+-	/* virtualbox */
+-	if(PCI_FindDevice(PCI_VENDOR_ID_INNOTEK, PCI_DEVICE_ID_VBOX_VGA, &pciAddr))
+-	{
+-		PCI_SetMemEnable(&pciAddr, TRUE);
+-		return PCI_GetBARAddr(&pciAddr, 0);
+-	}
+-	
+-	/* qemu */
+-	if(PCI_FindDevice(PCI_VENDOR_ID_BOCHSVBE, PCI_DEVICE_ID_BOCHSVBE, &pciAddr))
+-	{
+-		PCI_SetMemEnable(&pciAddr, TRUE);
+-		return PCI_GetBARAddr(&pciAddr, 0);
+-	}
+-	
+-	/* try failback */
+-	return ISA_LFB;
++    PCIAddress address;
++    volatile DWORD *registers;
++    if(!PCI_FindDevice(DG_PCI_VENDOR_ID, DG_PCI_DEVICE_ID, &address))
++        return 0;
++    PCI_SetMemEnable(&address, TRUE);
++    registers = (volatile DWORD*)_MapPhysToLinear(PCI_GetBARAddr(&address, DG_MMIO_BAR), DG_MMIO_SIZE, 0);
++    if(!registers || registers[DG_REG_MAGIC / 4] != DG_MAGIC ||
++       registers[DG_REG_VERSION / 4] != DG_ABI_VERSION)
++        return 0;
++#ifdef QEMU
++    DgVxdInitialize(&address, registers);
++#endif
++    return PCI_GetBARAddr(&address, DG_VRAM_BAR);
+ }
+ 
+ BOOL VBE_init_hw()
+@@ -140,6 +139,7 @@
+ 	}
+ 
+  	vram_phy = VBE_get_LFB();
++	if(!vram_phy) return FALSE;
+ 	
+  	if(!FBHDA_init_hw())
+  	{
+--- a/vxd_vbe_qemu.c
++++ b/vxd_vbe_qemu.c
+@@ -1,2 +1,4 @@
+ #define QEMU
+ #include "vxd_vbe.c"
++
++#include "dg-vxd.c"
+--- a/vxd_vdd.c
++++ b/vxd_vdd.c
+@@ -84,8 +84,8 @@
+ {
+ 	DWORD hi  = 0;
+ 	DWORD low = 0;
+-	DWORD selector;
+-	
++	DWORD selector = 0;
++	if (!linear || !size) return 0;
+ 	dbg_printf(dbg_map_pm16, vm, linear, size);
+ 	
+ 	_BuildDescriptorDWORDs(linear, RoundToPages(size), 0x92, 0x80, 0, &hi, &low);
+@@ -94,6 +94,7 @@
+ 	
+ 	//_Allocate_LDT_Selector(vm, hi, low, 1, 0, &selector, NULL);
+ 	_Allocate_GDT_Selector(hi, low, 0, &selector, NULL);
++	if (!selector) return 0;
+ 	VDD_Register_Extra_Screen_Selector(selector);
+ 	
+ 	dbg_printf(dbg_map_pm16_sel, selector);

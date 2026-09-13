@@ -1,0 +1,25 @@
+[submodule "vendor/qemu"]
+	path = vendor/qemu
+	url = https://github.com/anderstorpsfestivalen/qemu.git
+	branch = master
+[submodule "vendor/vmdisp9x"]
+	path = vendor/vmdisp9x
+	url = https://github.com/JHRobotics/vmdisp9x.git
+[submodule "vendor/reactos"]
+	path = vendor/reactos
+	url = https://github.com/reactos/reactos.git
+[submodule "vendor/qemu-3dfx"]
+	path = vendor/qemu-3dfx
+	url = https://github.com/startergo/qemu-3dfx-arch.git
+[submodule "vendor/wine9x"]
+	path = vendor/wine9x
+	url = https://github.com/JHRobotics/wine9x.git
+[submodule "vendor/qemu-xtra"]
+	path = vendor/qemu-xtra
+	url = https://github.com/kjliew/qemu-xtra.git
+[submodule "vendor/patcher9x"]
+	path = vendor/patcher9x
+	url = https://github.com/JHRobotics/patcher9x.git
+[submodule "vendor/wine-glu"]
+	path = vendor/wine-glu
+	url = https://github.com/wine-mirror/wine.git

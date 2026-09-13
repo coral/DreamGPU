@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "upstream": {
+    "vmdisp9x": "718b3d51a1532fe1ba2e133cf76186f1a609d35e"
+  },
+  "patches": [
+    {
+      "file": "base.patch",
+      "sha256": "f3680fb78c93d5f75d1dea48b9d2ff7595c68f8b410e15ddca4d5b3a265d4ddb"
+    }
+  ],
+  "files": {
+    "dbgprint.c": {
+      "before_sha256": "5d14945aa31d05dbd95412170fc3a124eed6518417f6afbf34be54b86bd03594",
+      "after_sha256": "8819a4bd532bf36d227627efdf05413af2ae5332425a6f76b80b7a17b30be900",
+      "normalize_lf": true
+    },
+    "dg-cursor.h": {
+      "before_sha256": "6ee56747b4230c754fa8fce45230c21f835ee6ee56bf80ff3f97023c76d3a5df",
+      "after_sha256": "f49b99e3a0fecef04ed86364c544c460c1b04ed21b102f7a02cda1d98b3d2bb9"
+    },
+    "dibcall.c": {
+      "before_sha256": "70d2d5f2f0edbccdacade6aee3cf5cfa41c8f454b4bc4cc4b3d351db4617e18f",
+      "after_sha256": "054adc43cf84921b42c6673fa9e767235a9a33a4bb361efb940e666a98f3deb4",
+      "normalize_lf": true
+    },
+    "enable.c": {
+      "before_sha256": "0c1718d1f150c96ad501d8fa1b80dec439217ff806cc4e63ad3614a9ee38ff8c",
+      "after_sha256": "79daf9ce580aab89a257b4cc7a9a0d752b5453497041c62753414efbfb67d563",
+      "normalize_lf": true
+    },
+    "init.c": {
+      "before_sha256": "91b942572b0be63ab5af6fe32efb5f2edb8ff9fe8a9c1d90a342e76de9db5b55",
+      "after_sha256": "c3e52e8d10fdc352b520a0dcb14251ad2907c5b405cd9a5a0a1ef7ad54b4a955",
+      "normalize_lf": true
+    },
+    "makefile.dreamgpu": {
+      "before_sha256": "4d044fdab70faf80b1e34261df6ca7082d808e975b14fd44683442e5ef8f346c",
+      "after_sha256": "7e8cc415f4ac0decd49f13027ca502830e1517a8cdfffce37a23c6f250b58778",
+      "normalize_lf": true
+    },
+    "pm16_calls_qemu.c": {
+      "before_sha256": "a971bd0f570978e9e0b96def4042023ccf97ccb7240810e673c2046bca2cba3f",
+      "after_sha256": "62424aeb1c26bd913c2e58cb22a27f199f4fa1d15f35781bfedbf6569afc69c9",
+      "normalize_lf": true
+    },
+    "vxd.h": {
+      "before_sha256": "0f45331abb385a5d2e706a9d5c59e505628d6cf494a435d54d0d150a8f44aa05",
+      "after_sha256": "e7eab57ad42825d2f20d958f6a153cc51e109b2055d40556f412253c717cc260",
+      "normalize_lf": true
+    },
+    "vxd_fbhda.c": {
+      "before_sha256": "eb4850ce380bc646f60981d9e580b60fabf7556c9a0da4ea3c1aad8bcaf0f29c",
+      "after_sha256": "b9e7db15359b09062eb9c27e17a1b14638ebd899247c4cf216f78a7b746d10f4",
+      "normalize_lf": true
+    },
+    "vxd_main.c": {
+      "before_sha256": "c8cd6e461b7b1b53c54d110637f1715b6687f8adc8b2414c3011a38d9e42c666",
+      "after_sha256": "2275644e8f19e1b12dc10e0161f287420f8ed22ac630faf5e68fd8c15e5886ea",
+      "normalize_lf": true
+    },
+    "vxd_mouse.c": {
+      "before_sha256": "c501586c868522c96f415c06479c1f43f99178a3c5b6d12a15867a4fb030a61d",
+      "after_sha256": "cdb5bf6f9921c00db80257114072574aa2339c474b2e8285df6bfd096fb32955",
+      "normalize_lf": true
+    },
+    "vxd_vbe.c": {
+      "before_sha256": "123a9fa33cae50d0acaaf6e49fd495dea27db312a64c5aefed4393878be9add4",
+      "after_sha256": "fedfa1d6e709bc088e44a68bb59d1601dfb734c4f76df4bb28fffed6d95c1017",
+      "normalize_lf": true
+    },
+    "vxd_vbe_qemu.c": {
+      "before_sha256": "dde05761dec45f34557a37eb2b86bd55b1c915c01aaa11f37558442c591b365c",
+      "after_sha256": "4adaa248aef37e140a98243d9cba63f856ba042b6c6ed829ec7e023094cb5ab5",
+      "normalize_lf": true
+    },
+    "vxd_vdd.c": {
+      "before_sha256": "f6d731c1dbf227e41f0e5d541362dc6c35ef8bfb025b7e4288a82755c3a59727",
+      "after_sha256": "034606234652a331b6572d7d3c4897300bb9ca7b9498599abb0cb3f5c5653c8a",
+      "normalize_lf": true
+    }
+  }
+}

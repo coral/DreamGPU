@@ -1,0 +1,6 @@
+# Unified diff payloads contain significant context spaces and CRLF bytes.
+# Checked patch application validates those bytes instead of source formatting.
+*.patch -whitespace
+
+# Preserve exact, content-addressed upstream license and attribution bytes.
+support/attribution/notices/* -text -whitespace

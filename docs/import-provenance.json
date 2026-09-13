@@ -1,0 +1,16 @@
+{
+  "schema": 1,
+  "sources": {
+    "juke": {
+      "head": "e70e5d0c9bd858793468c8eac8c76c8c219308ce",
+      "source_files": 428,
+      "working_patch_sha256": "d6ca154afbdfbdd97d65aca50874e3fdd66e68466400beb0d5baad695f8c0465"
+    },
+    "qemu": {
+      "head": "6ae1f2d8a6bbfe5e554825feab8643e797397824",
+      "source_files": 11266,
+      "working_patch_sha256": "0b60e475a1a8ddcae4f19f493ac6e28fa79e9f27e8dddcb9b72120f5f7013366"
+    }
+  },
+  "note": "Imported the complete recorded working state, including unpublished changes, not HEAD alone. Full local source hash inventory and diffs are in ignored target/import-evidence."
+}

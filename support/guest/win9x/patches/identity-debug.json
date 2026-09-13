@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "upstream": {
+    "vmdisp9x": "718b3d51a1532fe1ba2e133cf76186f1a609d35e"
+  },
+  "patches": [
+    {
+      "file": "identity-debug.patch",
+      "sha256": "593ae3bb98bef1ac6c1611ff1056dc6af85c3f2f59c703411dec476ed3c0091a"
+    }
+  ],
+  "files": {
+    "makefile.dreamgpu": {
+      "before_sha256": "7e8cc415f4ac0decd49f13027ca502830e1517a8cdfffce37a23c6f250b58778",
+      "after_sha256": "3b7806b7e57d4c11b6778f8d594694bff65105cf9414937426155db5428903c3"
+    },
+    "vxd_main.c": {
+      "before_sha256": "53f1723cac815e9482380c9a6df7aed1f1b5a7721caa4c69968fb534c580792a",
+      "after_sha256": "b4265ff15b93439f24468474df10c1d32296b80b3071d4afcc109b2b80d40c05"
+    }
+  }
+}

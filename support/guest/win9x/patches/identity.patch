@@ -1,0 +1,121 @@
+--- a/control.c
++++ b/control.c
+@@ -182,6 +182,7 @@
+  * control TV out (usually disabled it).
+  *
+  **/
++extern WORD DgNativeBlt(DWORD,DWORD,DWORD,DWORD);
+ LONG WINAPI __loadds Control(LPVOID lpDevice, UINT function,
+   LPVOID lpInput, LPVOID lpOutput)
+ {
+@@ -189,6 +190,7 @@
+   
+   dbg_printf("Control (16bit): %d (0x%x)\n", function, function);
+   
++  if (function == 0x4a01) { DgNativeBlt(0x106, (DWORD)lpDevice, 0, 0); return 1; }
+   switch(function)
+   {
+     case QUERYESCSUPPORT:
+--- a/dg-blit16.c
++++ b/dg-blit16.c
+@@ -12,6 +12,22 @@
+     result = DgWindowSource(dst, src, dx, dy, sx, sy, width, height, rop);
+     if (result)
+         return result == 1;
++    DgNativeBlt(0x103, sx | ((DWORD)sy << 16), dx | ((DWORD)dy << 16),
++                width | ((DWORD)height << 16));
++    if (src && rop == 0x00cc0020UL) {
++        LPDIBENGINE s = (LPDIBENGINE)src;
++        DgNativeBlt(0x104, (DWORD)src, (DWORD)dst, s->deType);
++        if (s->deType == TYPE_DIBENG) {
++            DgNativeBlt(0x105, s->deBitsOffset, s->deBitsSelector | ((DWORD)s->deFlags << 16),
++                        s->deWidth | ((DWORD)s->deHeight << 16));
++            if (s->deBitsPixel == 32 && !(s->deFlags & VRAM) && s->deBitsSelector &&
++                s->deBitsOffset <= 65520UL && s->deWidth >= 16 && s->deHeight) {
++                DWORD __far *words =
++                    (DWORD __far *)(((DWORD)s->deBitsSelector << 16) | s->deBitsOffset);
++                DgNativeBlt(0x107, words[0], words[1], words[2]);
++            }
++        }
++    }
+     if (dst == lpDriverPDevice && (dst->deFlags & VRAM) && !(dst->deFlags & BUSY) &&
+         (dst->deBitsPixel == 8 || dst->deBitsPixel == 16 || dst->deBitsPixel == 32) && width &&
+         height && (DWORD)dx + width <= dst->deWidth && (DWORD)dy + height <= dst->deHeight) {
+--- a/dg-vxd.c
++++ b/dg-vxd.c
+@@ -199,6 +199,7 @@
+ 
+ extern void Dg9PrimaryAccess(void);
+ extern void Dg9PrimaryFault(void);
++extern void DgAccessTrace(DWORD, DWORD, DWORD, DWORD);
+ WORD DgVxdBlt(PCRS_32 state) {
+     DWORD op = state->Client_EDX >> 16, timer, sequence, status;
+     DG9_SURFACE surface;
+@@ -213,6 +214,10 @@
+     }
+     if (op >= 1 && op <= 3)
+         Dg9PrimaryAccess();
++    if (op >= 0x100) {
++        DgAccessTrace(op, state->Client_EBX, state->Client_ECX, state->Client_ESI);
++        return 0;
++    }
+     /* No command has been submitted on any decline path. A critical VM must
+      * stay on the DIB engine instead of spinning or blocking the scheduler. */
+     if (!dg_registers || dg_failed)
+--- a/enable.c
++++ b/enable.c
+@@ -145,8 +145,10 @@
+ 
+ extern WORD DgNativeBlt(DWORD,DWORD,DWORD,DWORD);
+ extern WORD Dg9CursorDisable16(void);
++extern WORD DgNativeBlt(DWORD,DWORD,DWORD,DWORD);
+ VOID WINAPI __loadds BeginAccess_VXD( LPPDEVICE lpDevice, WORD wLeft, WORD wTop, WORD wRight, WORD wBottom, WORD wFlags )
+ {
++    DgNativeBlt(0x101, wLeft | ((DWORD)wTop << 16), wRight | ((DWORD)wBottom << 16), wFlags);
+     if (hda && *(volatile DWORD __far *)&hda->res0) DgNativeBlt(0x200, 0, 0, 0);
+ 	if(wFlags & CURSOREXCLUDE)
+ 	{
+@@ -161,6 +163,7 @@
+ 
+ VOID WINAPI __loadds EndAccess_VXD( LPPDEVICE lpDevice, WORD wFlags )
+ {
++    DgNativeBlt(0x102, 0, 0, wFlags);
+ 	if(!mouse_vxd)
+ 	{
+ 		DIB_EndAccess(lpDevice, wFlags);
+--- a/vxd_main.c
++++ b/vxd_main.c
+@@ -107,6 +107,10 @@
+ DWORD ThisVM = 0;
+ void *DeviceCTX = NULL;
+ DWORD is_qemu = FALSE;
++#ifdef QEMU
++#include "dg-identity-vxd.c"
++#endif
++
+ #ifdef QEMU
+ #include "dg-memory-vxd.c"
+ #include "dg-gl-vxd.c"
+@@ -823,6 +827,11 @@
+ 	DWORD *outBuf = (DWORD*)params->lpOutBuffer;
+ 	DWORD rc = 1;
+ #ifdef QEMU
++	if (Dg9MemoryControl(params, &rc)) return rc;
++	if (DgIdentityControl(vmhandle, params, &rc)) return rc;
++#endif
++
++#ifdef QEMU
+ 	if (Dg9WindowControl(params, &rc)) return rc;
+ 	if (Dg9GlControl(params, &rc)) return rc;
+ #endif
+@@ -1135,6 +1144,10 @@
+ void __stdcall win32_destroy_process_proc(DWORD pid)
+ {
+ #ifdef QEMU
++	DgIdentityDestroy(pid);
++#endif
++
++#ifdef QEMU
+ 	Dg9BootProcessExit();
+ #endif
+ 
