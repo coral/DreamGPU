@@ -4,7 +4,11 @@
 #include "gpu.h"
 #include "gl.h"
 #include "dg-escape.h"
+#define DG_TIMING_U32 ULONG
+#include "display-timing.h"
+#undef DG_TIMING_U32
 #define IOCTL_VIDEO_DG_CAPS CTL_CODE(FILE_DEVICE_VIDEO, 0x900, METHOD_BUFFERED, FILE_ANY_ACCESS)
+#define IOCTL_VIDEO_DG_TIMING CTL_CODE(FILE_DEVICE_VIDEO, 0x904, METHOD_BUFFERED, FILE_ANY_ACCESS)
 #define IOCTL_VIDEO_DG_GL CTL_CODE(FILE_DEVICE_VIDEO, 0x902, METHOD_BUFFERED, FILE_ANY_ACCESS)
 typedef struct {
     ULONG Opcode, Bpp, Source, Destination, SourceStride, DestinationStride;

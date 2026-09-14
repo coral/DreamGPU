@@ -25,11 +25,14 @@ unsafe extern "C" fn enable(cap: u32) {
 unsafe extern "C" fn disable(cap: u32) {
     note(4, cap as usize);
 }
-unsafe extern "C" fn pointer(_: i32, _: u32, stride: i32, data: *const core::ffi::c_void) {
+unsafe extern "C" fn pointer(size: i32, kind: u32, stride: i32, data: *const core::ffi::c_void) {
+    note(15, kind as usize);
+    note(16, size as usize);
     note(5, stride as usize);
     note(6, data as usize);
 }
-unsafe extern "C" fn normal(_: u32, stride: i32, data: *const core::ffi::c_void) {
+unsafe extern "C" fn normal(kind: u32, stride: i32, data: *const core::ffi::c_void) {
+    note(15, kind as usize);
     note(5, stride as usize);
     note(6, data as usize);
 }
@@ -252,4 +255,62 @@ fn sparse_game_arrays_do_not_query_restore_or_point_at_disabled_attributes() {
         assert_eq!(seen.iter().filter(|v| v.0 == 2).count(), 1);
         assert_eq!(seen.iter().filter(|v| v.0 == 7).count(), 1);
     }
+}
+
+#[test]
+fn compact_native_pointers_preserve_types_and_restore_on_draw_error() {
+    let mut api = api();
+    api.dg_glGetDoublev = Some(index_get);
+    api.dg_glGetBooleanv = Some(edge_get);
+    api.dg_glIndexd = Some(index_restore);
+    api.dg_glEdgeFlag = Some(edge_restore);
+    api.dg_glIndexPointer = Some(normal);
+    api.dg_glEdgeFlagPointer = Some(edge_pointer);
+    let data = raw::tests::packet();
+    let args = [GL_TRIANGLES, 0, 3, DG_GL_ARRAY_RAW | 127, 0, 0, 0, 0];
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = GL_INVALID_OPERATION);
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArrays, &args, &data) },
+        Ok(GL_INVALID_OPERATION)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let offsets = seen
+        .iter()
+        .filter(|v| v.0 == 6)
+        .map(|v| v.1 - data.as_ptr() as usize)
+        .collect::<Vec<_>>();
+    assert_eq!(offsets, [32, 80, 92, 112, 136, 152, 176]);
+    assert!(seen.iter().filter(|v| v.0 == 5).all(|v| v.1 == 0));
+    assert_eq!(
+        seen.iter()
+            .filter(|v| v.0 == 15)
+            .map(|v| v.1 as u32)
+            .collect::<Vec<_>>(),
+        [
+            GL_DOUBLE,
+            GL_UNSIGNED_BYTE,
+            GL_SHORT,
+            GL_FLOAT,
+            GL_BYTE,
+            GL_DOUBLE
+        ]
+    );
+    assert_eq!(
+        &seen[seen.len() - 2..],
+        &[(12, 16777217.25f64.to_bits() as usize), (13, 1)]
+    );
+    let mut bad = data.clone();
+    bad[28] = 1;
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArrays, &args, &bad) },
+        Err(1)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
+    api.dg_glColorPointer = None;
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArrays, &args, &data) },
+        Err(3)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
 }

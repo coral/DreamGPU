@@ -56,6 +56,11 @@ HINSTANCE JglModule(void);
 void JglSetError(GLenum error);
 void JglCommandError(GLenum error);
 void JglForgetTextures(ULONG count, const GLuint *textures);
+/* Capture runs synchronously into reserved packet bytes. It must not issue GL
+ * commands, allocate, fail, or retain the destination beyond its return. */
+typedef void (*JGL_CAPTURE)(void *opaque, BYTE *destination);
+BOOL JglCaptureData(ULONG function, const ULONG *arguments, ULONG words, ULONG bytes,
+                    JGL_CAPTURE capture, void *opaque);
 BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *payload, ULONG bytes);
 ULONG JglMaxDataBytes(ULONG words);
 ULONG JglNextImageId(void);

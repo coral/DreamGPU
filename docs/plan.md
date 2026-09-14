@@ -1,10 +1,98 @@
-# DreamGPU: playable, fast retro graphics
+# DreamGPU: maximize Mac performance and improve display modes
 
 This plan replaces the earlier plan on September 13, 2026, following the user's
 explicit scope correction. The earlier installer rollback, elaborate recovery,
 unattended-installation and exhaustive acceptance requirements were added by the
 agent; they were not the user's requirements. They are cancelled, not deferred
 release gates. Historical results remain in progress.md and ignored run artifacts.
+
+## Completed implementation — performance and display pass
+
+Approved September 13: maximize Mac game throughput. 120 Hz is the maximum
+selectable Windows refresh, not an FPS cap or a completion target. Preserve game
+quality, responsiveness and sleeping idle workers. The first-pass measurements
+below remain the baseline.
+
+- [x] Finish current Mac D3D, Glide and OpenGL attribution. Current D3D/Glide
+  guest-PC profiles and the OpenGL host sample are recorded. Name guest packing/conversion,
+  translated CPU helpers, driver submission, GPU execution and presentation costs.
+- [x] Accept compact typed-array packets and direct capture into reserved packet
+  storage. Focused source checks, both-host native pixel checks and changed games
+  pass. Signed GL 1.1 normalization semantics are preserved.
+- [x] Accept the grouped performance changes: compact arrays, native packed Glide
+  textures, exact x87 single-load/store conversions and optimized native builds.
+  First changed Mac results: D3D 65.07 → 69.87 submitted frames/s; Glide
+  33.99 → 40.14. A further exact x87 zero/identity/cancellation and finite-compare
+  pass addresses remaining named helper work. Move expensive guest work into host
+  handlers where useful. No approximations,
+  deeper frame queues or busy loops.
+- [x] Verify the actual 256 MiB framebuffer in Windows 98 and NT, including NT
+  reporting and Properties. XP reports 256 MB and Properties opens; Windows 98
+  mapped all 256 MiB and checked/restored words at 128 MiB, 255 MiB and the final
+  DWORD. The native texture budget remains separately 256 MiB.
+- [x] Verify 60/75/85/100/120 Hz in Windows 98/2000/XP, with 60 Hz as default.
+  Shared display timing and context-free driver queries are implemented, including
+  sleeping interrupt-driven waits. XP and Windows 2000 actual checks pass.
+  Windows 98 control-panel tracing proved that missing active-monitor maximum
+  resolution metadata hides the selector before it reads the valid mode lists.
+  Truthful virtual-monitor DDC now passes cold detection, with preferred 60 Hz,
+  maximum 120 Hz and preserved resolution choices; the selector appears normally.
+  Corrected the Win98 build rules that excluded the setter and the donor guard
+  that discarded explicit selected rates with invalid monitor-range flags.
+  Actual device readback now follows dynamic 120 → 60 → 120 Hz selection.
+- [x] Validate fractional refresh deadlines using the monitor containing the
+  consumer window. Source checks pass on both hosts. Guest refresh, physical
+  presentation and uncapped game rendering remain independent.
+- [x] Measure changed games on each host, including Linux Direct3D. Preserve
+  visuals and desktop responsiveness. Use saved baselines and serial/QMP commands.
+- [x] Produce matching native, guest and installer outputs; finish focused checks
+  and strict Clippy, and record actual results and remaining named bottlenecks.
+
+Current accepted measurements:
+
+| Host | Workload | Saved baseline | Current |
+| --- | --- | ---: | ---: |
+| Mac | UT Direct3D | 65.07 | 72.32 |
+| Mac | UT Glide | 33.99 | 39.94 |
+| Mac | Half-Life OpenGL | 70.08 | 76.54 |
+| Linux | UT Direct3D | 363.90 | 382.90 |
+| Linux | UT Glide | 184.31 | 190.72 |
+| Linux | Half-Life OpenGL | 189.84 | 210.76 |
+
+UT numbers are submitted GPU frames/s over the fixed measurement window;
+Half-Life numbers are engine-reported timedemo FPS. Linux D3D camera phases
+varied, so its comparison is descriptive rather than isolated causal attribution.
+Mac uses TCG and Linux uses KVM; cross-host ratios are not a like-for-like GPU test.
+All game runs completed with normal providers, hardware rendering and clean exit.
+
+The remaining Mac limit is translated guest command production. Current-pass
+profiles show native render workers waiting for work for roughly 92–95% of their
+samples; guest array capture/copies, game execution and exact x87 operations are
+the named costs addressed here. These samples are attribution, not a prediction
+of attainable FPS or a post-change GPU utilization benchmark. The final exact
+x87 group improved Mac D3D another 3.5%, with no demonstrated additional Glide
+gain. Further optimization should begin from a new profile of a specific slow
+game; 120 Hz does not mark performance completion or impose a rendering limit.
+
+Measured native builds are frozen under `target/follow-through/combined-native-v2/`;
+the final virtual-monitor metadata is in `final-edid-native-v1/`. The
+all-component Cargo build passes on Mac with the Linux guest builder. Strict
+workspace Clippy and normal Juke release builds pass on both hosts. XP and Windows
+2000 verified all five refresh rates, actual 120 Hz timing and sleeping waits.
+Windows 98 mapped all 256 MiB and now applies the selected rate to the device.
+Its final packaged drivers passed actual 120 Hz selection, interrupt-backed
+waits and restoration to 60 Hz, followed by clean shutdown. The final receipt is
+`display-edid-win98-v3/acceptance.json` on both hosts.
+Final standard guest outputs match across hosts (`final-packages-v3/`), including
+`target/guest/dreamgpu.exe`, SHA `44e7a5ef…`. Provider PE comparisons account for
+rebuild metadata changes without repeating the accepted game measurements.
+
+Ownership: SDK agent handles profiles, translation and Mac Direct3D; GL agent
+handles compact arrays, Glide and native pixel checks; guest agent handles display
+drivers and timing; root handles monitor pacing, OpenGL/Linux games, integration
+and documentation. VM measurements on each host are exclusive. No rollback,
+uninstall, unattended installation, smoke campaigns, repeated unchanged baselines
+or new branches.
 
 ## Vision
 
@@ -19,7 +107,14 @@ has better shading/shadows than Glide but runs poorly. Preserve those visuals
 while fixing the actual cost. High refresh rates, roughly 200 FPS where the guest
 and game permit it, are the ambition; do not invent FPS or disguise a CPU limit.
 
-## Milestone 1 — Usable adapter and working installation
+## Completed first pass — historical baseline
+
+The following milestones record the implementation before the active pass above.
+Their 64 MiB figures and earlier performance numbers are historical. Current
+capacity is 256 MiB, and current results are recorded in the active checklist and
+progress.md.
+
+### Milestone 1 — Usable adapter and working installation
 
 - [x] Cargo builds the native runtime and both guest OS payloads; a single
   dreamgpu.exe detects the guest OS and installs system graphics providers.
@@ -42,7 +137,7 @@ Completion: the user can install/use the GPU, inspect adapter properties without
 crashing, and see accurate supported capabilities. No rollback, perfect removal,
 unattended installation or Windows 98→XP migration requirement.
 
-## Milestone 2 — Fix Mac game-performance bottlenecks
+### Milestone 2 — Fix Mac game-performance bottlenecks
 
 - [x] Profile the existing automated UT Direct3D workload on Mac. Use saved
   results first; collect an actual CPU/GPU sample where the current evidence is
@@ -114,7 +209,7 @@ Further measured improvements:
   improvements; this is not isolated packed-texture attribution. New frontends require the matching updated native runtime; existing
   byte-pixel packets remain supported. No mixed-version migration project.
 
-## Milestone 3 — Carry the working improvements across hosts and games
+### Milestone 3 — Carry the working improvements across hosts and games
 
 - [x] Build the changed code on Mac and Linux; use the same supported DreamGPU
   device/profile configuration on both Juke instances.
@@ -131,7 +226,7 @@ properties issue fixed and the measured performance improvements enabled normall
 
 ## Delivered results and practical limits
 
-All three scoped milestones above are implemented. The standard native builds
+The first-pass milestones below were implemented; the active checklist above supersedes their completion status. The standard native builds
 and `target/guest/dreamgpu.exe` (SHA `c2b4bae4…`) include the accepted changes on
 both hosts. The installer still runs inside the guest. Current build/runtime
 pairing is explained in [build.md](build.md).

@@ -363,8 +363,8 @@ ULONG JglNextImageId(void) {
 ULONG JglMaxDataBytes(ULONG words) {
     return words <= MaxWords - 10 ? (MaxWords - 10 - words) * 4 : 0;
 }
-BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *payload,
-             ULONG bytes) {
+static BOOL CaptureData(ULONG function, const ULONG *arguments, ULONG words, const void *payload,
+                        ULONG bytes, JGL_CAPTURE capture, void *opaque) {
     JGL_CONTEXT *c;
     ULONG *record;
     c = CurrentContext();
@@ -378,7 +378,7 @@ BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *pa
             CommandError(c, GL_INVALID_OPERATION);
         return FALSE;
     }
-    if ((words && !arguments) || (bytes && !payload) || words > MaxWords - 10 ||
+    if ((words && !arguments) || (bytes && !payload && !capture) || words > MaxWords - 10 ||
         bytes > JglMaxDataBytes(words)) {
         if (function == FEnum_glDeleteTextures)
             Error(c, GL_INVALID_VALUE);
@@ -395,7 +395,9 @@ BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *pa
         CopyMemory(record + 2, arguments, words * 4);
     if (bytes & 3)
         record[2 + words + bytes / 4] = 0;
-    if (bytes)
+    if (capture)
+        capture(opaque, (BYTE *)(record + 2 + words));
+    else if (bytes)
         CopyMemory(record + 2 + words, payload, bytes);
     if (c->Arrays.ListMode != GL_COMPILE &&
         (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
@@ -409,6 +411,17 @@ BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *pa
          c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK))
         c->FrontDirty = TRUE;
     return TRUE;
+}
+
+BOOL JglData(ULONG function, const ULONG *arguments, ULONG words, const void *payload,
+             ULONG bytes) {
+    return CaptureData(function, arguments, words, payload, bytes, NULL, NULL);
+}
+BOOL JglCaptureData(ULONG function, const ULONG *arguments, ULONG words, ULONG bytes,
+                    JGL_CAPTURE capture, void *opaque) {
+    if (!capture)
+        return FALSE;
+    return CaptureData(function, arguments, words, NULL, bytes, capture, opaque);
 }
 
 } /* extern C */

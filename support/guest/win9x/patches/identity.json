@@ -6,7 +6,7 @@
   "patches": [
     {
       "file": "identity.patch",
-      "sha256": "7130f105e5eae15a3c0a918a22379e84f99ce5b87ac5fa2914dc9486bab3ee01"
+      "sha256": "a70299a8b9fba841fa0f39b984886c38256f8cb21f5074b07f71b045cb0ce64c"
     }
   ],
   "files": {
@@ -20,16 +20,16 @@
       "after_sha256": "4b1691284903130bfc362af0485b474a84e6b58ba760140e7f05b5ad1ab410a3"
     },
     "dg-vxd.c": {
-      "before_sha256": "161db1707e20e35d1041b43bffe8a801198ac01b0663d1f75a742161aef46aa0",
-      "after_sha256": "1d99fca462415010813f0263f1e741e174bf562c92893aedfa2f6a3b751ea621"
+      "before_sha256": "1e270c0b16e4090b21b7e0435a255a820fbffc104491edcb0640a09d7aa7b052",
+      "after_sha256": "505fcd23b0ff69baba87225f11f2abb216876c5aa4411805ad462f25f2409647"
     },
     "enable.c": {
       "before_sha256": "79daf9ce580aab89a257b4cc7a9a0d752b5453497041c62753414efbfb67d563",
       "after_sha256": "c27325fe64f97b331720467b7fa4b556c831f1a74b2823a0f57829337ba9e67d"
     },
     "vxd_main.c": {
-      "before_sha256": "2275644e8f19e1b12dc10e0161f287420f8ed22ac630faf5e68fd8c15e5886ea",
-      "after_sha256": "53f1723cac815e9482380c9a6df7aed1f1b5a7721caa4c69968fb534c580792a"
+      "before_sha256": "6c127a4aaf9fc2f4d690e87218f7475b3a015bc2c51c5c0511ae35e0c8c33fb2",
+      "after_sha256": "c4564b80aa0fe901e10e11683808de06d635880cb9a76ab0093ba45b3baee7a1"
     }
   }
 }

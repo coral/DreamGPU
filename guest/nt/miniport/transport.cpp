@@ -123,6 +123,11 @@ typedef struct {
     volatile ULONG InterruptCount;
     volatile ULONG DpcCount;
     ULONG TimeoutCount;
+    KMUTEX TimingMutex;
+    KEVENT TimingCompletion;
+    KDPC TimingDpc;
+    ULONG TimingSequence;
+    BOOLEAN TimingSupported;
     KMUTEX GlMutex;
     KEVENT GlCompletion;
     KEVENT DesktopStopped;
@@ -196,8 +201,98 @@ static VOID NTAPI CompleteGl(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2) {
         KeSetEvent(&t->DpcsIdle, IO_NO_INCREMENT, FALSE);
 }
 
+static VOID NTAPI CompleteTiming(PKDPC dpc, PVOID context, PVOID arg1, PVOID arg2) {
+    DG_TRANSPORT *t = (DG_TRANSPORT *)context;
+    (void)dpc;
+    (void)arg1;
+    (void)arg2;
+    KeSetEvent(&t->TimingCompletion, IO_NO_INCREMENT, FALSE);
+    if (!InterlockedDecrement(&t->DpcReferences))
+        KeSetEvent(&t->DpcsIdle, IO_NO_INCREMENT, FALSE);
+}
+
+BOOLEAN DgTransportTimingSupported(PVOID transport) {
+    DG_TRANSPORT *t = (DG_TRANSPORT *)transport;
+    return t && t->TimingSupported;
+}
+
+BOOLEAN DgTransportSetRate(PVOID transport, ULONG rate) {
+    DG_TRANSPORT *t = (DG_TRANSPORT *)transport;
+    if (!DgTimingRateValid(rate))
+        return FALSE;
+    if (!t || !t->TimingSupported)
+        return rate == DG_TIMING_DEFAULT_HZ;
+    /* MMIO commits cancel any pending timing wait, without taking its mutex. */
+    WriteReg(t, DG_TIMING_REG_RATE, rate);
+    return ReadReg(t, DG_TIMING_REG_RATE) == rate;
+}
+
+ULONG DgTransportTiming(PVOID transport, PVOID input, ULONG input_bytes, PVOID output,
+                        ULONG output_bytes) {
+    DG_TRANSPORT *t = (DG_TRANSPORT *)transport;
+    DG_TIMING_REQUEST request;
+    DG_TIMING_REPLY reply = {};
+    LARGE_INTEGER timeout;
+    ULONG serial, phase, i;
+    NTSTATUS waited;
+    if (!input || !output || input_bytes != sizeof(request) || output_bytes != sizeof(reply) ||
+        KeGetCurrentIrql() != PASSIVE_LEVEL)
+        return 0;
+    RtlCopyMemory(&request, input, sizeof(request));
+    if (request.Version != DG_TIMING_VERSION || request.Operation > DG_TIMING_WAIT_END ||
+        request.Reserved0 || request.Reserved1)
+        return 0;
+    reply.Version = DG_TIMING_VERSION;
+    reply.Status = DG_TIMING_REPLY_UNSUPPORTED;
+    if (!t || !t->TimingSupported)
+        goto done;
+    timeout.QuadPart = -2500000; /* 250 ms watchdog, not a refresh poll. */
+    waited = KeWaitForSingleObject(&t->TimingMutex, Executive, KernelMode, FALSE, &timeout);
+    if (waited != STATUS_SUCCESS) {
+        reply.Status = DG_TIMING_REPLY_TIMEOUT;
+        goto done;
+    }
+    reply.Status = DG_TIMING_REPLY_OK;
+    if (request.Operation) {
+        ULONG sequence = ++t->TimingSequence;
+        if (!sequence)
+            sequence = ++t->TimingSequence;
+        KeResetEvent(&t->TimingCompletion);
+        WriteReg(t, DG_REG_IRQ_STATUS, DG_IRQ_DISPLAY_TIMING);
+        WriteReg(t, DG_TIMING_REG_SEQUENCE, sequence);
+        WriteReg(t, DG_TIMING_REG_COMMAND, request.Operation);
+        waited =
+            KeWaitForSingleObject(&t->TimingCompletion, Executive, KernelMode, FALSE, &timeout);
+        if (waited != STATUS_SUCCESS || ReadReg(t, DG_TIMING_REG_COMPLETED) != sequence ||
+            ReadReg(t, DG_TIMING_REG_STATUS) != DG_TIMING_DONE) {
+            reply.Status =
+                waited == STATUS_TIMEOUT ? DG_TIMING_REPLY_TIMEOUT : DG_TIMING_REPLY_CANCELLED;
+            WriteReg(t, DG_TIMING_REG_COMMAND, DG_TIMING_CANCEL);
+        }
+    }
+    for (i = 0; i < 3; ++i) {
+        serial = ReadReg(t, DG_TIMING_REG_SNAPSHOT);
+        reply.ScanLine = ReadReg(t, DG_TIMING_REG_SCANLINE);
+        reply.Height = ReadReg(t, DG_TIMING_REG_HEIGHT);
+        phase = ReadReg(t, DG_TIMING_REG_PHASE);
+        reply.RateHz = phase >> 16;
+        reply.InVBlank = phase & 1;
+        reply.UntilBeginNs = ReadReg(t, DG_TIMING_REG_BEGIN_NS);
+        reply.UntilEndNs = ReadReg(t, DG_TIMING_REG_END_NS);
+        if (serial == ReadReg(t, DG_TIMING_REG_SERIAL))
+            break;
+    }
+    if (i == 3)
+        reply.Status = DG_TIMING_REPLY_CANCELLED;
+    KeReleaseMutex(&t->TimingMutex, FALSE);
+done:
+    RtlCopyMemory(output, &reply, sizeof(reply));
+    return sizeof(reply);
+}
+
 static ULONG InterruptMask(DG_TRANSPORT *t) {
-    return DG_IRQ_COMPLETION | (t->GlCommands ? DG_IRQ_GL_COMPLETION : 0);
+    return DG_IRQ_COMPLETION | (t->GlCommands ? DG_IRQ_GL_COMPLETION : 0) |
+           (t->TimingSupported ? DG_IRQ_DISPLAY_TIMING : 0);
 }
 
 PVOID DgTransportCreate(PVOID registers) {
@@ -213,6 +308,9 @@ PVOID DgTransportCreate(PVOID registers) {
     RtlZeroMemory(t, sizeof(*t));
     t->Registers = (volatile ULONG *)registers;
     caps = ReadReg(t, DG_REG_CAPS);
+    t->TimingSupported = (caps & DG_CAP_DISPLAY_TIMING) &&
+                         ReadReg(t, DG_TIMING_REG_VERSION) == DG_TIMING_VERSION &&
+                         ReadReg(t, DG_TIMING_REG_RATES) == DG_TIMING_RATES;
     t->GlPresentCaps = caps & (DG_CAP_GL_FRONT_BUFFERS | DG_CAP_GL_PRESENT_BOUNDS);
     t->NativeSubmitFlags =
         DG_SUBMIT_START | ((caps & DG_CAP_INLINE_NO_IRQ) ? DG_SUBMIT_INLINE_NO_IRQ : 0);
@@ -245,6 +343,9 @@ PVOID DgTransportCreate(PVOID registers) {
     t->Diagnostics[12] = IrqConfiguration[4];
     KeInitializeEvent(&t->Completion, NotificationEvent, FALSE);
     KeInitializeDpc(&t->Dpc, Complete, t);
+    KeInitializeMutex(&t->TimingMutex, 0);
+    KeInitializeEvent(&t->TimingCompletion, NotificationEvent, FALSE);
+    KeInitializeDpc(&t->TimingDpc, CompleteTiming, t);
     KeInitializeMutex(&t->GlMutex, 0);
     KeInitializeEvent(&t->GlCompletion, NotificationEvent, FALSE);
     KeInitializeEvent(&t->DesktopStopped, NotificationEvent, FALSE);
@@ -254,7 +355,7 @@ PVOID DgTransportCreate(PVOID registers) {
     WriteReg(t, DG_REG_BATCH_ADDR_LO, t->Address.LowPart);
     WriteReg(t, DG_REG_BATCH_ADDR_HI, t->Address.HighPart);
     WriteReg(t, DG_REG_IRQ_STATUS, DG_IRQ_COMPLETION);
-    WriteReg(t, DG_REG_IRQ_ENABLE, DG_IRQ_COMPLETION);
+    WriteReg(t, DG_REG_IRQ_ENABLE, InterruptMask(t));
     AdapterTransport = t;
     return pending.release();
 }
@@ -306,6 +407,11 @@ BOOLEAN DgTransportInterrupt(PVOID transport) {
     if (pending & DG_IRQ_COMPLETION) {
         InterlockedIncrement(&t->DpcReferences);
         if (!KeInsertQueueDpc(&t->Dpc, NULL, NULL))
+            InterlockedDecrement(&t->DpcReferences);
+    }
+    if (pending & DG_IRQ_DISPLAY_TIMING) {
+        InterlockedIncrement(&t->DpcReferences);
+        if (!KeInsertQueueDpc(&t->TimingDpc, NULL, NULL))
             InterlockedDecrement(&t->DpcReferences);
     }
     if (pending & DG_IRQ_GL_COMPLETION) {
@@ -437,6 +543,31 @@ BOOLEAN DgTransportKernel(PVOID transport, PVOID input, ULONG input_bytes, PVOID
 
 static NTSTATUS NTAPI DeviceControl(PDEVICE_OBJECT device, PIRP irp) {
     PIO_STACK_LOCATION stack = IoGetCurrentIrpStackLocation(irp);
+    if (stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_DG_TIMING) {
+        DG_TRANSPORT *t;
+        ULONG bytes = 0;
+        KIRQL irql;
+        KeAcquireSpinLock(&CallbackLock, &irql);
+        t = DriverReady ? AdapterTransport : NULL;
+        if (t && !CallbackCount++)
+            KeResetEvent(&CallbacksIdle);
+        KeReleaseSpinLock(&CallbackLock, irql);
+        if (t) {
+            bytes = DgTransportTiming(t, irp->AssociatedIrp.SystemBuffer,
+                                      stack->Parameters.DeviceIoControl.InputBufferLength,
+                                      irp->AssociatedIrp.SystemBuffer,
+                                      stack->Parameters.DeviceIoControl.OutputBufferLength);
+            KeAcquireSpinLock(&CallbackLock, &irql);
+            if (!--CallbackCount)
+                KeSetEvent(&CallbacksIdle, IO_NO_INCREMENT, FALSE);
+            KeReleaseSpinLock(&CallbackLock, irql);
+        }
+        /* Bypass VideoPort's mode/GL serialization while this thread sleeps. */
+        irp->IoStatus.Status = bytes ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+        irp->IoStatus.Information = bytes;
+        IoCompleteRequest(irp, IO_NO_INCREMENT);
+        return bytes ? STATUS_SUCCESS : STATUS_INVALID_PARAMETER;
+    }
     if (stack->Parameters.DeviceIoControl.IoControlCode == IOCTL_VIDEO_DG_KERNEL) {
         DG_TRANSPORT *t = AdapterTransport;
         if (t) {
@@ -926,9 +1057,11 @@ static VOID NTAPI DriverUnload(PDRIVER_OBJECT driver) {
     t = AdapterTransport;
     AdapterTransport = NULL;
     KeReleaseSpinLock(&CallbackLock, irql);
-    if (t && t->GlNotifyRegistered) {
+    if (t && t->GlNotifyRegistered)
         PsSetCreateProcessNotifyRoutine(ProcessNotify, TRUE);
+    if (t)
         KeWaitForSingleObject(&CallbacksIdle, Executive, KernelMode, FALSE, NULL);
+    if (t && t->GlNotifyRegistered) {
         KeWaitForSingleObject(&t->GlMutex, Executive, KernelMode, FALSE, NULL);
         for (i = 0; i < DG_ESCAPE_MAX_CLIENTS; ++i)
             CloseClient(t, &t->Clients[i]);
@@ -947,6 +1080,10 @@ static VOID NTAPI DriverUnload(PDRIVER_OBJECT driver) {
             DesktopFault(t, DG_ESCAPE_STOPPED);
             return;
         }
+        WriteReg(t, DG_TIMING_REG_COMMAND, DG_TIMING_CANCEL);
+        KeSetEvent(&t->TimingCompletion, IO_NO_INCREMENT, FALSE);
+        KeWaitForSingleObject(&t->TimingMutex, Executive, KernelMode, FALSE, NULL);
+        KeReleaseMutex(&t->TimingMutex, FALSE);
         WriteReg(t, DG_REG_IRQ_ENABLE, 0);
     }
     PortUnload(driver);
@@ -954,6 +1091,8 @@ static VOID NTAPI DriverUnload(PDRIVER_OBJECT driver) {
      * before releasing the event and DMA storage, including on SMP guests. */
     if (t) {
         if (KeRemoveQueueDpc(&t->Dpc))
+            InterlockedDecrement(&t->DpcReferences);
+        if (KeRemoveQueueDpc(&t->TimingDpc))
             InterlockedDecrement(&t->DpcReferences);
         if (KeRemoveQueueDpc(&t->GlDpc))
             InterlockedDecrement(&t->DpcReferences);
@@ -1033,6 +1172,9 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
         if (request.Client || request.Function)
             goto unlock;
         caps = t->GlRegisters.Caps;
+        t->TimingSupported = (caps & DG_CAP_DISPLAY_TIMING) &&
+                             ReadReg(t, DG_TIMING_REG_VERSION) == DG_TIMING_VERSION &&
+                             ReadReg(t, DG_TIMING_REG_RATES) == DG_TIMING_RATES;
         t->GlPresentCaps = caps & (DG_CAP_GL_FRONT_BUFFERS | DG_CAP_GL_PRESENT_BOUNDS);
         if (!t->GlSignatures) {
             t->GlSignatures = (DG_GL_SIGNATURE_CACHE *)ExAllocatePoolWithTag(

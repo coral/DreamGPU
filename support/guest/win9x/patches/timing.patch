@@ -1,0 +1,218 @@
+--- a/vxd_main.c
++++ b/vxd_main.c
+@@ -110,6 +110,7 @@
+ #ifdef QEMU
+ #include "dg-memory-vxd.c"
+ #include "dg-gl-vxd.c"
++#include "dg-timing-vxd.c"
+ #include "dg-window-vxd.c"
+ #include "dg-cursor-vxd.c"
+ #endif
+@@ -824,6 +825,7 @@
+ 	DWORD rc = 1;
+ #ifdef QEMU
+ 	if (Dg9WindowControl(params, &rc)) return rc;
++	if (Dg9TimingControl(params, &rc)) return rc;
+ 	if (Dg9GlControl(params, &rc)) return rc;
+ #endif
+ 
+--- a/vxd_fbhda.c
++++ b/vxd_fbhda.c
+@@ -305,8 +305,16 @@
+ 	}
+ }
+ 
++#ifdef QEMU
++extern BOOL Dg9TimingSetRate(DWORD);
++#endif
+ void FBHDA_refresh(DWORD refresh_rate)
+ {
++#ifdef QEMU
++    /* Virtual scanout and the CPU dirty-blit timer are independent. */
++    Dg9TimingSetRate(refresh_rate);
++    async_blit_settime(ASYNC_DEFAULT);
++#else
+ 	DWORD ms = 0;
+ 
+ 	if(refresh_rate > 0)
+@@ -322,4 +330,5 @@
+ 	{
+ 		async_blit_settime(ASYNC_DEFAULT);
+ 	}
+-}
++#endif
++}
+--- a/init.c
++++ b/init.c
+@@ -125,14 +125,25 @@
+ 
+             dbg_printf( "Registry: %ux%u %ubpp %udpi\n", DispInfo.diXRes, DispInfo.diYRes, DispInfo.diBpp, DispInfo.diDPI );
+             
+-            if((DispInfo.diInfoFlags & (MONITOR_INFO_NOT_VALID | MONITOR_INFO_DISABLED_BY_USER)) == 0)
++            if((DispInfo.diInfoFlags & (MONITOR_INFO_NOT_VALID | MONITOR_INFO_DISABLED_BY_USER)) == 0
++#ifdef QEMU
++                /* A user override supplies only Max, independently of monitor
++                 * range validity. The exact [Max, Max] interval below still
++                 * rejects unsupported positive rates in the mode validator. */
++                || (DispInfo.diInfoFlags & REFRESH_RATE_MAX_ONLY)
++#endif
++               )
+             {
+             	if((DispInfo.diInfoFlags & REFRESH_RATE_MAX_ONLY) != 0)
+             	{
+             		wFreqMax = DispInfo.diRefreshRateMax;
+             		if(wFreqMax > 0)
+             		{
+-            			wFreqMin = wFreqMax-1;
++            			#ifdef QEMU
++                    wFreqMin = wFreqMax;
++#else
++                    wFreqMin = wFreqMax-1;
++#endif
+             		}
+             	}
+             	else
+@@ -150,6 +161,18 @@
+         }
+     }
+ 
++#ifdef QEMU
++    {
++        static const WORD rates[] = {60, 75, 85, 100, 120};
++        WORD selected = (!wFreqMax || wFreqMax >= 0x8000) ? 60 : 0xffff;
++        unsigned i;
++        if (wFreqMax && wFreqMax < 0x8000)
++            for (i = 0; i < sizeof(rates) / sizeof(rates[0]); ++i)
++                if (rates[i] >= wFreqMin && rates[i] <= wFreqMax) selected = rates[i];
++        wFreqMin = selected - 1;
++        wFreqMax = selected;
++    }
++#endif
+     mode.xRes = wScrX;
+     mode.yRes = wScrY;
+     mode.bpp  = wBpp;
+--- a/modes.c
++++ b/modes.c
+@@ -199,6 +199,10 @@
+ {
+     dbg_printf( "SetDisplayMode: wXRes=%u wYRes=%u\n", wXRes, wYRes );
+ 
++#ifdef QEMU
++    if (wFreqMax != 60 && wFreqMax != 75 && wFreqMax != 85 &&
++        wFreqMax != 100 && wFreqMax != 120) return 0;
++#endif
+     /* Inform the VDD that the mode is about to change. */
+     CallVDD( VDD_PRE_MODE_CHANGE );
+ 
+--- a/vxd_vbe.c
++++ b/vxd_vbe.c
+@@ -109,18 +109,23 @@
+ #ifdef QEMU
+ static void DgVxdInitialize(PCIAddress *address, volatile DWORD *registers);
+ #endif
++static DWORD dg_vram_aperture;
+ DWORD VBE_get_LFB()
+ {
+     PCIAddress address;
+     volatile DWORD *registers;
+     if(!PCI_FindDevice(DG_PCI_VENDOR_ID, DG_PCI_DEVICE_ID, &address))
+         return 0;
++    dg_vram_aperture = PCI_GetBARSize(&address, DG_VRAM_BAR);
++    if (!dg_vram_aperture || (dg_vram_aperture & (dg_vram_aperture - 1))) return 0;
+     PCI_SetMemEnable(&address, TRUE);
+     registers = (volatile DWORD*)_MapPhysToLinear(PCI_GetBARAddr(&address, DG_MMIO_BAR), DG_MMIO_SIZE, 0);
+     if(!registers || registers[DG_REG_MAGIC / 4] != DG_MAGIC ||
+        registers[DG_REG_VERSION / 4] != DG_ABI_VERSION)
+         return 0;
+ #ifdef QEMU
++    if (registers[DG_REG_VRAM_SIZE / 4] < dg_vram_aperture)
++        dg_vram_aperture = registers[DG_REG_VRAM_SIZE / 4];
+     DgVxdInitialize(&address, registers);
+ #endif
+     return PCI_GetBARAddr(&address, DG_VRAM_BAR);
+@@ -139,7 +144,8 @@
+ 	}
+ 
+  	vram_phy = VBE_get_LFB();
+-	if(!vram_phy) return FALSE;
++	if(!vram_phy || !dg_vram_aperture) return FALSE;
++    if (vram_size > dg_vram_aperture) vram_size = dg_vram_aperture;
+ 	
+  	if(!FBHDA_init_hw())
+  	{
+--- a/makefile.dreamgpu
++++ b/makefile.dreamgpu
+@@ -113,6 +113,17 @@
+ 
+ enable.obj : enable.c .autodepend
+ 	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) $<
++
++# These objects alone compile the DreamGPU display-timing contract. Shared
++# donor objects remain available unchanged for the other adapter targets.
++init_qemu.obj : init.c .autodepend
++	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) -DQEMU -fo=$@ $<
++
++modes_qemu.obj : modes.c .autodepend
++	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) -DQEMU -fo=$@ $<
++
++vxd_fbhda_qemu.obj : vxd_fbhda.c .autodepend
++	$(CC32) $(CFLAGS32) $(INCS) $(FLAGS) -DQEMU -fo=$@ $<
+ 
+ init.obj : init.c .autodepend
+ 	$(CC) $(CFLAGS) -zW $(INCS) $(FLAGS) $<
+@@ -418,7 +429,7 @@
+ <<
+ 	$(VMWSMINI_DRV_RC)
+ 
+-dgpumini.drv : $(OBJS) qemumini.res dibeng.lib $(FIXLINK_EXE)
++dgpumini.drv : $(OBJS) init_qemu.obj modes_qemu.obj qemumini.res dibeng.lib $(FIXLINK_EXE)
+ 	wlink op quiet, start=DriverInit_ disable 2055 $(DBGFILE) @<<qemumini.lnk
+ system windows dll initglobal
+ file dibcall.obj
+@@ -426,12 +437,12 @@
+ file dddrv.obj 
+ file drvlib.obj
+ file enable.obj 
+-file init.obj
++file init_qemu.obj
+ file control.obj
+ file pm16_calls_qemu.obj
+ file palette.obj
+ file sswhook.obj
+-file modes.obj
++file modes_qemu.obj
+ file scrsw.obj
+ name dgpumini.drv
+ option map=dgpumini-drv.map
+@@ -588,7 +599,7 @@
+ # not working now
+ #	wrc -q vmws_vxd.res $@
+ 
+-dgpumini.vxd : $(OBJS) $(FIXLINK_EXE)
++dgpumini.vxd : $(OBJS) vxd_fbhda_qemu.obj $(FIXLINK_EXE)
+ 	wlink op quiet $(DBGFILE32) @<<qemumini.lnk
+ system win_vxd dynamic
+ option map=dgpumini.map
+@@ -603,7 +614,7 @@
+ file blt32.obj
+ file vxd_main_qemu.obj
+ file pci.obj
+-file vxd_fbhda.obj
++file vxd_fbhda_qemu.obj
+ file vxd_fbhda_dd.obj
+ file vxd_lib.obj
+ file vxd_vbe_qemu.obj
+--- a/minidrv.h
++++ b/minidrv.h
+@@ -48,11 +48,7 @@
+ extern int PhysicalEnable( void );
+ extern void PhysicalDisable( void );
+ extern void FAR SetRAMDAC_far( UINT bStart, UINT bCount, RGBQUAD FAR *lpPal );
+-#ifdef QEMU
+-extern DWORD ReadDisplayConfig( void );
+-#else
+ extern void ReadDisplayConfig( void );
+-#endif
+ extern void FAR RestoreDesktopMode( void );
+ extern FARPROC RepaintFunc;
+ extern void HookInt2Fh( void );

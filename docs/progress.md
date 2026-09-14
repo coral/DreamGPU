@@ -1803,3 +1803,274 @@ Linux Clippy lint without changing runtime behavior. Final logs:
 Mac Glide also completed normal Windows shutdown; all task-owned VMs/builds
 are stopped. Final grouped receipt, mirrored on bothhosts:
 `packed-texture-performance-v1/macos-acceptance.json`.
+
+
+## Next Mac performance/display pass started
+
+The user approved maximizing throughput beyond the firstpass,256MiB framebuffer
+and selectable rates through120Hz.120Hz is not an FPS cap or stopping target.
+Active tasks are now at the top of plan.md; prior completed milestones are saved
+evidence. Subagents own fresh attribution, typedarray/translation changes and
+guestdisplaytiming, while root owns monitor pacing and integration.
+
+
+### Physical-monitor refresh implementation
+
+The shared-memory display now accepts the consumer window monitor rate through
+a small host-control message. Juke supplies its current monitor rate; SDK keeps
+the value across native reconnects and only queues changed values. This is
+independent of Windows-selected refresh and GPU rendering throughput. Removed
+the global-main-display/first-DRM-card guess. Desktop deadlines retain fractional
+periods and skip missed deadlines without a catch-up loop.
+
+Actual-source clock checks pass underASan/UBSan onMac/Linux for59.94,60,75,85,100,
+120,144,240Hz over10,000deadlines and long stalls. SDK connection/deduplication
+checks pass. Native integration build and changed-window run await the grouped
+source handoff. No guest frame-rate cap was added.
+
+
+### Fresh profiles and next grouped candidate
+
+Current Mac profiles (`mac-current-profiles-v1/`) captured bothUTpaths with
+complete guestPCtables and hostCPU samples. The native renderer still waits
+roughly95% of sampled time. D3Dfrontend work includes158.8M memcpy,145.2M Draw
+and69.7M component-conversion instructions; Glide includes358.1M memcpy and
+267.4M Draw. Instruction counts identify volume, not cycle shares.
+
+The compact typed-array/direct-packet implementation now removes fixedfloat
+expansion and the scratch-to-packet copy. Shared guest/kernel/native admission
+is updated together. Glide's supported RGB565/ARGB4444/1555 uploads now bypass
+guest conversion; chromakey expansion remains where required. The current
+Glide profile measured255.3M instructions in Convert565to5551 alone.
+
+Named x87single-load/store helpers are another measured cost. Exact load/zero/
+store guards passed360,912 actual-source result/exception comparisons across
+rounding modes and precisions. The grouped candidate will also compile native
+code atO3, retaining strict floating-point semantics and existing hardening.
+None of these source-level results is yet a new gameFPSclaim.
+
+The old NTwindow harness expected pixel-format0 after production switched to
+format1 in commit1b06caf; corrected that stale assertion. Its source suite now
+passes, including newcompact kernel validation.
+
+### Combined build ready for game measurements
+
+Both native builds succeeded and were frozen in `combined-native-v1/`: Mac
+`0d81e810…`, Linux launcher `62808e0e…` with execution binary `15761615…` and
+immutable private runtime `77a1b2e…`. The new release Juke consumers are Mac
+`2bc83502…` and Linux `b811af52…`; both send the actual window-monitor rate.
+
+The coherent Cargo guest build passed. A final review caught signed-normalized
+GL 1.1 component semantics: retain the exact conversion for signed color/normal
+attributes while still writing directly into compact packet storage. The measured
+unsigned-byte colors and float attributes remain on the direct path. This narrow
+fix is being incorporated before package capture. The native compact-array pixel
+check has passed on Mac; Linux and actual game measurements follow.
+
+The final guest capture is ready on both hosts under
+`display-performance-v3/inputs/` (485 verified files). The single installer is
+`d0dc4ec1…`; frontend `91e58798…`, NT miniport/display `5e72a4be…`/`1f819995…`,
+Wine `2cf1ede2…`, Glide `f7e5a483…`. Standard guest outputs match this capture.
+Both native GPU compact-array checks passed. Independent stopped XP and Windows
+2000 images now contain the coherent driver pair and frontend, avoiding a mixed
+old-kernel/new-packet test. Actual game and display checks are underway.
+
+### First combined Mac results
+
+Unreal Tournament Direct3D passed at **69.87 submitted frames/s**, up from 65.07
+(+7.38%). Median frame gap improved from 16.109 to 14.816 ms; p95 from 20.181 to
+18.54 ms. Glide passed at **40.14 submitted frames/s**, up from 33.99 (+18.07%),
+with about 10.26% fewer submitted bytes per frame. Both used the normal system
+providers and completed normal engine exit with no rejected or dropped native
+commands. These are grouped changes, not isolated attribution to one optimization.
+Receipts: `mac-compact-performance-v1/`.
+
+XP's actual Adapter page reports **256 MB**, and Properties opens successfully
+and reports the device working. The refresh helper result and Windows 98 checks
+remain in progress.
+
+A further bounded CPU pass is now implementing exact canonical finite comparisons
+and zero/identity/cancellation cases excluded by the existing guarded PC24 helper.
+The saved profiles still contain 127/248 D3D/Glide arithmetic-helper samples and
+18/53 comparison samples; these include already-fast paths, so they do not predict
+the new optimization's FPS gain. Special values, exceptional cases and uncertain
+rounding continue through the existing implementation.
+
+XP refresh validation passed on the combined default-256 MiB native. The guest
+enumerated 60/75/85/100/120 Hz; changing to 120 succeeded, and both Windows mode
+readback and the device timing query reported 120. Interrupt-backed begin/end
+waits completed and restoring 60 succeeded. The diagnostic flushes a log after
+each wait, so its aggregate elapsed time is not a clean refresh-frequency
+measurement. No continuous timer or busy polling was introduced.
+
+### OpenGL attribution completed
+
+Ordinary system-ICD Half-Life completed with native GPU-path proof and a bounded
+CPU sample in `combined-opengl-v1/macos-game/`. CPU0 had 1,030 samples: 664 in
+translated execution, 89 in named x87 helpers and 220 in guest CPU event waits.
+CPU1 slept throughout. The renderer waited for work in 924/1,009 samples (91.6%).
+These are per-thread stack shares, not cycle counts. The observed launch window
+includes loading; exact engine frame timestamps remain unavailable.
+
+The sampled run reported 379 frames / 5.767 seconds (65.717 FPS). It is attribution
+evidence, not a clean speed comparison against the saved unsampled baseline.
+Half-Life issued roughly 4.8 million native GL records during the enclosing launch
+window, including 439 finishes and 758 matrix queries. No busy-loop replacement
+or weakened finish semantics was introduced. The guest then shut down normally.
+
+The additional exact x87 group passed **2,287,008 result/full-exception-flag
+comparisons per host** against the existing arithmetic and comparison routines.
+Checks cover all four rounding modes and three precision controls, signed zeros,
+normal cancellation, wider-value fallback, denormals, invalid encodings, NaNs and
+infinities. Independent source review found no blocker. The final Mac native is
+frozen as `combined-native-v2/` (`25c9fd96…`). No guest package changed in this
+second group; the prior Mac game results are the saved comparison baseline.
+
+### Final native game results and full framebuffer check
+
+Mac Direct3D reached **72.324 submitted frames/s**, another 3.51% above the first
+combined group's 69.87. Final Glide was **39.940**, versus 40.136 in that group
+(−0.49%); the last CPU change has no demonstrated Glide gain. Its overall gain
+against the previous 33.99 baseline remains about 17.5%. Exact receipt:
+`x87-exact-game-v1/`.
+
+The final unsampled Mac Half-Life run passed at **379 / 4.952 seconds = 76.537
+engine FPS**, versus the saved 70.083 baseline (+9.21%). System-provider and native
+GPU evidence passed, followed by clean shutdown. Receipt:
+`final-opengl-macos-v1/`.
+
+Linux Direct3D passed at **382.896 submitted frames/s** (382.889 received GPU
+frames/s), versus 363.90 (about +5.2%). Median GPU gap improved from 2.587 to
+2.374 ms; p95 increased slightly from 3.719 to 3.832 ms, so the gain is throughput,
+not uniformly improved pacing. This is Linux KVM, not Mac TCG. No dropped or
+rejected native commands were observed.
+
+Windows 98 successfully mapped the full **268,435,456-byte framebuffer** and
+checked/restored offscreen words at 128 MiB, 255 MiB and the final DWORD. Its
+refresh-mode registration check still requires the changed configuration to be
+reloaded; 120 Hz is not yet accepted on this guest.
+
+Final Linux Glide passed at **190.718 submitted frames/s**, versus the saved
+184.313 (+3.48% for the grouped changes), with correct captured rendering,
+normal system providers, no rejected/dropped commands and clean shutdown.
+Receipt: `final-glide-linux-v1/acceptance.json`.
+
+The Linux D3D receipt also records different camera/scene phases between the
+current and saved runs. Its throughput comparison is descriptive, not isolated
+causal proof of a 5.2% optimization. No unchanged baseline was repeated.
+
+Normal Juke release builds and strict DreamGPU workspace Clippy pass on both
+hosts. Linux's first concurrent build checks collided in a shared QEMU configure
+directory; serial checks repaired the generated build state and passed. The
+frozen native executables and private Linux runtime were unaffected.
+
+The final all-component Cargo build changed only two bytes in Win98's minidriver
+VERSIONINFO file-date field compared with the measured guest capture. All other
+runtime/tool payload bytes match. The resulting installer is `2c28ea52…`; package
+manifests record its exact generated identity. This timestamp-only difference is
+not a driver implementation change.
+
+Final Linux Half-Life passed at **379 / 1.798 seconds = 210.763 engine FPS**,
+versus the saved 189.844 (+11.02%). The ordinary system OpenGL provider and native
+GPU path passed; no CPU sampler or guest-PC plugin was enabled. The bounded
+Windows 2000 rate tool was then launched after normal game exit, before clean
+shutdown, so its actual 120 Hz result can be read from the stopped guest log.
+Receipt: `final-opengl-linux-v1/`.
+
+The stopped Windows 2000 diagnostic log confirms all five 1024×768×32 rates,
+Windows and MMIO 120 Hz readback, eight begin/end interrupt waits, restoration to
+60 Hz, and `RESULT failures=0 rates_mask=31`. Its extraction was read-only and
+temporary raw/loop resources were cleaned. All task-owned game VMs are stopped.
+Windows 98's refresh-selector interface remains under investigation; its capacity
+and 60 Hz graphics path are already accepted.
+
+### Windows 98 refresh-selector cause identified
+
+Tracing the exact guest's `DESKCP16.DLL` located the hide condition: the Adapter
+page requires the active monitor's nonzero parsed `MaxResolution` before reading
+refresh-rate lists. The Default Monitor lacks that metadata. The installed mode
+lists and default-60 registry entries were correct; the earlier GDIINFO field
+hypothesis was rejected without editing production code.
+
+The required fix is truthful virtual-monitor capability reporting through the
+normal DDC/monitor path. DreamGPU currently disables standard VGA EDID; directly
+turning on QEMU's shared helper would use the wrong containing-structure cast.
+Any native EDID implementation must own its storage, prefer 60 Hz, advertise the
+supported range through 120 Hz and preserve existing resolution choices. This
+monitor is virtual and independent of the consumer's physical display.
+
+The owned EDID implementation and native builds now pass on both hosts. The
+descriptor has valid checksums, preferred 1024×768 at 60 Hz, a 60–120 Hz range,
+and detailed 3840×2160 / 3200×2400 modes preserving NT resolution extrema. It
+uses DreamGPU-owned storage at BAR2+0, avoiding the incompatible shared VGA
+container cast. The actual changed Windows 98 cold-detection check is pending.
+Frozen native identities are in `final-edid-native-v1/manifest.json` on each host.
+
+Final standard guest outputs now match across hosts: 480 files including the
+installer, payloads and manifests; identity inventory SHA `f19637de…` in
+`final-packages-v1/manifest.json`. The single installer is SHA `2c28ea52…`.
+This preserves the recorded timestamp-only Win98 minidriver distinction from
+the measured capture. No unchanged game baseline or game test was repeated for
+the later virtual-monitor metadata change.
+
+Changed cold detection now finds the DreamGPU Plug and Play Monitor. Windows
+98's built-in MONITOR.INF installed it through the normal new-hardware wizard,
+and Adapter Properties now visibly exposes the previously missing refresh-rate
+selector, defaulting to 60 Hz. No fixture registry override was needed. Actual
+120 Hz device readback and restoration are the remaining check.
+
+The independent readback caught a real remaining defect: selecting and confirming
+120 Hz updates Windows 98's Adapter page but leaves native timing at 60 Hz. The
+monitor EDID and populated `MaxResolution` are accepted; the mode propagation
+path still needs correction. UI-only success is not a refresh-rate pass.
+
+The propagation cause is now concrete: the donor makefile compiles shared
+`vxd_fbhda.obj`, `init.obj` and `modes.obj` without `QEMU`, excluding the new
+conditional rate code from the production driver. The fix is to compile scoped
+QEMU objects and link them into the DreamGPU target. The uninitialized-register
+finding was an earlier hypothesis, not the established cause of UI120/device60.
+
+The scoped Win98 objects compile and link successfully after removing the
+donor's obsolete QEMU-only `DWORD ReadDisplayConfig` declaration; the actual
+implementation and callers use `void`. The all-component Cargo retry passes
+(`final-all-rate-macos-build-v2.log`). Standard outputs match across hosts:
+480-file inventory SHA `093104df…` in `final-packages-v2/manifest.json`, installer
+SHA `820f0b33…`. The changed guest rate check is running with identical VxD code
+and a minidriver differing from that package only in its resource timestamp.
+
+That build correction was necessary but not sufficient: the live read-only
+Win16 diagnostic returned VDD success with maximum 120, minimum 0, and flags
+`0x0280` (`MONITOR_INFO_NOT_VALID | REFRESH_RATE_MAX_ONLY`). The donor discarded
+the explicit selected rate together with invalid monitor-range information.
+The remaining correction gives a supported explicit max-only rate precedence;
+invalid ranges and unsupported selections must still use constrained behavior.
+
+### Performance/display pass complete
+
+Windows 98 now passes with the exact standard-package minidriver `e6841050…`
+and VxD `14c08c63…`. Normal Windows selection changes device timing between
+60 and 120 Hz. The final helper blocks report 120/120/60 Hz, each with eight
+begin-blank and one end-blank interrupt waits and zero failures. The guest was
+restored to 60 Hz and cleanly shut down. Receipt:
+`display-edid-win98-v3/acceptance.json` on both hosts.
+
+The active monitor has the exact EDID, no Config Manager problem, hardware
+maximum 3840×2400 and the Win98 built-in monitor driver's maximum 1600×1200,
+covering every maintained Win98 INF mode. All five selectable refresh rates are
+present. Focused actual-source checks cover explicit supported selections,
+unsupported positive selections, invalid ranges and the 60 Hz default.
+
+Final `DREAMGPU_BUILD=all` Cargo build passed in 14.98 seconds using the Linux
+guest builder. Both hosts have matching 480-file inventories, SHA `cb633485…`,
+and the combined installer `target/guest/dreamgpu.exe`, SHA `44e7a5ef…`.
+Evidence: `final-packages-v3/manifest.json`. The provider comparison in the same
+directory accounts for every changed loaded byte as an assertion source path;
+executable instructions remain identical to the measured providers. WineD3D
+changes only checksum and nonloaded symbols. No unchanged game was rerun.
+
+Native builds, strict Rust Clippy and consumer release builds pass on both hosts;
+the final display changes passed their focused source and actual guest checks.
+All task-owned VMs and builds are stopped. The six accepted performance results
+and their practical limits are in plan.md and
+`performance-display-summary-v1/acceptance.json`. The Mac remains limited by
+translated guest work; 120 Hz remains a selectable scanout rate, never an FPS cap.

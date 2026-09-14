@@ -16,29 +16,29 @@ extern "C" {
 #include "bochsmp.h"
 
 static const BOCHS_SIZE BochsAvailableResolutions[] = {
-    {640, 480},   // VGA
-    {800, 600},   // SVGA
-    {1024, 600},  // WSVGA
-    {1024, 768},  // XGA
-    {1152, 864},  // XGA+
-    {1280, 720},  // WXGA-H
-    {1280, 768},  // WXGA
-    {1280, 960},  // SXGA-
-    {1280, 1024}, // SXGA
-    {1368, 768},  // HD ready
-    {1400, 1050}, // SXGA+
-    {1440, 900},  // WSXGA
-    {1600, 900},  // HD+
-    {1600, 1200}, // UXGA
-    {1680, 1050}, // WSXGA+
-    {1920, 1080}, // FHD
-    {2048, 1536}, // QXGA
-    {2560, 1440}, // WQHD
-    {2560, 1600}, // WQXGA
-    {2560, 2048}, // QSXGA
-    {2800, 2100}, // QSXGA+
-    {3200, 2400}, // QUXGA
-    {3840, 2160}, // 4K UHD-1
+    {640, 480, 60},   // VGA
+    {800, 600, 60},   // SVGA
+    {1024, 600, 60},  // WSVGA
+    {1024, 768, 60},  // XGA
+    {1152, 864, 60},  // XGA+
+    {1280, 720, 60},  // WXGA-H
+    {1280, 768, 60},  // WXGA
+    {1280, 960, 60},  // SXGA-
+    {1280, 1024, 60}, // SXGA
+    {1368, 768, 60},  // HD ready
+    {1400, 1050, 60}, // SXGA+
+    {1440, 900, 60},  // WSXGA
+    {1600, 900, 60},  // HD+
+    {1600, 1200, 60}, // UXGA
+    {1680, 1050, 60}, // WSXGA+
+    {1920, 1080, 60}, // FHD
+    {2048, 1536, 60}, // QXGA
+    {2560, 1440, 60}, // WQHD
+    {2560, 1600, 60}, // WQXGA
+    {2560, 2048, 60}, // QSXGA
+    {2800, 2100, 60}, // QSXGA+
+    {3200, 2400, 60}, // QUXGA
+    {3840, 2160, 60}, // 4K UHD-1
 };
 
 CODE_SEG("PAGE")
@@ -94,7 +94,15 @@ static BOOLEAN BochsWriteDispIAndCheck(_In_ PBOCHS_DEVICE_EXTENSION DeviceExtens
 CODE_SEG("PAGE")
 static BOOLEAN BochsInitializeSuitableModeInfo(_In_ PBOCHS_DEVICE_EXTENSION DeviceExtension,
                                                _In_ ULONG PotentialModeCount) {
-    ULONG i, ModeCount = 0;
+    static const USHORT rates[] = {60, 75, 85, 100, 120};
+    ULONG i, r, ModeCount = 0;
+    ULONG rate_count =
+        (VideoPortReadRegisterUlong((PULONG)(DeviceExtension->IoPorts.Mapped + DG_REG_CAPS)) &
+         DG_CAP_DISPLAY_TIMING) &&
+                VideoPortReadRegisterUlong((PULONG)(DeviceExtension->IoPorts.Mapped +
+                                                    DG_TIMING_REG_VERSION)) == DG_TIMING_VERSION
+            ? ARRAYSIZE(rates)
+            : 1;
 
     for (i = 0; i < ARRAYSIZE(BochsAvailableResolutions) && ModeCount < PotentialModeCount; i++) {
         if (BochsAvailableResolutions[i].XResolution > DeviceExtension->MaxXResolution)
@@ -105,7 +113,10 @@ static BOOLEAN BochsInitializeSuitableModeInfo(_In_ PBOCHS_DEVICE_EXTENSION Devi
                 BochsAvailableResolutions[i].YResolution * 4 >
             DeviceExtension->VramSize64K * 64 * 1024)
             continue;
-        DeviceExtension->AvailableModeInfo[ModeCount++] = BochsAvailableResolutions[i];
+        for (r = 0; r < rate_count && ModeCount < PotentialModeCount; ++r) {
+            DeviceExtension->AvailableModeInfo[ModeCount] = BochsAvailableResolutions[i];
+            DeviceExtension->AvailableModeInfo[ModeCount++].Frequency = rates[r];
+        }
     }
 
     if (ModeCount == 0) {
@@ -201,7 +212,7 @@ static VOID BochsGetModeInfo(_In_ PBOCHS_SIZE AvailableModeInfo,
     ModeInfo->ScreenStride = AvailableModeInfo->XResolution * 4;
     ModeInfo->NumberOfPlanes = 1;
     ModeInfo->BitsPerPlane = 32;
-    ModeInfo->Frequency = 60;
+    ModeInfo->Frequency = AvailableModeInfo->Frequency;
 
     /* 960 DPI appears to be common */
     ModeInfo->XMillimeter = AvailableModeInfo->XResolution * 254 / 960;
@@ -353,6 +364,10 @@ static BOOLEAN BochsSetCurrentMode(_In_ PBOCHS_DEVICE_EXTENSION DeviceExtension,
         VideoPortWriteRegisterUshort((PUSHORT)(DeviceExtension->IoPorts.Mapped + 0x400), 0x20);
     }
 
+    if (!DgTransportSetRate(DeviceExtension->Transport, AvailableModeInfo->Frequency)) {
+        StatusBlock->Status = ERROR_INVALID_PARAMETER;
+        return FALSE;
+    }
     DeviceExtension->CurrentMode = (USHORT)ModeRequested;
     StatusBlock->Status = NO_ERROR;
 
@@ -520,7 +535,7 @@ BOOLEAN NTAPI BochsInitialize(_In_ PVOID HwDeviceExtension) {
     }
 
     DgRecordStatus(L"DreamGPUInitStage", 21);
-    PotentialModeCount = ARRAYSIZE(BochsAvailableResolutions);
+    PotentialModeCount = ARRAYSIZE(BochsAvailableResolutions) * 5;
     DeviceExtension->AvailableModeInfo =
         (PBOCHS_SIZE)DgAllocatePaged(PotentialModeCount * sizeof(BOCHS_SIZE), BOCHS_TAG);
     if (!DeviceExtension->AvailableModeInfo) {
@@ -570,6 +585,15 @@ static BOOLEAN BochsStartIoLocked(_In_ PVOID HwDeviceExtension,
             } else
                 RequestPacket->StatusBlock->Status = ERROR_INVALID_PARAMETER;
             return TRUE;
+        case IOCTL_VIDEO_DG_TIMING: {
+            ULONG returned =
+                DgTransportTiming(DeviceExtension->Transport, RequestPacket->InputBuffer,
+                                  RequestPacket->InputBufferLength, RequestPacket->OutputBuffer,
+                                  RequestPacket->OutputBufferLength);
+            RequestPacket->StatusBlock->Status = returned ? NO_ERROR : ERROR_INVALID_PARAMETER;
+            RequestPacket->StatusBlock->Information = returned;
+            return TRUE;
+        }
         case IOCTL_VIDEO_DG_GL: {
             ULONG returned =
                 DgTransportGl(DeviceExtension->Transport, RequestPacket->InputBuffer,
@@ -693,6 +717,8 @@ CODE_SEG("PAGE")
 BOOLEAN NTAPI BochsStartIO(PVOID HwDeviceExtension, PVIDEO_REQUEST_PACKET RequestPacket) {
     PBOCHS_DEVICE_EXTENSION DeviceExtension = (PBOCHS_DEVICE_EXTENSION)HwDeviceExtension;
     BOOLEAN Result;
+    if (RequestPacket->IoControlCode == IOCTL_VIDEO_DG_TIMING)
+        return BochsStartIoLocked(HwDeviceExtension, RequestPacket);
     if (!DgTransportEnter(DeviceExtension->Transport)) {
         RequestPacket->StatusBlock->Status = ERROR_INVALID_FUNCTION;
         return TRUE;

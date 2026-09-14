@@ -2,6 +2,7 @@
  * GL 1.1 client arrays. Only guest-local descriptors retain client pointers;
  * immutable draw packets contain packed vertices, never an address. */
 #include "internal.h"
+#include "gl-arrays.h"
 
 extern "C" {
 
@@ -425,44 +426,70 @@ void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
     CopyMemory(state->Attribute, next, sizeof(next));
 }
 
-static void Vertex(JGL_ARRAY_STATE *state, ULONG vertex, BYTE *out, ULONG bytes) {
-    static const ULONG offsets[5] = {0, 16, 32, 44, DG_GL_VERTEX_SECONDARY};
-    ULONG i, component;
-    ZeroMemory(out, bytes);
-    for (i = 0; i < 5; ++i) {
-        const JGL_ARRAY *a = &state->Attribute[i];
-        ULONG unit, stride;
-        const BYTE *p;
-        GLfloat *v;
+// GL1.1 Table2.6 signed normalization differs from modern SNORM zero.
+// Preserve that existing arithmetic in the cold signed-normalized path while
+// still writing directly to packet storage. Game FLOAT/UBYTE paths stay raw.
+static GLenum ArrayWireType(ULONG index, const JGL_ARRAY *a) {
+    if ((index == 1 || index == 2 || index == 4) &&
+        (a->Type == GL_BYTE || a->Type == GL_SHORT || a->Type == GL_INT))
+        return GL_FLOAT;
+    return a->Type;
+}
+struct RawCapture {
+    JGL_ARRAY_STATE *state;
+    const BYTE *indices;
+    ULONG index_size, first, at, count, mask;
+    unsigned bytes;
+    BOOL fan;
+    unsigned descriptors[7], offsets[7];
+};
+static void CaptureVertices(void *opaque, BYTE *out) {
+    const RawCapture *c = (const RawCapture *)opaque;
+    CopyMemory(out, c->descriptors, DG_GL_ARRAY_DESCRIPTOR_BYTES);
+    ULONG end = DG_GL_ARRAY_DESCRIPTOR_BYTES;
+    for (ULONG i = 0; i < 7; ++i) {
+        const JGL_ARRAY *a = &c->state->Attribute[i];
         if (!a->Enabled)
             continue;
-        unit = TypeBytes(a->Type);
-        stride = a->Stride ? (ULONG)a->Stride : unit * a->Size;
-        p = (const BYTE *)a->Pointer + (ULONG_PTR)vertex * stride;
-        v = (GLfloat *)(out + offsets[i]);
-        if (i != 2 && i != 4)
-            v[3] = 1;
-        if (a->Type == GL_FLOAT)
-            CopyMemory(v, p, a->Size * 4);
-        else
-            for (component = 0; component < (ULONG)a->Size; ++component)
-                v[component] = Component(p + component * unit, a->Type,
-                                         i == 4             ? 1
-                                         : i == 1 || i == 2 ? i
-                                                            : 0);
+        ULONG unit = TypeBytes(a->Type);
+        ULONG input_bytes = unit * a->Size;
+        ULONG bytes = TypeBytes(ArrayWireType(i, a)) * a->Size;
+        ULONG stride = a->Stride ? (ULONG)a->Stride : input_bytes;
+        BYTE *destination = out + c->offsets[i];
+        if (c->offsets[i] != end)
+            ZeroMemory(out + end, c->offsets[i] - end);
+        if (ArrayWireType(i, a) != a->Type) {
+            for (ULONG v = 0; v < c->count; ++v) {
+                ULONG offset = c->fan ? (v == 0   ? 0
+                                         : v == 1 ? c->at - 1
+                                                  : c->at + v - 2)
+                                      : c->at + v;
+                ULONG index = Index(c->indices, c->index_size, c->first, offset);
+                const BYTE *source = (const BYTE *)a->Pointer + (ULONG_PTR)index * stride;
+                for (GLint component = 0; component < a->Size; ++component) {
+                    GLfloat value = Component(source + component * unit, a->Type, 1);
+                    CopyMemory(destination + v * bytes + component * 4, &value, 4);
+                }
+            }
+        } else if (!c->indices && !c->fan && stride == bytes) {
+            CopyMemory(destination,
+                       (const BYTE *)a->Pointer + (ULONG_PTR)(c->first + c->at) * stride,
+                       c->count * bytes);
+        } else {
+            for (ULONG v = 0; v < c->count; ++v) {
+                ULONG offset = c->fan ? (v == 0   ? 0
+                                         : v == 1 ? c->at - 1
+                                                  : c->at + v - 2)
+                                      : c->at + v;
+                ULONG index = Index(c->indices, c->index_size, c->first, offset);
+                CopyMemory(destination + v * bytes,
+                           (const BYTE *)a->Pointer + (ULONG_PTR)index * stride, bytes);
+            }
+        }
+        end = c->offsets[i] + c->count * bytes;
     }
-    if (state->Attribute[5].Enabled) {
-        const JGL_ARRAY *a = &state->Attribute[5];
-        const BYTE *p = (const BYTE *)a->Pointer +
-                        (ULONG_PTR)vertex * (a->Stride ? (ULONG)a->Stride : TypeBytes(a->Type));
-        GLdouble v = IndexComponent(p, a->Type);
-        CopyMemory(out + DG_GL_VERTEX_INDEX, &v, 8);
-    }
-    if (state->Attribute[6].Enabled) {
-        const JGL_ARRAY *a = &state->Attribute[6];
-        out[DG_GL_VERTEX_EDGE] = *((const BYTE *)a->Pointer +
-                                   (ULONG_PTR)vertex * (a->Stride ? (ULONG)a->Stride : 1)) != 0;
-    }
+    if (end != c->bytes)
+        ZeroMemory(out + end, c->bytes - end);
 }
 static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const void *index_pointer,
                  BOOL elements) {
@@ -522,10 +549,31 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
             }
             mask |= 1U << i;
         }
-    vertex_bytes = DG_GL_VERTEX_SIZE(mask);
-    capacity = JglMaxDataBytes(4) / vertex_bytes;
-    if (capacity > sizeof(state->Scratch) / vertex_bytes)
-        capacity = sizeof(state->Scratch) / vertex_bytes;
+    RawCapture capture = {};
+    capture.state = state;
+    capture.indices = indices;
+    capture.index_size = index_size;
+    capture.first = (ULONG)first;
+    capture.mask = mask | DG_GL_ARRAY_RAW;
+    vertex_bytes = 0;
+    for (i = 0; i < 7; ++i) {
+        const JGL_ARRAY *a = &state->Attribute[i];
+        if (a->Enabled) {
+            capture.descriptors[i] = ArrayWireType(i, a) | ((ULONG)a->Size << 16);
+            vertex_bytes += TypeBytes(ArrayWireType(i, a)) * a->Size;
+        }
+    }
+    ULONG limit = JglMaxDataBytes(4);
+    capacity = limit > DG_GL_ARRAY_DESCRIPTOR_BYTES
+                   ? (limit - DG_GL_ARRAY_DESCRIPTOR_BYTES) / vertex_bytes
+                   : 0;
+    if (capacity > DG_GL_MAX_VERTICES)
+        capacity = DG_GL_MAX_VERTICES;
+    // At most alignment padding needs trimming; no payload memory is touched.
+    while (capacity && (!DgRawArrayLayout(capture.mask, capacity, capture.descriptors,
+                                          capture.offsets, &capture.bytes) ||
+                        capture.bytes > limit))
+        --capacity;
     if (capacity < 4 || ((mode == GL_LINE_LOOP || mode == GL_POLYGON) && (ULONG)count > capacity)) {
         JglCommandError(GL_OUT_OF_MEMORY);
         return;
@@ -544,7 +592,7 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
         }
     }
     while (at < (ULONG)count) {
-        ULONG n = (ULONG)count - at, args[4] = {mode, 0, 0, mask};
+        ULONG n = (ULONG)count - at, args[4] = {mode, 0, 0, mask | DG_GL_ARRAY_RAW};
         BOOL fan = mode == GL_TRIANGLE_FAN && at != 0;
         if (fan)
             n += 2;
@@ -558,12 +606,11 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
                 n -= n % 4;
         }
         args[2] = n;
-        for (i = 0; i < n; ++i) {
-            ULONG offset = fan ? (i == 0 ? 0 : i == 1 ? at - 1 : at + i - 2) : at + i;
-            Vertex(state, Index(indices, index_size, (ULONG)first, offset),
-                   state->Scratch + i * vertex_bytes, vertex_bytes);
-        }
-        if (!JglData(FEnum_glDrawArrays, args, 4, state->Scratch, n * vertex_bytes))
+        capture.at = at;
+        capture.count = n;
+        capture.fan = fan;
+        DgRawArrayLayout(capture.mask, n, capture.descriptors, capture.offsets, &capture.bytes);
+        if (!JglCaptureData(FEnum_glDrawArrays, args, 4, capture.bytes, CaptureVertices, &capture))
             return;
         at += fan ? n - 2 : n;
         if (at >= (ULONG)count)

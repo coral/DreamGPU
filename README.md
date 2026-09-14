@@ -2,6 +2,12 @@
 
 DreamGPU accelerates graphics for Windows 98/2000/XP guests in QEMU on macOS and Linux. It combines guest display drivers and an OpenGL frontend with a native host renderer and a Rust transport/presentation SDK. Glide uses OpenGLide; Direct3D uses WineD3D for Windows through the guest system providers.
 
+The virtual adapter defaults to a real 256 MiB framebuffer, separate from its
+256 MiB native texture budget. Guest timing supports 60, 75, 85, 100 and 120 Hz,
+with 60 Hz as the default. Guest refresh does not cap game rendering; consumers
+pace presentation using their physical monitor. See the [current measurements
+and display validation](docs/plan.md) for results and remaining limitations.
+
 ## Source layout
 
 - [`guest/`](guest/README.md) contains runtime display drivers, the OpenGL

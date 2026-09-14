@@ -83,6 +83,15 @@ installing pointers, so an unsupported function cannot cause an early return wit
 a dangling array pointer still configured. Full index and padding validation remains
 a precondition of the execution entry point.
 
+Compact array packets carry seven fixed-width descriptors and aligned, tightly
+packed attribute sections. No guest address or stride crosses the transport.
+The frontend captures directly into reserved packet storage; the kernel and Rust
+host independently validate types, component counts, lengths and padding. Signed
+GL 1.1 normalized color/normal inputs retain their original conversion into float
+sections. Native GL consumes other supported component types directly. Display
+lists retain owned immutable packet data, and pointer/current-state restoration
+finishes before that data is released.
+
 ## Render resources and export transactions
 
 The render worker exclusively owns `ContextState`, texture namespaces, internal
@@ -366,3 +375,18 @@ for missing native storage. Mac's exact border oracle passes. Linux Mesa26.1.8
 currently reports width4/border0 for width6/border1, reproduced by a standalone
 EGL program without DreamGPU. That border conformance failure remains open;
 borderless copies, residency and priority have separate acceptance gates.
+
+## Virtual display timing
+
+The guest's selected 60/75/85/100/120 Hz mode drives a coherent virtual scanout
+sample, separate from physical monitor pacing and GPU submission throughput.
+Timing queries and begin/end waits use fixed 16-byte requests and 32-byte replies.
+The NT display escape routes to its miniport; Windows 98 uses the existing VxD
+DeviceIoControl boundary, avoiding a sleeping Win16 display escape.
+
+A waiter owns one sequence and one one-shot virtual-clock timer. Completion raises
+an interrupt and wakes a kernel event/semaphore; it does not poll or hold the GL
+render lock. Cancellation, mode change and teardown resolve the owned request.
+An idle display has no continuously armed vblank timer. Consumer monitor hints
+only schedule desktop refresh deadlines, with fractional periods retained and
+missed deadlines skipped rather than replayed in a busy loop.

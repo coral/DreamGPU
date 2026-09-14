@@ -12,6 +12,10 @@
     {
       "file": "0002-texture-content-reuse.patch",
       "sha256": "0ba98c0bbf05d2ffbb2ab80da4e9dc1cda93010439fc65343f9bd8c3957ff41b"
+    },
+    {
+      "file": "0003-native-packed-textures.patch",
+      "sha256": "8f4b6519bb23a713d597adf7cd63acae9ec5d695ee1281f192815c51434d5658"
     }
   ],
   "files": {
@@ -37,7 +41,7 @@
     },
     "PGTexture.cpp": {
       "before_sha256": "5f79f966cf4866413a0479e0d00c6a9b886b06d5e7add3d96273e17e0eadc481",
-      "after_sha256": "711b0f9c656209b84dbc740220e46e7af8e6f1783d71daba73ae7f9f6c9bce2e"
+      "after_sha256": "7090883fc0ba046914606891abd85b67534b9cb9c0c4d20aa7d023fea4585849"
     },
     "TexDB.cpp": {
       "before_sha256": "26a2eb3530acbd6779d3b8bb30619613a353215483aab9dea3f080766ca5f4ba",

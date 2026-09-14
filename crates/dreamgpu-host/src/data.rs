@@ -39,6 +39,19 @@ unsafe fn stage_arrays<'a>(
     let elements = fnc == FEnum_glDrawElements;
     let vertices = a[if elements { 3 } else { 2 }] as usize;
     let attributes = a[if elements { 4 } else { 3 }];
+    if attributes & DG_GL_ARRAY_RAW != 0 {
+        let input = unsafe { core::slice::from_raw_parts(data, bytes as usize) };
+        let layout = crate::arrays::raw::layout(attributes, vertices as u32, input)?;
+        for a in layout.iter().filter(|a| a.unit > 1) {
+            let length = vertices * a.size as usize * a.unit;
+            let output =
+                unsafe { core::slice::from_raw_parts_mut(storage.p.add(a.offset), length) };
+            for component in output.chunks_exact_mut(a.unit) {
+                component.reverse();
+            }
+        }
+        return Some(storage);
+    }
     let stride = if attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0 {
         DG_GL_VERTEX_EXTENDED_BYTES
     } else if attributes & DG_GL_ARRAY_SECONDARY != 0 {

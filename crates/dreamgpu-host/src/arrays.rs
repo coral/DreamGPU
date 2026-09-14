@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Fixed vertex-array execution with bounded payloads and full pointer restoration.
 use crate::gl_api::*;
+pub(crate) mod raw;
 
 unsafe fn draw(
     api: &DreamGpuGlApi,
@@ -13,7 +14,17 @@ unsafe fn draw(
         return Err(3);
     }
     let vertices = args[if elements { 3 } else { 2 }];
-    let attributes = args[if elements { 4 } else { 3 }];
+    let wire_attributes = args[if elements { 4 } else { 3 }];
+    let compact = wire_attributes & DG_GL_ARRAY_RAW != 0;
+    let raw = if compact {
+        if elements {
+            return Err(1);
+        }
+        Some(raw::layout(wire_attributes, vertices, data).ok_or(1u32)?)
+    } else {
+        None
+    };
+    let attributes = wire_attributes & !DG_GL_ARRAY_RAW;
     let extended = attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0;
     let stride = if extended {
         DG_GL_VERTEX_EXTENDED_BYTES as u64
@@ -39,7 +50,8 @@ unsafe fn draw(
         || attributes & !DG_GL_ARRAY_MASK != 0
         || attributes & DG_GL_ARRAY_POSITION == 0
         || (!elements && args[1] != 0)
-        || u64::from(vertices) * stride + u64::from(indices) * index_size != data.len() as u64
+        || (!compact
+            && u64::from(vertices) * stride + u64::from(indices) * index_size != data.len() as u64)
     {
         return Err(1);
     }
@@ -78,6 +90,14 @@ unsafe fn draw(
     {
         return Err(3);
     }
+    // Legacy layout and compact descriptors share native pointer/state lifetime.
+    let attribute = |i: usize, size: i32, kind: u32, offset: usize| {
+        if let Some(raw) = &raw {
+            (raw[i].size as i32, raw[i].kind, 0, raw[i].offset)
+        } else {
+            (size, kind, stride as i32, offset)
+        }
+    };
     let mut index = 0.0;
     let mut edge = 0;
     let mut color = [0.0f32; 4];
@@ -109,7 +129,8 @@ unsafe fn draw(
         }
         api.dg_glPushClientAttrib.unwrap()(GL_CLIENT_VERTEX_ARRAY_BIT);
         api.dg_glEnableClientState.unwrap()(GL_VERTEX_ARRAY);
-        api.dg_glVertexPointer.unwrap()(4, GL_FLOAT, stride as i32, data.as_ptr().cast());
+        let (size, kind, step, offset) = attribute(0, 4, GL_FLOAT, 0);
+        api.dg_glVertexPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
         for (bit, cap) in [
             (DG_GL_ARRAY_COLOR, GL_COLOR_ARRAY),
             (DG_GL_ARRAY_SECONDARY, GL_SECONDARY_COLOR_ARRAY),
@@ -123,34 +144,26 @@ unsafe fn draw(
             }
         }
         if attributes & DG_GL_ARRAY_COLOR != 0 {
-            api.dg_glColorPointer.unwrap()(
-                4,
-                GL_FLOAT,
-                stride as i32,
-                data.as_ptr().add(DG_GL_VERTEX_COLOR as usize).cast(),
-            );
+            let (size, kind, step, offset) = attribute(1, 4, GL_FLOAT, DG_GL_VERTEX_COLOR as usize);
+            api.dg_glColorPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
         }
         if attributes & DG_GL_ARRAY_NORMAL != 0 {
-            api.dg_glNormalPointer.unwrap()(
-                GL_FLOAT,
-                stride as i32,
-                data.as_ptr().add(DG_GL_VERTEX_NORMAL as usize).cast(),
-            );
+            let (_, kind, step, offset) = attribute(2, 3, GL_FLOAT, DG_GL_VERTEX_NORMAL as usize);
+            api.dg_glNormalPointer.unwrap()(kind, step, data.as_ptr().add(offset).cast());
         }
         if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
-            api.dg_glTexCoordPointer.unwrap()(
-                4,
-                GL_FLOAT,
-                stride as i32,
-                data.as_ptr().add(DG_GL_VERTEX_TEXCOORD as usize).cast(),
-            );
+            let (size, kind, step, offset) =
+                attribute(3, 4, GL_FLOAT, DG_GL_VERTEX_TEXCOORD as usize);
+            api.dg_glTexCoordPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
         }
         if attributes & DG_GL_ARRAY_SECONDARY != 0 {
+            let (size, kind, step, offset) =
+                attribute(4, 3, GL_FLOAT, DG_GL_VERTEX_SECONDARY as usize);
             api.dg_glSecondaryColorPointer.unwrap()(
-                3,
-                GL_FLOAT,
-                stride as i32,
-                data.as_ptr().add(DG_GL_VERTEX_SECONDARY as usize).cast(),
+                size,
+                kind,
+                step,
+                data.as_ptr().add(offset).cast(),
             );
         }
         if extended {
@@ -164,15 +177,16 @@ unsafe fn draw(
                     api.dg_glDisableClientState.unwrap()(cap);
                 }
             }
-            api.dg_glIndexPointer.unwrap()(
-                GL_DOUBLE,
-                stride as i32,
-                data.as_ptr().add(DG_GL_VERTEX_INDEX as usize).cast(),
-            );
-            api.dg_glEdgeFlagPointer.unwrap()(
-                stride as i32,
-                data.as_ptr().add(DG_GL_VERTEX_EDGE as usize).cast(),
-            );
+            if attributes & DG_GL_ARRAY_INDEX != 0 {
+                let (_, kind, step, offset) =
+                    attribute(5, 1, GL_DOUBLE, DG_GL_VERTEX_INDEX as usize);
+                api.dg_glIndexPointer.unwrap()(kind, step, data.as_ptr().add(offset).cast());
+            }
+            if attributes & DG_GL_ARRAY_EDGE != 0 {
+                let (_, _, step, offset) =
+                    attribute(6, 1, GL_UNSIGNED_BYTE, DG_GL_VERTEX_EDGE as usize);
+                api.dg_glEdgeFlagPointer.unwrap()(step, data.as_ptr().add(offset).cast());
+            }
         }
         if elements {
             api.dg_glDrawElements.unwrap()(

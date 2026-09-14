@@ -89,7 +89,8 @@ static void EngReleaseSemaphore(void *semaphore) {
 }
 static WNDOBJ *EngCreateWnd(SURFOBJ *surface, HWND window, void (*changed)(WNDOBJ *, FLONG),
                             ULONG flags, int format) {
-    assert(!lock && window && flags == WO_RGN_CLIENT && format == 0);
+    // The system ICD uses pixel format1 (promoted from the old diagnostic path).
+    assert(!lock && window && flags == WO_RGN_CLIENT && format == 1);
     memset(&object, 0, sizeof(object));
     object.psoOwner = surface;
     object.rclClient = (RECTL){10, 20, 110, 100};

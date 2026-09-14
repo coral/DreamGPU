@@ -191,3 +191,28 @@ fn extended_array_endian_staging_preserves_double_and_byte_edge() {
     drop(storage);
     LIVE.with(|v| assert_eq!(v.get(), 0));
 }
+
+#[test]
+fn compact_array_endian_staging_preserves_descriptors_and_byte_attributes() {
+    let api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    let m = memory(&api);
+    let mut source = crate::arrays::raw::tests::packet();
+    source[32..40].copy_from_slice(&0x7ff0_0001_dead_beefu64.to_le_bytes());
+    source[92..94].copy_from_slice(&0x807fu16.to_le_bytes());
+    source[112..116].copy_from_slice(&0x7f00_1234u32.to_le_bytes());
+    let args = [GL_TRIANGLES, 0, 3, DG_GL_ARRAY_RAW | 127, 0, 0, 0, 0];
+    assert!(
+        unsafe { stage_arrays(&m, FEnum_glDrawArrays, &args, source.as_ptr(), 180, false) }
+            .is_none()
+    );
+    let storage =
+        unsafe { stage_arrays(&m, FEnum_glDrawArrays, &args, source.as_ptr(), 180, true) }.unwrap();
+    let bytes = unsafe { core::slice::from_raw_parts(storage.p, 180) };
+    assert_eq!(&bytes[..32], &source[..32]);
+    assert_eq!(&bytes[32..40], &0x7ff0_0001_dead_beefu64.to_be_bytes());
+    assert_eq!(&bytes[92..94], &0x807fu16.to_be_bytes());
+    assert_eq!(&bytes[112..116], &0x7f00_1234u32.to_be_bytes());
+    assert_eq!(&bytes[176..], &source[176..]);
+    drop(storage);
+    LIVE.with(|v| assert_eq!(v.get(), 0));
+}

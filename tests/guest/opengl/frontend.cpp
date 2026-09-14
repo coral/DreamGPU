@@ -322,6 +322,14 @@ static void ErrorDrains(void) {
         assert(glGetError() == GL_NO_ERROR);
     assert(Calls == calls);
 }
+static ULONG Captures;
+static void CapturePacket(void *opaque, BYTE *destination) {
+    JGL_CONTEXT *c = CurrentContext();
+    assert(destination >= (BYTE *)c->Packet.Words &&
+           destination + 3 <= (BYTE *)(c->Packet.Words + MaxWords));
+    memcpy(destination, opaque, 3);
+    ++Captures;
+}
 int main(void) {
     HGLRC context, other;
     JGL_CONTEXT *c;
@@ -517,6 +525,14 @@ int main(void) {
         assert(c->Packet.Words[8] == FEnum_glColor4f);
         assert(!memcmp(c->Packet.Words + 9, expected, sizeof(expected)));
         assert(JglData(FEnum_glTexImage2D, args, 8, pixel, sizeof(pixel)));
+        ULONG prior = c->Used;
+        Captures = 0;
+        assert(JglCaptureData(FEnum_glTexImage2D, args, 8, 3, CapturePacket, pixel));
+        assert(Captures == 1 && !memcmp(c->Packet.Words + prior + 18, pixel, 3));
+        assert(((BYTE *)(c->Packet.Words + prior + 18))[3] == 0);
+        assert(!JglCaptureData(FEnum_glTexImage2D, args, 8, JglMaxDataBytes(8) + 1, CapturePacket,
+                               pixel) &&
+               Captures == 1);
         assert(Flush(c));
         assert(wglDeleteContext(context));
     }

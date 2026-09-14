@@ -5,6 +5,7 @@
 #ifndef DG_GL_VALIDATE_H
 #define DG_GL_VALIDATE_H
 #include "dg-gl-limits.h"
+#include "gl-arrays.h"
 static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG generation,
                             const DG_GL_LIMITS *limits, ULONG (*function_words)(void *, ULONG),
                             void *context) {
@@ -65,6 +66,32 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                 for (i = 0; i < padding; ++i)
                     if (((const unsigned char *)record)[payload + data_bytes + i])
                         return 0;
+                // DrawArrays compact descriptor data is checked before DMA on
+                // both NT and Win9x. Other GL semantics remain host admission.
+                if (record[8] == 469 && args == 4 && (record[13] & DG_GL_ARRAY_RAW)) {
+                    unsigned descriptors[7], offsets[7], length;
+                    const unsigned char *data = (const unsigned char *)record + payload;
+                    if (data_bytes < DG_GL_ARRAY_DESCRIPTOR_BYTES || record[10] > 9 || record[11])
+                        return 0;
+                    for (i = 0; i < 7; ++i)
+                        descriptors[i] = record[payload / 4 + i];
+                    if (!DgRawArrayLayout(record[13], record[12], descriptors, offsets, &length) ||
+                        length != data_bytes)
+                        return 0;
+                    unsigned end = DG_GL_ARRAY_DESCRIPTOR_BYTES;
+                    for (i = 0; i < 7; ++i) {
+                        if (!(record[13] & (1U << i)))
+                            continue;
+                        for (unsigned j = end; j < offsets[i]; ++j)
+                            if (data[j])
+                                return 0;
+                        end = offsets[i] + record[12] * (descriptors[i] >> 16) *
+                                               DgArrayComponentBytes(descriptors[i] & 65535);
+                    }
+                    for (unsigned j = end; j < length; ++j)
+                        if (data[j])
+                            return 0;
+                }
                 expected = size;
                 break;
             }

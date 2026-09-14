@@ -556,6 +556,17 @@ fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let elements = function == FEnum_glDrawElements;
     let vertices = a[if elements { 3 } else { 2 }];
     let attributes = a[if elements { 4 } else { 3 }];
+    if attributes & DG_GL_ARRAY_RAW != 0 {
+        return if !elements
+            && a[0] <= GL_POLYGON
+            && a[1] == 0
+            && crate::arrays::raw::layout(attributes, vertices, data).is_some()
+        {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     let indices = if elements { a[1] } else { 0 };
     let index_size = if elements { index_bytes(a[2]) } else { 0 };
     let stride = if attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0 {

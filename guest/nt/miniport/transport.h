@@ -10,6 +10,10 @@ VOID DgRecordStatus(PCWSTR Name, ULONG Value);
 VOID DgDiagnosticsIrq(ULONG Level, ULONG Vector, ULONG Mode, ULONG AssignedLevel,
                       ULONG AssignedVector);
 VOID DgDiagnosticsIsrEntry(PVOID Device, PVOID Transport, PVOID Handler);
+BOOLEAN DgTransportTimingSupported(PVOID Transport);
+BOOLEAN DgTransportSetRate(PVOID Transport, ULONG Rate);
+ULONG DgTransportTiming(PVOID Transport, PVOID Input, ULONG InputBytes, PVOID Output,
+                        ULONG OutputBytes);
 PVOID DgTransportCreate(PVOID Registers);
 VOID DgTransportDestroy(PVOID Transport);
 BOOLEAN DgTransportInterrupt(PVOID Transport);

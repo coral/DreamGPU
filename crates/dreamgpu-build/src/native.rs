@@ -57,6 +57,10 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
     ];
     args.extend(
         [
+            // Native emulation and packet processing are performance-critical
+            // even when the consuming Rust application uses a debug profile.
+            // Keep strict floating-point semantics and all hardening defaults.
+            "-Doptimization=3",
             "--enable-slirp",
             "--enable-libusb",
             "--disable-werror",

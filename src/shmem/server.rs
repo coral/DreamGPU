@@ -14,8 +14,8 @@ use std::{
     io::{Read, Write},
     os::fd::AsRawFd,
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     thread::JoinHandle,
 };
@@ -71,6 +71,12 @@ impl ShmemServer {
             stop,
             worker: Some(worker),
         })
+    }
+    /// Update desktop refresh pacing from the monitor containing the consumer
+    /// window. The rate is retained across native reconnects, independent of
+    /// guest-selected modes and native GPU submission throughput.
+    pub fn set_host_refresh_millihz(&self, millihz: u32) {
+        self.input.set_host_refresh(millihz);
     }
     pub fn set_callback(&mut self, callback: WakeCallback) {
         *self.callback.lock().unwrap() = Some(callback);

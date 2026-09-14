@@ -17,6 +17,8 @@ static ULONG FunctionWords(void *context, ULONG function) {
             return DG_GL_FUNCTION_INLINE_DATA | 2;
         case 19:
             return DG_GL_FUNCTION_QUERY | 1;
+        case 469:
+            return DG_GL_FUNCTION_INLINE_DATA | 4;
         case 20:
             return DG_GL_FUNCTION_INLINE_DATA | 8;
         default:
@@ -26,6 +28,24 @@ static ULONG FunctionWords(void *context, ULONG function) {
 int main(void) {
     const DG_GL_LIMITS limits = {7, DG_ESCAPE_MAX_BYTES, DG_GL_MAX_RECORDS, 1};
     ULONG words[1024], valid[] = {DG_GL_CALL, 52, 999, 1, 1, 0, 0, 999, 17, 0, 0, 0, 0};
+    {
+        ULONG compact[32] = {DG_GL_DATA_CALL,    128, 0, 1, 1, 0, 0, 0, 469, 72, 4, 0, 2,
+                             DG_GL_ARRAY_RAW | 3};
+        compact[14] = 0x140a | (2U << 16); // double2 position at offset32
+        compact[15] = 0x1401 | (4U << 16); // byte4 color at offset64
+        assert(DgValidateUserGl(compact, sizeof(compact), 42, 7, &limits, FunctionWords, NULL));
+        compact[21] = 1; // alignment padding before double data
+        assert(!DgValidateUserGl(compact, sizeof(compact), 42, 7, &limits, FunctionWords, NULL));
+        compact[21] = 0;
+        compact[15] |= 0x80000000U; // reserved descriptor bits
+        assert(!DgValidateUserGl(compact, sizeof(compact), 42, 7, &limits, FunctionWords, NULL));
+        compact[15] &= ~0x80000000U;
+        compact[12] = DG_GL_MAX_VERTICES + 1;
+        assert(!DgValidateUserGl(compact, sizeof(compact), 42, 7, &limits, FunctionWords, NULL));
+        compact[12] = 2;
+        compact[16] = 0x1406 | (3U << 16); // disabled descriptor must be zero
+        assert(!DgValidateUserGl(compact, sizeof(compact), 42, 7, &limits, FunctionWords, NULL));
+    }
     memcpy(words, valid, sizeof(valid));
     assert(DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));
     assert(words[2] == 42 && words[7] == 7);

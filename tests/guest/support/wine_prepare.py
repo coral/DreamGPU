@@ -21,6 +21,10 @@ def prepare(work, output, copy_diagnostics=False):
     for name in ('row-copy', 'map-policy', 'vertex-pack', 'vertex-array'):
         shutil.copy2(ROOT / ('guest/d3d/wine-' + name + '.h'),
                      work / ('wined3d/dg-wine-' + name + '.h'))
+    for directory in ('ddraw', 'wined3d'):
+        shutil.copy2(ROOT / 'guest/d3d/wine-display-timing.h', work / directory / 'dg-wine-display-timing.h')
+        for header in ('display-timing.h', 'gpu.h'):
+            shutil.copy2(ROOT / 'guest/include' / header, work / directory / header)
     shutil.copyfile(work / 'ddraw/surface.c', output / 'surface-diagnostic.c')
     sources = {}
     if copy_diagnostics:

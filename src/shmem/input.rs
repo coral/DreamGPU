@@ -6,8 +6,8 @@ use std::{
     io::Write,
     os::unix::net::UnixStream,
     sync::{
-        atomic::{AtomicU64, Ordering},
         Arc, Condvar, Mutex,
+        atomic::{AtomicU64, Ordering},
     },
 };
 pub const DREAMGPU_INPUT_MOUSE_REL: u8 = 1;
@@ -16,6 +16,8 @@ pub const DREAMGPU_INPUT_MOUSE_BTN: u8 = 3;
 pub const DREAMGPU_INPUT_KEY: u8 = 4;
 pub const DREAMGPU_INPUT_RESET: u8 = 5;
 pub const DREAMGPU_INPUT_REFRESH: u8 = 6;
+/// Consumer monitor rate in millihertz; never a guest render-rate limit.
+pub const DREAMGPU_HOST_REFRESH: u8 = 7;
 const CAPACITY: usize = 1024;
 
 #[repr(C)]
@@ -47,6 +49,7 @@ impl DreamGpuInputEvent {
 pub(super) struct InputQueue {
     pub events: VecDeque<DreamGpuInputEvent>,
     pub connected: bool,
+    pub host_refresh_millihz: Option<u32>,
 }
 impl InputQueue {
     /// Coalescing is restricted to consecutive motion; buttons/keys remain
@@ -100,7 +103,34 @@ pub(super) struct InputSender {
     pub next_barrier: Arc<AtomicU64>,
 }
 impl InputSender {
+    pub fn set_host_refresh(&self, millihz: u32) {
+        let millihz = millihz.clamp(10_000, 500_000);
+        let mut queue = self.queue.lock().unwrap();
+        if queue.host_refresh_millihz == Some(millihz) {
+            return;
+        }
+        queue.host_refresh_millihz = Some(millihz);
+        if queue.connected {
+            queue.push(DreamGpuInputEvent {
+                event_type: DREAMGPU_HOST_REFRESH,
+                x: millihz as i32,
+                ..Default::default()
+            });
+        }
+        drop(queue);
+        self.wake();
+    }
     pub fn connection_changed(&self, connected: bool) {
+        if connected {
+            let mut queue = self.queue.lock().unwrap();
+            if let Some(millihz) = queue.host_refresh_millihz {
+                queue.push(DreamGpuInputEvent {
+                    event_type: DREAMGPU_HOST_REFRESH,
+                    x: millihz as i32,
+                    ..Default::default()
+                });
+            }
+        }
         let (lock, changed) = &*self.acknowledgments;
         lock.lock().unwrap().1 = connected;
         changed.notify_all();
@@ -201,6 +231,33 @@ mod tests {
         q.push(ev(1, i32::MAX));
         q.push(ev(1, 1));
         assert_eq!(q.events.len(), 2);
+    }
+    #[test]
+    fn monitor_rate_is_retained_for_connect_and_changes_are_deduplicated() {
+        let (wake, _reader) = UnixStream::pair().unwrap();
+        let sender = InputSender {
+            queue: Arc::new(Mutex::new(InputQueue::default())),
+            wake: Arc::new(wake),
+            acknowledgments: Arc::new((Mutex::new((0, false)), Condvar::new())),
+            next_barrier: Arc::new(AtomicU64::new(1)),
+        };
+        sender.set_host_refresh(120_000);
+        assert!(sender.queue.lock().unwrap().events.is_empty());
+        sender.queue.lock().unwrap().connected = true;
+        sender.connection_changed(true);
+        sender.set_host_refresh(120_000);
+        {
+            let mut queue = sender.queue.lock().unwrap();
+            assert_eq!(queue.events.len(), 1);
+            let event = queue.events.pop_front().unwrap();
+            assert_eq!(
+                (event.event_type, event.x),
+                (DREAMGPU_HOST_REFRESH, 120_000)
+            );
+        }
+        sender.set_host_refresh(59_940);
+        let mut queue = sender.queue.lock().unwrap();
+        assert_eq!(queue.events.pop_front().unwrap().x, 59_940);
     }
     #[test]
     fn wire_layout() {

@@ -271,6 +271,7 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
         "dg-memory.h",
         "dg-memory-vxd.c",
         "dg-gl-vxd.c",
+        "dg-timing-vxd.c",
         "dg-function-cache.h",
         "dg-owner.h",
         "dg-window9.h",
@@ -286,7 +287,7 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
     ] {
         copy(root.join("guest/win9x").join(name), vmdisp.join(name))?;
     }
-    for name in ["gpu.h", "gl.h"] {
+    for name in ["gpu.h", "gl.h", "gl-arrays.h", "display-timing.h"] {
         copy(root.join("guest/include").join(name), vmdisp.join(name))?;
     }
     copy(
@@ -303,6 +304,7 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
     }
     copy(vmdisp.join("makefile"), vmdisp.join("makefile.dreamgpu"))?;
     let vmdisp_patches = apply(&vmdisp, &support.join("win9x/patches/base.json"))?;
+    let vmdisp_timing_patches = apply(&vmdisp, &support.join("win9x/patches/timing.json"))?;
     // The checked ANSI discovery patch is part of the single production driver.
     copy(
         root.join("guest/win9x/dg-icd16.h"),
@@ -331,6 +333,18 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
             root.join(format!("guest/d3d/wine-{name}.h")),
             wine.join(format!("wined3d/dg-wine-{name}.h")),
         )?;
+    }
+    for directory in ["ddraw", "wined3d"] {
+        copy(
+            root.join("guest/d3d/wine-display-timing.h"),
+            wine.join(directory).join("dg-wine-display-timing.h"),
+        )?;
+        for header in ["display-timing.h", "gpu.h"] {
+            copy(
+                root.join("guest/include").join(header),
+                wine.join(directory).join(header),
+            )?;
+        }
     }
     copy(
         wine.join("ddraw/surface.c"),
@@ -430,7 +444,7 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
         vmdisp,
         wine,
         glide,
-        patches: json!({"vmdisp9x": vmdisp_patches, "vmdisp9x-icd": vmdisp_icd_patches, "wine9x": {"base": wine_patches}, "openglide": glide_patches}),
+        patches: json!({"vmdisp9x": vmdisp_patches, "vmdisp9x-timing": vmdisp_timing_patches, "vmdisp9x-icd": vmdisp_icd_patches, "wine9x": {"base": wine_patches}, "openglide": glide_patches}),
     })
 }
 

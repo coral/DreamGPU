@@ -2504,3 +2504,88 @@ fn qemu_bulk_readback_pixels_legacy_and_dma_bounds() {
     drop(server);
     std::fs::remove_dir_all(directory).unwrap();
 }
+
+#[test]
+#[ignore = "requires native GPU; compact original-type arrays and immutable list replay"]
+fn qemu_compact_arrays_preserve_native_types_pixels_current_state_and_lists() {
+    let (device, queue, host) = native_gpu();
+    let directory = std::env::temp_dir().join(format!("dg-raw-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&directory).unwrap();
+    let server = GpuServer::new(&directory.join("gpu.sock"), host).unwrap();
+    let (wake, ready) = mpsc::sync_channel(1);
+    server.set_callback(Arc::new(move |_| {
+        let _ = wake.try_send(());
+    }));
+    let mut qemu = Qemu::start(&directory, &directory.join("gpu.sock"));
+    let mut sequence = 1;
+    qemu.batch(
+        sequence,
+        &[
+            (1, vec![0]),
+            (3, vec![32, 32]),
+            (5, vec![]),
+            call(219, &[0, 1f32.to_bits(), 0, 1f32.to_bits()]),
+        ],
+    );
+    qemu.await_completion(sequence);
+    // Compact double2 positions retain native missing z=0,w=1 defaults;
+    // unsigned-byte colors are normalized by native GL, not the guest packer.
+    let mut data = vec![0u8; 112];
+    data[..4].copy_from_slice(&(0x140au32 | (2 << 16)).to_le_bytes());
+    data[4..8].copy_from_slice(&(0x1401u32 | (4 << 16)).to_le_bytes());
+    for (i, value) in [-1f64, -1., 1., -1., 1., 1., -1., 1.]
+        .into_iter()
+        .enumerate()
+    {
+        data[32 + i * 8..40 + i * 8].copy_from_slice(&value.to_le_bytes());
+    }
+    data[96..112].copy_from_slice(&[255, 0, 0, 255].repeat(4));
+    sequence += 1;
+    qemu.batch(
+        sequence,
+        &[data_call(469, &[7, 0, 4, 0x80000003], &data), (7, vec![])],
+    );
+    qemu.command("memset 0x100000 512 0xff");
+    qemu.await_completion(sequence);
+    assert_gpu_image(&device, &queue, &receive(&server, &ready, 1, 1), |_, _| {
+        [0, 0, 255, 255]
+    });
+    assert_eq!(
+        words(&query(&mut qemu, &mut sequence, 773, &[0x0b00]).1),
+        [0, 1f32.to_bits(), 0, 1f32.to_bits()]
+    );
+    // Compile snapshots the whole compact descriptor+data command. Overwrite
+    // the DMA region before replay; lists cannot retain caller data or pointers.
+    assert_eq!(
+        words(&query(&mut qemu, &mut sequence, 1592, &[7, 0x1300, 0]).1),
+        [0]
+    );
+    sequence += 1;
+    qemu.batch(sequence, &[data_call(469, &[7, 0, 4, 0x80000003], &data)]);
+    qemu.await_completion(sequence);
+    assert_eq!(
+        words(&query(&mut qemu, &mut sequence, 539, &[0, 0, 0]).1),
+        [0]
+    );
+    data[4..8].fill(0);
+    data.truncate(96);
+    sequence += 1;
+    qemu.batch(
+        sequence,
+        &[data_call(469, &[7, 0, 4, 0x80000001], &data), (7, vec![])],
+    );
+    qemu.await_completion(sequence);
+    assert_gpu_image(&device, &queue, &receive(&server, &ready, 1, 1), |_, _| {
+        [0, 255, 0, 255]
+    });
+    sequence += 1;
+    qemu.batch(sequence, &[call(146, &[7]), (7, vec![])]);
+    qemu.await_completion(sequence);
+    assert_gpu_image(&device, &queue, &receive(&server, &ready, 1, 1), |_, _| {
+        [0, 0, 255, 255]
+    });
+    assert_eq!(words(&query(&mut qemu, &mut sequence, 0x2fc, &[]).1), [0]);
+    drop(qemu);
+    drop(server);
+    std::fs::remove_dir_all(directory).unwrap();
+}

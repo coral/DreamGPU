@@ -18,8 +18,21 @@ ULONG APIENTRY DrvEscape(SURFOBJ *surface, ULONG escape, ULONG input_bytes, PVOI
         return 1;
     if (escape == QUERYESCSUPPORT)
         return input_bytes >= sizeof(ULONG) && input &&
-               (*(ULONG *)input == DG_ESCAPE || *(ULONG *)input == WNDOBJ_SETUP ||
-                *(ULONG *)input == DG_DRAW_ESCAPE);
+               (*(ULONG *)input == DG_TIMING_ESCAPE || *(ULONG *)input == DG_ESCAPE ||
+                *(ULONG *)input == WNDOBJ_SETUP || *(ULONG *)input == DG_DRAW_ESCAPE);
+    if (escape == DG_TIMING_ESCAPE) {
+        if (!surface || !surface->dhpdev || !input || !output ||
+            input_bytes != sizeof(DG_TIMING_REQUEST) || output_bytes != sizeof(DG_TIMING_REPLY))
+            return 0;
+        device = (PPDEV)surface->dhpdev;
+        if (EngDeviceIoControl(device->hDriver, IOCTL_VIDEO_DG_TIMING, input, input_bytes, output,
+                               output_bytes, &returned) ||
+            returned != output_bytes) {
+            memset(output, 0, output_bytes);
+            return 0;
+        }
+        return 1;
+    }
     if (escape == WNDOBJ_SETUP)
         return DgBindWindow(surface, input_bytes, input, output_bytes, output);
     if (escape != DG_ESCAPE || !surface || !surface->dhpdev || !input || !output ||

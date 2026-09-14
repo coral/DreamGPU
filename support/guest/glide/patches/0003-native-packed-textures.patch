@@ -1,0 +1,65 @@
+--- a/PGTexture.cpp
++++ b/PGTexture.cpp
+@@ -406,49 +406,23 @@
+                 Convert565Kto8888( (FxU16*)data, m_chromakey_value_565, m_tex_temp, texVals.nPixels );
+                 OGL_LOAD_CREATE_TEXTURE( 4, GL_RGBA, GL_UNSIGNED_BYTE, m_tex_temp );
+             }
+-            else if ( InternalConfig.OGLVersion > OGL_VER_1_1 )
+-            {
++            else
++            {
++                // DreamGPU supports these exact packed types independently of
++                // the advertised GL API level. Preserve all six green bits and
++                // let native GL convert; chromakey still expands above.
+                 OGL_LOAD_CREATE_TEXTURE( 3, GL_RGB, GL_UNSIGNED_SHORT_5_6_5, data );
+             }
+-            else
+-            {
+-                if ( InternalConfig.Wrap565to5551 )
+-                {
+-                    Convert565to5551( (FxU32*)data, m_tex_temp, texVals.nPixels );
+-                    OGL_LOAD_CREATE_TEXTURE( 4, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1_EXT, m_tex_temp );
+-                }
+-                else
+-                {
+-                    Convert565to8888( (FxU16*)data, m_tex_temp, texVals.nPixels );
+-                    OGL_LOAD_CREATE_TEXTURE( 4, GL_RGBA, GL_UNSIGNED_BYTE, m_tex_temp );
+-                }
+-            }
+-            break;
+-            
++            break;
++
+         case GR_TEXFMT_ARGB_4444:
+-            if ( InternalConfig.OGLVersion > OGL_VER_1_1 )
+-            {
+-                OGL_LOAD_CREATE_TEXTURE( 4, GL_BGRA_EXT, GL_UNSIGNED_SHORT_4_4_4_4_REV, data );
+-            }
+-            else
+-            {
+-                Convert4444to4444special( (FxU32*)data, m_tex_temp, texVals.nPixels );
+-                OGL_LOAD_CREATE_TEXTURE( 4, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4_EXT, m_tex_temp );
+-            }
+-            break;
+-            
++            OGL_LOAD_CREATE_TEXTURE( 4, GL_BGRA_EXT, GL_UNSIGNED_SHORT_4_4_4_4_REV, data );
++            break;
++
+         case GR_TEXFMT_ARGB_1555:
+-            if ( InternalConfig.OGLVersion > OGL_VER_1_1 )
+-            {
+-                OGL_LOAD_CREATE_TEXTURE( 4, GL_BGRA_EXT, GL_UNSIGNED_SHORT_1_5_5_5_REV, data );
+-            }
+-            else
+-            {
+-                Convert1555to5551( (FxU32*)data, m_tex_temp, texVals.nPixels );
+-                OGL_LOAD_CREATE_TEXTURE( 4, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1_EXT, m_tex_temp );
+-            }
+-            break;
+-            
++            OGL_LOAD_CREATE_TEXTURE( 4, GL_BGRA_EXT, GL_UNSIGNED_SHORT_1_5_5_5_REV, data );
++            break;
++
+         case GR_TEXFMT_P_8:
+             if ( InternalConfig.EXT_paletted_texture )
+             {

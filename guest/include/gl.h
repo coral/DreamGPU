@@ -233,6 +233,15 @@
     (((mask) & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE))                                             \
          ? DG_GL_VERTEX_EXTENDED_BYTES                                                             \
          : (((mask) & DG_GL_ARRAY_SECONDARY) ? DG_GL_VERTEX_SECONDARY_BYTES : DG_GL_VERTEX_BYTES))
+/* Compact DrawArrays retains four scalar words; ARRAY_RAW marks a payload
+ * of seven LE descriptor words followed by tight attribute sections in bit
+ * order. Descriptor = GL type | (component count <<16); zero when disabled.
+ * Each section begins at its component-size alignment relative to payload;
+ * inter-section and final four-byte alignment padding is zero. Native GL owns
+ * conversion/default-component semantics. No pointers or strides cross ABI.
+ * Legacy fixed records above remain accepted by the paired current host. */
+#define DG_GL_ARRAY_RAW 0x80000000U
+#define DG_GL_ARRAY_DESCRIPTOR_BYTES 28
 #define DG_GL_MAX_VERTICES 65536
 #define DG_GL_MAX_EVAL_ORDER 8
 #define DG_GL_MAX_CAPTURE_VALUES 16384

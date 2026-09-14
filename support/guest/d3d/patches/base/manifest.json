@@ -27,6 +27,10 @@
     {
       "file": "0006-transformed-vertex-arrays.patch",
       "sha256": "69965ff61eeb65a08e51f124c5cb4bef3db7c2f3b815ddfa8a3152b231dae7e2"
+    },
+    {
+      "file": "0007-display-timing.patch",
+      "sha256": "8214300741812869bd8d11a9b75acb96f7677676e5edcbd1fce6f4ec85b8294f"
     }
   ],
   "files": {
@@ -40,7 +44,7 @@
     },
     "wined3d/directx.c": {
       "before_sha256": "3bb18ad8cf7805122c5d124cfc84707b7f495f4eec8dc36b928ee33ec2318a2e",
-      "after_sha256": "2d90476d246663e7b7010db8553ab799d774a616763a9de9d3335c2994051587"
+      "after_sha256": "571f543bfe914316d397a102cd4d94567125d9019eaf4632c52a3016fd2f82c2"
     },
     "wined3d/resource.c": {
       "before_sha256": "bb5d96bd0ba31be8b24eaf172b5a927c6760b9e094b9ebb132d118f1447039d7",
@@ -105,6 +109,10 @@
     "wined3d/drawprim.c": {
       "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
       "after_sha256": "bace9e3719f4d6a09370e724d11daab378d0184dc93e4396aabcd00ffd0e6ce1"
+    },
+    "ddraw/ddraw.c": {
+      "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",
+      "after_sha256": "040ad087b7f8fa265f1f24b39cce2e4013d182410efd192f03fa2d8beb17e34f"
     }
   }
 }

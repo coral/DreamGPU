@@ -51,30 +51,70 @@ void JglSetError(GLenum error) {
 }
 ULONG JglMaxDataBytes(ULONG words) {
     assert(words == 4);
-    return Capacity * 64;
+    unsigned descriptors[7] = {}, offsets[7], bytes = 0, mask = DG_GL_ARRAY_RAW;
+    for (ULONG i = 0; i < 7; ++i) {
+        const JGL_ARRAY *a = &States[Current].Attribute[i];
+        if (a->Enabled) {
+            mask |= 1U << i;
+            descriptors[i] = ArrayWireType(i, a) | ((ULONG)a->Size << 16);
+        }
+    }
+    assert(DgRawArrayLayout(mask, Capacity, descriptors, offsets, &bytes));
+    return bytes;
 }
-BOOL JglData(ULONG fn, const ULONG *args, ULONG words, const void *payload, ULONG bytes) {
-    ULONG i, stride = DG_GL_VERTEX_SIZE(args[3]);
-    const BYTE *p = (const BYTE *)payload;
+static BYTE Raw[65536];
+static ULONG RawBytes, CaptureCount;
+BOOL JglData(ULONG, const ULONG *, ULONG, const void *, ULONG) {
+    assert(!"array draws must capture directly, without a scratch copy");
+    return FALSE;
+}
+BOOL JglCaptureData(ULONG fn, const ULONG *args, ULONG words, ULONG bytes, JGL_CAPTURE capture,
+                    void *opaque) {
     assert(fn == FEnum_glDrawArrays && words == 4 && args[1] == 0);
-    assert(bytes == args[2] * stride && bytes <= Capacity * 64 && Calls < 100);
+    assert(args[3] & DG_GL_ARRAY_RAW);
+    assert(bytes <= sizeof(Raw) && bytes <= JglMaxDataBytes(words) && Calls < 100);
+    memset(Raw, 0xa5, sizeof(Raw));
+    capture(opaque, Raw);
+    ++CaptureCount;
+    RawBytes = bytes;
+    unsigned descriptors[7], offsets[7], length;
+    memcpy(descriptors, Raw, 28);
+    assert(DgRawArrayLayout(args[3], args[2], descriptors, offsets, &length) && length == bytes);
     Counts[Calls] = args[2];
     Modes[Calls] = args[0];
-    Masks[Calls] = args[3];
-    for (i = 0; i < args[2]; ++i) {
-        ULONG reserved;
-        memcpy(&Positions[Calls][i], p + i * stride, 4);
-        memcpy(&reserved, p + i * stride + 60, 4);
-        assert(!reserved);
+    Masks[Calls] = args[3] & DG_GL_ARRAY_MASK;
+    const ULONG stride = DG_GL_VERTEX_SIZE(Masks[Calls]);
+    memset(Packed, 0, sizeof(Packed));
+    const ULONG legacy[7] = {0, 16, 32, 44, 64, 80, 88};
+    for (ULONG i = 0; i < 7; ++i) {
+        if (!(Masks[Calls] & (1U << i)))
+            continue;
+        ULONG type = descriptors[i] & 65535, n = descriptors[i] >> 16, unit = TypeBytes(type);
+        for (ULONG v = 0; v < args[2]; ++v) {
+            const BYTE *source = Raw + offsets[i] + v * n * unit;
+            BYTE *target = Packed + v * stride + legacy[i];
+            if (i == 5) {
+                GLdouble value = IndexComponent(source, type);
+                memcpy(target, &value, 8);
+            } else if (i == 6) {
+                *target = *source != 0;
+            } else {
+                GLfloat values[4] = {0, 0, 0, 1};
+                for (ULONG c = 0; c < n; ++c)
+                    values[c] = Component(source + c * unit, type, i == 1 || i == 2 || i == 4);
+                memcpy(target, values, (i == 2 || i == 4 ? 3 : 4) * 4);
+            }
+        }
     }
-    memcpy(Packed, p, bytes);
+    for (ULONG i = 0; i < args[2]; ++i)
+        memcpy(&Positions[Calls][i], Packed + i * stride, 4);
     ++Calls;
     return TRUE;
 }
 static void Reset(void) {
     ULONG i, j;
     memset(States, 0, sizeof(States));
-    Current = Error = Calls = ScalarCount = 0;
+    Current = Error = Calls = ScalarCount = CaptureCount = 0;
     Ready = TRUE;
     Capacity = 1023;
     for (j = 0; j < 2; ++j)
@@ -149,6 +189,18 @@ int main(void) {
     glEnableClientState(GL_NORMAL_ARRAY);
     glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, indices);
     assert(Positions[1][0] == 2 && Positions[1][1] == 0 && Positions[1][2] == 1);
+    // Original native formats survive gathering, with no per-vertex float expansion.
+    unsigned raw_descriptors[7], raw_offsets[7], raw_length;
+    memcpy(raw_descriptors, Raw, 28);
+    assert(raw_descriptors[1] == (GL_UNSIGNED_BYTE | (4U << 16)));
+    assert(raw_descriptors[2] == (GL_FLOAT | (3U << 16)));
+    assert(DgRawArrayLayout(DG_GL_ARRAY_RAW | 7, 3, raw_descriptors, raw_offsets, &raw_length));
+    assert(!memcmp(Raw + raw_offsets[1], colors[2], 4));
+    GLfloat zero_normal;
+    memcpy(&zero_normal, Raw + raw_offsets[2], 4);
+    assert(zero_normal == 1.0f / 65535.0f); // preserve GL1.1 signed zero conversion
+
+    assert(RawBytes < 3 * 64 && CaptureCount == Calls);
     assert(Value(0, 24) == 1 && Value(1, 16) == 1 && Value(1, 32) == -1 && Value(1, 40) == 1);
     assert(Value(1, 24) > 0.5019f && Value(1, 24) < 0.5020f);
     glDisableClientState(GL_COLOR_ARRAY);
@@ -222,7 +274,7 @@ int main(void) {
     glGetPointerv(0x845d, &pointer);
     assert(pointer == colors);
     Calls = 0;
-    Capacity = 7;
+    Capacity = 5;
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 3);
     assert(Calls == 1 && Counts[0] == 3);
     Calls = 0;
@@ -254,6 +306,29 @@ int main(void) {
     }
     glSecondaryColor3dEXT(.25, .5, .75);
     assert(SecondaryValues[0] == .25f && SecondaryValues[2] == .75f);
+    {
+        const signed char b[3] = {0, 127, -128};
+        const GLshort h[3] = {0, 32767, -32768};
+        const GLint w[3] = {0, 2147483647, (-2147483647 - 1)};
+        const void *inputs[3] = {b, h, w};
+        const GLenum types[3] = {GL_BYTE, GL_SHORT, GL_INT};
+        const GLfloat zero[3] = {1.0f / 255.0f, 1.0f / 65535.0f, 1.0f / 4294967295.0f};
+        for (ULONG n = 0; n < 3; ++n) {
+            Reset();
+            glVertexPointer(3, GL_FLOAT, 0, vertices);
+            glEnableClientState(GL_VERTEX_ARRAY);
+            glColorPointer(3, types[n], 0, inputs[n]);
+            glEnableClientState(GL_COLOR_ARRAY);
+            glDrawArrays(GL_POINTS, 0, 1);
+            unsigned d[7], offsets[7], bytes;
+            memcpy(d, Raw, 28);
+            assert(d[1] == (GL_FLOAT | (3U << 16)));
+            assert(DgRawArrayLayout(DG_GL_ARRAY_RAW | 3, 1, d, offsets, &bytes));
+            GLfloat values[3];
+            memcpy(values, Raw + offsets[1], sizeof(values));
+            assert(values[0] == zero[n] && values[1] == 1 && values[2] == -1);
+        }
+    }
     puts("PASS actual client arrays: local state, indexed/strided snapshots, normalization, "
          "topology across bounded packets, invalid ranges/types, zero draws");
     return 0;

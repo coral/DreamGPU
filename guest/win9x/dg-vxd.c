@@ -6,6 +6,8 @@
 #include "vpicd.h"
 #include "gl.h"
 extern void Dg9GlSignal(void);
+extern void Dg9TimingSignal(void);
+extern void Dg9TimingShutdown(void);
 extern void Dg9GlShutdown(void);
 
 #include "blt32.h"
@@ -60,12 +62,15 @@ static BOOL __stdcall DgInterrupt(void) {
     DWORD status;
     if (!dg_registers)
         return FALSE;
-    status = DgRead(DG_REG_IRQ_STATUS) & (DG_IRQ_COMPLETION | DG_IRQ_GL_COMPLETION);
+    status = DgRead(DG_REG_IRQ_STATUS) &
+             (DG_IRQ_COMPLETION | DG_IRQ_GL_COMPLETION | DG_IRQ_DISPLAY_TIMING);
     if (!status)
         return FALSE;
     DgWrite(DG_REG_IRQ_STATUS, status);
     if (status & DG_IRQ_COMPLETION)
         DgSignal();
+    if (status & DG_IRQ_DISPLAY_TIMING)
+        Dg9TimingSignal();
     if (status & DG_IRQ_GL_COMPLETION)
         Dg9GlSignal();
     // clang-format off: Watcom assembly uses newline instruction boundaries.
@@ -166,7 +171,9 @@ static void DgVxdInitialize(PCIAddress *address, volatile DWORD *registers) {
     DgWrite(DG_REG_RESET, 1);
     Dg9CursorInitialize();
     DgWrite(DG_REG_IRQ_STATUS, DG_IRQ_COMPLETION);
-    DgWrite(DG_REG_IRQ_ENABLE, DG_IRQ_COMPLETION | DG_IRQ_GL_COMPLETION);
+    DgWrite(DG_REG_IRQ_ENABLE,
+            DG_IRQ_COMPLETION | DG_IRQ_GL_COMPLETION |
+                ((DgRead(DG_REG_CAPS) & DG_CAP_DISPLAY_TIMING) ? DG_IRQ_DISPLAY_TIMING : 0));
     dbg_printf("DG DMA: linear=%lX physical=%lX irq=%ld submit=%ld\n", dg_command, dg_physical, irq,
                dg_submit_flags);
     // clang-format off: Watcom assembly uses newline instruction boundaries.
@@ -178,6 +185,7 @@ static void DgVxdInitialize(PCIAddress *address, volatile DWORD *registers) {
 }
 
 void DgVxdShutdown(void) {
+    Dg9TimingShutdown();
     if (!dg_registers)
         return;
     DgWrite(DG_REG_IRQ_ENABLE, 0);

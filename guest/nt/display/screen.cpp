@@ -188,7 +188,8 @@ BOOL IntInitScreenInfo(PPDEV ppdev, LPDEVMODEW pDevMode, PGDIINFO pGdiInfo, PDEV
                 pDevMode->dmPelsHeight == ModeInfoPtr->VisScreenHeight &&
                 pDevMode->dmBitsPerPel ==
                     (ModeInfoPtr->BitsPerPlane * ModeInfoPtr->NumberOfPlanes) &&
-                pDevMode->dmDisplayFrequency == ModeInfoPtr->Frequency) {
+                (pDevMode->dmDisplayFrequency <= 1 ? 60 : pDevMode->dmDisplayFrequency) ==
+                    ModeInfoPtr->Frequency) {
                 SelectedMode = ModeInfoPtr;
                 break;
             }

@@ -15,8 +15,8 @@
       "after_sha256": "3b7806b7e57d4c11b6778f8d594694bff65105cf9414937426155db5428903c3"
     },
     "vxd_main.c": {
-      "before_sha256": "2275644e8f19e1b12dc10e0161f287420f8ed22ac630faf5e68fd8c15e5886ea",
-      "after_sha256": "819d7b95115ba23e6a1aa774373fc2e6b123fafbb892e5c2b06c604d8bc77e10"
+      "before_sha256": "6c127a4aaf9fc2f4d690e87218f7475b3a015bc2c51c5c0511ae35e0c8c33fb2",
+      "after_sha256": "ba6a2c99875c393f9ab548625c946130fd2c3a5910aa0295fd5bca11f72d5c93"
     }
   }
 }
