@@ -4,7 +4,7 @@
 use std::{ffi::c_void, ptr::NonNull, sync::Arc};
 
 use crate::{GpuFrameLease, GpuImageHandle, PixelFormat};
-use objc2::{msg_send, rc::Retained, runtime::ProtocolObject, Encoding, RefEncode};
+use objc2::{Encoding, RefEncode, msg_send, rc::Retained, runtime::ProtocolObject};
 use objc2_metal::{
     MTLPixelFormat, MTLStorageMode, MTLTexture, MTLTextureDescriptor, MTLTextureType,
     MTLTextureUsage,
@@ -540,8 +540,8 @@ mod tests {
     #[ignore = "requires macOS CGL and Metal"]
     fn cgl_drawable_composites_in_a_window_with_ordered_cpu_occlusion() {
         use crate::{
-            desktop::{DesktopBatch, DesktopOp, DesktopRect},
             FrameLease,
+            desktop::{DesktopBatch, DesktopOp, DesktopRect},
         };
         let instance = wgpu::Instance::new(wgpu::InstanceDescriptor {
             backends: wgpu::Backends::METAL,

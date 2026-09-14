@@ -1,10 +1,10 @@
 #![cfg(target_os = "linux")]
 
-use std::ffi::{c_char, c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_char, c_void};
 use std::os::fd::{AsFd, FromRawFd, OwnedFd};
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 
 use dreamgpu::presentation::linux_gpu_texture::{self, DmaBufLayout};
@@ -246,8 +246,8 @@ fn egl_dma_buf_and_native_fence_reach_vulkan_without_cpu_upload() {
     // Reuse the completed immutable drawable in a clipped window. Ordinary CPU
     // desktop pixels around it and subsequent occlusion must survive exactly.
     use dreamgpu::{
-        desktop::{DesktopBatch, DesktopOp, DesktopRect},
         FrameLease, GpuFrameLease, PixelFormat,
+        desktop::{DesktopBatch, DesktopOp, DesktopRect},
     };
     let canvas_released = Arc::new(AtomicUsize::new(0));
     let image = GpuFrameLease {

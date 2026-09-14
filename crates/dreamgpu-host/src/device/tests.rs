@@ -282,6 +282,36 @@ fn two_d_capture_and_restore_bound_progress_before_access() {
 }
 
 #[test]
+fn desktop_wire_format_must_match_actual_vbe_before_enqueue() {
+    for (format, bpp, expected) in [
+        (0u32, 32, 0),
+        (16, 16, 0),
+        (0, 16, DG_GL_ERROR_DESKTOP),
+        (16, 32, DG_GL_ERROR_DESKTOP),
+        (0, 8, DG_GL_ERROR_DESKTOP),
+    ] {
+        let mut h = Host {
+            source: packet(DG_GL_DESKTOP, 96),
+            ..Host::default()
+        };
+        h.source[64..68].copy_from_slice(&format.to_le_bytes());
+        let r = GlRequest {
+            bytes: 96,
+            bpp,
+            ..GlRequest::default()
+        };
+        assert_eq!(submit(&mut h, r).0, expected);
+        if expected == 0 {
+            assert!(!h.queued.is_null());
+            let queued = h.queued;
+            unsafe { free((&mut h as *mut Host).cast(), queued) };
+        } else {
+            assert!(h.queued.is_null());
+        }
+        assert_eq!(h.allocations, h.frees);
+    }
+}
+#[test]
 fn query_result_lease_checked_before_enqueue() {
     let mut h = Host {
         source: packet(DG_GL_QUERY, 48),

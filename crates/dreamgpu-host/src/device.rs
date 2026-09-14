@@ -307,8 +307,15 @@ unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult) -> u32 {
                 word(record, DG_GL_OFF_SIZE as usize),
             )
         };
-        if op == DG_GL_DESKTOP && (r.bpp != 32 || r.busy_2d != 0) {
-            return DG_GL_ERROR_DESKTOP;
+        if op == DG_GL_DESKTOP {
+            // Framing and reserved-field validation completed before this loop.
+            let format = unsafe {
+                u32::from_le_bytes(core::ptr::read_unaligned(record.add(64).cast::<[u8; 4]>()))
+            };
+            let expected = if format == 16 { 16 } else { 32 };
+            if r.bpp != expected || r.busy_2d != 0 {
+                return DG_GL_ERROR_DESKTOP;
+            }
         }
         offset += size as usize;
     }

@@ -260,9 +260,8 @@ int main(void) {
         const unsigned char rgb565[] = {0xf8, 0x00, 0x07, 0xe0};
         const unsigned char words[] = {0x00, 0xf8, 0xe0, 0x07};
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, 2, 1, 0, GL_RGB, 0x8363, rgb565);
-        assert(!Error && Count == 2 && Tiles[1].Bytes == 4 &&
-               Tiles[1].Args[6] == GL_RGB && Tiles[1].Args[7] == 0x8363 &&
-               !memcmp(Tiles[1].Pixels, words, 4));
+        assert(!Error && Count == 2 && Tiles[1].Bytes == 4 && Tiles[1].Args[6] == GL_RGB &&
+               Tiles[1].Args[7] == 0x8363 && !memcmp(Tiles[1].Pixels, words, 4));
     }
     {
         const unsigned char source[] = {4, 3, 2, 1, 8, 7, 6, 5};

@@ -14,11 +14,7 @@ pub fn binary_in(directory: &Path, name: &str) -> PathBuf {
         return binary;
     }
     let unsigned = directory.join(format!("{name}-unsigned"));
-    if unsigned.is_file() {
-        unsigned
-    } else {
-        binary
-    }
+    if unsigned.is_file() { unsigned } else { binary }
 }
 
 /// Native output selected when Cargo built this SDK.

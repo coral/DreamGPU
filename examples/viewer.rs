@@ -3,16 +3,16 @@
 //! `cargo run --example viewer --features presentation -- /tmp/dreamgpu.sock`
 //! `--smoke` presents a synthetic ordered desktop once and exits.
 use dreamgpu::{
+    GpuHostInfo,
     desktop::{DesktopBatch, DesktopOp},
     presentation::desktop::DesktopCanvas,
     transport::GpuServer,
-    GpuHostInfo,
 };
 use std::{
     path::PathBuf,
     sync::{
-        atomic::{AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -259,7 +259,7 @@ impl State {
                 return Ok(false);
             }
             wgpu::CurrentSurfaceTexture::Timeout | wgpu::CurrentSurfaceTexture::Occluded => {
-                return Ok(false)
+                return Ok(false);
             }
             other => return Err(format!("Surface acquisition failed: {other:?}")),
         };
@@ -408,7 +408,9 @@ impl ApplicationHandler<()> for Viewer {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.iter().any(|a| a == "--help") {
-        println!("viewer [SOCKET] [--smoke]\nConsumes DreamGPU native image/ordered desktop transport. This viewer presents native GPU images; a VM application supplies input routing and CPU-display integration.");
+        println!(
+            "viewer [SOCKET] [--smoke]\nConsumes DreamGPU native image/ordered desktop transport. This viewer presents native GPU images; a VM application supplies input routing and CPU-display integration."
+        );
         return Ok(());
     }
     let smoke = args.iter().any(|a| a == "--smoke");

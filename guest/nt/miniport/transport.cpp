@@ -143,7 +143,7 @@ typedef struct {
     ULONG GlSequence, NextClient;
     ULONG GlPresentCaps;
     volatile ULONG DesktopActive;
-    ULONG DesktopWidth, DesktopHeight, DesktopStride;
+    ULONG DesktopWidth, DesktopHeight, DesktopStride, DesktopBpp;
     BOOLEAN GlFaulted, GlNotifyRegistered;
     volatile LONG DpcReferences;
     KEVENT DpcsIdle;
@@ -690,6 +690,7 @@ static ULONG *DesktopRecord(DG_TRANSPORT *t, ULONG index, ULONG op, ULONG client
     words[4] = drawable;
     words[7] = ReadReg(t, DG_REG_GENERATION);
     words[8] = op;
+    words[16] = t->DesktopBpp == 16 ? 16 : 0;
     return words + 8;
 }
 
@@ -896,8 +897,9 @@ static ULONG NTAPI KernelPresent(PVOID context, const DG_KERNEL_PRESENT_REQUEST 
     }
     if (!request->Context || !request->Drawable || request->Count > DG_WINDOW_MAX_CLIPS ||
         !request->Width || !request->Height || request->Width > DG_GL_MAX_DIMENSION ||
-        request->Height > DG_GL_MAX_DIMENSION || request->Stride < request->Width * 4 ||
-        (request->Stride & 3) || !request->WindowWidth || !request->WindowHeight ||
+        request->Height > DG_GL_MAX_DIMENSION || (request->Bpp != 16 && request->Bpp != 32) ||
+        request->Stride < request->Width * (request->Bpp / 8) || (request->Stride & 3) ||
+        !request->WindowWidth || !request->WindowHeight ||
         request->WindowWidth > DG_GL_MAX_DIMENSION || request->WindowHeight > DG_GL_MAX_DIMENSION ||
         (ULONGLONG)request->Stride * request->Height > DG_DESKTOP_MAX_BYTES)
         goto done;
@@ -926,7 +928,7 @@ static ULONG NTAPI KernelPresent(PVOID context, const DG_KERNEL_PRESENT_REQUEST 
     }
     if (t->DesktopActive &&
         (t->DesktopWidth != request->Width || t->DesktopHeight != request->Height ||
-         t->DesktopStride != request->Stride))
+         t->DesktopStride != request->Stride || t->DesktopBpp != request->Bpp))
         goto done;
     /* Export first: an invalid/deleted user context cannot enter mixed mode.
      * The export stays retained until the last visible clip consumes it. */
@@ -942,6 +944,7 @@ static ULONG NTAPI KernelPresent(PVOID context, const DG_KERNEL_PRESENT_REQUEST 
     frame_lo = ReadReg(t, DG_GL_REG_PRESENT_FRAME_LO);
     frame_hi = ReadReg(t, DG_GL_REG_PRESENT_FRAME_HI);
     if (!t->DesktopActive) {
+        t->DesktopBpp = request->Bpp;
         r = DesktopRecord(t, 0, DG_DESKTOP_SEED, 0, 0);
         r[4] = request->Width;
         r[5] = request->Height;

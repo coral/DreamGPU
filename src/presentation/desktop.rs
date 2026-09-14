@@ -2,14 +2,14 @@
 //! GPU canvas for ordered mixed CPU/GPU desktops. Ordinary CPU frames bypass it.
 
 use crate::{
+    FrameLease, PixelFormat,
     desktop::{
         DesktopBatch, DesktopOp, DesktopRect, MAX_DESKTOP_OPERATIONS, MAX_DESKTOP_PIXEL_BYTES,
     },
-    FrameLease, PixelFormat,
 };
 use std::sync::{
-    atomic::{AtomicUsize, Ordering},
     Arc,
+    atomic::{AtomicUsize, Ordering},
 };
 use wgpu::util::DeviceExt;
 

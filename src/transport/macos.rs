@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Mach send-right reception for IOSurfaces; file descriptor passing cannot carry these rights.
 
-use super::wire::{invalid, Packet, BYTES};
+use super::wire::{BYTES, Packet, invalid};
 use std::{
-    ffi::{c_char, c_void, CString},
+    ffi::{CString, c_char, c_void},
     io,
     mem::size_of,
 };

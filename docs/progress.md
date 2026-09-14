@@ -9,6 +9,70 @@
 
 Started September 12, 2026. Plan: [plan.md](plan.md).
 
+## Paused handoff — September 13 evening
+
+**Runtime work is stopped. Fullscreen return to gameplay is not fixed/accepted.**
+The private VM shut down through `C:\DGSTOP.EXE`; its QMP socket and owned Juke
+process disappeared. No unrelated process was signaled. The normal Windows 2000
+disk/config were not changed or replaced during this recovery investigation.
+
+Next session: reuse the stopped updated fixture, inspect the real launcher
+Console/Resume control's state and notification route, then attempt one faithful
+reactivation. The last real map renders correctly and desktop restoration works;
+the attempted return leaves the engine hidden/minimized. Do not rerun installer
+setup or repeat the old performance benchmarks to resume this work.
+
+All paths below are relative to DreamGPU unless marked Juke. These are local,
+ignored artifacts under `target/`, not files promised by a clean Git clone.
+
+| Item | Location / identity |
+| --- | --- |
+| Shutdown receipt | `target/follow-through/fullscreen-focus-v1/night-stop.json` |
+| Resume fixture | `target/follow-through/fullscreen-focus-v1/handoff-v4/` (`run.json` has launcher/native/firmware settings) |
+| Stopped disk | `target/follow-through/fullscreen-focus-v1/handoff-v4/machines/win2000/disk.qcow2` |
+| Disk SHA-256 | `aeafd120981f966b278ff3efa86ab6a5d55f34fa68b9446255d0a6b3ea45b23d` |
+| Installed recovery package | `target/guest/dreamgpu.exe`, SHA `74064e43724843de8be56964a636a6f15163c51dfd2887c3655b0a1f56702cf0` (matched on both hosts before cleanup) |
+| Frozen consumer | `fullscreen-focus-v1/juke-handoff`, SHA `a64c5313ce488fa8dcbb7987af1f97a20c0e44b0e41ca61ae9512b7c031b3047` |
+| Frozen QEMU | `fullscreen-mouse-native-v1/qemu-system-i386`, SHA `2b013907a3a33dc9ea768a8e13e62b17ec33c808ea25b568cde105b027be7629` |
+| Meaningful run | `fullscreen-focus-v1/transition-v4/{capture.json,outcome.json,log-export-110s/engine-output.txt}` |
+| Process samples | `fullscreen-focus-v1/transition-v4/state-export/{engine-output.txt,analysis.json}` |
+| Normal source record | `fullscreen-focus-v1/normal-source-record.json`; normal disk SHA at clone `3df51b66217b56e17b02d155ababd68d1b787fa0db4bc67062031042154f7cfd` |
+
+Abbreviated evidence paths beginning `fullscreen-` above are under
+`target/follow-through/`. Normal Juke still selects
+`files/machines/win2000/.retro-adoptions/fullscreen-mouse/disk.qcow2` and retains
+the Half-Life CUE. That is the earlier launch/input adoption, **not** the latest
+recovery package or diagnostic disk. Frozen binaries identify the observed run;
+tonight's source cleanup is separate and does not retroactively change it.
+
+When work resumes, use `scripts/fixtures/fixture.py prepare` with the stopped
+`handoff-v4` disk as the source and its recorded binary/firmware settings, writing
+to a new run directory. Then use `start` on that newly prepared fixture. The
+controller deliberately refuses to restart a completed run in place; do not
+overwrite its receipt or log. This reuses the installed driver state without
+another installation. It starts paused so networking is disabled before `cont`;
+the existing runner is `C:\DGPUBEN.EXE`. Refresh runtime PIDs/HWNDs from the new
+process; recorded ones are no longer valid. Guest logs can be exported through
+the existing serial probe without a reboot or disk copy. See the final ledger
+section for failed automation assumptions that must not be repeated.
+
+## Evening cleanup — September 13
+
+Runtime investigation is paused independently of these source checks.
+
+- `cargo fmt --all -- --check` passes for Juke and DreamGPU. DreamGPU's standalone
+  native launcher formatting also passes.
+- `cargo clippy --workspace --all-targets --all-features -- -D warnings` passes
+  for Juke on Mac. DreamGPU passes the same command on Mac and Linux with
+  `DREAMGPU_BUILD=sdk`; its standalone launcher also passes on both hosts with
+  the required runtime manifest/directory/program compile-time values. Logs and
+  the Linux source comparison are under `target/housekeeping-night-20260913/`;
+  `receipt.json` records Linux checks and `juke-checks.json` records Juke checks.
+- Fixed explicit unsafe-block requirements around owned fd/mmap operations and
+  collapsible Rust conditions. Formatting covers the existing workspace changes.
+  Existing staged/unstaged work is preserved; no commit or push was made.
+- C/C++ formatting and actual-target clang-tidy results are being collected.
+
 ## Cargo/C++ housekeeping completed (September 12)
 
 The runtime work was paused for the requested build and repository cleanup.
@@ -2074,3 +2138,126 @@ All task-owned VMs and builds are stopped. The six accepted performance results
 and their practical limits are in plan.md and
 `performance-display-summary-v1/acceptance.json`. The Mac remains limited by
 translated guest work; 120 Hz remains a selectable scanout rate, never an FPS cap.
+
+### Half-Life fullscreen and mouse follow-up (in progress)
+
+The actual stopped Windows 2000 image contains old `jrg` system drivers and
+app-local graphics providers. Its retail Half-Life settings request fullscreen
+800×600×16, and its normal shortcut has no arguments. The retail engine ignores
+a failed 16-bit mode change, explaining the borderless game within the larger
+desktop. Current NT modes previously offered only 32-bit storage.
+
+The matched NT driver/native implementation now supports real RGB565 primary
+storage. Native GPU composition remains 32-bit; bounded conversion occurs at
+CPU-primary ownership boundaries. Existing 32-bit transfers retain memcpy.
+The matched private kernel interface is version 7; desktop word 8 specifies
+16 for RGB565 and zero for the existing 32-bit protocol.
+
+The actual native GPU/VRAM check passes on Mac and Linux through 32→16→32,
+GPU drawing, CPU patching, readback, work-quantum boundaries and guard bytes.
+The first check failed because its reused frame waiter hardcoded 64×32; after
+correcting that test helper, the same native binaries pass. Evidence is in
+`nt16-primary-v1/{macos-native-test-v2.log,linux-oracle-v2.log}`.
+
+Captured mouse movement now activates the existing relative PS/2 pointer instead
+of accumulating deltas into USB tablet coordinates that ignore guest recentering.
+Buttons are released before device switches. Juke uses raw relative motion in
+both Locked and Confined modes, leaves failed grabs uncaptured, and ignores
+unsupported buttons instead of synthesizing left clicks. Source routing sanitizer
+and Rust input tests pass; actual guest recenter and game validation are pending.
+
+Actual-image activation found the old-install migration guard: driver-status.log
+reports `supported original driver pair result=3`; the original service is
+`jrgmini`, which the current installer does not capture. The existing exact-PCI
+`DGDRV` update helper is being used for this one migration before system setup.
+No rollback schema or new installer lifecycle support is being added.
+
+Review before game launch also caught two remaining 32-bit-only guards in the
+actual NT display ICD callbacks (`DrvDescribePixelFormat` and
+`DrvSetPixelFormat`). These must admit the new 16-bit primary; the OpenGL
+backbuffer remains truthful RGBA8. The guest package is being rebuilt with that
+correction before attempting the game. Native mode-cycle evidence is unchanged.
+
+### Actual Windows 2000 fullscreen/input fix complete
+
+The current paired driver was installed with the existing exact-PCI update
+helper, followed by the existing system installer. Installer `8f33bb52…`
+completed phase 2 with exit 0. The installed display `779c9f0b…` and miniport
+`368fadbf…` match the standard Cargo package. No installer source or rollback
+schema changed for the legacy migration.
+
+Actual retail Half-Life now changes native scanout to 800×600×16. The composed
+frame contains the complete game without desktop borders; Juke's physical window
+remains 2048×1536 throughout. Ten small relative movements produce a modest camera
+turn. Console `quit` exits normally and restores 1280×1024×32 at 60 Hz. That
+original desktop setting was restored after the driver update's 1024×768 default.
+
+The separate actual guest recenter check passes: twelve injected `(3,2)` motions
+become eight coalesced Windows messages totaling exactly `(36,24)`, maximum `(6,4)`.
+There are two button downs, two ups, and no held button after capture release.
+The read-only post-shutdown audit confirms normal `default` system OpenGL selection,
+original fullscreen preferences and absence of the six verified old app-local
+providers. Original user disk SHA `5cff1692…` stayed unchanged.
+
+The private fullscreen helper's strict window-geometry predicate **did not pass**
+and therefore collected no module list. Its normal-exit/restoration receipt is
+valid; it is not used to claim a geometry or module pass. The independent native
+VBE readback, actual composed game frames and fixed host-window measurements
+establish the requested visible result. No unchanged game was rerun to satisfy
+that diagnostic's extra predicate.
+
+Normal Juke's `files/machines/win2000/machine.toml` now selects the verified image
+`.retro-adoptions/fullscreen-mouse/disk.qcow2` (SHA `916a0234…`), retaining the
+Half-Life CUE attachment. Debug/release builds pass on Mac; normal release builds
+and strict Clippy pass on both hosts. Native RGB565 mode-cycle and actual ICD
+callback sanitizer checks pass on both hosts. All task-owned VMs are stopped.
+Evidence: `target/follow-through/halflife-win2000-userdisk-v1/acceptance.json`.
+
+
+### 2026-09-13: fullscreen reactivation follow-up — paused, unresolved
+
+The authoritative current handoff is at the top of this ledger. This is a new
+failure after the earlier successful launch/normal-exit check. The user's trigger
+involved guest movement keys; shortcut handling is deferred until graphics
+recovery works. The shutdown screenshot naming CSC Notifications does not, by
+itself, establish a DreamGPU fault.
+
+Implemented guest changes distinguish a retired binding from a temporarily
+unavailable clip before submission. A retired binding gets one rebind/retry;
+missing or overflowed DC clips preserve the context and submit no kernel work.
+Uncertain native presentation failures remain fail-closed. Neither GL commands
+nor possibly submitted swaps are replayed. Actual frontend/window sanitizer
+checks passed on Mac and Linux. Evidence:
+`target/follow-through/wgl-binding-recovery-v1/`, including
+`clip-recovery.json` and `final-package-receipt.json`.
+
+Juke now marks the VM's CPU framebuffer dirty after the renderer accepts
+ReturnCpu/Reset, including retried queue-full submissions, and requests redraw
+for the active VM. Source review found that consuming a dirty notification during
+GPU ownership could otherwise lose the final CPU update; coherence checks remain.
+The first apparent runtime example was **not evidence of this race**: the host
+was occluded. Foregrounding it immediately aligned raw/rendered 1280×1024 output.
+Observers now record host visibility.
+
+Diagnostic attempts and their limits:
+
+| Attempt | What actually happened | What it establishes |
+| --- | --- | --- |
+| Initial helper | SetForegroundWindow was refused; game stayed active | Rendering only, no recovery transition |
+| v2 | Real Alt+Tab, but `-toconsole`/`+map` bypassed launcher initialization | Not a faithful normal launcher lifecycle |
+| v3 | Normal launcher entry; WM_CHAR map input was ignored | No actual gameplay recovery tested |
+| v4 | Real keyboard map input, textured `c1a0`, Alt+Tab away and back | Desktop restores; engine resume still unresolved |
+
+In v4, `focus_away=1`, `focus_back=1`, `engine_resumed=0`. The host was unoccluded;
+raw and rendered desktop output agreed at 1280×1024. Three later main-thread
+samples show USER32/MFC message waiting; engine modules remain loaded. There was
+no observed blocked GL/Wine call. Sampling cannot establish whether the earlier
+resume handler ran or returned early. The helper posted menu-form WM_COMMAND
+with `lParam=0`, while the executable binds real child controls with DDX. A normal
+button notification carries the child HWND. Inspect that route before blaming a
+provider for the helper's failed resume.
+
+The read-only state/export bootstrap can itself change launcher foreground, so
+use the v4 phase log for the failed-return foreground state. All twelve temporary
+thread suspensions were balanced; no thread was left suspended. No further game
+input or driver change followed the user's request to pause.

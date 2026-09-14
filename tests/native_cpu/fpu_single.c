@@ -4,16 +4,14 @@
 #include "target/i386/tcg/fpu-single.h"
 
 static uint64_t random_state = UINT64_C(0x7b302e0f4e932ab1);
-static uint64_t random64(void)
-{
+static uint64_t random64(void) {
     random_state ^= random_state << 13;
     random_state ^= random_state >> 7;
     random_state ^= random_state << 17;
     return random_state;
 }
 
-static void check_load(float32 value, float_status status)
-{
+static void check_load(float32 value, float_status status) {
     float_status ref = status, got = status;
     floatx80 expected = float32_to_floatx80(value, &ref);
     floatx80 actual = fpu_load_single(value, &got);
@@ -21,8 +19,7 @@ static void check_load(float32 value, float_status status)
     assert(get_float_exception_flags(&ref) == get_float_exception_flags(&got));
 }
 
-static void check_store(floatx80 value, float_status status)
-{
+static void check_store(floatx80 value, float_status status) {
     float_status ref = status, got = status;
     float32 expected = floatx80_to_float32(value, &ref);
     float32 actual = fpu_store_single(value, &got);
@@ -30,22 +27,23 @@ static void check_store(floatx80 value, float_status status)
     assert(get_float_exception_flags(&ref) == get_float_exception_flags(&got));
 }
 
-int main(void)
-{
-    const uint32_t edges[] = {0, 1, 0x007fffff, 0x00800000, 0x00800001,
-                              0x3f7fffff, 0x3f800000, 0x3f800001, 0x7f7fffff,
-                              0x7f800000, 0x7f800001, 0x7fc00000, 0x7fffffff};
+int main(void) {
+    const uint32_t edges[] = {0,          1,          0x007fffff, 0x00800000, 0x00800001,
+                              0x3f7fffff, 0x3f800000, 0x3f800001, 0x7f7fffff, 0x7f800000,
+                              0x7f800001, 0x7fc00000, 0x7fffffff};
     const floatx80 extended[] = {
-        { .high = 0, .low = 0 }, { .high = 0x8000, .low = 0 },
-        { .high = 0, .low = 1 }, { .high = 0, .low = UINT64_C(0x8000000000000000) },
-        { .high = 0x3fff, .low = 0 }, /* unsupported unnormal */
-        { .high = 0x3fff, .low = UINT64_C(0x8000000000000001) }, /* inexact */
-        { .high = 0x3f69, .low = UINT64_C(0x8000000000000000) }, /* underflow */
-        { .high = 0x3f81, .low = UINT64_C(0x8000000000000000) }, /* FLT_MIN */
-        { .high = 0x407f, .low = UINT64_C(0x8000000000000000) }, /* overflow */
-        { .high = 0x7fff, .low = UINT64_C(0x8000000000000000) },
-        { .high = 0x7fff, .low = UINT64_C(0x8000000000000001) },
-        { .high = 0x7fff, .low = UINT64_C(0xc000000000000001) },
+        {.high = 0, .low = 0},
+        {.high = 0x8000, .low = 0},
+        {.high = 0, .low = 1},
+        {.high = 0, .low = UINT64_C(0x8000000000000000)},
+        {.high = 0x3fff, .low = 0},                            /* unsupported unnormal */
+        {.high = 0x3fff, .low = UINT64_C(0x8000000000000001)}, /* inexact */
+        {.high = 0x3f69, .low = UINT64_C(0x8000000000000000)}, /* underflow */
+        {.high = 0x3f81, .low = UINT64_C(0x8000000000000000)}, /* FLT_MIN */
+        {.high = 0x407f, .low = UINT64_C(0x8000000000000000)}, /* overflow */
+        {.high = 0x7fff, .low = UINT64_C(0x8000000000000000)},
+        {.high = 0x7fff, .low = UINT64_C(0x8000000000000001)},
+        {.high = 0x7fff, .low = UINT64_C(0xc000000000000001)},
     };
     uint64_t cases = 0;
     for (unsigned mode = 0; mode < 4; ++mode) {
@@ -77,7 +75,7 @@ int main(void)
                 check_load(value, status);
                 float_status convert = status;
                 check_store(float32_to_floatx80(value, &convert), status);
-                floatx80 raw = { .high = random64(), .low = random64() };
+                floatx80 raw = {.high = random64(), .low = random64()};
                 check_store(raw, status);
                 cases += 3;
             }

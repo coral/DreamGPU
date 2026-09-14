@@ -18,6 +18,7 @@ pub const DREAMGPU_INPUT_RESET: u8 = 5;
 pub const DREAMGPU_INPUT_REFRESH: u8 = 6;
 /// Consumer monitor rate in millihertz; never a guest render-rate limit.
 pub const DREAMGPU_HOST_REFRESH: u8 = 7;
+pub const DREAMGPU_INPUT_MOUSE_CAPTURE: u8 = 8;
 const CAPACITY: usize = 1024;
 
 #[repr(C)]
@@ -50,32 +51,33 @@ pub(super) struct InputQueue {
     pub events: VecDeque<DreamGpuInputEvent>,
     pub connected: bool,
     pub host_refresh_millihz: Option<u32>,
+    pub mouse_capture: Option<bool>,
 }
 impl InputQueue {
     /// Coalescing is restricted to consecutive motion; buttons/keys remain
     /// ordered relative to all preceding and following movement.
     fn push(&mut self, event: DreamGpuInputEvent) -> bool {
-        if let Some(tail) = self.events.back_mut() {
-            if tail.event_type == event.event_type {
-                match event.event_type {
-                    DREAMGPU_INPUT_MOUSE_REL => {
-                        if let (Some(x), Some(y)) =
-                            (tail.x.checked_add(event.x), tail.y.checked_add(event.y))
-                        {
-                            tail.x = x;
-                            tail.y = y;
-                            tail.id = event.id;
-                            perf::event("input.coalesced", event.id, 1);
-                            return false;
-                        }
-                    }
-                    DREAMGPU_INPUT_MOUSE_ABS => {
-                        *tail = event;
+        if let Some(tail) = self.events.back_mut()
+            && tail.event_type == event.event_type
+        {
+            match event.event_type {
+                DREAMGPU_INPUT_MOUSE_REL => {
+                    if let (Some(x), Some(y)) =
+                        (tail.x.checked_add(event.x), tail.y.checked_add(event.y))
+                    {
+                        tail.x = x;
+                        tail.y = y;
+                        tail.id = event.id;
                         perf::event("input.coalesced", event.id, 1);
                         return false;
                     }
-                    _ => {}
                 }
+                DREAMGPU_INPUT_MOUSE_ABS => {
+                    *tail = event;
+                    perf::event("input.coalesced", event.id, 1);
+                    return false;
+                }
+                _ => {}
             }
         }
         if self.events.len() >= CAPACITY {
@@ -103,6 +105,20 @@ pub(super) struct InputSender {
     pub next_barrier: Arc<AtomicU64>,
 }
 impl InputSender {
+    pub fn set_mouse_capture(&self, captured: bool) {
+        let mut queue = self.queue.lock().unwrap();
+        queue.mouse_capture = Some(captured);
+        if queue.connected {
+            queue.push(DreamGpuInputEvent {
+                event_type: DREAMGPU_INPUT_MOUSE_CAPTURE,
+                pressed: u8::from(captured),
+                ..Default::default()
+            });
+        }
+        drop(queue);
+        self.wake();
+    }
+
     pub fn set_host_refresh(&self, millihz: u32) {
         let millihz = millihz.clamp(10_000, 500_000);
         let mut queue = self.queue.lock().unwrap();
@@ -127,6 +143,21 @@ impl InputSender {
                 queue.push(DreamGpuInputEvent {
                     event_type: DREAMGPU_HOST_REFRESH,
                     x: millihz as i32,
+                    ..Default::default()
+                });
+            }
+            if let Some(captured) = queue.mouse_capture {
+                // Reestablish routing before a concurrently queued button.
+                if queue.events.len() >= CAPACITY {
+                    queue.events.clear();
+                    queue.events.push_back(DreamGpuInputEvent {
+                        event_type: DREAMGPU_INPUT_RESET,
+                        ..Default::default()
+                    });
+                }
+                queue.events.push_front(DreamGpuInputEvent {
+                    event_type: DREAMGPU_INPUT_MOUSE_CAPTURE,
+                    pressed: u8::from(captured),
                     ..Default::default()
                 });
             }
@@ -231,6 +262,41 @@ mod tests {
         q.push(ev(1, i32::MAX));
         q.push(ev(1, 1));
         assert_eq!(q.events.len(), 2);
+    }
+    #[test]
+    fn capture_is_ordered_with_motion_buttons_and_reconnection() {
+        let (wake, _reader) = UnixStream::pair().unwrap();
+        let sender = InputSender {
+            queue: Arc::new(Mutex::new(InputQueue::default())),
+            wake: Arc::new(wake),
+            acknowledgments: Arc::new((Mutex::new((0, false)), Condvar::new())),
+            next_barrier: Arc::new(AtomicU64::new(1)),
+        };
+        sender.set_mouse_capture(true);
+        assert!(sender.queue.lock().unwrap().events.is_empty());
+        sender.queue.lock().unwrap().connected = true;
+        sender.send(ev(DREAMGPU_INPUT_MOUSE_BTN, 0));
+        sender.connection_changed(true);
+        sender.send(ev(DREAMGPU_INPUT_MOUSE_REL, 2));
+        sender.set_mouse_capture(false);
+        sender.send(ev(DREAMGPU_INPUT_MOUSE_ABS, 30));
+        let mut q = sender.queue.lock().unwrap();
+        assert_eq!(
+            q.events.iter().map(|e| e.event_type).collect::<Vec<_>>(),
+            vec![8, 3, 1, 8, 2]
+        );
+        assert_eq!(q.events[0].pressed, 1);
+        assert_eq!(q.events[3].pressed, 0);
+        q.events.clear();
+        for _ in 0..CAPACITY {
+            q.push(ev(DREAMGPU_INPUT_KEY, 30));
+        }
+        drop(q);
+        sender.connection_changed(true);
+        let q = sender.queue.lock().unwrap();
+        assert_eq!(q.events.len(), 2);
+        assert_eq!(q.events[0].event_type, DREAMGPU_INPUT_MOUSE_CAPTURE);
+        assert_eq!(q.events[1].event_type, DREAMGPU_INPUT_RESET);
     }
     #[test]
     fn monitor_rate_is_retained_for_connect_and_changes_are_deduplicated() {

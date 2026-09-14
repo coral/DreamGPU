@@ -549,6 +549,31 @@ static BOOL Bind(JGL_CONTEXT *c) {
     c->Capabilities = reply.Capabilities;
     return TRUE;
 }
+/* Only the display driver can distinguish a retired binding from a failed
+ * native presentation. Recover once before any swap was submitted; never
+ * replay GL commands or retry an outcome whose completion is uncertain. */
+static BOOL PresentWindow(JGL_CONTEXT *c, ULONG flags) {
+    DG_WINDOW_PRESENT present = {DG_WINDOW_MAGIC, DG_WINDOW_VERSION, c->Binding, flags};
+    int status = JglTransportPresent(c->DC, &present);
+    if (status == DG_WINDOW_PRESENT_REBIND) {
+        if (!Bind(c)) {
+            SetLastError(ERROR_BUSY);
+            return FALSE;
+        }
+        present.Binding = c->Binding;
+        status = JglTransportPresent(c->DC, &present);
+    }
+    if (status == 1)
+        return TRUE;
+    if (status == DG_WINDOW_PRESENT_REBIND || status == DG_WINDOW_PRESENT_NOT_READY) {
+        SetLastError(ERROR_BUSY);
+        return FALSE;
+    }
+    c->Failed = TRUE;
+    Error(c, GL_INVALID_OPERATION);
+    SetLastError(ERROR_GEN_FAILURE);
+    return FALSE;
+}
 static void CloseIdleClient(PACKET *packet) {
     ULONG i;
     DG_ESCAPE_REPLY reply;
@@ -938,7 +963,6 @@ HDC WINAPI wglGetCurrentDC(void) {
 }
 BOOL WINAPI wglSwapBuffers(HDC dc) {
     JGL_CONTEXT *c = CurrentContext();
-    DG_WINDOW_PRESENT present;
     HWND window;
     ULONG width, height;
     /* Report the boundary that rejected the swap; OpenGLide records the first
@@ -969,16 +993,8 @@ BOOL WINAPI wglSwapBuffers(HDC dc) {
         SetLastError(ERROR_WRITE_FAULT);
         return FALSE;
     }
-    present.Magic = DG_WINDOW_MAGIC;
-    present.Version = DG_WINDOW_VERSION;
-    present.Binding = c->Binding;
-    present.Flags = 0;
-    if (JglTransportPresent(dc, &present) != 1) {
-        c->Failed = TRUE;
-        Error(c, GL_INVALID_OPERATION);
-        SetLastError(ERROR_GEN_FAILURE);
+    if (!PresentWindow(c, 0))
         return FALSE;
-    }
     c->FrontDirty = FALSE;
     return TRUE;
 }
@@ -1040,20 +1056,12 @@ BOOL JglCallLists(ULONG count, const ULONG *offsets) {
 }
 
 static BOOL PublishFront(JGL_CONTEXT *c) {
-    DG_WINDOW_PRESENT present;
     if (!c->FrontDirty)
         return TRUE;
     if (!(c->Capabilities & DG_WINDOW_CAP_FRONT_ONLY) || !MatchingGeometry(c))
         return FALSE;
-    present.Magic = DG_WINDOW_MAGIC;
-    present.Version = DG_WINDOW_VERSION;
-    present.Binding = c->Binding;
-    present.Flags = DG_WINDOW_PRESENT_FRONT_ONLY;
-    if (JglTransportPresent(c->DC, &present) != 1) {
-        c->Failed = TRUE;
-        Error(c, GL_INVALID_OPERATION);
+    if (!PresentWindow(c, DG_WINDOW_PRESENT_FRONT_ONLY))
         return FALSE;
-    }
     c->FrontDirty = FALSE;
     return TRUE;
 }

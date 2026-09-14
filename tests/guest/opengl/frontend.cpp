@@ -10,7 +10,8 @@ static HANDLE PixelFormats[3];
 static ULONG Thread, Allocations, Calls, QueryCalls, NativeFlushes, Closes;
 static ULONG DestroyContexts, DestroyDrawables, NativeBegins, NativeEnds, Sequence;
 static ULONG FailOperation, FailStatus, FailError, LostOperation, MalformedQuery;
-static BOOL ExecuteLost, FailPresent, FailTls, FailHeap;
+static BOOL ExecuteLost, FailPresent, FailTls, FailHeap, FailBind;
+static ULONG RetiredPresents, UnreadyPresents, Binds;
 static ULONG BindCapabilities, Presents, PresentFlags;
 static ULONG SharedWith[128];
 static BOOL HostContexts[128], HostDrawables[128];
@@ -121,6 +122,14 @@ int DrawEscape(HDC dc, int escape, int bytes, LPCSTR input) {
     assert(dc && escape == DG_DRAW_ESCAPE && bytes == sizeof(DG_WINDOW_PRESENT) && input);
     ++Presents;
     PresentFlags = ((const DG_WINDOW_PRESENT *)input)->Flags;
+    if (RetiredPresents) {
+        --RetiredPresents;
+        return DG_WINDOW_PRESENT_REBIND;
+    }
+    if (UnreadyPresents) {
+        --UnreadyPresents;
+        return DG_WINDOW_PRESENT_NOT_READY;
+    }
     return !FailPresent;
 }
 
@@ -190,6 +199,9 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
         const DG_WINDOW_BIND *bind = (const DG_WINDOW_BIND *)input;
         DG_WINDOW_REPLY *bound = (DG_WINDOW_REPLY *)output;
         assert(dc && input_bytes == sizeof(*bind) && output_bytes == sizeof(*bound));
+        ++Binds;
+        if (FailBind)
+            return 0;
         *bound =
             (DG_WINDOW_REPLY){DG_WINDOW_VERSION, DG_ESCAPE_OK, bind->Drawable, BindCapabilities};
         return 1;
@@ -298,7 +310,8 @@ static void Reset(void) {
     Thread = Client = NextId = Calls = QueryCalls = NativeFlushes = Closes = 0;
     DestroyContexts = DestroyDrawables = NativeBegins = NativeEnds = Sequence = 0;
     FailOperation = FailStatus = FailError = LostOperation = MalformedQuery = 0;
-    ExecuteLost = FailPresent = FailTls = FALSE;
+    ExecuteLost = FailPresent = FailTls = FailBind = FALSE;
+    RetiredPresents = UnreadyPresents = Binds = 0;
     Width = 320;
     Height = 240;
     MaxWords = PACKET_WORDS;
@@ -536,6 +549,55 @@ int main(void) {
         assert(Flush(c));
         assert(wglDeleteContext(context));
     }
+
+    Reset();
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    context = Create();
+    // A same-size display deactivate/reactivate retires only the GDI binding.
+    // Retrying that binding must not recreate the drawable or resubmit GL.
+    glClear(GL_COLOR_BUFFER_BIT);
+    calls = Calls;
+    ULONG bindings = Binds, presentations = Presents;
+    RetiredPresents = 1;
+    assert(wglSwapBuffers((HDC)1));
+    assert(Binds == bindings + 1 && Presents == presentations + 2 && Calls == calls + 1);
+    assert(!DestroyDrawables && !Lookup(context)->Failed && wglGetCurrentContext() == context);
+    // A second loss is bounded: return failure, preserve context, retry on
+    // the application's following call rather than spinning or replaying GL.
+    RetiredPresents = 2;
+    bindings = Binds;
+    presentations = Presents;
+    calls = Calls;
+    assert(!wglSwapBuffers((HDC)1) && LastError == ERROR_BUSY);
+    assert(Binds == bindings + 1 && Presents == presentations + 2 && Calls == calls);
+    assert(!Lookup(context)->Failed && !Lookup(context)->Uncertain);
+    assert(wglSwapBuffers((HDC)1));
+    // Temporarily invalid GDI clip snapshots do not retire the GL context.
+    UnreadyPresents = 1;
+    bindings = Binds;
+    assert(!wglSwapBuffers((HDC)1) && Binds == bindings && !Lookup(context)->Failed);
+    assert(wglSwapBuffers((HDC)1));
+    // A mode transition may refuse rebinding until the window is ready.
+    RetiredPresents = 1;
+    FailBind = TRUE;
+    assert(!wglSwapBuffers((HDC)1) && !Lookup(context)->Failed);
+    FailBind = FALSE;
+    RetiredPresents = 1;
+    assert(wglSwapBuffers((HDC)1));
+    // Front-only publication uses the same recovery without a buffer swap.
+    glDrawBuffer(GL_FRONT);
+    glClear(GL_COLOR_BUFFER_BIT);
+    RetiredPresents = 1;
+    bindings = Binds;
+    assert(PublishFront(Lookup(context)) && Binds == bindings + 1);
+    assert(PresentFlags == DG_WINDOW_PRESENT_FRONT_ONLY && !Lookup(context)->FrontDirty);
+    glClear(GL_COLOR_BUFFER_BIT);
+    UnreadyPresents = 1;
+    assert(!PublishFront(Lookup(context)) && Lookup(context)->FrontDirty &&
+           !Lookup(context)->Failed);
+    assert(PublishFront(Lookup(context)) && !Lookup(context)->FrontDirty);
+    assert(wglDeleteContext(context));
+    BindCapabilities = 0;
 
     Reset();
     context = Create();

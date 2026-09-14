@@ -223,7 +223,7 @@ uint32_t dreamgpu_slot_prepare(DreamGpuExportSlot *, DreamGpuDrawable *, uint32_
 void dreamgpu_slot_pending(DreamGpuExportSlot *);
 typedef struct DreamGpuDesktopState {
     uint64_t epoch, sequence;
-    uint32_t width, height, active, coherent, exclusive;
+    uint32_t width, height, active, coherent, exclusive, primary_bpp;
 } DreamGpuDesktopState;
 typedef struct DreamGpuDesktopOps {
     void *opaque;
@@ -235,6 +235,9 @@ typedef struct DreamGpuDesktopOps {
 } DreamGpuDesktopOps;
 uint32_t dreamgpu_desktop_execute(DreamGpuDesktopState *, const DreamGpuDesktopOps *,
                                   const uint8_t *, uint32_t, uint32_t);
+/* Bounded primary conversion; RGBA storage here is little-endian ARGB8888
+ * (BGRA bytes), primary storage is little-endian RGB565. Buffers disjoint. */
+void dreamgpu_primary16_transfer(uint8_t *, uint8_t *, uint32_t, uint32_t);
 uint32_t dreamgpu_desktop_retained(const DreamGpuExportSlot *, const uint8_t *);
 typedef struct DreamGpuResources {
     DreamGpuContext contexts[32];

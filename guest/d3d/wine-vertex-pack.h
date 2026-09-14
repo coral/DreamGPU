@@ -15,24 +15,23 @@ struct dg_wine_vertex {
     unsigned char diffuse[4], specular[4];
 };
 
-static inline int dg_wine_vertex_address(const void *base, unsigned int stride,
-        int64_t index, unsigned int bytes, const void **out)
-{
+static inline int dg_wine_vertex_address(const void *base, unsigned int stride, int64_t index,
+                                         unsigned int bytes, const void **out) {
     uintptr_t address = (uintptr_t)base;
     uint64_t offset;
     if (!base || index < 0 || (stride && (uint64_t)index > UINTPTR_MAX / stride))
         return 0;
     offset = (uint64_t)index * stride;
-    if (offset > UINTPTR_MAX || address > UINTPTR_MAX - (uintptr_t)offset
-            || bytes > UINTPTR_MAX - address - (uintptr_t)offset)
+    if (offset > UINTPTR_MAX || address > UINTPTR_MAX - (uintptr_t)offset ||
+        bytes > UINTPTR_MAX - address - (uintptr_t)offset)
         return 0;
     *out = (const void *)(address + (uintptr_t)offset);
     return 1;
 }
 
-static inline void dg_wine_pack_vertex(struct dg_wine_vertex *out,
-        const void *position, const void *texture, const void *diffuse, const void *specular)
-{
+static inline void dg_wine_pack_vertex(struct dg_wine_vertex *out, const void *position,
+                                       const void *texture, const void *diffuse,
+                                       const void *specular) {
     float p[4];
     const unsigned char *c = (const unsigned char *)diffuse;
     const unsigned char *s = (const unsigned char *)specular;
@@ -49,9 +48,13 @@ static inline void dg_wine_pack_vertex(struct dg_wine_vertex *out,
         out->position[3] = 1.0f;
     }
     memcpy(out->texture, texture, sizeof(out->texture));
-    out->diffuse[0] = c[2]; out->diffuse[1] = c[1];
-    out->diffuse[2] = c[0]; out->diffuse[3] = c[3];
-    out->specular[0] = s ? s[2] : 0; out->specular[1] = s ? s[1] : 0;
-    out->specular[2] = s ? s[0] : 0; out->specular[3] = 0;
+    out->diffuse[0] = c[2];
+    out->diffuse[1] = c[1];
+    out->diffuse[2] = c[0];
+    out->diffuse[3] = c[3];
+    out->specular[0] = s ? s[2] : 0;
+    out->specular[1] = s ? s[1] : 0;
+    out->specular[2] = s ? s[0] : 0;
+    out->specular[3] = 0;
 }
 #endif

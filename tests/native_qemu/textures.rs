@@ -336,11 +336,12 @@ fn qemu_front_back_selection_exchange_and_readpixels_preserve_exact_images() {
         }
     });
     let (_, rgba) = query(&mut qemu, &mut sequence, PIXELS, &[0, 0, 16 | (8 << 16)]);
-    assert!(rgba
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .all(|pixel| *pixel == [0, 0, 255, 255]));
+    assert!(
+        rgba.as_chunks::<4>()
+            .0
+            .iter()
+            .all(|pixel| *pixel == [0, 0, 255, 255])
+    );
     drop(front);
 
     // A regular swap exchanges the existing allocations, exporting blue.
@@ -402,11 +403,12 @@ fn qemu_front_back_selection_exchange_and_readpixels_preserve_exact_images() {
         qemu.batch(sequence, &[call(READ, &[buffer])]);
         qemu.await_completion(sequence);
         let (_, rgba) = query(&mut qemu, &mut sequence, PIXELS, &[0, 0, 16 | (8 << 16)]);
-        assert!(rgba
-            .as_chunks::<4>()
-            .0
-            .iter()
-            .all(|pixel| *pixel == [255, 255, 0, 255]));
+        assert!(
+            rgba.as_chunks::<4>()
+                .0
+                .iter()
+                .all(|pixel| *pixel == [255, 255, 0, 255])
+        );
     }
     sequence += 1;
     qemu.batch_for(sequence, 1, 2, 1, 0, &[(5, vec![])]);
@@ -438,9 +440,10 @@ fn qemu_front_back_selection_exchange_and_readpixels_preserve_exact_images() {
     }
     assert_eq!(qemu.read(0x1124), 5);
     assert_eq!(qemu.read(0x1168), 0);
-    assert!(qemu
-        .command("read 0x200000 512")
-        .ends_with(&format!("0x{}", "5a".repeat(512))));
+    assert!(
+        qemu.command("read 0x200000 512")
+            .ends_with(&format!("0x{}", "5a".repeat(512)))
+    );
     // No GL errors leak from export FBO selection/restoration or readback.
     assert_eq!(words(&query(&mut qemu, &mut sequence, 0x2fc, &[]).1), [0]);
     sequence += 1;
@@ -529,10 +532,10 @@ fn qemu_reset_fences_queued_query_dma_before_guest_result_page_reuse() {
         if let Some(error) = server.take_error() {
             panic!("reset transport: {error}");
         }
-        if let Some(batch) = server.take_desktop_update() {
-            if matches!(batch.operations.as_slice(), [DesktopOp::Reset]) {
-                break;
-            }
+        if let Some(batch) = server.take_desktop_update()
+            && matches!(batch.operations.as_slice(), [DesktopOp::Reset])
+        {
+            break;
         }
         assert!(
             Instant::now() < deadline,
@@ -1596,7 +1599,9 @@ fn qemu_gl_queries_return_bounded_guest_state_and_hide_host_objects() {
         .collect::<Vec<_>>();
     assert_eq!(
         matrix,
-        [1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0.25, -0.5, 0., 1.]
+        [
+            1., 0., 0., 0., 0., 1., 0., 0., 0., 0., 1., 0., 0.25, -0.5, 0., 1.
+        ]
     );
     // Double matrix entrypoints retain the full sixteen-double wire payload;
     // test both decoding and multiplication through actual native GL state.
@@ -1636,7 +1641,9 @@ fn qemu_gl_queries_return_bounded_guest_state_and_hide_host_objects() {
             .iter()
             .map(|word| f64::from_le_bytes(*word))
             .collect::<Vec<_>>(),
-        [0.5, 0., 0., 0., 0., 4., 0., 0., 0., 0., 3., 0., 0.5, -0.25, 0.125, 1.]
+        [
+            0.5, 0., 0., 0., 0., 4., 0., 0., 0., 0., 3., 0., 0.5, -0.25, 0.125, 1.
+        ]
     );
     let (kind, data) = query(&mut qemu, &mut sequence, 0x305, &[0x0c22]);
     assert_eq!(kind, 3);
@@ -2495,9 +2502,10 @@ fn qemu_bulk_readback_pixels_legacy_and_dma_bounds() {
         }
         assert_ne!(qemu.read(0x1124), 0);
         assert_eq!(qemu.read(0x1168), 0);
-        assert!(qemu
-            .command("read 0x200000 65552")
-            .ends_with(&format!("0x{}", "5a".repeat(65552))));
+        assert!(
+            qemu.command("read 0x200000 65552")
+                .ends_with(&format!("0x{}", "5a".repeat(65552)))
+        );
     }
     assert_eq!(words(&query(&mut qemu, &mut sequence, 0x2fc, &[]).1), [0]);
     drop(qemu);

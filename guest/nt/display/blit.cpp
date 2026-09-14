@@ -110,8 +110,8 @@ BOOL APIENTRY DrvBitBlt(SURFOBJ *dest, SURFOBJ *source, SURFOBJ *mask, CLIPOBJ *
                         BRUSHOBJ *brush, POINTL *brush_origin, ROP4 rop) {
     PPDEV dev = (PPDEV)dest->dhpdev;
     ULONG opcode = 0, color = 0;
-    if (dev && dev->NativeCaps && dest->hsurf == dev->hSurfEng && dev->ScreenDelta > 0 && !mask &&
-        rect->left < rect->right && rect->top < rect->bottom) {
+    if (dev && dev->BitsPerPixel == 32 && dev->NativeCaps && dest->hsurf == dev->hSurfEng &&
+        dev->ScreenDelta > 0 && !mask && rect->left < rect->right && rect->top < rect->bottom) {
         if (rop == 0x0000 || rop == 0xffff ||
             (rop == 0xf0f0 && brush && brush->iSolidColor != 0xffffffff)) {
             opcode = DG_CMD_FILL;
@@ -126,7 +126,9 @@ BOOL APIENTRY DrvBitBlt(SURFOBJ *dest, SURFOBJ *source, SURFOBJ *mask, CLIPOBJ *
         if (opcode && (DgDesktopActive(dev) || WorthNativeBlt(dev, rect, clip)))
             return NativeBlt(dev, opcode, rect, source_point, clip, color);
     }
-    /* Covers both CPU writes to the primary and CPU reads from it (for
+    /* RGB565 uses the DIB engine after returning any native desktop to CPU
+     * ownership; native GDI color/ROP shortcuts currently target 32-bit pixels.
+     * Covers both CPU writes to the primary and CPU reads from it (for
      * example BitBlt into a memory DC). EngBitBlt can bypass the sync hook
      * when called by this driver, so synchronize explicitly before fallback. */
     if (dev && dest->hsurf == dev->hSurfEng && !DgCoherent(dev, DG_COHERE_DESTINATION))

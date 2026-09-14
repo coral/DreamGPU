@@ -390,3 +390,18 @@ render lock. Cancellation, mode change and teardown resolve the owned request.
 An idle display has no continuously armed vblank timer. Consumer monitor hints
 only schedule desktop refresh deadlines, with fractional periods retained and
 missed deadlines skipped rather than replayed in a busy loop.
+
+### RGB565 primary storage
+
+NT 16-bit modes use actual RGB565 VRAM, masks, stride and mapped extent. The
+matched version-7 miniport/display request carries the primary depth; native
+validation checks it against the active VBE mode and desktop epoch. Legacy
+32-bit commands keep format word zero. The GPU compositor and exported frames
+remain 32-bit regardless of primary depth.
+
+`dreamgpu_primary16_transfer` borrows disjoint native-owned buffers only for the
+call. QEMU validates VRAM row extents before each chunk, converts between two-byte
+RGB565 and four-byte compositor pixels, and retains the existing bounded work
+quantum. No pointers survive the call. The unchanged 32-bit branch uses memcpy.
+The native mode-cycle test checks exact GPU/CPU pixels, conversion across a work
+quantum inside a row, guard bytes, and return to a fresh CPU-owned frame.

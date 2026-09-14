@@ -157,7 +157,7 @@ ULONG DgBindWindow(SURFOBJ *surface, ULONG input_bytes, PVOID input, ULONG outpu
     reply.Version = DG_WINDOW_VERSION;
     reply.Status = DG_ESCAPE_INVALID;
     dev = (PPDEV)surface->dhpdev;
-    if (surface->hsurf != dev->hSurfEng || dev->BitsPerPixel != 32 ||
+    if (surface->hsurf != dev->hSurfEng || (dev->BitsPerPixel != 32 && dev->BitsPerPixel != 16) ||
         request.Magic != DG_WINDOW_MAGIC || request.Version != DG_WINDOW_VERSION ||
         request.Reserved || !request.Window || !request.Context || !request.Drawable ||
         !dev->Kernel.Owner)
@@ -217,6 +217,7 @@ ULONG DgBindWindow(SURFOBJ *surface, ULONG input_bytes, PVOID input, ULONG outpu
     window->Present.Width = dev->ScreenWidth;
     window->Present.Height = dev->ScreenHeight;
     window->Present.Stride = dev->ScreenDelta;
+    window->Present.Bpp = dev->BitsPerPixel;
     reply.Binding = window->Binding;
     reply.Status = DG_ESCAPE_OK;
     reply.Capabilities = dev->Kernel.WindowCapabilities & DG_WINDOW_CAP_FRONT_ONLY;
@@ -286,8 +287,17 @@ ULONG APIENTRY DrvDrawEscape(SURFOBJ *surface, ULONG escape, CLIPOBJ *clip, RECT
             break;
         }
     }
-    if (!window || !window->Valid)
+    if (!window) {
+        result = DG_WINDOW_PRESENT_REBIND;
         goto done;
+    }
+    if (!window->Valid) {
+        result = DG_WINDOW_PRESENT_NOT_READY;
+        goto done;
+    }
+    /* A transient DC clip that exceeds our bounded packet must not retire the
+     * GL context. Nothing has reached the kernel until the final Present call. */
+    result = DG_WINDOW_PRESENT_NOT_READY;
     *present = window->Present;
     present->Flags = request.Flags;
     present->Count = 0;

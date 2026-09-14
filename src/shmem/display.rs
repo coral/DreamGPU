@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Protocol v5: immutable mmap epochs with page-aligned, explicitly leased planes.
 use super::input::{
-    DreamGpuInputEvent, InputSender, DREAMGPU_INPUT_KEY, DREAMGPU_INPUT_MOUSE_ABS,
-    DREAMGPU_INPUT_MOUSE_BTN, DREAMGPU_INPUT_MOUSE_REL, DREAMGPU_INPUT_REFRESH,
-    DREAMGPU_INPUT_RESET,
+    DREAMGPU_INPUT_KEY, DREAMGPU_INPUT_MOUSE_ABS, DREAMGPU_INPUT_MOUSE_BTN,
+    DREAMGPU_INPUT_MOUSE_REL, DREAMGPU_INPUT_REFRESH, DREAMGPU_INPUT_RESET, DreamGpuInputEvent,
+    InputSender,
 };
-use crate::{perf, FrameAllocation, FrameLease, FramePixels, FrameStorage, PixelFormat};
+use crate::{FrameAllocation, FrameLease, FramePixels, FrameStorage, PixelFormat, perf};
 use std::os::unix::io::RawFd;
 use std::sync::{
-    atomic::{AtomicU32, AtomicU64, Ordering},
     Arc,
+    atomic::{AtomicU32, AtomicU64, Ordering},
 };
 
 pub const DREAMGPU_SHMEM_MAGIC: u32 = 0x454B554A;
@@ -231,19 +231,25 @@ impl ShmemDisplay {
     pub unsafe fn from_fd(fd: RawFd, size: usize) -> Option<Self> {
         if size < PIXEL_BASE || size > isize::MAX as usize || !size.is_multiple_of(PLANE_ALIGNMENT)
         {
-            libc::close(fd);
+            // SAFETY: this function owns the caller-provided descriptor.
+            unsafe { libc::close(fd) };
             return None;
         }
-        let ptr = libc::mmap(
-            std::ptr::null_mut(),
-            size,
-            libc::PROT_READ | libc::PROT_WRITE,
-            libc::MAP_SHARED,
-            fd,
-            0,
-        );
+        // SAFETY: the caller supplies the actual shared-memory size; the
+        // validated length fits isize and the returned mapping is owned below.
+        let ptr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                size,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_SHARED,
+                fd,
+                0,
+            )
+        };
         if ptr == libc::MAP_FAILED {
-            libc::close(fd);
+            // SAFETY: mmap failed, so descriptor ownership has not transferred.
+            unsafe { libc::close(fd) };
             return None;
         }
         let mut mapping = Mapping {
@@ -429,6 +435,12 @@ impl ShmemDisplay {
     }
     pub fn send_mouse_rel(&self, x: i32, y: i32) {
         self.send(DREAMGPU_INPUT_MOUSE_REL, 0, 0, x, y);
+    }
+    /// Select relative game input or absolute desktop input before sending buttons.
+    pub fn set_mouse_capture(&self, captured: bool) {
+        if let Some(input) = &self.input {
+            input.set_mouse_capture(captured);
+        }
     }
     pub fn send_mouse_abs(&self, x: i32, y: i32) {
         self.send(DREAMGPU_INPUT_MOUSE_ABS, 0, 0, x, y);

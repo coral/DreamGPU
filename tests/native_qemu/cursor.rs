@@ -12,10 +12,10 @@ fn await_cursor(
         if let Some(error) = cpu.take_cursor_error() {
             panic!("cursor transport: {error}");
         }
-        if let Some(state) = cpu.native_cursor() {
-            if predicate(&state) {
-                return state;
-            }
+        if let Some(state) = cpu.native_cursor()
+            && predicate(&state)
+        {
+            return state;
         }
         assert!(Instant::now() < deadline, "cursor update did not arrive");
         std::thread::sleep(Duration::from_millis(2));
@@ -46,13 +46,13 @@ fn qemu_native_cursor_moves_without_publishing_desktop_frames() {
     let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         cpu.poll();
-        if let Some(display) = cpu.display_mut() {
-            if let Some(frame) = display.acquire_frame() {
-                if (frame.width, frame.height) == (64, 32) {
-                    break;
-                }
-                display.discard_current();
+        if let Some(display) = cpu.display_mut()
+            && let Some(frame) = display.acquire_frame()
+        {
+            if (frame.width, frame.height) == (64, 32) {
+                break;
             }
+            display.discard_current();
         }
         assert!(Instant::now() < deadline, "initial CPU frame missing");
         std::thread::sleep(Duration::from_millis(2));
@@ -127,12 +127,14 @@ fn qemu_native_cursor_moves_without_publishing_desktop_frames() {
         (epoch, generation),
         "cursor-only input must not dirty/publish the desktop"
     );
-    assert!(after
-        .bytes()
-        .as_chunks::<4>()
-        .0
-        .iter()
-        .all(|p| p[0..3] == [0x30; 3]));
+    assert!(
+        after
+            .bytes()
+            .as_chunks::<4>()
+            .0
+            .iter()
+            .all(|p| p[0..3] == [0x30; 3])
+    );
     qemu.write(0x10ac, 2);
     qemu.write(0x10b0, 1002);
     qemu.write(0x10b4, 2);

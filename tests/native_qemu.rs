@@ -12,6 +12,8 @@ mod fixed;
 mod pixel_image;
 #[path = "native_qemu/pixels.rs"]
 mod pixels;
+#[path = "native_qemu/primary16.rs"]
+mod primary16;
 #[path = "native_qemu/raster.rs"]
 mod raster;
 #[path = "native_qemu/secondary.rs"]
@@ -34,7 +36,7 @@ use std::{
     io::Write,
     os::unix::net::UnixStream,
     path::{Path, PathBuf},
-    sync::{mpsc, Arc},
+    sync::{Arc, mpsc},
 };
 
 struct Qemu {

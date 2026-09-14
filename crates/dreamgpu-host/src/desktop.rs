@@ -28,8 +28,9 @@ fn validate(r: &[u8; 64], pw: u32, ph: u32, vram: u32, work: u64) -> Result<u64,
     let image = op == 6 || op == 8;
     let cpu = matches!(op, 1 | 2 | 3 | 7);
     if !(1..=8).contains(&op)
-        || word(32) != 0
+        || !matches!(word(32), 0 | 16)
         || word(36) != 0
+        || (word(32) == 16 && matches!(op, 4 | 5))
         || (flags != 0 && (op != 6 || flags != 1))
     {
         return Err(BATCH);
@@ -58,17 +59,17 @@ fn validate(r: &[u8; 64], pw: u32, ph: u32, vram: u32, work: u64) -> Result<u64,
         return Err(BATCH);
     }
     if cpu {
-        let row = u64::from(w) * 4;
+        let row = u64::from(w) * if word(32) == 16 { 2 } else { 4 };
         if u64::from(stride) < row {
             return Err(DESKTOP);
         }
         let end = u64::from(offset) + u64::from(h - 1) * u64::from(stride) + row;
-        let export_bytes = ((row + 255) & !255)
+        let export_bytes = ((u64::from(w) * 4 + 255) & !255)
             .checked_mul(u64::from(h))
             .and_then(|v| v.checked_add(65535))
             .ok_or(DESKTOP)?
             & !65535;
-        if offset & 3 != 0
+        if offset & if word(32) == 16 { 1 } else { 3 } != 0
             || stride & 3 != 0
             || u64::from(stride) < row
             || end > u64::from(vram)
@@ -134,6 +135,27 @@ mod tests {
             r[i * 4..i * 4 + 4].copy_from_slice(&w.to_le_bytes());
         }
         r
+    }
+    #[test]
+    fn rgb565_primary_bounds_use_two_bytes_but_budget_full_compositor_storage() {
+        for op in [1, 2, 3, 7] {
+            let r = record([op, 0, 0, 0, 64, 32, 0, 0, 16, 0, 0, 128, 0, 0, 0, 0]);
+            assert_eq!(validate(&r, 64, 32, 4096, 0), Ok(8192));
+            assert_eq!(validate(&r, 64, 32, 4095, 0), Err(DESKTOP));
+            let mut short = r;
+            short[44..48].copy_from_slice(&124u32.to_le_bytes());
+            assert_eq!(validate(&short, 64, 32, 4096, 0), Err(DESKTOP));
+        }
+        for format in [1, 15, 24, 32, u32::MAX] {
+            let r = record([1, 0, 0, 0, 64, 32, 0, 0, format, 0, 0, 256, 0, 0, 0, 0]);
+            assert_eq!(validate(&r, 64, 32, 8192, 0), Err(BATCH));
+        }
+        for op in [4, 5] {
+            let r = record([op, 0, 0, 0, 64, 32, 0, 0, 16, 0, 0, 0, 0, 0, 0, 0]);
+            assert_eq!(validate(&r, 64, 32, 8192, 0), Err(BATCH));
+        }
+        let r = record([2, 0, 0, 0, 1, 1, 0, 0, 16, 0, 2, 4, 0, 0, 0, 0]);
+        assert_eq!(validate(&r, 64, 32, 4, 0), Ok(4));
     }
     #[test]
     fn desktop_roles_and_epoch_guards() {

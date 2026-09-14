@@ -332,11 +332,13 @@ mod tests {
         let old_session = session_id();
         start().unwrap();
         event_for_session(old_session, "test.capture.late", 42, 0);
-        assert!(stop()
-            .unwrap()
-            .samples
-            .iter()
-            .all(|s| !s.name.starts_with("test.capture.")));
+        assert!(
+            stop()
+                .unwrap()
+                .samples
+                .iter()
+                .all(|s| !s.name.starts_with("test.capture."))
+        );
     }
 
     #[test]
@@ -373,11 +375,13 @@ mod tests {
         assert_eq!((changes[0].id, changes[0].value), (2, 160));
         start().unwrap();
         assert_eq!(probe_ack(&frame([96; 3], 4)), Some(0));
-        assert!(stop()
-            .unwrap()
-            .samples
-            .iter()
-            .all(|s| s.name != "animation.gray_transition"));
+        assert!(
+            stop()
+                .unwrap()
+                .samples
+                .iter()
+                .all(|s| s.name != "animation.gray_transition")
+        );
         start().unwrap();
         for (gray, generation) in [([88, 92, 88], 5), ([96; 3], 6), ([152, 156, 152], 7)] {
             assert_eq!(probe_ack(&frame(gray, generation)), Some(0));

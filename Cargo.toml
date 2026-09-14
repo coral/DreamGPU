@@ -2,7 +2,7 @@
 name = "dreamgpu"
 links = "dreamgpu"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 license = "GPL-2.0-or-later"
 description = "Native retro GPU transport and presentation SDK"
 

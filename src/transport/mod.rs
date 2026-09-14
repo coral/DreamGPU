@@ -15,12 +15,13 @@ use std::{
     },
     path::{Path, PathBuf},
     sync::{
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, AtomicU64, Ordering},
-        mpsc, Arc, Condvar, Mutex,
+        mpsc,
     },
     thread::{self, JoinHandle},
 };
-use wire::{invalid, Frame, Packet, Slot, BYTES, MAX_DRAWABLES, MAX_SLOTS};
+use wire::{BYTES, Frame, MAX_DRAWABLES, MAX_SLOTS, Packet, Slot, invalid};
 
 mod desktop;
 #[cfg(target_os = "macos")]

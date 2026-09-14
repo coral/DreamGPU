@@ -306,12 +306,12 @@ fn validate_direct_storage(
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_direct_storage, DirectTextureCache};
+    use super::{DirectTextureCache, validate_direct_storage};
     use crate::{FrameAllocation, FrameLease, FramePixels, FrameStorage, PixelFormat};
     use objc2_metal::MTLBuffer;
     use std::sync::{
-        atomic::{AtomicBool, AtomicUsize, Ordering},
         Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
     };
 
     struct TestMapping {

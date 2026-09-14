@@ -1,10 +1,10 @@
 #![recursion_limit = "256"]
 use dreamgpu::presentation::desktop::DesktopCanvas;
 use dreamgpu::{
-    desktop::{DesktopBatch, DesktopOp, DesktopRect},
     FrameLease, PixelFormat,
+    desktop::{DesktopBatch, DesktopOp, DesktopRect},
 };
-use std::sync::{mpsc, Arc};
+use std::sync::{Arc, mpsc};
 
 fn block_on<T>(future: impl std::future::Future<Output = T>) -> T {
     struct Wake(std::thread::Thread);
@@ -129,39 +129,43 @@ fn ordered_mixed_desktop_preserves_pixels_and_services_offscreen_reads() {
     assert!(canvas.is_mixed());
 
     // A bad trailing operation cannot leave its valid prefix on the canvas.
-    assert!(canvas
-        .apply(
-            &device,
-            &queue,
-            batch(
-                2,
-                vec![
-                    DesktopOp::Fill {
-                        rect: rect(0, 0, 16, 8),
+    assert!(
+        canvas
+            .apply(
+                &device,
+                &queue,
+                batch(
+                    2,
+                    vec![
+                        DesktopOp::Fill {
+                            rect: rect(0, 0, 16, 8),
+                            bgra: red
+                        },
+                        DesktopOp::Copy {
+                            source: rect(u32::MAX, 0, 2, 1),
+                            x: 0,
+                            y: 0
+                        },
+                    ]
+                )
+            )
+            .is_err()
+    );
+    assert!(
+        canvas
+            .apply(
+                &device,
+                &queue,
+                batch(
+                    3,
+                    vec![DesktopOp::Fill {
+                        rect: rect(0, 0, 1, 1),
                         bgra: red
-                    },
-                    DesktopOp::Copy {
-                        source: rect(u32::MAX, 0, 2, 1),
-                        x: 0,
-                        y: 0
-                    },
-                ]
+                    }]
+                )
             )
-        )
-        .is_err());
-    assert!(canvas
-        .apply(
-            &device,
-            &queue,
-            batch(
-                3,
-                vec![DesktopOp::Fill {
-                    rect: rect(0, 0, 1, 1),
-                    bgra: red
-                }]
-            )
-        )
-        .is_err());
+            .is_err()
+    );
     let (a, ra) = mpsc::sync_channel(1);
     canvas
         .apply(
@@ -188,26 +192,30 @@ fn ordered_mixed_desktop_preserves_pixels_and_services_offscreen_reads() {
         )
         .unwrap();
     assert!(!canvas.is_mixed());
-    assert!(canvas
-        .apply(
-            &device,
-            &queue,
-            batch(
-                4,
-                vec![DesktopOp::Fill {
-                    rect: rect(0, 0, 1, 1),
-                    bgra: red
-                }]
+    assert!(
+        canvas
+            .apply(
+                &device,
+                &queue,
+                batch(
+                    4,
+                    vec![DesktopOp::Fill {
+                        rect: rect(0, 0, 1, 1),
+                        bgra: red
+                    }]
+                )
             )
-        )
-        .is_err());
-    assert!(canvas
-        .apply(
-            &device,
-            &queue,
-            batch(1, vec![DesktopOp::Seed(pixels(16, 8, red))])
-        )
-        .is_err());
+            .is_err()
+    );
+    assert!(
+        canvas
+            .apply(
+                &device,
+                &queue,
+                batch(1, vec![DesktopOp::Seed(pixels(16, 8, red))])
+            )
+            .is_err()
+    );
     canvas
         .apply(
             &device,
@@ -238,17 +246,19 @@ fn ordered_mixed_desktop_preserves_pixels_and_services_offscreen_reads() {
             },
         )
         .unwrap();
-    assert!(canvas
-        .apply(
-            &device,
-            &queue,
-            DesktopBatch {
-                epoch: 3,
-                sequence: 1,
-                operations: vec![DesktopOp::Reset, DesktopOp::Barrier]
-            }
-        )
-        .is_err());
+    assert!(
+        canvas
+            .apply(
+                &device,
+                &queue,
+                DesktopBatch {
+                    epoch: 3,
+                    sequence: 1,
+                    operations: vec![DesktopOp::Reset, DesktopOp::Barrier]
+                }
+            )
+            .is_err()
+    );
     canvas
         .apply(
             &device,

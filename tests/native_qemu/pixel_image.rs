@@ -441,7 +441,9 @@ fn qemu_bitmap_drawpixels_stream_once_with_zoom_and_raster_state() {
     id += 1;
     assert_eq!(
         &pixels(&mut q, &mut seq)[..16],
-        &[0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255]
+        &[
+            0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255
+        ]
     );
     submit(&mut q, &mut seq, &[call(453, &[0x0b71])]);
     // Stencil Bitmap input and stencil CopyPixels preserve one-bit unpack order.
@@ -479,7 +481,9 @@ fn qemu_bitmap_drawpixels_stream_once_with_zoom_and_raster_state() {
     );
     assert_eq!(
         &pixels(&mut q, &mut seq)[..16],
-        &[255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255]
+        &[
+            255, 0, 0, 255, 0, 0, 255, 255, 255, 0, 0, 255, 0, 0, 255, 255
+        ]
     );
     assert_eq!(words(&query(&mut q, &mut seq, 0x2fc, &[]).1), [0]);
     // Packed COLOR_INDEX rows preserve padding and native index-to-RGBA maps.

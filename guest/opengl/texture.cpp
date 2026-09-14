@@ -81,8 +81,7 @@ static ULONG PixelBytes(GLenum format, GLenum type) {
 }
 
 static BOOL Packed16(GLenum type) {
-    return type == 0x8363 || type == 0x8033 || type == 0x8034 || type == 0x8365 ||
-           type == 0x8366;
+    return type == 0x8363 || type == 0x8033 || type == 0x8034 || type == 0x8365 || type == 0x8366;
 }
 
 static BOOL DirectPixels(GLenum type) {

@@ -1133,43 +1133,49 @@ mod tests {
         drop_packet.set64(64, 42);
         desktop.push(drop_packet, vec![], &releases).unwrap();
         assert!(desktop.take().unwrap().is_none());
-        assert!(!desktop
-            .receive_image(
-                7,
-                8,
-                Slot {
-                    index: 5,
-                    epoch: 100,
-                    generation: 41
-                }
-            )
-            .unwrap());
-        assert!(!desktop
-            .receive_image(
-                7,
-                8,
-                Slot {
-                    index: 6,
-                    epoch: 100,
-                    generation: 42
-                }
-            )
-            .unwrap());
+        assert!(
+            !desktop
+                .receive_image(
+                    7,
+                    8,
+                    Slot {
+                        index: 5,
+                        epoch: 100,
+                        generation: 41
+                    }
+                )
+                .unwrap()
+        );
+        assert!(
+            !desktop
+                .receive_image(
+                    7,
+                    8,
+                    Slot {
+                        index: 6,
+                        epoch: 100,
+                        generation: 42
+                    }
+                )
+                .unwrap()
+        );
         assert!(
             desktop.dropped.is_empty(),
             "ordered final image retires the tombstone without an unbounded history"
         );
-        assert!(desktop
-            .receive_image(
-                7,
-                8,
-                Slot {
-                    index: 5,
-                    epoch: 101,
-                    generation: 1
-                }
-            )
-            .unwrap());
+        assert!(
+            desktop
+                .receive_image(
+                    7,
+                    8,
+                    Slot {
+                        index: 5,
+                        epoch: 101,
+                        generation: 1
+                    }
+                )
+                .unwrap()
+        );
         let mut reset = Packet::new(wire::RESET);
         reset.set64(88, 9);
         reset.set64(96, 2);

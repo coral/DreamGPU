@@ -161,6 +161,10 @@
 #define DG_DESKTOP_SRC_X 24
 #define DG_DESKTOP_SRC_Y 28
 #define DG_DESKTOP_RESERVED0 32
+/* Primary memory format, independent of the 32-bit compositor/export format.
+ * Zero preserves the original XRGB8888 packets; 16 selects little-endian RGB565.
+ * The device checks this against the active VBE mode before enqueue. */
+#define DG_DESKTOP_PRIMARY_BPP 32
 #define DG_DESKTOP_RESERVED1 36
 #define DG_DESKTOP_SLOT_OR_OFFSET 40
 #define DG_DESKTOP_VRAM_STRIDE 44

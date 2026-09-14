@@ -53,8 +53,8 @@ TexDB::Record *TexDB::Acquire(GrTexInfo *info, bool two) {
     if (!two)
         for (Record **p = &m_pool; *p; p = &(*p)->next) {
             Record *r = *p;
-            if (r->info.largeLod != info->largeLod ||
-                r->info.aspectRatio != info->aspectRatio || r->info.format != info->format)
+            if (r->info.largeLod != info->largeLod || r->info.aspectRatio != info->aspectRatio ||
+                r->info.format != info->format)
                 continue;
             *p = r->next;
             --m_poolCount;

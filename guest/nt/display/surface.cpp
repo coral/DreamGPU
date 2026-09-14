@@ -48,6 +48,13 @@ HSURF APIENTRY DrvEnableSurface(IN DHPDEV dhpdev) {
     VIDEO_MEMORY_INFORMATION VideoMemoryInfo;
     ULONG ulTemp;
 
+    // Both primaries use the same native RGBA compositor, with explicit
+    // RGB565 conversion at the 16-bit CPU framebuffer boundary.
+    if ((ppdev->BitsPerPixel != 16 && ppdev->BitsPerPixel != 32) || !ppdev->ScreenWidth ||
+        !ppdev->ScreenHeight || ppdev->ScreenDelta <= 0 ||
+        (ULONGLONG)ppdev->ScreenWidth * (ppdev->BitsPerPixel / 8) > (ULONG)ppdev->ScreenDelta)
+        return NULL;
+
     /*
      * Set video mode of our adapter.
      */
@@ -69,6 +76,14 @@ HSURF APIENTRY DrvEnableSurface(IN DHPDEV dhpdev) {
     }
 
     ppdev->ScreenPtr = VideoMemoryInfo.FrameBufferBase;
+    if (!ppdev->ScreenPtr || (ULONGLONG)(ULONG)ppdev->ScreenDelta * ppdev->ScreenHeight >
+                                 VideoMemoryInfo.FrameBufferLength) {
+        VideoMemory.RequestedVirtualAddress = VideoMemoryInfo.VideoRamBase;
+        EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_UNMAP_VIDEO_MEMORY, &VideoMemory,
+                           sizeof(VideoMemory), NULL, 0, &ulTemp);
+        ppdev->ScreenPtr = NULL;
+        return NULL;
+    }
     ppdev->NativeCaps = 0;
     memset(&ppdev->Kernel, 0, sizeof(ppdev->Kernel));
     {

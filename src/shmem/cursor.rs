@@ -5,8 +5,8 @@ use std::{
     os::fd::{AsRawFd, FromRawFd, OwnedFd},
     ptr::NonNull,
     sync::{
-        atomic::{AtomicU32, Ordering},
         Arc,
+        atomic::{AtomicU32, Ordering},
     },
 };
 

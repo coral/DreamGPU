@@ -2,11 +2,13 @@
 
 DreamGPU accelerates graphics for Windows 98/2000/XP guests in QEMU on macOS and Linux. It combines guest display drivers and an OpenGL frontend with a native host renderer and a Rust transport/presentation SDK. Glide uses OpenGLide; Direct3D uses WineD3D for Windows through the guest system providers.
 
-The virtual adapter defaults to a real 256 MiB framebuffer, separate from its
-256 MiB native texture budget. Guest timing supports 60, 75, 85, 100 and 120 Hz,
-with 60 Hz as the default. Guest refresh does not cap game rendering; consumers
-pace presentation using their physical monitor. See the [current measurements
-and display validation](docs/plan.md) for results and remaining limitations.
+DreamGPU works by essentially exposing a "virtual" GPU (depends on how you like to think about it) that forward draw calls to the host. For OpenGL it's quite trivial, we just draw GL, for GLide we use the [qemu-3dfx](https://github.com/startergo/qemu-3dfx-arch) approach and for Direct3D we use WineD3D. End of the day your host GPU ends up painting into a framebuffer, the guest just doesn't know it's actually interacting with a GPU that's 30 years newer than it was designed for.
+
+Yes really, you can play Half Life, UT2004 or Diablo 2 inside a QEMU Windows 98 or Windows 2000 machine at 250 FPS and it just... works? I was surprised myself at first but it's not really that surprising. Noone bats an eye when you run WINE on a Linux box and get better performance than a modern Windows install so why would this be any different really? Sure, we are virtualizing an entire operating system here and translating drawcalls but still. My Mac Studio with an M4 Max is getting > 100 FPS and that's including translating x86 -> ARM lol and then translating GL to Metal. Absolutely insane.
+
+## Is this vibed?
+
+Oh absolutely, top vibed. Not even ashamed of it. Reality is that all the pieces to make this have been out there for years but there just hasn't been energy to put this together and in a "brute-force" way attack this. GPT6 Astra slammed most of this out with **heavy guidance**.
 
 ## Source layout
 
@@ -20,47 +22,18 @@ and display validation](docs/plan.md) for results and remaining limitations.
 - `tests/guest/` contains driver and frontend source tests; `src/`,
   `crates/dreamgpu-host/` and `vendor/qemu/` contain the SDK and native host.
 
-## Library and standalone viewer
-
-```toml
-[dependencies]
-dreamgpu = { path = "../dreamgpu", features = ["presentation"] }
-```
-
-```sh
-cargo test --features presentation
-cargo run --features presentation --example viewer -- /tmp/dgpu.sock
-```
-
-
-## Build the native device and guest package
-
-Cargo owns source initialization, native builds, cross compilation and packaging:
+## Building
 
 ```sh
 cargo build --release                            # SDK and native QEMU
 DREAMGPU_BUILD=all cargo build --release          # also both Windows guest packages
 ```
 
-Guest compilation uses the [pinned x86-64 Linux toolchain](support/guest/toolchain/README.md).
-From macOS, select your configured SSH builder:
-
-```sh
-DREAMGPU_GUEST_HOST=your-builder DREAMGPU_BUILD=all cargo build --release
-```
-
 Outputs:
 
 - `target/qemu-build/`: native QEMU binaries and their source/binary manifest.
-- `target/guest/packages/win98/`: Win98 display drivers, OpenGL, Glide, WineD3D,
-  corresponding license notices and separately grouped tools.
-- `target/guest/packages/windows2000-xp/`: NT5 display drivers and the same API
-  implementations, with tools kept separate from runtime drivers.
-- `target/guest/dreamgpu.exe`: combined guest installer, with an adjacent
-  `installer-manifest.json` recording payload identities. System-wide activation
-  installs the system graphics providers inside the Windows guest.
-  See [installation](tools/setup/README.md) and the [graphics performance plan](docs/plan.md).
+- `target/guest/dreamgpu.exe`: driver installer for the 98/2000/XP guest
 
 ## Licensing
 
-DreamGPU project code is **GPL-2.0-or-later**. See the central [attribution inventory](ATTRIBUTION.md), [license details](docs/licensing.md). Third-party components retain their own licenses.
+DreamGPU project code is **GPL-2.0-or-later**. See the central [attribution inventory](ATTRIBUTION.md). Third-party components retain their own licenses.

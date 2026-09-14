@@ -53,6 +53,7 @@ mod image;
 mod lists;
 mod pixel_image;
 mod pixels;
+mod primary;
 mod publication;
 mod query;
 mod resource;

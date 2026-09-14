@@ -1,6 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Exercise the actual GDI hook against a checked command sink, without a VM.
- * clang -std=c99 -Wall -Wextra -Werror -Iguest/include
+ * clang++ -x c++ -std=c++23 -Wall -Wextra -Werror -Iguest/include
  *   -Iguest/nt/include tests/guest/nt/blit.c -o /tmp/dg-blit-test
  */
 #include <assert.h>
@@ -159,7 +159,7 @@ static BOOL DgCoherent(PPDEV dev, ULONG reason) {
     return !DgDesktopActive(dev) || dev->Kernel.Cohere(dev->Kernel.Context, reason);
 }
 
-#include "../display/blit.c"
+#include "../../../guest/nt/display/blit.cpp"
 
 int main(void) {
     ULONG i;
@@ -248,6 +248,24 @@ int main(void) {
         fail_cohere = TRUE;
         assert(!DrvCopyBits(&memory, &surface, NULL, NULL, &tiny, &zero));
         assert(mixed && fallbacks == cpu_before + 2);
+    }
+    {
+        ULONG before = submits, cpu_before = fallbacks, cohere_before = coheres;
+        dev.BitsPerPixel = 16;
+        dev.ScreenDelta = 64;
+        fail_cohere = FALSE;
+        mixed = 1;
+        // Even a solid primary fill must first return native-owned RGB565
+        // pixels and use DIB semantics, never the RGBA-only GDI shortcut.
+        assert(
+            DrvBitBlt(&surface, NULL, NULL, NULL, NULL, &full, NULL, NULL, &brush, NULL, 0xf0f0));
+        assert(submits == before && fallbacks == cpu_before + 1 && coheres == cohere_before + 1 &&
+               !mixed);
+        mixed = 1;
+        fail_cohere = TRUE;
+        assert(
+            !DrvBitBlt(&surface, NULL, NULL, NULL, NULL, &full, NULL, NULL, &brush, NULL, 0xf0f0));
+        assert(submits == before && fallbacks == cpu_before + 1 && mixed);
     }
     puts("native GDI blit: clipped overlap, fill, unsupported source and failure propagation "
          "passed");

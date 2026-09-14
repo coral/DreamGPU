@@ -8,7 +8,7 @@
 #include "cursor.h"
 #include "dg-window.h"
 #define IOCTL_VIDEO_DG_KERNEL CTL_CODE(FILE_DEVICE_VIDEO, 0x903, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define DG_KERNEL_VERSION 6
+#define DG_KERNEL_VERSION 7
 #ifndef DG_KERNEL_CALL
 #define DG_KERNEL_CALL __stdcall
 #endif
@@ -23,6 +23,7 @@ typedef struct {
     LONG WindowX, WindowY;
     ULONG WindowWidth, WindowHeight, Count, Flags;
     DG_WINDOW_RECT Clips[DG_WINDOW_MAX_CLIPS];
+    ULONG Bpp; /* Actual primary storage: 16 RGB565 or 32 XRGB8888. */
 } DG_KERNEL_PRESENT_REQUEST;
 /* Zero rejects the client; otherwise returns its current kernel process
  * identity. This value stays inside the matched miniport/display pair and is

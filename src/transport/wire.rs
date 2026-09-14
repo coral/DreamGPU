@@ -296,10 +296,12 @@ mod tests {
         assert_eq!(packet.get32(40), slot.index);
         assert_eq!(packet.get64(56), slot.epoch);
         assert_eq!(packet.get64(64), slot.generation);
-        assert!(packet.0[16..40]
-            .iter()
-            .chain(&packet.0[72..])
-            .all(|b| *b == 0));
+        assert!(
+            packet.0[16..40]
+                .iter()
+                .chain(&packet.0[72..])
+                .all(|b| *b == 0)
+        );
     }
 
     #[test]

@@ -58,6 +58,27 @@ fn run(s: &mut State, o: &Ops, op: u32) -> u32 {
     unsafe { dreamgpu_desktop_execute(s, o, record(op, 640, 480).as_ptr(), 640, 480) }
 }
 #[test]
+fn primary_format_change_requires_return_and_new_seed() {
+    let mut s = State::default();
+    let mut c = Check::default();
+    let o = ops(&mut c, &s);
+    assert_eq!(run(&mut s, &o, DG_DESKTOP_SEED), 0);
+    let mut r = record(DG_DESKTOP_PATCH, 640, 480);
+    put(&mut r, 32 + DG_DESKTOP_PRIMARY_BPP, 16);
+    assert_eq!(
+        unsafe { dreamgpu_desktop_execute(&mut s, &o, r.as_ptr(), 640, 480) },
+        DG_GL_ERROR_DESKTOP
+    );
+    assert_eq!((s.sequence, s.primary_bpp, c.captures.len()), (1, 0, 1));
+    assert_eq!(run(&mut s, &o, DG_DESKTOP_RETURN), 0);
+    put(&mut r, 32 + DG_DESKTOP_OP, DG_DESKTOP_SEED);
+    assert_eq!(
+        unsafe { dreamgpu_desktop_execute(&mut s, &o, r.as_ptr(), 640, 480) },
+        0
+    );
+    assert_eq!((s.epoch, s.primary_bpp, s.active), (2, 16, 1));
+}
+#[test]
 fn seed_fill_readback_return_preserve_coherence_and_roll_back_failed_capture() {
     let mut s = State::default();
     let mut c = Check {

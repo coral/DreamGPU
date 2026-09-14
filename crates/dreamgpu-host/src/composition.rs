@@ -15,6 +15,7 @@ pub struct State {
     pub active: u32,
     pub coherent: u32,
     pub exclusive: u32,
+    pub primary_bpp: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -102,6 +103,7 @@ pub unsafe extern "C" fn dreamgpu_desktop_execute(
     let w = word(r, DG_DESKTOP_WIDTH);
     let h = word(r, DG_DESKTOP_HEIGHT);
     let detached = op == DG_DESKTOP_DISCARD;
+    let primary_bpp = word(r, DG_DESKTOP_PRIMARY_BPP);
     unsafe {
         if op == DG_DESKTOP_SEED {
             if (*state).active != 0 {
@@ -114,8 +116,12 @@ pub unsafe extern "C" fn dreamgpu_desktop_execute(
             (*state).sequence = 0;
             (*state).width = width;
             (*state).height = height;
+            (*state).primary_bpp = primary_bpp;
         } else if !detached
-            && ((*state).active == 0 || (*state).width != width || (*state).height != height)
+            && ((*state).active == 0
+                || (*state).width != width
+                || (*state).height != height
+                || (*state).primary_bpp != primary_bpp)
         {
             return DG_GL_ERROR_DESKTOP;
         }

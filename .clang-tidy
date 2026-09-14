@@ -15,5 +15,5 @@ Checks: >-
   bugprone-unused-raii,
   bugprone-use-after-move,
   performance-unnecessary-copy-initialization
-HeaderFilterRegex: '(^|/)(guest|tools)/|/source/(openglide/texture-pool.cpp.inc|wine9x/(ddraw/dg-wine-diagnostics.h|wined3d/dg-wine-blit-usage.h))|/crates/dreamgpu-host/|/(standard-headers/dreamgpu/|hw/display/dreamgpu[^/]*|ui/dreamgpu[^/]*)'
+HeaderFilterRegex: '(^|/)(guest|tools)/|/source/(openglide/texture-pool.cpp.inc|wine9x/(ddraw|wined3d)/dg-wine-[^/]*\.h)|/crates/dreamgpu-host/|/(standard-headers/dreamgpu/|hw/display/dreamgpu[^/]*|ui/dreamgpu[^/]*)'
 FormatStyle: file

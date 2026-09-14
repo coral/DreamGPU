@@ -69,6 +69,7 @@ static RECTL regions[4];
 static ULONG region_count, enum_count_override, lock, owner = 7, process = 1234, presents, deletes,
                                                       active, coherent;
 static DG_KERNEL_PRESENT_REQUEST received;
+static ULONG dc_enum_count;
 static void *EngAllocMem(ULONG flags, ULONG size, ULONG tag) {
     (void)flags;
     (void)tag;
@@ -128,7 +129,7 @@ static void CLIPOBJ_cEnumStart(CLIPOBJ *clip, BOOL all, ULONG type, ULONG dir, U
 static BOOL CLIPOBJ_bEnum(CLIPOBJ *clip, ULONG bytes, ULONG *data) {
     (void)clip;
     (void)bytes;
-    *data = 0;
+    *data = dc_enum_count;
     return FALSE;
 }
 static ULONG Owner(void *context, ULONG client) {
@@ -175,7 +176,8 @@ int main(void) {
     assert(reply.Status == DG_ESCAPE_OK && reply.Binding &&
            reply.Capabilities == DG_WINDOW_CAP_FRONT_ONLY);
     present.Binding = reply.Binding;
-    assert(!DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_NOT_READY);
     /* Disjoint visible rectangles preserve an occluder and are further
      * intersected with the caller's GDI DC clip. */
     regions[0] = (RECTL){10, 20, 40, 100};
@@ -184,6 +186,7 @@ int main(void) {
     callback(&object, WOC_RGN_CLIENT);
     assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, &dc, NULL, sizeof(present), &present));
     assert(received.Count == 2 && received.WindowX == 10 && received.WindowY == 20);
+    assert(received.Bpp == 32 && received.Stride == 640);
     assert(received.Clips[0].Left == 15 && received.Clips[0].Right == 40 &&
            received.Clips[0].Top == 25);
     assert(received.Clips[1].Left == 60 && received.Clips[1].Right == 105 &&
@@ -204,11 +207,23 @@ int main(void) {
     present.Flags = 0;
     assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, &dc, NULL, sizeof(present), &present));
     assert(received.Flags == 0); /* front-only never sticks to a binding */
+    /* A temporarily unrepresentable DC clip has not submitted anything.
+     * Recover on the next ordinary clip without replacing the binding. */
+    CLIPOBJ complex_dc = {DC_COMPLEX, {0, 0, 160, 120}};
+    old = presents;
+    dc_enum_count = 33;
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, &complex_dc, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_NOT_READY);
+    assert(presents == old);
+    dc_enum_count = 0;
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, &dc, NULL, sizeof(present), &present) == 1);
+    assert(presents == old + 1 && received.Count == 2);
     /* Clip count overflow invalidates the entire snapshot instead of exposing
      * a partially enumerated window. */
     enum_count_override = (ULONG)-1;
     callback(&object, WOC_RGN_CLIENT);
-    assert(!DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_NOT_READY);
     enum_count_override = 0;
     region_count = 0;
     callback(&object, WOC_RGN_CLIENT);
@@ -218,14 +233,16 @@ int main(void) {
     bind.Drawable = 6;
     assert(DgBindWindow(&surface, sizeof(bind), &bind, sizeof(reply), &reply));
     assert(reply.Status == DG_ESCAPE_OK && reply.Binding != old);
-    assert(!DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_REBIND);
     present.Binding = reply.Binding;
     /* Last-context teardown retired client7 but leaves the actual HWND alive.
      * A fresh client from that same process may reuse it; old bindings expire. */
     owner = bind.Client = 8;
     assert(DgBindWindow(&surface, sizeof(bind), &bind, sizeof(reply), &reply));
     assert(reply.Status == DG_ESCAPE_OK && reply.Binding != present.Binding);
-    assert(!DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_REBIND);
     present.Binding = reply.Binding;
     assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
     /* Even with a valid new client and the old token retired, a different
@@ -242,12 +259,43 @@ int main(void) {
     DrvSynchronizeSurface(&surface, NULL, 0);
     assert(coherent == 1);
     callback(&object, WOC_DELETE);
-    assert(!DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_REBIND);
     bind.Client = 8;
     assert(DgBindWindow(&surface, sizeof(bind), &bind, sizeof(reply), &reply));
     assert(reply.Status == DG_ESCAPE_OK);
     DgDeleteWindows(&dev);
     assert(deletes == 1 && !lock);
+    // A real RGB565 primary carries its own byte stride/depth through the
+    // same owned WNDOBJ clipping path; it is not advertised as RGBA memory.
+    dev.BitsPerPixel = 16;
+    dev.ScreenDelta = 320;
+    assert(DgBindWindow(&surface, sizeof(bind), &bind, sizeof(reply), &reply));
+    assert(reply.Status == DG_ESCAPE_OK);
+    present.Binding = reply.Binding;
+    callback(&object, WOC_RGN_CLIENT);
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present));
+    assert(received.Bpp == 16 && received.Stride == 320);
+    old = presents;
+    DgDeleteWindows(&dev);
+    // Same-size mode deactivation destroys WNDOBJs without changing the
+    // frontend's cached client dimensions. No stale-token attempt submits.
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_REBIND);
+    assert(presents == old);
+    assert(DgBindWindow(&surface, sizeof(bind), &bind, sizeof(reply), &reply));
+    assert(reply.Status == DG_ESCAPE_OK && reply.Binding != present.Binding);
+    present.Binding = reply.Binding;
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) ==
+           DG_WINDOW_PRESENT_NOT_READY);
+    assert(presents == old);
+    callback(&object, WOC_RGN_CLIENT);
+    assert(DrvDrawEscape(&surface, DG_DRAW_ESCAPE, NULL, NULL, sizeof(present), &present) == 1);
+    assert(presents == old + 1 && received.Count == 0);
+    DgDeleteWindows(&dev);
+    dev.BitsPerPixel = 24;
+    assert(DgBindWindow(&surface, sizeof(bind), &bind, sizeof(reply), &reply));
+    assert(reply.Status == DG_ESCAPE_INVALID && !lock);
     puts("window binding: visible/DC clips, front capability/flags, bounded enumeration, rebind, "
          "ownership, teardown and coherence passed");
     return 0;

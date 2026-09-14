@@ -241,34 +241,34 @@ fn display_worker(
         if stop.load(Ordering::Acquire) {
             break;
         }
-        if fds[1].revents & libc::POLLIN != 0 {
-            if let Ok((stream, _)) = listener.accept() {
-                if stream.set_nonblocking(true).is_err() {
-                    continue;
-                }
-                #[cfg(target_os = "macos")]
-                unsafe {
-                    let on: libc::c_int = 1;
-                    libc::setsockopt(
-                        stream.as_raw_fd(),
-                        libc::SOL_SOCKET,
-                        libc::SO_NOSIGPIPE,
-                        (&on as *const libc::c_int).cast(),
-                        size_of_val(&on) as _,
-                    );
-                }
-                input.queue.lock().unwrap().connected = true;
-                input.connection_changed(true);
-                client = Some(DisplayConnection {
-                    stream,
-                    bytes: [0; 24],
-                    used: 0,
-                    fd: None,
-                    output: [0; 24],
-                    out_used: 0,
-                    out_len: 0,
-                });
+        if fds[1].revents & libc::POLLIN != 0
+            && let Ok((stream, _)) = listener.accept()
+        {
+            if stream.set_nonblocking(true).is_err() {
+                continue;
             }
+            #[cfg(target_os = "macos")]
+            unsafe {
+                let on: libc::c_int = 1;
+                libc::setsockopt(
+                    stream.as_raw_fd(),
+                    libc::SOL_SOCKET,
+                    libc::SO_NOSIGPIPE,
+                    (&on as *const libc::c_int).cast(),
+                    size_of_val(&on) as _,
+                );
+            }
+            input.queue.lock().unwrap().connected = true;
+            input.connection_changed(true);
+            client = Some(DisplayConnection {
+                stream,
+                bytes: [0; 24],
+                used: 0,
+                fd: None,
+                output: [0; 24],
+                out_used: 0,
+                out_len: 0,
+            });
         }
         let mut disconnected = false;
         let mut changed = false;

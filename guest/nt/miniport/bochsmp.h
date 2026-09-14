@@ -56,6 +56,7 @@ typedef struct {
     USHORT XResolution;
     USHORT YResolution;
     USHORT Frequency;
+    USHORT BitsPerPixel;
 } BOCHS_SIZE, *PBOCHS_SIZE;
 
 typedef struct {

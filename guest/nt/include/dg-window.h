@@ -8,6 +8,11 @@
 #define DG_WINDOW_MAGIC 0x4a524757UL
 #define DG_WINDOW_VERSION 1
 #define DG_DRAW_ESCAPE 0x4a524702UL
+/* DrawEscape outcomes known to precede every kernel presentation. Rebinding
+ * may be attempted once; an incomplete clip snapshot waits for GDI's callback.
+ * Neither outcome means a GL command or a buffer exchange should be replayed. */
+#define DG_WINDOW_PRESENT_REBIND 2
+#define DG_WINDOW_PRESENT_NOT_READY 3
 /* Optional response capability. Legacy replies leave this word zero. */
 #define DG_WINDOW_CAP_FRONT_ONLY 1
 /* Publish the current front buffer without exchanging front/back. This is

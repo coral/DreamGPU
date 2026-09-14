@@ -7,7 +7,7 @@
 //! nothing about its position or visibility on the desktop.
 
 use crate::{FrameLease, GpuFrameLease};
-use std::sync::{mpsc::SyncSender, Arc, Mutex};
+use std::sync::{Arc, Mutex, mpsc::SyncSender};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct DesktopRect {
@@ -117,7 +117,7 @@ impl DesktopReply {
     pub fn complete(&self, result: ReadResult) {
         let reply = self
             .0
-             .0
+            .0
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take();
