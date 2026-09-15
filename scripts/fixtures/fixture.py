@@ -259,7 +259,10 @@ def bootstrap_program(endpoint, program):
     vm = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(vm)
     vm.key(endpoint, 'meta_l+r')
-    time.sleep(.8)
+    # Cold NT startup can take over a second to finish creating the Run edit.
+    # Sending sooner dropped the opening quote and drive prefix, turning
+    # C:\DGPUBEN.EXE into \DGPUBEN.EXE and making serial discovery time out.
+    time.sleep(1.5)
     vm.type_text(endpoint, '"' + program + '"')
     vm.key(endpoint, 'ret')
 

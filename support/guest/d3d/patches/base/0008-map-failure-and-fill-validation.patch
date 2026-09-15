@@ -1,0 +1,144 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -2886,7 +2886,6 @@
+     {
+         TRACE("WINED3D_MAP_DISCARD flag passed, marking %s as up to date.\n",
+                 wined3d_debug_location(surface->resource.map_binding));
+-        surface_validate_location(surface, surface->resource.map_binding);
+     }
+     else
+     {
+@@ -2907,9 +2906,6 @@
+         }
+     }
+ 
+-    if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
+-        surface_invalidate_location(surface, ~surface->resource.map_binding);
+-
+     switch (surface->resource.map_binding)
+     {
+         case WINED3D_LOCATION_SYSMEM:
+@@ -2938,8 +2934,21 @@
+ 
+         default:
+             ERR("Unexpected map binding %s.\n", wined3d_debug_location(surface->resource.map_binding));
+-            base_memory = NULL;
+-    }
++            --surface->resource.map_count;
++            return WINED3DERR_INVALIDCALL;
++    }
++
++    if (!base_memory)
++    {
++        --surface->resource.map_count;
++        return E_OUTOFMEMORY;
++    }
++
++    /* Publish writable/discarded storage only after a successful map. */
++    if (flags & WINED3D_MAP_DISCARD)
++        surface_validate_location(surface, surface->resource.map_binding);
++    if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
++        surface_invalidate_location(surface, ~surface->resource.map_binding);
+ 
+     if (fmt_flags & WINED3DFMT_FLAG_BROKEN_PITCH)
+         map_desc->row_pitch = surface->resource.width * format->byte_count;
+@@ -3811,6 +3820,10 @@
+             flags, DDBltFx, debug_d3dtexturefiltertype(filter));
+ 
+     /* Get the swapchain. One of the surfaces has to be a primary surface */
++    /* Source-less raster operations use the ordinary CPU fallback. */
++    if (!src_surface)
++        return WINED3DERR_INVALIDCALL;
++
+     if (dst_surface->resource.pool == WINED3D_POOL_SYSTEM_MEM)
+     {
+         WARN("Destination is in sysmem, rejecting gl blt\n");
+@@ -4936,7 +4949,8 @@
+ 
+     if (src_surface == dst_surface)
+     {
+-        wined3d_surface_map(dst_surface, &dst_map, NULL, 0);
++        if (FAILED(hr = wined3d_surface_map(dst_surface, &dst_map, NULL, 0)))
++            goto release_texture;
+         src_map = dst_map;
+         src_format = dst_surface->resource.format;
+         dst_format = src_format;
+@@ -4955,11 +4969,13 @@
+                 {
+                     /* The conv function writes a FIXME */
+                     WARN("Cannot convert source surface format to dest format.\n");
+-                    goto release;
++                    hr = WINED3DERR_NOTAVAILABLE;
++                    goto release_texture;
+                 }
+                 src_surface = surface_from_resource(wined3d_texture_get_sub_resource(src_texture, 0));
+             }
+-            wined3d_surface_map(src_surface, &src_map, NULL, WINED3D_MAP_READONLY);
++            if (FAILED(hr = wined3d_surface_map(src_surface, &src_map, NULL, WINED3D_MAP_READONLY)))
++                goto release_texture;
+             src_format = src_surface->resource.format;
+             src_fmt_flags = src_surface->container->resource.format_flags;
+         }
+@@ -4969,7 +4985,12 @@
+             src_fmt_flags = dst_fmt_flags;
+         }
+ 
+-        wined3d_surface_map(dst_surface, &dst_map, &dst_box, 0);
++        if (FAILED(hr = wined3d_surface_map(dst_surface, &dst_map, &dst_box, 0)))
++        {
++            if (src_surface)
++                wined3d_surface_unmap(src_surface);
++            goto release_texture;
++        }
+     }
+ 
+     bpp = dst_surface->resource.format->byte_count;
+@@ -5395,6 +5416,7 @@
+     wined3d_surface_unmap(dst_surface);
+     if (src_surface && src_surface != dst_surface)
+         wined3d_surface_unmap(src_surface);
++release_texture:
+     /* Release the converted surface, if any. */
+     if (src_texture)
+         wined3d_texture_decref(src_texture);
+@@ -5524,6 +5546,10 @@
+                 fx->ddckSrcColorkey.color_space_high_value);
+     }
+ 
++    /* Both accelerated and CPU fill paths require the operation payload. */
++    if ((flags & (WINEDDBLT_COLORFILL | WINEDDBLT_DEPTHFILL)) && !fx)
++        return WINED3DERR_INVALIDCALL;
++
+     if (dst_surface->resource.map_count || (src_surface && src_surface->resource.map_count))
+     {
+         WARN("Surface is busy, returning WINEDDERR_SURFACEBUSY.\n");
+@@ -5648,6 +5674,9 @@
+ 
+             TRACE("Depth fill.\n");
+ 
++            if (!fx)
++                return WINED3DERR_INVALIDCALL;
++
+             if (!surface_convert_depth_to_float(dst_surface, fx->u5.dwFillDepth, &depth))
+                 return WINED3DERR_INVALIDCALL;
+ 
+@@ -5693,6 +5722,9 @@
+             const struct wined3d_palette *palette = dst_swapchain ? dst_swapchain->palette : NULL;
+ 
+             TRACE("Color fill.\n");
++
++            if (!fx)
++                return WINED3DERR_INVALIDCALL;
+ 
+             if (!wined3d_format_convert_color_to_float(dst_surface->resource.format,
+                     palette, fx->u5.dwFillColor, &color))
+--- a/include/wine/wined3d.h
++++ b/include/wine/wined3d.h
+@@ -639,6 +639,7 @@
+     WINED3D_TS_WORLD1                       = 257,
+     WINED3D_TS_WORLD2                       = 258,
+     WINED3D_TS_WORLD3                       = 259,
++    WINED3D_TS_WORLD_LAST                   = 511, /* WINED3D_TS_WORLD_MATRIX(255) */
+ };
+ 
+ #define WINED3D_TS_WORLD_MATRIX(index)                          (enum wined3d_transform_state)(index + 256)

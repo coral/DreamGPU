@@ -150,8 +150,16 @@ def profile_config(original, profile, disk, cdroms):
 def verify_package(directory, expected):
     manifest = json.loads((directory/'package.json').read_text())
     files = manifest['files']
-    identity = hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest()
-    if manifest.get('schema') != 1 or identity != expected or manifest.get('identity') != expected:
+    if manifest.get('schema') == 1:
+        encoded = json.dumps(files, sort_keys=True).encode()
+    elif (manifest.get('schema') == 2 and
+          manifest.get('identity_scheme') == 'sha256-json-utf8-sorted-compact'):
+        encoded = json.dumps(files, sort_keys=True, ensure_ascii=False,
+                             separators=(',', ':')).encode('utf-8')
+    else:
+        raise ValueError('Unknown graphics package identity scheme')
+    identity = hashlib.sha256(encoded).hexdigest()
+    if identity != expected or manifest.get('identity') != expected:
         raise ValueError('Shared graphics package identity mismatch')
     if not isinstance(files, dict) or not files:
         raise ValueError('Missing graphics package inventory')
@@ -166,7 +174,19 @@ def verify_package(directory, expected):
             raise ValueError('Symlink in graphics package')
         if path.is_file():
             actual.add(str(path.relative_to(directory)))
-    if actual != set(files)|{'package.json'}:
+    metadata = {'package.json'}
+    if manifest.get('schema') == 2 and 'manifest.json' in actual:
+        # Cargo retains its source/build receipt beside the payload manifest.
+        # Its inventory must agree with the authenticated payload inventory;
+        # runner_manifest.json is added by Cargo after that receipt is written.
+        build = json.loads((directory/'manifest.json').read_text())
+        expected_files = {name: checksum for name, checksum in files.items()
+                          if name != 'runner_manifest.json'}
+        if (build.get('schema') != 1 or build.get('files') != expected_files or
+                build.get('build_identity') != manifest.get('runner_identity')):
+            raise ValueError('Build receipt differs from graphics package inventory')
+        metadata.add('manifest.json')
+    if actual != set(files)|metadata:
         raise ValueError('Unrecorded graphics package member')
     return manifest
 

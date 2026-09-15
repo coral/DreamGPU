@@ -25,7 +25,9 @@ class HostInput:
             import fcntl
             self.fcntl = fcntl
             self.fd = os.open('/dev/uinput', os.O_WRONLY | os.O_NONBLOCK)
-            self.keys = {'A': 30, 'F12': 88, 'Escape': 1, 'Enter': 28, 'Space': 57,
+            self.keys = {'W': 17, 'A': 30, 'S': 31, 'D': 32,
+                         'LeftCtrl': 29, 'LeftShift': 42, 'LeftAlt': 56, 'LeftMeta': 125,
+                         'F12': 88, 'Escape': 1, 'Enter': 28, 'Space': 57,
                          'Left': 105, 'Right': 106, 'Up': 103, 'Down': 108}
             self.buttons = {'Left': 272, 'Right': 273, 'Middle': 274}
             for event_type in [1, 2]:
@@ -47,8 +49,11 @@ class HostInput:
             self.cg.CGEventCreateKeyboardEvent.argtypes = [ctypes.c_void_p, ctypes.c_uint16, ctypes.c_bool]
             self.cg.CGEventCreateKeyboardEvent.restype = ctypes.c_void_p
             self.cg.CGEventPost.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+            self.cg.CGEventSetFlags.argtypes = [ctypes.c_void_p, ctypes.c_uint64]
             self.cf.CFRelease.argtypes = [ctypes.c_void_p]
-            self.keys = {'A': 0, 'F12': 111, 'Escape': 53, 'Enter': 36, 'Space': 49,
+            self.keys = {'W': 13, 'A': 0, 'S': 1, 'D': 2,
+                         'LeftCtrl': 59, 'LeftShift': 56, 'LeftAlt': 58, 'LeftMeta': 55,
+                         'F12': 111, 'Escape': 53, 'Enter': 36, 'Space': 49,
                          'Left': 123, 'Right': 124, 'Up': 126, 'Down': 125}
         else:
             raise RuntimeError('Host injection supports Linux and macOS')
@@ -78,6 +83,10 @@ class HostInput:
                 native = self.cg.CGEventCreateKeyboardEvent(None, self.keys[value], down)
                 if not native:
                     raise RuntimeError('CGEventCreateKeyboardEvent failed')
+                flags = sum(mask for key, mask in (
+                    ('LeftShift', 1 << 17), ('LeftCtrl', 1 << 18),
+                    ('LeftAlt', 1 << 19), ('LeftMeta', 1 << 20)) if key in self.held)
+                self.cg.CGEventSetFlags(native, flags)
                 self.cg.CGEventPost(0, native)
                 self.cf.CFRelease(native)
         elif sys.platform == 'linux' and kind == 'MouseMoveRel':

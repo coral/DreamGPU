@@ -70,6 +70,35 @@ class AdoptTests(unittest.TestCase):
             (directory/'application/dgpugl.dll').write_bytes(b'changed')
             with self.assertRaisesRegex(ValueError,'identity changed'):adopt.verify_package(directory,identity)
 
+    def test_cargo_schema2_package_identity_and_payload_are_enforced(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory,_=self.package(Path(temporary))
+            manifest=json.loads((directory/'package.json').read_text())
+            identity=hashlib.sha256(json.dumps(manifest['files'],sort_keys=True,
+                ensure_ascii=False,separators=(',',':')).encode('utf-8')).hexdigest()
+            manifest.update(schema=2,identity_scheme='sha256-json-utf8-sorted-compact',identity=identity,
+                            runner_identity='b'*64)
+            (directory/'package.json').write_text(json.dumps(manifest))
+            adopt.verify_package(directory,identity)
+            build={'schema':1,'files':manifest['files'],'build_identity':'b'*64}
+            (directory/'manifest.json').write_text(json.dumps(build))
+            adopt.verify_package(directory,identity)
+            build['build_identity']='c'*64
+            (directory/'manifest.json').write_text(json.dumps(build))
+            with self.assertRaisesRegex(ValueError,'Build receipt'):
+                adopt.verify_package(directory,identity)
+            build['build_identity']='b'*64
+            (directory/'manifest.json').write_text(json.dumps(build))
+            manifest['identity_scheme']='unknown'
+            (directory/'package.json').write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError,'identity scheme'):
+                adopt.verify_package(directory,identity)
+            manifest['identity_scheme']='sha256-json-utf8-sorted-compact'
+            (directory/'package.json').write_text(json.dumps(manifest))
+            (directory/'application/dgpugl.dll').write_bytes(b'changed')
+            with self.assertRaisesRegex(ValueError,'identity changed'):
+                adopt.verify_package(directory,identity)
+
     def test_actual_qcow_chain_flattens_before_config_switch_and_rejects_conflict(self):
         image_tool=adopt.ROOT/'target/qemu-build/qemu-img'
         if not image_tool.exists():self.skipTest('Source-built qemu-img unavailable')

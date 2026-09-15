@@ -31,6 +31,10 @@
     {
       "file": "0007-display-timing.patch",
       "sha256": "8214300741812869bd8d11a9b75acb96f7677676e5edcbd1fce6f4ec85b8294f"
+    },
+    {
+      "file": "0008-map-failure-and-fill-validation.patch",
+      "sha256": "ed6da980d72720bac5db492e8379c641c1e565c7a8c7c64b73057c46be6df866"
     }
   ],
   "files": {
@@ -52,7 +56,7 @@
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "d518f285b5cfe0d7a07ceb4f25f529917c7af2f30033365f02828ca71bc28ffe"
+      "after_sha256": "058345797ecb7b50b762628d9e3fb5c9234e304a7040b22116faba3009473ac8"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
@@ -113,6 +117,10 @@
     "ddraw/ddraw.c": {
       "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",
       "after_sha256": "040ad087b7f8fa265f1f24b39cce2e4013d182410efd192f03fa2d8beb17e34f"
+    },
+    "include/wine/wined3d.h": {
+      "before_sha256": "63724cc929732fd76fe099e2dd360531212b6237245da92c56160fc765753e38",
+      "after_sha256": "db8372f4813504711e7ce7e4f2c69512364154acdb51c321397b8a1765c4ad3b"
     }
   }
 }

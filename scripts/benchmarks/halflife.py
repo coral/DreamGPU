@@ -200,7 +200,7 @@ def parse_probe(raw, name="arrays"):
     return {'probe': name, 'passed': True}
 
 
-def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_timeout=30, timeout=180, *, probe=False, on_phase=None, sampler=None, gpu=None):
+def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_timeout=30, timeout=180, *, probe=False, on_phase=None, sampler=None, gpu=None, on_started=None):
     demo = demo_name(demo)
     if probe and demo not in PROBES:
         raise ValueError('Unknown fixed public API probe')
@@ -255,6 +255,11 @@ def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_time
             report["host_monotonic_seconds"]["process_created_observed"] = started
             report["latency_seconds"]["start_after_run"] = started - submitted
             report["state"] = "await_result"
+            # Coordinate host input with the actual guest process creation,
+            # rather than a separate controller/model turn and a guessed delay.
+            # STARTED is not a rendered-frame or application-readiness claim.
+            if on_started:
+                on_started(started)
             phases=[]
             launch_phases=[]
             while True:

@@ -9,6 +9,132 @@
 
 Started September 12, 2026. Plan: [plan.md](plan.md).
 
+## September 14 — execution resumed
+
+The user resumed [plan.md](plan.md). Fullscreen graphics recovery and captured
+movement chords pass, and normal-image adoption is complete. Prior performance
+and display-mode measurements are retained; they will not be rerun unchanged.
+
+The previous local `target/follow-through` fixtures, helpers and receipts are no
+longer present. Juke's normal Windows 2000 disk and DreamGPU's native QEMU binaries
+remain; the consumer executable was rebuilt successfully. The exact previous
+recovery installer survived in Framework's dedicated Cargo guest cache and was
+recovered to `target/follow-through/recovered-740/` (SHA `74064e43…`), with its NT
+package. It can be used without waiting for the independent Wine patch rebuild. The
+September 13 handoff below is historical evidence, not a list of artifacts
+currently available locally. Prepare a private copy of the stopped normal image
+and verify its installed stack before testing; do not use the missing fixture's
+hashes as the identity of a new run.
+
+The pending Wine analyzer patch is complete, including map-failure cleanup,
+conversion-failure cleanup and common fill validation. This is housekeeping work, not an explanation for the
+Half-Life focus failure. Runtime preparation and patch validation run independently.
+Framework SSH uses the existing `coralmodern` identity; its prior agent-only key
+availability did not survive the session change.
+
+The retained focus helper is now `tools/benchmark/hl-focus.cpp`, built as
+`DGFOCUS.EXE` by the existing guest CMake/Cargo tool target. It starts a normally
+initialized retail process, discovers its real enabled Console/Resume controls,
+uses the child HWND in button notifications, types the map through key events,
+and logs mode/window/foreground phases. It exports through the existing serial
+probe; generated media and run data stay in `target/`. The private fixture has an
+additional helper CD drive so further diagnostics do not require a reboot.
+
+The C/C++ checker also had a concrete empty-diff bug: it emitted line zero for
+unchanged borrowed files, which LLVM rejects. It now emits a positive range
+beyond EOF. Existing checker tests and a real LLVM invocation over an unchanged
+donor with a diagnostic pass; this keeps unchanged upstream warnings outside
+our maintained-line filter while retaining explicit owned-header coverage.
+Evidence: `target/follow-through/quality-filter-20260914/report.json`.
+
+Wine patch `0008` and all manifest identities now replay exactly (eight patches,
+21 files). The final Cargo guest release build passes, producing installer
+`79b45eef7063da19157c10e2e20520a127761d6a4c7bc9bed10dd7f19deffef8`.
+Both OS packages contain WineD3D SHA `2cd38c95…`. Target-aware LLVM 22 analysis
+passes for the affected surface and transform-header paths, with owned-line and
+header filters; no diagnostics were suppressed to claim completion. This is
+source/build/static validation, not new game performance or runtime acceptance.
+The OpenGL recovery investigation uses the separately recovered `74064e43…`
+package. Receipt: `target/follow-through/wine-cleanup-20260914/receipt.json`.
+
+Recovery package `74064e43…` is activated in the new private fixture: installer
+continuation reached terminal phase 2 with exit 0. Reboot automation now uses a
+fixture-only HKCU Run entry for `C:\DGPUBEN.EXE`; serial readiness was observed
+without the manual Run-dialog bootstrap. The retained provisioning recipe is
+`tools/benchmark/DEBUGGING.md`. The original normal disk remains unchanged.
+Actual recovery now passes in the same Half-Life process (PID 924): textured
+800×600×16 gameplay, Alt+Tab away to the 1280×1024×32 desktop, then ordinary
+launcher `SC_RESTORE` returning directly to live textured gameplay. Composed output
+fills the render area. The first Alt+Tab-back left Explorer selected, so it was
+not a rendering-recovery failure or a successful application-selection test.
+No forced mode, drawable recreation or console notification was needed. The
+helper's initial post-restore exit condition incorrectly looked for launcher
+controls after the engine was already active; that condition was fixed without
+repeating the observed successful transition.
+
+Evidence: `target/follow-through/fullscreen-recovery-20260914/recovery-acceptance.json`
+and `return-existing-process/001-rendered.png` in the same directory.
+
+The real host-input check also passes: plain WASD, Shift+WASD and Ctrl+Shift+WASD
+went through macOS Quartz → Juke → the guest. A read-only observer recorded all
+12 movement chords, game foreground throughout, no Alt/Windows bits and final
+release of every key (31 state-change samples). Existing Juke release/reconciliation
+fixes are accepted for these captured chords. The historical Search incident's
+exact cause is not established by this result.
+
+The first observer attempt was invalid: input arrived after its observation
+window ended because separate controller/agent turns consumed the interval.
+The retained `scripts/diagnostics/host-keys.py` now injects synchronously from the
+serial STARTED callback; the observer exits after activity plus a released-key
+settling interval, with a bounded no-activity timeout. No screenshot or menu loop
+is involved. Evidence: `host-input-synchronized/{acceptance.json,host-events.json,guest/engine-output.txt}`
+under the same recovery evidence directory. Existing Half-Life protocol and
+C/C++ checker tests pass (29 tests).
+
+Final source checks pass on Mac: strict all-target/all-feature Clippy for both
+workspaces, Rust formatting for both, clang-format for 318 maintained C/C++ files,
+and the 29 relevant existing Python checks. Juke's ordinary build passed earlier
+in this run. The final guest Cargo build includes all retained focus/observer tools
+and passes in 10.85 seconds; current installer SHA is
+`aa538306d9b5424e06b1f66ff5fca07be0c4536f4d3d0bfe64c11694afc09067`.
+Its NT display drivers and OpenGL payload match the recovered runtime installer;
+WineD3D and Glide binaries differ, so this build is not represented as a new
+full-stack game validation. Source-check receipt and explicit package comparison:
+`target/follow-through/quality-final-20260914/{checks.json,package-difference.json}`.
+Targeted LLVM 22 clang-tidy also passes with the exact current configuration:
+all three Half-Life focus helper modes, the input observer, and affected Wine
+surface/stateblock sources including expanded owned-header coverage. Earlier
+cached-config analysis was superseded by these exact-config checks; no additional
+source corrections were needed. Commands, source/config hashes and per-TU logs
+are recorded in `quality-final-20260914/receipt.json` under the same evidence root.
+
+The normal-image adoption tool was still limited to the old schema-1 Python
+package format. It now accepts Cargo schema 2 using its declared compact UTF-8
+identity encoding and validates the accompanying build receipt against the
+payload inventory. Existing payload hash and unexpected-file checks remain in
+force. Six adoption tests pass, including schema-2 acceptance and tampering.
+Guest cleanup recorded normal game exit, absent fixture autostart and a restored
+1280×1024×32 desktop before clean shutdown; no runtime process holds the source
+disk. Cleanup receipt: `fullscreen-recovery-20260914/normal-finalize/shutdown.json`.
+
+Normal adoption is complete. Juke's `files/machines/win2000/machine.toml` selects
+`.dreamgpu-adoptions/20260915T041802Z-a8e5ca0b/disk.qcow2`, a standalone copy of the
+cleanly stopped verified guest (SHA
+`631c0da3b25f7295d36a79409d0d7d8b1d39f0f2f54ecb342ca860e9f08da0da`).
+The original selected disk still hashes to `3df51b66…`; presentation settings and
+the Half-Life CUE at IDE index 2 are preserved. No diagnostic optical media or
+private runner autostart is carried into ordinary use. The installed stack remains
+the actual recovery-tested `74064e43…` package, not the newer separately built
+Wine/Glide payload. VM and game were left stopped after clean shutdown.
+
+Receipt: `target/follow-through/fullscreen-recovery-20260914/normal-adoption.json`;
+full provenance is beside the adopted disk. All current plan checkboxes are
+complete. No unchanged performance rerun, new lifecycle campaign, commit or push
+was performed. Normal use resumes with Juke's usual `cargo run` and Windows 2000
+slot; the current game-recovery result specifically covers ordinary taskbar-style
+restore, not a claim that every Alt+Tab shell-selection sequence was tested.
+
+
 ## Paused handoff — September 13 evening
 
 **Runtime work is stopped. Fullscreen return to gameplay is not fixed/accepted.**
@@ -71,7 +197,9 @@ Runtime investigation is paused independently of these source checks.
 - Fixed explicit unsafe-block requirements around owned fd/mmap operations and
   collapsible Rust conditions. Formatting covers the existing workspace changes.
   Existing staged/unstaged work is preserved; no commit or push was made.
-- C/C++ formatting and actual-target clang-tidy results are being collected.
+- The final Wine analyzer findings were carried into September 14 and fixed;
+  see the current execution section above. Earlier passing format/native/guest
+  checks remain historical results, not newly rerun checks.
 
 ## Cargo/C++ housekeeping completed (September 12)
 

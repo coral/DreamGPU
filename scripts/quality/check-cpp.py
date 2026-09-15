@@ -159,9 +159,10 @@ def main():
         ranges = [[start + 1, end] for tag, _, _, start, end in
                   difflib.SequenceMatcher(None, before, after, autojunk=False).get_opcodes()
                   if tag != 'equal' and end > start]
-        # An empty line list means all lines to clang-tidy; select impossible
-        # line zero when a copied donor has no maintained changes.
-        borrowed_filter.append({'name': str(Path(prepared).resolve()), 'lines': ranges or [[0, 0]]})
+        # An empty list selects every line, and LLVM rejects line zero. Use a
+        # positive range beyond EOF when a donor has no maintained changes.
+        borrowed_filter.append({'name': str(Path(prepared).resolve()),
+                                'lines': ranges or [[len(after) + 2, len(after) + 2]]})
     borrowed_filter.extend({'name': str(path.resolve())} for path in args.borrowed_header)
 
     def analyze(item):
