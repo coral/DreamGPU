@@ -43,7 +43,105 @@ The Rust orchestrator verifies GCC/G++ version and target, donor commits and
 nested pins, the Watcom download hash, and exact input/patch/output hashes.
 Patches apply to private source copies, never to a checked-out donor.
 
-On macOS, `DREAMGPU_GUEST_HOST=<ssh-alias>` delegates guest compilation to a
+### Local Docker build on macOS
+
+Run these commands from the repository root with Docker Desktop running. Docker
+builds the Windows guest components locally; the macOS QEMU runtime builds with
+the host's Cargo toolchain. Use `linux/amd64` on both Intel and Apple Silicon Macs:
+the pinned compiler and Open Watcom tools are x86-64 Linux binaries.
+
+Build the toolchain image once (repeat when its Containerfile changes):
+
+```sh
+docker build --platform linux/amd64 \
+  -t dreamgpu-guest-toolchain:16.1.1 \
+  -f support/guest/toolchain/Containerfile support/guest/toolchain
+```
+
+Build both guest packages and the combined installer:
+
+```sh
+docker run --rm --platform linux/amd64 \
+  --mount type=bind,source="$PWD",target=/src \
+  --mount type=tmpfs,target=/src/.cargo \
+  --mount type=volume,source=dreamgpu-guest-cargo,target=/root/.cargo \
+  -e CARGO_TARGET_DIR=/src/target/docker-cargo \
+  dreamgpu-guest-toolchain:16.1.1 \
+  cargo run --locked --release -p dreamgpu-build -- \
+    guest --root /src --output /src/target/guest
+```
+
+The temporary `.cargo` mount hides personal builder settings for this container,
+including old `DREAMGPU_GUEST_HOST` defaults. It does not edit your local config.
+The Cargo volume caches downloads, and `target/docker-cargo` keeps Linux Rust
+artifacts separate from macOS builds. Generated guest files stay in the checkout
+after the container exits. The first build downloads the checked Watcom archive
+and compiles drivers/translators; subsequent builds reuse those outputs.
+
+The finished installer is **`target/guest/dreamgpu.exe`**. Its hash, embedded file
+identities and import audit are in `target/guest/installer-manifest.json`.
+
+After changes limited to `tools/setup`, rebuild just the installer using the
+existing audited packages:
+
+```sh
+docker run --rm --platform linux/amd64 \
+  --mount type=bind,source="$PWD",target=/src \
+  --mount type=tmpfs,target=/src/.cargo \
+  --mount type=volume,source=dreamgpu-guest-cargo,target=/root/.cargo \
+  -e CARGO_TARGET_DIR=/src/target/docker-cargo \
+  dreamgpu-guest-toolchain:16.1.1 \
+  cargo run --locked --release -p dreamgpu-build -- \
+    installer --root /src --output /src/target/guest
+```
+
+Use the full `guest` command again after changes to drivers, translators or
+packaged probes. The installer-only command requires both package manifests and
+rejects changed payload files whose recorded hashes no longer match.
+
+### Try the installation in a Windows VM
+
+Build the native macOS runtime from the same checkout:
+
+```sh
+cargo build --release
+```
+
+Start your Windows 98 or 32-bit Windows 2000/XP VM with this runtime and its
+DreamGPU adapter enabled. Copy `target/guest/dreamgpu.exe` into the guest using
+your normal file-transfer method. Alternatively, create an installer CD on macOS:
+
+```sh
+mkdir -p target/guest/install-media
+cp target/guest/dreamgpu.exe target/guest/install-media/DREAMGPU.EXE
+hdiutil makehybrid -ov -iso -joliet \
+  -o target/guest/dreamgpu-setup.iso target/guest/install-media
+```
+
+Attach `target/guest/dreamgpu-setup.iso` to the VM's CD drive, then run
+`DREAMGPU.EXE` from the CD in Windows. Use an administrator account on 2000/XP.
+For a fresh installation, double-click without `/silent`:
+
+1. An installation window appears with the current operation, filenames, an
+   activity log and elapsed time. It stays responsive while setup works.
+2. If a restart is requested, restart Windows and let setup resume automatically.
+   A restart request means installation is still pending. Startup continuation
+   runs silently; after logging back in, run `DREAMGPU.EXE /continue` to open the
+   status window and see the result.
+3. Wait for the explicit installed message. Setup checks the driver and runs
+   normal-loader OpenGL, Glide 2 and Direct3D 6/7/8/9 probes before reporting success.
+4. Try your application with its normal renderer selection. No app-local graphics
+   DLL copies or special OpenGL driver arguments are needed.
+
+When testing a newly built package over an existing installation, run
+`DREAMGPU.EXE /upgrade`. `/continue` resumes pending work. A failure dialog includes
+the setup error code and last operation/filename; retain those when reporting a
+problem. Full commands and status meanings are in the
+[installer documentation](../tools/setup/README.md).
+
+### Optional SSH builder
+
+`DREAMGPU_GUEST_HOST=<ssh-alias>` delegates guest compilation to a
 configured x86-64 Linux host. Native macOS artifacts still build locally. The
 SSH cache is dedicated build space, not a consumer checkout. A marked build
 cache or empty directory is required before syncing files. Only source inputs

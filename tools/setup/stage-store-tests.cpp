@@ -121,6 +121,42 @@ static bool execute() {
 static void clean_handles() {
     assert(fake_win32::handles.empty() && scans.empty());
 }
+static std::vector<std::pair<std::string, std::string>> activity;
+static bool fail_reported_file = false;
+static void observe(const char *operation, const char *path) {
+    activity.emplace_back(operation, path);
+    if (fail_reported_file && !strcmp(operation, "Extracting file"))
+        fake_win32::fail = fake_win32::mutation + 1;
+}
+static void progress_reporting() {
+    initial();
+    assert(execute());
+    const auto mutations = fake_win32::mutation;
+    initial();
+    setup::progress_observer = observe;
+    assert(execute() && fake_win32::mutation == mutations);
+    assert(activity.size() == 3);
+    assert(activity[0].first == "Creating directory");
+    assert(activity[1].first == "Extracting file" &&
+           activity[1].second == std::string(Root) + "\\drivers\\file.dll");
+    assert(activity[2].second == std::string(Root) + "\\RESULT.json");
+    clean_handles();
+    initial();
+    activity.clear();
+    fail_reported_file = true;
+    assert(!execute());
+    // An I/O failure retains the failing filename, not the next file or a
+    // premature success message. Observing progress adds no disk mutations.
+    assert(activity.back().first == "Extracting file" &&
+           activity.back().second == std::string(Root) + "\\drivers\\file.dll");
+    clean_handles();
+    setup::progress_observer = nullptr;
+    fail_reported_file = false;
+    activity.clear();
+    initial();
+    assert(execute() && activity.empty()); // /silent leaves the observer unset.
+    puts("PASS file progress, failing filename retention and silent installation");
+}
 static void faults() {
     initial();
     assert(execute());
@@ -266,6 +302,7 @@ static void cancellation() {
         cases);
 }
 int main() {
+    progress_reporting();
     cancellation();
     faults();
     crashes_and_foreign();

@@ -42,6 +42,7 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
     let mut inputs = serde_json::Map::new();
     for name in [
         "guest",
+        "icons",
         "tools",
         "support/guest",
         "support/attribution",
@@ -295,11 +296,13 @@ fn watcom(_root: &Path, output: &Path, pin: &Value) -> Result<PathBuf> {
         .unwrap_or_else(|| cache.join("watcom"));
     if !destination.join("binl64/wmake").is_file() {
         fs::create_dir_all(&destination)?;
-        run(Command::new("tar")
-            .arg("-xJf")
-            .arg(&archive)
-            .arg("-C")
-            .arg(&destination))?;
+        // CMake's libarchive extractor also works under Docker Desktop's
+        // amd64 emulation, where Fedora GNU tar can fail opening output files
+        // with ENOSYS. CMake is already required for the guest build.
+        run(Command::new("cmake")
+            .args(["-E", "tar", "xJf"])
+            .arg(archive.canonicalize()?)
+            .current_dir(&destination))?;
     }
     Ok(destination)
 }
@@ -326,6 +329,7 @@ fn remote(root: &Path, output: &Path, host: &str) -> Result<()> {
     run(Command::new("ssh").arg(host).arg(mkdir))?;
     for name in [
         "guest",
+        "icons",
         "tools",
         "support",
         "LICENSES",

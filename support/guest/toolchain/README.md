@@ -15,15 +15,19 @@ On x86-64 Linux, with the pinned compiler installed:
 DREAMGPU_BUILD=all cargo build --release
 ```
 
-The same build can run inside the toolchain container:
+On macOS, use the [local Docker build and VM test workflow](../../../docs/build.md#local-docker-build-on-macos).
+It includes first builds, installer-only rebuilds, and transferring the result to
+Windows. The container must use `--platform linux/amd64`, including on Apple Silicon.
+
+On Linux, the same build can run inside the toolchain container:
 
 ```sh
 podman build -t dreamgpu-guest-toolchain:16.1.1 -f support/guest/toolchain/Containerfile support/guest/toolchain
 podman run --rm --userns=keep-id -v "$PWD:/src:Z" -e DREAMGPU_BUILD=guest dreamgpu-guest-toolchain:16.1.1
 ```
 
-On macOS, native QEMU builds locally and the guest compilation can use your SSH
-builder. Set up the alias normally in `~/.ssh/config`, then run:
+An optional SSH builder can also compile the guest components while native QEMU
+builds locally. Set up the alias normally in `~/.ssh/config`, then run:
 
 ```sh
 DREAMGPU_GUEST_HOST=builder DREAMGPU_BUILD=all cargo build --release

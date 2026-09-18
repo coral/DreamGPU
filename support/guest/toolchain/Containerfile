@@ -15,7 +15,6 @@ RUN dnf -y install \
     && dnf clean all
 RUN dnf -y install nasm-3.02-1.fc44.x86_64 && dnf clean all
 WORKDIR /src
-CMD ["cargo", "build", "--release"]
 
 ENV DREAMGPU_BUILD=guest
 CMD ["cargo", "build", "--release"]

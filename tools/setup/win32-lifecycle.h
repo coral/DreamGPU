@@ -10,6 +10,7 @@
 #include "native-alias.h"
 #include "providers.h"
 #include "sha256.h"
+#include "progress.h"
 namespace setup::lifecycle {
 // Win32 syscalls are confined here. All ordering/ownership decisions live in
 // the source-tested Engine. Deferred file replacement has a separate owned
@@ -782,6 +783,8 @@ class Win32Store {
             return false;
         const auto &i = j.items[n];
         const auto &to = undo ? i.before : i.desired;
+        progress(undo || j.uninstall ? "Preparing file restoration" : "Preparing system file",
+                 i.path);
         if (!slot(temp, j.generation, n, undo ? "restore" : "new"))
             return false;
         if (to.exists && !close_match(temp, to)) {
@@ -869,6 +872,8 @@ class Win32Store {
         if (state != Actual::before && state != Actual::intermediate)
             return Change::error;
         const Item &i = j.items[n];
+        progress(undo || j.uninstall ? "Restoring system entry" : "Installing system entry",
+                 i.path);
         const Image &from = undo ? i.desired : i.before;
         const Image &to = undo ? i.before : i.desired;
         if (i.kind == Kind::registry_key) {

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include "progress.h"
 #include "global-record.h"
 #include "lifecycle-runtime.h"
 #include "runtime-resume.h"
@@ -252,6 +253,7 @@ template <class Payloads> class Win32Store {
         return NativeComponents::repair_assessment(owner_, j);
     }
     lifecycle::Result driver_apply(Intent intent) {
+        progress("Installing and verifying display driver");
         if (intent == Intent::repair)
             return lifecycle::Result::invalid;
         DriverIdentity current;
@@ -276,6 +278,7 @@ template <class Payloads> class Win32Store {
         return driver_step(current.id ? 3 : 0);
     }
     lifecycle::Result driver_restore(Intent intent) {
+        progress("Restoring display driver");
         DriverIdentity current;
         bool owned = false;
         auto result = driver_identity(current, owned);
@@ -295,6 +298,7 @@ template <class Payloads> class Win32Store {
         return driver_step(2);
     }
     lifecycle::Result providers_apply(Intent intent, uint32_t generation) {
+        progress("Installing graphics system files");
         static lifecycle::Journal j;
         if (!runtime(j))
             return lifecycle::Result::invalid;
@@ -312,6 +316,7 @@ template <class Payloads> class Win32Store {
         return NativeComponents::providers_act(record_.os, action, payloads_);
     }
     lifecycle::Result providers_restore(Intent intent, uint32_t generation) {
+        progress("Restoring graphics system files");
         static lifecycle::Journal j;
         if (!runtime(j))
             return lifecycle::Result::invalid;

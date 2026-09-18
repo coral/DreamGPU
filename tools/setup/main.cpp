@@ -16,6 +16,7 @@
 #include "global-runtime.h"
 #include "stage-store.h"
 #include "setup-lock.h"
+#include "progress-window.h"
 namespace {
 class Handle {
     HANDLE h_;
@@ -89,6 +90,7 @@ bool all_payloads(unsigned os) {
     for (const auto &p : payloads) {
         if (p.os != os)
             continue;
+        setup::progress("Checking installer file", p.path);
         Blob blob = {};
         if (!setup::safe_path(p.path) || !resource(p, blob) ||
             !equal_hash(blob.data, blob.bytes, p.sha))
@@ -106,6 +108,7 @@ void receipt(const char *text) {
     OutputDebugStringA(text);
 }
 unsigned stage(unsigned os, bool cancel = false) {
+    setup::progress(cancel ? "Removing unfinished setup files" : "Preparing installation files");
     setup::lifecycle::Win32Store inspector;
     setup::lifecycle::Image executing;
     char self[MAX_PATH];
@@ -138,9 +141,11 @@ unsigned stage(unsigned os, bool cancel = false) {
     // recovery state on I/O failure; never claim rollback of an uncertain write.
     if (!storage.copy() || !storage.commit() || !storage.finish())
         return 26;
+    setup::progress("Preparing system installation");
     return setup::lifecycle::ensure_prepared(static_cast<setup::Os>(os), payloads) ? 10 : 27;
 }
 unsigned run(bool stage_only, int action) {
+    setup::progress("Checking Windows version");
     OSVERSIONINFOA version = {};
     version.dwOSVersionInfoSize = sizeof(version);
     if (!GetVersionExA(&version))
@@ -151,6 +156,7 @@ unsigned run(bool stage_only, int action) {
         return 20;
     // Wait for ownership before observing mutable device/journal state. The
     // startup executor may finish a phase while this continuation is waiting.
+    setup::progress("Waiting for any other DreamGPU setup to finish");
     setup::SetupLock lock(os, 90000);
     if (!lock.acquired())
         return 28;
@@ -161,11 +167,13 @@ unsigned run(bool stage_only, int action) {
     const bool recovery =
         action == 0 || action == 1 || action == 2 || action == 5 || action == 6 || action == 8 ||
         (action < 0 && !stage_only && global_presence == setup::global::Presence::present);
+    setup::progress("Checking DreamGPU adapter");
     Devices devices;
     if (!devices.exactly_one(recovery))
         return 21;
     if (!all_payloads(static_cast<unsigned>(os)))
         return 22;
+    setup::progress("Checking saved installation state");
     const auto staging_presence = setup::staging::pending();
     if (staging_presence == setup::staging::Presence::error)
         return 29;
@@ -183,6 +191,7 @@ unsigned run(bool stage_only, int action) {
             return staged;
     }
     auto global_action = [&](setup::global::Request request) -> unsigned {
+        setup::progress("Preparing system installation");
         if (global_presence == setup::global::Presence::absent &&
             request == setup::global::Request::start) {
             if (!setup::providers(os).ready())
@@ -282,6 +291,35 @@ unsigned run(bool stage_only, int action) {
     }
     return global_action(setup::global::Request::start);
 }
+struct Work {
+    bool staging;
+    int action;
+};
+DWORD WINAPI install_worker(void *opaque) {
+    const auto &work = *static_cast<Work *>(opaque);
+    return run(work.staging, work.action);
+}
+unsigned execute(bool staging, int action, bool valid, bool silent) {
+    if (silent)
+        return valid ? run(staging, action) : 23;
+    const char *title = staging                      ? "Preparing DreamGPU files..."
+                        : action == 1 || action == 6 ? "Restoring the previous installation..."
+                        : action == 2                ? "Removing DreamGPU..."
+                        : action == 7                ? "Repairing DreamGPU..."
+                        : action == 8                ? "Recovering DreamGPU setup..."
+                        : action == 0 || action == 5 ? "Continuing DreamGPU setup..."
+                        : action == 3                ? "Upgrading DreamGPU..."
+                                                     : "Installing DreamGPU...";
+    if (!setup::ui::open(title))
+        return 32;
+    if (!valid)
+        return 23;
+    Work work{staging, action};
+    HANDLE worker = CreateThread(nullptr, 0, install_worker, &work, 0, nullptr);
+    if (!worker)
+        return 32;
+    return setup::ui::wait(worker);
+}
 template <class Function> bool api(Function &function, HMODULE module, const char *name) {
     FARPROC address = GetProcAddress(module, name);
     if (!address)
@@ -324,16 +362,16 @@ bool restart_windows() {
 }
 void show_result(unsigned code) {
     if (code == 11 || code == 16) {
-        const int choice =
-            MessageBoxA(nullptr,
-                        "DreamGPU needs to restart Windows to continue. Setup will resume "
-                        "automatically.\r\n\r\nRestart now?",
-                        "DreamGPU setup", MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
+        const int choice = setup::ui::message_box(
+            setup::ui::window,
+            "DreamGPU needs to restart Windows to continue. Setup will resume "
+            "automatically.\r\n\r\nRestart now?",
+            MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
         if (choice == IDYES && !restart_windows())
-            MessageBoxA(
-                nullptr,
+            setup::ui::message_box(
+                setup::ui::window,
                 "Windows could not restart automatically. Restart Windows to continue setup.",
-                "DreamGPU setup", MB_OK | MB_ICONWARNING);
+                MB_OK | MB_ICONWARNING);
         return;
     }
     const char *message =
@@ -386,6 +424,14 @@ void show_result(unsigned code) {
             message = "The setup command is invalid. Run dreamgpu.exe to install, or use "
                       "/continue, /upgrade, /repair, /rollback, /uninstall or /recover.";
             break;
+        case 24:
+            message = "Setup could not prepare its installation directory or extract a file. "
+                      "Check available disk space and write access to the Windows directory.";
+            break;
+        case 27:
+            message = "The files were staged, but setup could not prepare the system installation. "
+                      "The saved state has been retained. Run setup again to continue.";
+            break;
         case 28:
             message = "DreamGPU setup is already running.";
             break;
@@ -396,8 +442,24 @@ void show_result(unsigned code) {
         case 30:
             message = "This development build does not yet enable complete system installation.";
             break;
+        case 31:
+            message = "Setup could not capture the existing display driver configuration.";
+            break;
+        case 32:
+            message = "Setup could not start its installation window or worker. "
+                      "No installation was started. Close other applications and try again.";
+            break;
     }
-    MessageBoxA(nullptr, message, "DreamGPU setup", MB_OK | icon);
+    char detail[1600];
+    if (code >= 20 && code != 28) {
+        // Include a stable setup error code and the actual last reported action.
+        // GetLastError here could be stale after transaction cleanup.
+        wsprintfA(detail, "%s\r\n\r\nSetup error code: %u\r\nLast operation: ", message, code);
+        lstrcatA(detail,
+                 setup::ui::last_operation[0] ? setup::ui::last_operation : "Starting setup");
+        message = detail;
+    }
+    setup::ui::message_box(setup::ui::window, message, MB_OK | icon);
 }
 } // namespace
 extern "C" void WINAPI WinMainCRTStartup() {
@@ -453,7 +515,7 @@ extern "C" void WINAPI WinMainCRTStartup() {
         else
             valid = false;
     }
-    unsigned code = valid && !(staging && action >= 0) ? run(staging, action) : 23;
+    unsigned code = execute(staging, action, valid && !(staging && action >= 0), silent);
     const char *result = "{\"schema\":1,\"exit_code\":23,\"status\":\"invalid_arguments\",\"system_"
                          "activated\":false}\r\n";
     switch (code) {
@@ -538,9 +600,18 @@ extern "C" void WINAPI WinMainCRTStartup() {
             result = "{\"schema\":1,\"exit_code\":30,\"status\":\"system_provider_not_ready\","
                      "\"system_activated\":false}\r\n";
             break;
+        case 32:
+            result = "{\"schema\":1,\"exit_code\":32,\"status\":\"ui_start_failed\","
+                     "\"system_activated\":false}\r\n";
+            break;
     }
     receipt(result);
-    if (!silent)
+    if (!silent) {
+        if (setup::ui::window)
+            setup::ui::finish(code);
         show_result(code);
+        if (setup::ui::window)
+            DestroyWindow(setup::ui::window);
+    }
     ExitProcess(code);
 }

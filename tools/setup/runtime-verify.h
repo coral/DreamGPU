@@ -197,6 +197,9 @@ template <class Payloads> class VerifiedRuntimeStore : public Win32Store {
         for (unsigned n = 0; n < 6; ++n) {
             if (record.completed & (1u << n))
                 continue;
+            constexpr const char *names[] = {"OpenGL",     "Glide 2",    "Direct3D 6",
+                                             "Direct3D 7", "Direct3D 8", "Direct3D 9"};
+            progress("Testing graphics", names[n]);
             if (!installed(j))
                 return false;
             char executable[MAX_PATH], directory[MAX_PATH];

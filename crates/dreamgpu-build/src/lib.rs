@@ -9,6 +9,7 @@ use std::{
     process::{Command, Stdio},
 };
 pub mod guest;
+mod inputs;
 pub mod installer;
 pub mod mesa;
 pub mod native;
@@ -127,7 +128,6 @@ pub fn build(root: &Path) -> Result<()> {
     );
     if selection == "native" || selection == "all" {
         for path in [
-            "vendor/qemu",
             "crates/dreamgpu-host",
             "include/dreamgpu",
             "support/native",
@@ -135,6 +135,7 @@ pub fn build(root: &Path) -> Result<()> {
             println!("cargo::rerun-if-changed={}", root.join(path).display());
         }
         native::build(root, &output.join("qemu-build"))?;
+        inputs::watch_git_sources(&root.join("vendor/qemu"))?;
         println!(
             "cargo::metadata=native_dir={}",
             native::launch_directory(&output.join("qemu-build")).display()
@@ -143,6 +144,7 @@ pub fn build(root: &Path) -> Result<()> {
     if selection == "guest" || selection == "all" {
         for path in [
             "guest",
+            "icons",
             "tools",
             "support/guest",
             "support/attribution",

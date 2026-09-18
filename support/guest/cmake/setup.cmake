@@ -2,12 +2,13 @@
 if(NOT CMAKE_CXX_COMPILER_ID STREQUAL "GNU" OR NOT CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL "16.1.1")
   message(FATAL_ERROR "Installer requires pinned MinGW GCC16.1.1")
 endif()
-if(NOT EXISTS "${DREAMGPU_SETUP_INPUT}/payload.rc")
+if(NOT EXISTS "${DREAMGPU_SETUP_INPUT}/payload.rc" OR NOT EXISTS "${DREAMGPU_SETUP_INPUT}/icons.rc")
   message(FATAL_ERROR "Rust must validate and generate installer resources first")
 endif()
 include("${DREAMGPU_ROOT}/support/guest/cmake/runtime.cmake")
 add_executable(dreamgpu-setup "${DREAMGPU_ROOT}/tools/setup/main.cpp"
-  "${DREAMGPU_ROOT}/guest/nt/memory.cpp" "${DREAMGPU_SETUP_INPUT}/payload.rc")
+  "${DREAMGPU_ROOT}/guest/nt/memory.cpp" "${DREAMGPU_SETUP_INPUT}/payload.rc"
+  "${DREAMGPU_SETUP_INPUT}/icons.rc")
 dreamgpu_user(dreamgpu-setup)
 target_include_directories(dreamgpu-setup PRIVATE "${DREAMGPU_SETUP_INPUT}")
 target_link_options(dreamgpu-setup PRIVATE -Wl,--entry,_WinMainCRTStartup@0,--fatal-warnings)

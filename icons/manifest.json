@@ -1,0 +1,61 @@
+{
+  "png_sizes": [
+    16,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256,
+    512,
+    1024
+  ],
+  "ico": [
+    {
+      "file": "DreamGPU_win98_win2000.ico",
+      "sizes": [
+        16,
+        32,
+        48
+      ],
+      "depths": [
+        4,
+        8,
+        24
+      ],
+      "entries": 9
+    },
+    {
+      "file": "DreamGPU_winxp.ico",
+      "sizes": [
+        16,
+        24,
+        32,
+        48
+      ],
+      "depths": [
+        4,
+        8,
+        32
+      ],
+      "entries": 12
+    },
+    {
+      "file": "DreamGPU.ico",
+      "sizes": [
+        16,
+        32,
+        48
+      ],
+      "depths": [
+        4,
+        8,
+        24,
+        32
+      ],
+      "entries": 12
+    }
+  ],
+  "engine": "Cycles",
+  "alpha": "RGBA PNG / XP; 1-bit AND masks for legacy"
+}

@@ -125,9 +125,30 @@ fn prepare(output: &Path) -> Result<Vec<serde_json::Value>> {
     write_if_changed(&input.join("payload.rc"), resources.as_bytes())?;
     Ok(evidence)
 }
+fn prepare_icons(root: &Path, input: &Path) -> Result<serde_json::Map<String, serde_json::Value>> {
+    let mut resources = format!(
+        "// Generated installer icons.\n#include \"{}\"\n",
+        rc_path(&root.join("tools/setup/resources.h"))?
+    );
+    let mut inputs = serde_json::Map::new();
+    for (id, name) in [
+        ("IDI_DREAMGPU", "icons/DreamGPU.ico"),
+        ("IDI_DREAMGPU_LEGACY", "icons/DreamGPU_win98_win2000.ico"),
+        ("IDI_DREAMGPU_XP", "icons/DreamGPU_winxp.ico"),
+    ] {
+        let path = root.join(name);
+        let hash = digest(&path)?;
+        // Invalidate windres even when only the icon bytes change.
+        resources += &format!("// sha256 {hash}\n{id} ICON \"{}\"\n", rc_path(&path)?);
+        inputs.insert(name.into(), json!(hash));
+    }
+    write_if_changed(&input.join("icons.rc"), resources.as_bytes())?;
+    Ok(inputs)
+}
 pub fn build(root: &Path, output: &Path, prefix: &str) -> Result<()> {
     let evidence = prepare(output)?;
     let input = output.join("build/setup-input");
+    let icon_inputs = prepare_icons(root, &input)?;
     let binary = output.join("build/setup");
     run(Command::new("cmake")
         .arg("-S")
@@ -178,7 +199,7 @@ pub fn build(root: &Path, output: &Path, prefix: &str) -> Result<()> {
     fs::copy(&exe, &publishing)?;
     fs::File::open(&publishing)?.sync_all()?;
     fs::rename(publishing, output.join("dreamgpu.exe"))?;
-    let mut inputs = serde_json::Map::new();
+    let mut inputs = icon_inputs;
     crate::native::record_tree(root, &root.join("tools/setup"), &mut inputs)?;
     for name in [
         "support/guest/cmake/setup.cmake",

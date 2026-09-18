@@ -6,6 +6,19 @@ Windows 98 or 32-bit Windows 2000/XP, validates the DreamGPU PCI adapter and
 embedded payloads, installs the display driver and system graphics providers,
 and offers a restart when needed. macOS and Linux use the same guest installer.
 
+Interactive setup opens an installation window immediately. It shows the current
+operation, filenames being checked/extracted/installed, a scrolling activity log,
+and elapsed time while driver operations and graphics tests run. The window stays
+responsive during installation. Setup failures include an error code and the last
+operation; completion and restart requests remain explicit dialogs. Closing setup
+is disabled while it is working. `/silent` suppresses the window and dialogs.
+
+The executable embeds the supplied `icons/DreamGPU.ico` for Explorer and
+shortcuts. The installer window and result/restart dialog title bars, taskbar
+and Alt+Tab use the legacy icon set on Windows 98/2000 and the XP set on XP,
+with separate small and large icons. Icon changes are included in the installer
+manifest and picked up by the installer-only rebuild.
+
 The normal provider paths are:
 
 - OpenGL: Microsoft system `opengl32.dll` and GDI load `dgpuicd.dll`.
@@ -58,7 +71,8 @@ A removal already in progress must finish rather than reverse into installation.
 Key exit statuses are 0 activated, 10 staged, 11 pending reboot, 12 rolled back,
 13 removed, 17 staging cancelled, 20 unsupported OS, 21 missing/ambiguous device,
 22 invalid payload, 23 arguments, 26 operation incomplete, 27 preparation failed,
-28 installer busy and 29 ownership conflict. Driver-only diagnostic statuses
+28 installer busy, 29 ownership conflict and 32 UI startup failed (installation
+not started). Driver-only diagnostic statuses
 14–16 do not report full graphics activation.
 
 ## Ownership and recovery

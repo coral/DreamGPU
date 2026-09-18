@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include "progress.h"
 #include "policy.h"
 #include "sha256.h"
 namespace setup::staging {
@@ -350,6 +351,7 @@ class Store {
             char path[MAX_PATH];
             if (!join(root_, nodes_[n].path, path))
                 return false;
+            progress(nodes_[n].directory ? "Creating directory" : "Extracting file", path);
             if (nodes_[n].directory) {
                 if (!directory(path) && (!absent(path) || !CreateDirectoryA(path, nullptr)))
                     return false;

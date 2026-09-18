@@ -24,6 +24,9 @@ Oh absolutely, top vibed. Not even ashamed of it. Reality is that all the pieces
 
 ## Building
 
+For macOS, follow the [local Docker build and Windows installation walkthrough](docs/build.md#local-docker-build-on-macos).
+It covers the full guest build, quick installer rebuilds and testing in your VM.
+
 ```sh
 cargo build --release                            # SDK and native QEMU
 DREAMGPU_BUILD=all cargo build --release          # also both Windows guest packages

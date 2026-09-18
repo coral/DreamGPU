@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
 #include "driver-generation.h"
+#include "progress.h"
 namespace setup::driver {
 inline bool executing_driver_installer(char out[68]) {
     char path[MAX_PATH];
@@ -40,6 +41,7 @@ struct ReverseExecutor {
 template <class Payloads>
 Result act_at(Os os, int action, const char *owner, const Payloads &payloads,
               const ReverseExecutor *recovery = nullptr, bool managed_startup = false) {
+    progress("Preparing display driver", owner);
     if (action < 0 || action > 4)
         return Result::invalid;
     Lineage lineage;
