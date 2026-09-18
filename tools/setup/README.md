@@ -83,13 +83,23 @@ installer targets PE4 and imports APIs available on the selected legacy OS.
 The Cargo audit specifically checks that `CM_Get_Device_IDA` resolves from
 CfgMgr32, since Windows 98 does not export it from SetupAPI.
 
-A checksummed ticket binds initial extraction to the installer, OS and complete
-payload catalog before creating `%WINDIR%\DGSETUP.NEW`. Exact owned partial
-copies can resume; cancellation records its direction before deleting anything.
-Only a complete catalog is published as `%WINDIR%\DreamGPU`. Unknown files,
-foreign edits and corrupt complete records are rejected. A crash before the
-first ownership ticket is fully written fails closed; unproven files are not
-silently adopted.
+Running setup normally starts fresh extraction: after checking the new payloads
+and acquiring the installer lock, it deletes `%WINDIR%\DGSETUP.NEW`,
+`DGSETUP.JRN` and `DGSETUP.CAN`, including incomplete or mismatched state left by
+an earlier build. This cleanup is repeatable after interruption and never
+traverses directory links. No manual file renaming or old installer is required
+for abandoned extraction.
+
+Explicit `/continue` and `/rollback` still use a ticket binding extraction to
+the exact installer, OS and payload catalog. Only a complete catalog is
+published as `%WINDIR%\DreamGPU`. Running a new EXE over a completed installation
+automatically selects upgrade; that path replaces the installed components
+while retaining the original Windows driver/runtime before-images. The installed
+tree is not disposable extraction scratch space.
+
+Guest packages contain one `LICENSES.txt` with all license texts and attribution
+records in labeled sections. The individual source notices are combined before
+the package manifest is hashed and embedded.
 
 Within that private tree, GLOBAL coordinates driver and provider transactions.
 Independent immutable generations retain both the original baseline and the

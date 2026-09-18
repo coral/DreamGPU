@@ -171,6 +171,7 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
             fs::remove_dir_all(&stage)?;
         }
         run(Command::new("cmake").arg("--install").arg(&binary))?;
+        crate::licenses::consolidate(&stage)?;
         let imports = audit_package(&stage, &prefix)?;
         let mut files = serde_json::Map::new();
         crate::native::record_tree(&stage, &stage, &mut files)?;

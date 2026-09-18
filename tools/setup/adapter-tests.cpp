@@ -61,6 +61,31 @@ static bool prepare(Win32Store &s, Journal &j) {
     return s.persist(j);
 }
 int main() {
+    {
+        initial();
+        // Hashing an installer launched from a read-only CD requires no writes.
+        constexpr char cd[] = "D:\\DREAMGPU.EXE";
+        auto &file = fake_win32::files[fake_win32::canon(cd)];
+        file.bytes = {'i', 'n', 's', 't', 'a', 'l', 'l', 'e', 'r'};
+        file.attributes = FILE_ATTRIBUTE_READONLY;
+        Win32Store s;
+        Image actual;
+        auto writes = fake_win32::mutation;
+        assert(s.inspect_file(cd, actual, true) && same(actual, image("installer")));
+        assert(fake_win32::mutation == writes && fake_win32::handles.empty());
+        fake_win32::enforce_file_sharing = true;
+        HANDLE held = CreateFileA(cd, GENERIC_READ, 0, nullptr, OPEN_EXISTING, 0, nullptr);
+        assert(held != INVALID_HANDLE_VALUE);
+        assert(!s.inspect_file(cd, actual, true));
+        assert(setup::failure_error == ERROR_SHARING_VIOLATION);
+        CloseHandle(held);
+        assert(fake_win32::handles.empty());
+        // A validation failure must not reuse a previous syscall's error.
+        file.directory = true;
+        assert(!s.inspect_file(cd, actual, true) && setup::failure_error == 0);
+        fake_win32::enforce_file_sharing = false;
+        puts("PASS read-only installer inspection and captured file errors");
+    }
     unsigned capture_points, apply_points;
     {
         initial();

@@ -135,11 +135,14 @@ static void progress_reporting() {
     initial();
     setup::progress_observer = observe;
     assert(execute() && fake_win32::mutation == mutations);
-    assert(activity.size() == 3);
-    assert(activity[0].first == "Creating directory");
-    assert(activity[1].first == "Extracting file" &&
-           activity[1].second == std::string(Root) + "\\drivers\\file.dll");
-    assert(activity[2].second == std::string(Root) + "\\RESULT.json");
+    assert(activity.size() == 6);
+    assert(activity[0].first == "Preparing staging receipt" && activity[0].second == Intent);
+    assert(activity[1].first == "Preparing staging directory" && activity[1].second == Root);
+    assert(activity[2].first == "Checking staging directory contents");
+    assert(activity[3].first == "Creating directory");
+    assert(activity[4].first == "Extracting file" &&
+           activity[4].second == std::string(Root) + "\\drivers\\file.dll");
+    assert(activity[5].second == std::string(Root) + "\\RESULT.json");
     clean_handles();
     initial();
     activity.clear();
@@ -147,8 +150,9 @@ static void progress_reporting() {
     assert(!execute());
     // An I/O failure retains the failing filename, not the next file or a
     // premature success message. Observing progress adds no disk mutations.
-    assert(activity.back().first == "Extracting file" &&
+    assert(activity.back().first == "Could not open installation file" &&
            activity.back().second == std::string(Root) + "\\drivers\\file.dll");
+    assert(setup::failure_error == ERROR_ACCESS_DENIED);
     clean_handles();
     setup::progress_observer = nullptr;
     fail_reported_file = false;
@@ -301,7 +305,57 @@ static void cancellation() {
         "PASS staging cancellation: %u cleanup failure/restart points, durable reverse direction\n",
         cases);
 }
+static void replacement_staging() {
+    auto abandoned = [] {
+        initial();
+        assert(store.begin() && store.copy());
+        // A different build's catalog, corrupt receipt, readonly file, and
+        // cancellation marker all belong to disposable extraction state.
+        fake_win32::files[fake_win32::canon(Intent)].bytes = {'o', 'l', 'd'};
+        fake_win32::files[fake_win32::canon("C:\\WINDOWS\\DGSETUP.CAN")].bytes = {'x'};
+        auto &obsolete = fake_win32::files[fake_win32::canon("C:\\WINDOWS\\DGSETUP.NEW\\old.txt")];
+        obsolete.bytes = {'o'};
+        obsolete.attributes = FILE_ATTRIBUTE_READONLY;
+        fake_win32::files[fake_win32::canon("C:\\WINDOWS\\keep.txt")].bytes = {'k'};
+        fake_win32::mutation = 0;
+    };
+    abandoned();
+    assert(Store::discard_pending());
+    const unsigned mutations = fake_win32::mutation;
+    for (unsigned fault = 0; fault <= mutations; ++fault) {
+        abandoned();
+        fake_win32::fail = fault;
+        assert(Store::discard_pending() == (fault == 0));
+        clean_handles();
+        fake_win32::fail = 0;
+        assert(Store::discard_pending());
+        assert(fake_win32::files.size() == 2); // Windows and unrelated keep.txt
+        assert(fake_win32::files.at(fake_win32::canon("C:\\WINDOWS\\keep.txt")).bytes ==
+               std::vector<BYTE>{'k'});
+        configure("bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+        assert(store.add("LICENSES.txt", reinterpret_cast<const BYTE *>("all notices"), 11));
+        assert(execute());
+        clean_handles();
+    }
+    // A completed installation and its Windows before-images are not scratch
+    // space. The existing automatic upgrade path owns replacing that install.
+    const auto installed = fake_win32::files;
+    assert(Store::discard_pending());
+    assert(fake_win32::files.size() == installed.size());
+    for (const auto &[name, node] : installed)
+        assert(fake_win32::files.at(name).bytes == node.bytes);
+    // Orphaned extraction without a receipt is also disposable.
+    abandoned();
+    fake_win32::files.erase(fake_win32::canon(Intent));
+    fake_win32::files.erase(fake_win32::canon("C:\\WINDOWS\\DGSETUP.CAN"));
+    assert(Store::discard_pending());
+    assert(fake_win32::files.size() == 2);
+    clean_handles();
+    printf("PASS new installer replaces stale staging: %u cleanup failure/retry points\n",
+           mutations);
+}
 int main() {
+    replacement_staging();
     progress_reporting();
     cancellation();
     faults();

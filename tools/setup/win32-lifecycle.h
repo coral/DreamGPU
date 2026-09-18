@@ -39,31 +39,42 @@ class Win32Store {
                 RegCloseKey(h);
         }
     };
-    static bool hash_file(const char *path, Image &out) {
+    static bool hash_file(const char *path, Image &out, bool diagnose = false) {
+        auto failed = [&](const char *operation, DWORD error = 0) {
+            return diagnose ? failure(operation, path, error) : false;
+        };
         out = {};
         DWORD attrs = GetFileAttributesA(path);
-        if (attrs == INVALID_FILE_ATTRIBUTES)
-            return GetLastError() == ERROR_FILE_NOT_FOUND;
+        if (attrs == INVALID_FILE_ATTRIBUTES) {
+            const DWORD error = GetLastError();
+            if (diagnose)
+                return failed("Could not inspect installer file", error);
+            return error == ERROR_FILE_NOT_FOUND;
+        }
         if (attrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))
-            return false;
+            return failed("Installer path is a directory or link");
         File file(
             CreateFileA(path, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr));
         if (file.h == INVALID_HANDLE_VALUE)
-            return false;
+            return failed("Could not open installer for reading", GetLastError());
         DWORD high = 0, size = GetFileSize(file.h, &high);
+        if (size == INVALID_FILE_SIZE)
+            return failed("Could not read installer size", GetLastError());
         if (high || size > 64 * 1024 * 1024)
-            return false;
+            return failed("Installer exceeds the supported file size");
         Sha256 hash;
         BYTE buffer[4096];
         DWORD total = 0, got = 0;
         do {
-            if (!ReadFile(file.h, buffer, sizeof(buffer), &got, nullptr) || got > size - total)
-                return false;
+            if (!ReadFile(file.h, buffer, sizeof(buffer), &got, nullptr))
+                return failed("Could not read installer", GetLastError());
+            if (got > size - total)
+                return failed("Installer size changed while reading");
             hash.update(buffer, got);
             total += got;
         } while (got);
         if (total != size)
-            return false;
+            return failed("Installer read ended before the expected file size");
         out.exists = 1;
         out.size = size;
         hash.finish(out.sha);
@@ -862,8 +873,8 @@ class Win32Store {
     bool private_path(char *out, const char *suffix) const {
         return path(out, suffix);
     }
-    bool inspect_file(const char *path, Image &image) const {
-        return hash_file(path, image);
+    bool inspect_file(const char *path, Image &image, bool diagnose = false) const {
+        return hash_file(path, image, diagnose);
     }
     Change mutate(const Journal &j, unsigned n, bool undo) {
         Actual state = classify(j, n, undo);

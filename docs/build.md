@@ -133,10 +133,14 @@ For a fresh installation, double-click without `/silent`:
 4. Try your application with its normal renderer selection. No app-local graphics
    DLL copies or special OpenGL driver arguments are needed.
 
-When testing a newly built package over an existing installation, run
-`DREAMGPU.EXE /upgrade`. `/continue` resumes pending work. A failure dialog includes
-the setup error code and last operation/filename; retain those when reporting a
-problem. Full commands and status meanings are in the
+Double-clicking a new installer automatically upgrades a completed installation
+and clears abandoned extraction files from earlier attempts. `/upgrade` is also
+available explicitly. `/continue` resumes pending work with the matching installer. A failure dialog includes
+the setup error code, last operation/filename and, for diagnosed file-operation
+failures, the Windows error code captured at the failure. Retain those when
+reporting a problem. Setup error 24 covers preparation, including reading the
+running EXE and checking saved staging state; it does not by itself establish
+that disk space or permissions are the cause. Full commands and status meanings are in the
 [installer documentation](../tools/setup/README.md).
 
 ### Optional SSH builder
@@ -153,7 +157,9 @@ The packages under `target/guest/packages/{win98,windows2000-xp}` contain:
 - `application/`: OpenGL, Glide and WineD3D translation libraries.
 - `switchers/`: upstream app-local Direct3D/DirectDraw switchers for that OS.
 - `tools/`: reusable installers, controls and probes, separate from drivers.
-- `licenses/`: applicable component notices.
+- `LICENSES.txt`: all license texts and attribution records, with labeled sections
+  preserving their original paths. Guest packaging combines these before hashing
+  the package, so setup extracts one notice file.
 - Manifests recording exact source, patch, compiler and payload identities.
 
 CMake emits compilation databases in the intermediate build directory. Wine's

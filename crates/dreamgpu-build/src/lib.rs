@@ -11,6 +11,7 @@ use std::{
 pub mod guest;
 mod inputs;
 pub mod installer;
+mod licenses;
 pub mod mesa;
 pub mod native;
 pub mod native_runtime;

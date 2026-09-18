@@ -112,9 +112,17 @@ unsigned stage(unsigned os, bool cancel = false) {
     setup::lifecycle::Win32Store inspector;
     setup::lifecycle::Image executing;
     char self[MAX_PATH];
+    setup::progress("Locating running installer");
     DWORD length = GetModuleFileNameA(nullptr, self, sizeof(self));
-    if (!length || length >= sizeof(self) || !inspector.inspect_file(self, executing) ||
-        !executing.exists || !storage.reset(static_cast<setup::Os>(os), executing.sha))
+    if (!length || length >= sizeof(self)) {
+        setup::failure("Could not locate running installer", "", GetLastError());
+        return 24;
+    }
+    setup::progress("Reading running installer", self);
+    if (!inspector.inspect_file(self, executing, true) || !executing.exists)
+        return 24;
+    setup::progress("Locating Windows installation directory");
+    if (!storage.reset(static_cast<setup::Os>(os), executing.sha))
         return 24;
     static constexpr char pending[] =
         "{\"schema\":1,\"state\":\"staging\",\"system_activated\":false,"
@@ -122,18 +130,21 @@ unsigned stage(unsigned os, bool cancel = false) {
     static constexpr char complete[] =
         "{\"schema\":1,\"state\":\"staged\",\"system_activated\":false,"
         "\"provider\":\"not_ready\"}\r\n";
+    setup::progress("Preparing file catalog", "PREPARE.json");
     if (!storage.add("PREPARE.json", reinterpret_cast<const BYTE *>(pending), sizeof(pending) - 1))
         return 24;
     for (const auto &p : payloads) {
         if (p.os != os)
             continue;
+        setup::progress("Preparing file catalog", p.path);
         Blob blob{};
         if (!resource(p, blob) || !storage.add(p.path, blob.data, blob.bytes, p.sha))
             return 24;
     }
-    if (!storage.add("RESULT.json", reinterpret_cast<const BYTE *>(complete),
-                     sizeof(complete) - 1) ||
-        !storage.begin(cancel))
+    setup::progress("Preparing file catalog", "RESULT.json");
+    if (!storage.add("RESULT.json", reinterpret_cast<const BYTE *>(complete), sizeof(complete) - 1))
+        return 24;
+    if (!storage.begin(cancel))
         return 24;
     if (cancel)
         return storage.cancel() ? 17 : 26;
@@ -173,6 +184,11 @@ unsigned run(bool stage_only, int action) {
         return 21;
     if (!all_payloads(static_cast<unsigned>(os)))
         return 22;
+    // Double-clicking a new installer replaces abandoned extraction state,
+    // including receipts written by a different build. Explicit continuation
+    // and rollback retain their exact-identity recovery semantics.
+    if (action < 0 && !setup::staging::Store::discard_pending())
+        return 26;
     setup::progress("Checking saved installation state");
     const auto staging_presence = setup::staging::pending();
     if (staging_presence == setup::staging::Presence::error)
@@ -425,8 +441,8 @@ void show_result(unsigned code) {
                       "/continue, /upgrade, /repair, /rollback, /uninstall or /recover.";
             break;
         case 24:
-            message = "Setup could not prepare its installation directory or extract a file. "
-                      "Check available disk space and write access to the Windows directory.";
+            message = "Setup could not prepare the installation. The operation and path below "
+                      "identify where it stopped.";
             break;
         case 27:
             message = "The files were staged, but setup could not prepare the system installation. "
@@ -457,6 +473,11 @@ void show_result(unsigned code) {
         wsprintfA(detail, "%s\r\n\r\nSetup error code: %u\r\nLast operation: ", message, code);
         lstrcatA(detail,
                  setup::ui::last_operation[0] ? setup::ui::last_operation : "Starting setup");
+        if (setup::failure_error) {
+            char error[64];
+            wsprintfA(error, "\r\nWindows error code: %u", setup::failure_error);
+            lstrcatA(detail, error);
+        }
         message = detail;
     }
     setup::ui::message_box(setup::ui::window, message, MB_OK | icon);

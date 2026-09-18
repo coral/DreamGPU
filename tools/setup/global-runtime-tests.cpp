@@ -420,12 +420,14 @@ static void next_epoch_setup() {
 }
 static void next_epoch_failures() {
     next_epoch_setup();
-    assert(invoke(Request::upgrade) == Result::complete);
+    // Double-click a different installer: no /upgrade or manual cleanup.
+    assert(invoke(Request::start) == Result::complete);
+    assert(global_record().flow.intent == Intent::upgrade);
     unsigned points = fake_win32::mutation;
     for (unsigned fault = 1; fault <= points; ++fault) {
         next_epoch_setup();
         fake_win32::fail = fault;
-        assert(invoke(Request::upgrade) != Result::complete);
+        assert(invoke(Request::start) != Result::complete);
         fake_win32::fail = 0;
         assert(invoke(Request::start) == Result::complete);
         assert(global_record().flow.epoch == 2 && runtime_record().generation == 2 &&

@@ -95,31 +95,88 @@ class Store {
         lstrcatA(out, relative);
         return true;
     }
+    // A new installation discards the private extraction scratch space. Never
+    // traverse junctions/links, and never call this on the installed DreamGPU
+    // tree: that tree holds Windows driver before-images used by upgrades.
+    static bool erase_staging(const char *path, unsigned depth = 0) {
+        DWORD attributes = GetFileAttributesA(path);
+        if (attributes == INVALID_FILE_ATTRIBUTES) {
+            const DWORD error = GetLastError();
+            return error == ERROR_FILE_NOT_FOUND || error == ERROR_PATH_NOT_FOUND ||
+                   failure("Could not inspect old setup files", path, error);
+        }
+        if (depth > 64)
+            return failure("Old setup directory nesting is too deep", path);
+        const bool dir = (attributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+        if (dir && !(attributes & FILE_ATTRIBUTE_REPARSE_POINT)) {
+            char pattern[MAX_PATH];
+            if (!join(path, "*", pattern))
+                return failure("Old setup path is too long", path);
+            WIN32_FIND_DATAA found{};
+            HANDLE scan = FindFirstFileA(pattern, &found);
+            if (scan == INVALID_HANDLE_VALUE) {
+                if (GetLastError() != ERROR_FILE_NOT_FOUND)
+                    return failure("Could not list old setup files", path, GetLastError());
+            } else {
+                bool okay = true;
+                do {
+                    if (!lstrcmpA(found.cFileName, ".") || !lstrcmpA(found.cFileName, ".."))
+                        continue;
+                    char child[MAX_PATH];
+                    if (!join(path, found.cFileName, child)) {
+                        okay = failure("Old setup path is too long", path);
+                        break;
+                    }
+                    if (!erase_staging(child, depth + 1)) {
+                        okay = false;
+                        break;
+                    }
+                } while (FindNextFileA(scan, &found));
+                const DWORD error = GetLastError();
+                FindClose(scan);
+                if (!okay)
+                    return false;
+                if (error != ERROR_NO_MORE_FILES)
+                    return failure("Could not finish listing old setup files", path, error);
+            }
+        }
+        progress("Removing old setup files", path);
+        if ((attributes & FILE_ATTRIBUTE_READONLY) &&
+            !(attributes & FILE_ATTRIBUTE_REPARSE_POINT) &&
+            !SetFileAttributesA(path, (attributes & ~FILE_ATTRIBUTE_READONLY)
+                                          ? attributes & ~FILE_ATTRIBUTE_READONLY
+                                          : FILE_ATTRIBUTE_NORMAL))
+            return failure("Could not clear old setup file attributes", path, GetLastError());
+        return (dir ? RemoveDirectoryA(path) : DeleteFileA(path)) ||
+               failure("Could not remove old setup file", path, GetLastError());
+    }
     // Read through a held non-sharing handle: only an exact immutable prefix
     // can be extended. Never truncate or replace a mismatching file.
     static bool contents(const char *path, const BYTE *bytes, DWORD size, bool complete,
                          bool write) {
         DWORD a = GetFileAttributesA(path);
         bool missing = a == INVALID_FILE_ATTRIBUTES;
-        if ((missing && (!write || GetLastError() != ERROR_FILE_NOT_FOUND)) ||
-            (!missing && (a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT))))
-            return false;
+        if (missing && (!write || GetLastError() != ERROR_FILE_NOT_FOUND))
+            return failure("Could not inspect installation file", path, GetLastError());
+        if (!missing && (a & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT)))
+            return failure("Installation file is a directory or link", path);
         File f(CreateFileA(path, GENERIC_READ | (write ? GENERIC_WRITE : 0), 0, nullptr,
                            missing ? CREATE_NEW : OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr));
         if (f.h == INVALID_HANDLE_VALUE)
-            return false;
+            return failure("Could not open installation file", path, GetLastError());
         DWORD high = 0, existing = GetFileSize(f.h, &high);
         if (high || existing > size || (complete && !write && existing != size))
-            return false;
+            return failure("Installation file has an unexpected size", path);
         BYTE buffer[4096];
         DWORD offset = 0;
         while (offset < existing) {
             DWORD n = existing - offset, got = 0;
             if (n > sizeof(buffer))
                 n = sizeof(buffer);
-            if (!ReadFile(f.h, buffer, n, &got, nullptr) || got != n ||
-                !equal(buffer, bytes + offset, n))
-                return false;
+            if (!ReadFile(f.h, buffer, n, &got, nullptr))
+                return failure("Could not read installation file", path, GetLastError());
+            if (got != n || !equal(buffer, bytes + offset, n))
+                return failure("Installation file does not match this installer", path);
             offset += n;
         }
         if (!write)
@@ -128,11 +185,14 @@ class Store {
             DWORD n = size - offset, written = 0;
             if (n > 65536)
                 n = 65536;
-            if (!WriteFile(f.h, bytes + offset, n, &written, nullptr) || written != n)
-                return false;
+            if (!WriteFile(f.h, bytes + offset, n, &written, nullptr))
+                return failure("Could not write installation file", path, GetLastError());
+            if (written != n)
+                return failure("Installation file write was incomplete", path);
             offset += n;
         }
-        return FlushFileBuffers(f.h);
+        return FlushFileBuffers(f.h) ||
+               failure("Could not flush installation file", path, GetLastError());
     }
     int locate(const char *relative) const {
         for (unsigned n = 0; n < count_; ++n)
@@ -180,7 +240,7 @@ class Store {
             HANDLE scan = FindFirstFileA(pattern, &found);
             if (scan == INVALID_HANDLE_VALUE) {
                 if (GetLastError() != ERROR_FILE_NOT_FOUND)
-                    return false;
+                    return failure("Could not list staging directory", path, GetLastError());
                 continue;
             }
             bool okay = true;
@@ -200,14 +260,17 @@ class Store {
                 if (index < 0 || (found.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT) ||
                     bool(found.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) !=
                         nodes_[index].directory) {
+                    failure("Unexpected file or directory in staging area", child);
                     okay = false;
                     break;
                 }
             } while (FindNextFileA(scan, &found));
             DWORD error = GetLastError();
             FindClose(scan);
-            if (!okay || error != ERROR_NO_MORE_FILES)
+            if (!okay)
                 return false;
+            if (error != ERROR_NO_MORE_FILES)
+                return failure("Could not finish listing staging directory", path, error);
         }
         for (unsigned n = 0; n < count_; ++n) {
             char path[MAX_PATH];
@@ -228,6 +291,21 @@ class Store {
     }
 
   public:
+    // The caller holds SetupLock and has validated the new embedded payloads.
+    // Remove receipts last. If interrupted, another new install can repeat the
+    // cleanup without needing the old executable or its payload catalog.
+    static bool discard_pending() {
+        char windows[MAX_PATH], path[MAX_PATH];
+        const DWORD size = GetWindowsDirectoryA(windows, MAX_PATH);
+        if (!size || size >= MAX_PATH - 20 || !directory(windows))
+            return failure("Could not locate Windows directory for setup cleanup");
+        static constexpr const char *names[] = {"DGSETUP.NEW", "DGSETUP.JRN", "DGSETUP.CAN"};
+        for (const char *name : names) {
+            if (!join(windows, name, path) || !erase_staging(path))
+                return false;
+        }
+        return true;
+    }
     // Caller hashes the actual running executable, not its staged alias.
     bool reset(Os os, const char *installer_sha) {
         count_ = 0;
@@ -244,8 +322,13 @@ class Store {
         lstrcpyA(intent_.installer, installer_sha);
         char windows[MAX_PATH];
         DWORD n = GetWindowsDirectoryA(windows, MAX_PATH);
-        return n && n < MAX_PATH - 20 && directory(windows) &&
-               join(windows, "DGSETUP.NEW", root_) && join(windows, "DreamGPU", final_) &&
+        if (!n)
+            return failure("Could not locate Windows directory", "", GetLastError());
+        if (n >= MAX_PATH - 20)
+            return failure("Windows directory path is too long");
+        if (!directory(windows))
+            return failure("Could not access Windows directory", windows);
+        return join(windows, "DGSETUP.NEW", root_) && join(windows, "DreamGPU", final_) &&
                join(windows, "DGSETUP.JRN", receipt_) && join(windows, "DGSETUP.CAN", cancel_);
     }
     bool add(const char *relative, const BYTE *data, DWORD bytes, const char *expected = nullptr) {
@@ -272,6 +355,7 @@ class Store {
         return node(path, false, data, bytes);
     }
     bool begin(bool cancel = false) {
+        progress("Preparing staging receipt", receipt_);
         if (begun_ || !count_ || !receipt_[0])
             return false;
         Sha256 hash;
@@ -300,8 +384,11 @@ class Store {
         } else if (absent(receipt_)) {
             if (cancel)
                 return false;
-            if (!absent(root_) || !absent(final_))
-                return false;
+            if (!absent(root_))
+                return failure(
+                    "Staging directory is unavailable or already exists without a receipt", root_);
+            if (!absent(final_))
+                return failure("Installation directory is unavailable or already exists", final_);
             // Publish full binding before touching the staged tree. A foreign
             // or torn unbound first receipt is never treated as ownership.
             bool published = false;
@@ -309,10 +396,12 @@ class Store {
                 File f(CreateFileA(receipt_, GENERIC_READ | GENERIC_WRITE, 0, nullptr, CREATE_NEW,
                                    FILE_ATTRIBUTE_NORMAL, nullptr));
                 if (f.h == INVALID_HANDLE_VALUE)
-                    return false;
+                    return failure("Could not create staging receipt", receipt_, GetLastError());
                 DWORD wrote = 0;
                 published = WriteFile(f.h, raw, sizeof(intent_), &wrote, nullptr) &&
                             wrote == sizeof(intent_) && FlushFileBuffers(f.h);
+                if (!published)
+                    failure("Could not write and flush staging receipt", receipt_, GetLastError());
             }
             if (!published) {
                 // This process exclusively created the metadata, so it may
@@ -332,8 +421,10 @@ class Store {
                 return false;
             committed_ = true;
         } else {
+            progress("Preparing staging directory", root_);
             if (absent(root_) && !cancel && !CreateDirectoryA(root_, nullptr))
-                return false;
+                return failure("Could not create staging directory", root_, GetLastError());
+            progress("Checking staging directory contents", root_);
             if (!absent(root_) && !tree(root_, false))
                 return false;
         }

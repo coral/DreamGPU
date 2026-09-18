@@ -10,4 +10,12 @@ inline void progress(const char *operation, const char *detail = "") {
     if (progress_observer)
         progress_observer(operation, detail);
 }
+// Capture errors at the failing syscall, before handle cleanup or UI calls can
+// replace GetLastError. Zero means a validation failure, not a Windows error.
+inline unsigned failure_error = 0;
+inline bool failure(const char *operation, const char *detail = "", unsigned error = 0) {
+    failure_error = error;
+    progress(operation, detail);
+    return false;
+}
 } // namespace setup
