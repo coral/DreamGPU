@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <string.h>
 #include "compatibility.cpp"
+extern "C" BOOL JglDepthStencilReadbackAvailable(void);
 #include "readback.cpp"
 static BOOL Ready = TRUE;
 static GLenum Error;
@@ -10,7 +11,11 @@ static GLfloat Values[4];
 static ULONG Calls, Deleted[20], DeletedCount, Capacity = 12, QueryCalls, ShortReply;
 static ULONG Readback[128];
 static GLint TextureWidth = 129, TextureHeight = 2;
-static BOOL PackedOracle, FixedPixel;
+static BOOL PackedOracle, FixedPixel, ExtendedReadback;
+static float FloatPixel[4] = {.25f, .5f, .75f, 1.0f};
+BOOL JglDepthStencilReadbackAvailable(void) {
+    return ExtendedReadback;
+}
 static ULONG ReadPixel(ULONG at) {
     if (FixedPixel)
         return 0x78563412;
@@ -107,6 +112,38 @@ BOOL JglQuery(ULONG fn, const ULONG *args, ULONG type, void *out, ULONG capacity
         assert(capacity == 4);
         *(GLint *)out = args[2] == GL_TEXTURE_WIDTH ? TextureWidth : TextureHeight;
         *bytes = 4;
+        ++QueryCalls;
+        return TRUE;
+    }
+    if (fn == FEnum_glGetTexImage && (args[1] & DG_GL_TEXTURE_READ_FLOAT)) {
+        ULONG pixels = args[1] >> 16;
+        assert(ExtendedReadback && type == DG_GL_RESULT_FLOAT && pixels && capacity == pixels * 16);
+        for (i = 0; i < pixels; ++i) {
+            ULONG c, pixel = ReadPixel(args[2] + i);
+            for (c = 0; c < 4; ++c)
+                ((float *)out)[i * 4 + c] =
+                    FixedPixel ? FloatPixel[c] : ((pixel >> (c * 8)) & 255) / 255.0f;
+        }
+        *bytes = ShortReply ? capacity - 4 : capacity;
+        ++QueryCalls;
+        return TRUE;
+    }
+    if (fn == FEnum_glReadPixels && (args[0] & ~DG_GL_READ_X_MASK)) {
+        ULONG mode = args[0] & ~DG_GL_READ_X_MASK, x = args[0] & DG_GL_READ_X_MASK;
+        ULONG pixels = (args[2] & 65535) * (args[2] >> 16), wide = mode == DG_GL_READ_RGBA_FLOAT;
+        assert(ExtendedReadback && capacity == pixels * (wide ? 16 : 4));
+        assert(type == (mode == DG_GL_READ_STENCIL ? DG_GL_RESULT_INT : DG_GL_RESULT_FLOAT));
+        for (i = 0; i < pixels; ++i) {
+            if (mode == DG_GL_READ_STENCIL)
+                rgba[i] = FixedPixel ? 0xed : ((x + i % (args[2] & 65535)) & 1);
+            else if (mode == DG_GL_READ_DEPTH)
+                ((float *)out)[i] = .5f;
+            else {
+                assert(wide);
+                memcpy((float *)out + i * 4, FloatPixel, sizeof(FloatPixel));
+            }
+        }
+        *bytes = ShortReply ? capacity - 4 : capacity;
         ++QueryCalls;
         return TRUE;
     }
@@ -344,8 +381,215 @@ int main(void) {
             assert(!memcmp(image, before, sizeof(image)));
         }
     }
+    /* New formats must never send unnegotiated wire modes to old drivers. */
+    {
+        static const GLenum types[] = {0x1400, 0x1402, 0x1403, 0x1404,
+                                       0x1405, 0x1406, 0x8036, 0x8368};
+        ULONG k;
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        for (k = 0; k < sizeof(types) / sizeof(types[0]); ++k) {
+            Calls = QueryCalls;
+            Error = 0;
+            glReadPixels(0, 0, 1, 1, GL_RGBA, types[k], image);
+            assert(Error == GL_INVALID_OPERATION && QueryCalls == Calls);
+            Error = 0;
+            glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, types[k], image);
+            assert(Error == GL_INVALID_OPERATION && QueryCalls == Calls);
+        }
+        for (k = 0x1901; k <= 0x1902; ++k) {
+            Error = 0;
+            Calls = QueryCalls;
+            glReadPixels(0, 0, 1, 1, k, GL_UNSIGNED_BYTE, image);
+            assert(Error == GL_INVALID_OPERATION && Calls == QueryCalls);
+        }
+    }
+    ExtendedReadback = TRUE;
+    FixedPixel = TRUE;
+    Error = 0;
+    TextureWidth = TextureHeight = 1;
+    /* Exact non-byte-representable values prove wide transport, while fixed
+     * signed results follow GL1.1's conversion table rather than unsigned masks. */
+    {
+        static const struct {
+            GLenum type;
+            ULONG bytes, red, green, blue, alpha;
+        } cases[] = {
+            {0x1400, 1, 31, 63, 95, 127},
+            {0x1402, 2, 8191, 16383, 24575, 32767},
+            {0x1403, 2, 16384, 32768, 49151, 65535},
+            {0x1404, 4, 536870911, 1073741823, 1610612735, 2147483647},
+            {0x1405, 4, 1073741824, 2147483648u, 3221225471u, 4294967295u},
+            {0x1406, 4, 0x3e800000, 0x3f000000, 0x3f400000, 0x3f800000},
+            {0x8036, 4, 0x40200c03, 0, 0, 0},
+            {0x8368, 4, 0xf0080100, 0, 0, 0},
+        };
+        ULONG k, swapped, api, c;
+        for (k = 0; k < sizeof(cases) / sizeof(cases[0]); ++k)
+            for (swapped = 0; swapped < 2; ++swapped)
+                for (api = 0; api < 2; ++api) {
+                    ULONG components = cases[k].type >= 0x8000 ? 1 : 4;
+                    ULONG expected[] = {cases[k].red, cases[k].green, cases[k].blue,
+                                        cases[k].alpha};
+                    Pack = (JGL_UNPACK){4, 0, 0, 0, (GLint)swapped, 0};
+                    memset(image, 0xcc, sizeof(image));
+                    if (api)
+                        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, cases[k].type, image + 1);
+                    else
+                        glReadPixels(0, 0, 1, 1, GL_RGBA, cases[k].type, image + 1);
+                    assert(!Error && image[0] == 0xcc &&
+                           image[1 + components * cases[k].bytes] == 0xcc);
+                    for (c = 0; c < components * cases[k].bytes; ++c) {
+                        ULONG offset = c % cases[k].bytes;
+                        if (swapped)
+                            offset = cases[k].bytes - 1 - offset;
+                        assert(image[c + 1] ==
+                               (BYTE)(expected[c / cases[k].bytes] >> (offset * 8)));
+                    }
+                }
+        /* Float transport has four words per pixel, including chunk starts
+         * beyond the first tile and destination row padding. */
+        {
+            static BYTE tiled[3 * 536 + 8];
+            ULONG j, api;
+            TextureWidth = 33;
+            TextureHeight = 2;
+            for (api = 0; api < 2; ++api) {
+                Pack = (JGL_UNPACK){8, 33, 1, 0, 0, 0};
+                memset(tiled, 0xcc, sizeof(tiled));
+                if (api)
+                    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, 0x1406, tiled + 1);
+                else
+                    glReadPixels(0, 0, 33, 2, GL_RGBA, 0x1406, tiled + 1);
+                assert(!Error);
+                for (j = 0; j < sizeof(tiled); ++j) {
+                    BYTE expected = 0xcc;
+                    if (j >= 529 && j < 1585) {
+                        ULONG word = ((j - 529) % 16) / 4;
+                        static const ULONG bits[] = {0x3e800000, 0x3f000000, 0x3f400000,
+                                                     0x3f800000};
+                        expected = (BYTE)(bits[word] >> (((j - 529) % 4) * 8));
+                    }
+                    assert(tiled[j] == expected);
+                }
+            }
+            TextureWidth = TextureHeight = 1;
+        }
+        /* Non-8bit 1D texture data remains exact even with 16bit scalar output. */
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        FloatPixel[0] = 12345 / 65535.0f;
+        FloatPixel[1] = 23456 / 65535.0f;
+        FloatPixel[2] = 34567 / 65535.0f;
+        FloatPixel[3] = 45678 / 65535.0f;
+        Pack.SwapBytes = 0;
+        glGetTexImage(GL_TEXTURE_1D, 0, GL_RGBA, 0x1403, image + 1);
+        assert(!Error);
+        assert((image[1] | (image[2] << 8)) == 12345 && (image[3] | (image[4] << 8)) == 23456);
+        assert((image[5] | (image[6] << 8)) == 34567 && (image[7] | (image[8] << 8)) == 45678);
+        FloatPixel[0] = .25f;
+        FloatPixel[1] = .5f;
+        FloatPixel[2] = .75f;
+        FloatPixel[3] = 1;
+        /* Component extraction and the distinct framebuffer/texture luminance rules. */
+        for (api = 0; api < 2; ++api) {
+            static const GLenum formats[] = {
+                0x1903, 0x1904, 0x1905, GL_ALPHA, GL_LUMINANCE, GL_LUMINANCE_ALPHA, 0x80e0, 0x80e1};
+            for (k = 0; k < sizeof(formats) / sizeof(formats[0]); ++k) {
+                float out[4] = {-9, -9, -9, -9};
+                if (api)
+                    glGetTexImage(GL_TEXTURE_2D, 0, formats[k], 0x1406, out);
+                else
+                    glReadPixels(0, 0, 1, 1, formats[k], 0x1406, out);
+                assert(!Error);
+                assert(out[0] == (k == 0   ? .25f
+                                  : k == 1 ? .5f
+                                  : k == 2 ? .75f
+                                  : k == 3 ? 1.0f
+                                  : k < 6  ? (api ? .25f : 1.0f)
+                                           : .75f));
+                if (k == 5)
+                    assert(out[1] == 1.0f && out[2] == -9);
+                if (k >= 6)
+                    assert(out[1] == .5f && out[2] == .25f && out[3] == (k == 7 ? 1.0f : -9.0f));
+            }
+        }
+        /* Additional packed types preserve exact native field order. */
+        {
+            static const struct {
+                GLenum type;
+                ULONG word, bytes;
+            } packed[] = {{0x8032, 0x05, 1},
+                          {0x8362, 0x48, 1},
+                          {0x8364, 0x51a2, 2},
+                          {0x8035, 0x12345678, 4},
+                          {0x8367, 0x78563412, 4}};
+            for (k = 0; k < sizeof(packed) / sizeof(packed[0]); ++k) {
+                glReadPixels(0, 0, 1, 1, k < 3 ? GL_RGB : GL_RGBA, packed[k].type, image + 1);
+                assert(!Error);
+                for (c = 0; c < packed[k].bytes; ++c)
+                    assert(image[c + 1] == (BYTE)(packed[k].word >> (c * 8)));
+            }
+        }
+        /* Depth converts normalized values; stencil uses integer masks. */
+        {
+            static const struct {
+                GLenum type;
+                ULONG depth, stencil, bytes;
+            } scalar[] = {{0x1400, 63, 0x6d, 1},
+                          {GL_UNSIGNED_BYTE, 128, 0xed, 1},
+                          {0x1402, 16383, 0xed, 2},
+                          {0x1403, 32768, 0xed, 2},
+                          {0x1404, 1073741823, 0xed, 4},
+                          {0x1405, 2147483648u, 0xed, 4},
+                          {0x1406, 0x3f000000, 0x436d0000, 4}};
+            for (k = 0; k < sizeof(scalar) / sizeof(scalar[0]); ++k)
+                for (api = 0; api < 2; ++api) {
+                    ULONG expected = api ? scalar[k].depth : scalar[k].stencil;
+                    glReadPixels(0, 0, 1, 1, api ? 0x1902 : 0x1901, scalar[k].type, image + 1);
+                    assert(!Error);
+                    for (c = 0; c < scalar[k].bytes; ++c)
+                        assert(image[c + 1] == (BYTE)(expected >> (c * 8)));
+                }
+        }
+        /* Bit-packed stencil retains neighboring bits, row padding and skip
+         * pixels across a transport boundary, in either bit order. */
+        FixedPixel = FALSE;
+        for (swapped = 0; swapped < 2; ++swapped) {
+            Pack = (JGL_UNPACK){4, 141, 1, 3, 1, (GLint)swapped};
+            memset(image, 0xa5, sizeof(image));
+            glReadPixels(1, 0, 130, 2, 0x1901, 0x1a00, image);
+            assert(!Error);
+            for (c = 0; c < sizeof(image) * 8; ++c) {
+                ULONG byte = c / 8, bit = c % 8, expected = (0xa5 >> bit) & 1;
+                if (byte >= 20 && byte < 60) {
+                    ULONG y = (byte - 20) / 20,
+                          x = ((byte - 20) % 20) * 8 + (swapped ? bit : 7 - bit);
+                    if (y < 2 && x >= 3 && x < 133)
+                        expected = (x - 3 + 1) & 1;
+                }
+                assert(((image[byte] >> bit) & 1) == expected);
+            }
+        }
+        Error = 0;
+        Calls = QueryCalls;
+        glReadPixels(0, 0, 1, 1, 0x1900, GL_UNSIGNED_BYTE, image);
+        assert(Error == GL_INVALID_OPERATION && Calls == QueryCalls);
+        Error = 0;
+        /* Malformed wide replies do not mutate output. */
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        ShortReply = 1;
+        memcpy(before, image, sizeof(image));
+        Error = 0;
+        glReadPixels(0, 0, 1, 1, GL_RGBA, 0x1406, image);
+        assert(Error == GL_INVALID_OPERATION && !memcmp(image, before, sizeof(image)));
+        Error = 0;
+        glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, 0x1406, image);
+        assert(Error == GL_INVALID_OPERATION && !memcmp(image, before, sizeof(image)));
+        ShortReply = 0;
+        Error = 0;
+    }
     puts("PASS legacy frontend: scalar normalization, immutable vectors/deletes, bounded reads, "
-         "pack stride/skips, all RGB565 texels, packed16 orders/swaps and malformed results");
+         "pack stride/skips, all RGB565 texels, wide color, depth/stencil, bitmap and malformed "
+         "results");
     return 0;
 }
 

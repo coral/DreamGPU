@@ -199,11 +199,13 @@ pub fn build(root: &Path, output: &Path, prefix: &str) -> Result<()> {
     fs::copy(&exe, &publishing)?;
     fs::File::open(&publishing)?.sync_all()?;
     fs::rename(publishing, output.join("dreamgpu.exe"))?;
+    crate::installer_iso::build(&output.join("dreamgpu.exe"), output)?;
     let mut inputs = icon_inputs;
     crate::native::record_tree(root, &root.join("tools/setup"), &mut inputs)?;
     for name in [
         "support/guest/cmake/setup.cmake",
         "crates/dreamgpu-build/src/installer.rs",
+        "crates/dreamgpu-build/src/installer_iso.rs",
     ] {
         inputs.insert(name.into(), json!(digest(&root.join(name))?));
     }
@@ -211,6 +213,9 @@ pub fn build(root: &Path, output: &Path, prefix: &str) -> Result<()> {
         &output.join("installer-manifest.json"),
         &json!({
             "schema":1,"exe":"dreamgpu.exe","sha256":digest(&exe)?,
+            "iso":{"path":crate::installer_iso::NAME,
+                   "sha256":digest(&output.join(crate::installer_iso::NAME))?,
+                   "installer_path":"DREAMGPU.EXE"},
             "imports":imports,"inputs":inputs,"payloads":evidence,
             "activation":"journalled-system-installation","journal_schema":2,
             "stage":{"journal_schema":1,"ownership":"authenticated-private-staging-tree",

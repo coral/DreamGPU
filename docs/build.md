@@ -78,8 +78,11 @@ artifacts separate from macOS builds. Generated guest files stay in the checkout
 after the container exits. The first build downloads the checked Watcom archive
 and compiles drivers/translators; subsequent builds reuse those outputs.
 
-The finished installer is **`target/guest/dreamgpu.exe`**. Its hash, embedded file
-identities and import audit are in `target/guest/installer-manifest.json`.
+The build produces **`target/guest/dreamgpu.exe`** and a ready-to-mount installer
+CD, **`target/guest/dreamgpu-setup.iso`**, containing `DREAMGPU.EXE`. Both hashes,
+embedded file identities and the import audit are in
+`target/guest/installer-manifest.json`. ISO generation runs directly in Rust
+on any build host, including Docker, without extra CD authoring tools.
 
 After changes limited to `tools/setup`, rebuild just the installer using the
 existing audited packages:
@@ -97,7 +100,8 @@ docker run --rm --platform linux/amd64 \
 
 Use the full `guest` command again after changes to drivers, translators or
 packaged probes. The installer-only command requires both package manifests and
-rejects changed payload files whose recorded hashes no longer match.
+rejects changed payload files whose recorded hashes no longer match. It also
+regenerates the ISO from the rebuilt installer.
 
 ### Try the installation in a Windows VM
 
@@ -108,18 +112,10 @@ cargo build --release
 ```
 
 Start your Windows 98 or 32-bit Windows 2000/XP VM with this runtime and its
-DreamGPU adapter enabled. Copy `target/guest/dreamgpu.exe` into the guest using
-your normal file-transfer method. Alternatively, create an installer CD on macOS:
-
-```sh
-mkdir -p target/guest/install-media
-cp target/guest/dreamgpu.exe target/guest/install-media/DREAMGPU.EXE
-hdiutil makehybrid -ov -iso -joliet \
-  -o target/guest/dreamgpu-setup.iso target/guest/install-media
-```
-
-Attach `target/guest/dreamgpu-setup.iso` to the VM's CD drive, then run
+DreamGPU adapter enabled. Attach the generated
+`target/guest/dreamgpu-setup.iso` to the VM's CD drive, then run
 `DREAMGPU.EXE` from the CD in Windows. Use an administrator account on 2000/XP.
+You can also copy `target/guest/dreamgpu.exe` into the guest directly.
 For a fresh installation, double-click without `/silent`:
 
 1. An installation window appears with the current operation, filenames, an

@@ -807,10 +807,12 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
     {
         return DG_GL_ERROR_TEXTURE;
     }
-    if bytes
-        > u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
-            * u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
-            * u64::from(pixel_bytes)
+    // Cache length and offsets are u32 even on a 64-bit host.
+    if bytes > u64::from(u32::MAX)
+        || bytes
+            > u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
+                * u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
+                * u64::from(pixel_bytes)
     {
         return DG_GL_ERROR_LIMIT;
     }

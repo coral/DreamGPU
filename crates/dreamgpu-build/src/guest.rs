@@ -378,7 +378,11 @@ fn remote(root: &Path, output: &Path, host: &str) -> Result<()> {
             quote(&format!("{destination}/target/guest/packages"))
         ))
         .arg(output.join("packages")))?;
-    for name in ["dreamgpu.exe", "installer-manifest.json"] {
+    for name in [
+        "dreamgpu.exe",
+        crate::installer_iso::NAME,
+        "installer-manifest.json",
+    ] {
         run(Command::new("rsync")
             .arg("-a")
             .arg(format!(

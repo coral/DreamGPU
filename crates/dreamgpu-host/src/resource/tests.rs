@@ -917,3 +917,39 @@ fn float_texture_cache_keeps_precision_and_separates_representation() {
     assert!(cache.pixels.is_null());
     assert_eq!(errors, 0);
 }
+
+#[test]
+fn float_texture_read_rejects_four_gib_cache_before_allocation() {
+    let a = api();
+    let mut alloc = Allocator::default();
+    let m = memory(&a, &mut alloc);
+    let mut cache = ReadCache::EMPTY;
+    let mut t = Texture::default();
+    // Future adapter limits must not make the u32 cache length wrap at 4GiB.
+    t.widths[0] = 16384;
+    t.heights[0] = 16384;
+    let mut errors = 0;
+    let mut out = [0xab; 16];
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_read(
+                &m,
+                &mut cache,
+                &mut t,
+                &mut errors,
+                1,
+                GL_TEXTURE_2D,
+                DG_GL_TEXTURE_READ_FLOAT,
+                0,
+                16,
+                out.as_mut_ptr(),
+            )
+        },
+        DG_GL_ERROR_LIMIT
+    );
+    assert_eq!(out, [0xab; 16]);
+    assert_eq!(alloc.max, 0);
+    assert!(alloc.live.is_empty());
+    assert!(cache.pixels.is_null());
+    N.with(|v| assert_eq!(v.borrow().reads, 0));
+}

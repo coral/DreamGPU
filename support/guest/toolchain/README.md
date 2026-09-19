@@ -39,8 +39,12 @@ copies only build sources, verifies all public dependency pins and copies back
 the finished packages. It does not boot or modify any VM.
 
 Outputs are `target/guest/packages/win98` and
-`target/guest/packages/windows2000-xp`. CMake keeps intermediate builds and
-compilation databases in `target/guest/build/{nt5,win98}/`.
+`target/guest/packages/windows2000-xp`, plus `target/guest/dreamgpu.exe` and
+`target/guest/dreamgpu-setup.iso`. Both full guest builds and installer-only
+rebuilds generate the ISO automatically, with no external ISO tools required.
+SSH builds copy the installer, ISO and manifest back to the local output directory.
+CMake keeps intermediate builds and compilation databases in
+`target/guest/build/{nt5,win98}/`.
 
 Open Watcom is downloaded from the URL in `sources.lock.json` and checked
 against SHA256 `be75ec9f0cd9ee9ebf3af9a096092dd988f3c016599a415724c455d81205f71d`.
