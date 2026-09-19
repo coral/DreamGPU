@@ -53,9 +53,20 @@ class RuntimeResume {
     }
     bool validate(const Record &r) const {
         return r.magic == 0x52474744 &&
-               (r.version == record_version_ || (os_ == Os::nt5 && r.version == 1)) &&
+               (r.version == record_version_ || (os_ == Os::win98 && r.version == 2) ||
+                (os_ == Os::nt5 && (r.version == 1 || r.version == 3))) &&
                r.generation == record_.generation && valid_image(r.before, Kind::registry) &&
                r.installer.exists && valid_image(r.installer, Kind::file);
+    }
+
+    void select_invocation() {
+        key_path_ = record_.version == 1 ? "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce"
+                                         : "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+        char command[256] = "\"";
+        lstrcatA(command, installer_);
+        // Historical receipts own the exact silent command they captured.
+        lstrcatA(command, record_.version >= 4 ? "\" /continue /startup" : "\" /continue /silent");
+        desired_ = string_value(command);
     }
 
   public:
@@ -67,8 +78,9 @@ class RuntimeResume {
         os_ = os;
         key_path_ = "Software\\Microsoft\\Windows\\CurrentVersion\\Run";
         // Same durable layout; the version binds the captured baseline to its
-        // registry key. A legacy Win98 receipt cannot be reinterpreted as Run.
-        record_.version = record_version_ = os == Os::win98 ? 2 : 3;
+        // registry key, OS and command. Versions 2/3 retain silent continuation;
+        // versions 4/5 notify when startup continuation needs user action.
+        record_.version = record_version_ = os == Os::win98 ? 4 : 5;
         value_name_ = scope == ResumeScope::global     ? "DreamGPU.Setup"
                       : scope == ResumeScope::recovery ? "DreamGPU.Recovery"
                                                        : "DreamGPU.Runtime";
@@ -88,12 +100,9 @@ class RuntimeResume {
                   generation);
         if (!store_.private_path(installer_, suffix))
             return;
-        char command[256] = "\"";
         if (lstrlenA(installer_) > 200)
             return;
-        lstrcatA(command, installer_);
-        lstrcatA(command, "\" /continue /silent");
-        desired_ = string_value(command);
+        select_invocation();
         ready_ = true;
     }
     bool prepare() {
@@ -112,8 +121,7 @@ class RuntimeResume {
             return false;
         if (exists) {
             record_ = loaded;
-            if (loaded.version == 1)
-                key_path_ = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+            select_invocation();
             if (installer_matches())
                 return true;
         }
@@ -156,8 +164,7 @@ class RuntimeResume {
             !exists)
             return false;
         record_ = loaded;
-        if (record_.version == 1)
-            key_path_ = "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
+        select_invocation();
         Key key;
         Image current;
         return installer_matches() &&

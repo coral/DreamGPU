@@ -17,6 +17,7 @@
 #include "stage-store.h"
 #include "setup-lock.h"
 #include "progress-window.h"
+#include "startup-policy.h"
 namespace {
 class Handle {
     HANDLE h_;
@@ -376,12 +377,18 @@ bool restart_windows() {
     }
     return ExitWindowsEx(EWX_REBOOT, 0) != FALSE;
 }
-void show_result(unsigned code) {
+void show_result(unsigned code, bool startup) {
     if (code == 11 || code == 16) {
         const int choice = setup::ui::message_box(
             setup::ui::window,
-            "DreamGPU needs to restart Windows to continue. Setup will resume "
-            "automatically.\r\n\r\nRestart now?",
+            startup
+                ? "DreamGPU setup resumed after Windows started and needs another restart to "
+                  "finish. Setup installs the display driver first, then the graphics libraries; "
+                  "these steps can require separate restarts. The graphics update is not ready "
+                  "yet.\r\n\r\nRestart Windows now?"
+                : "DreamGPU needs to restart Windows to continue. Setup installs the display "
+                  "driver first, then the graphics libraries; another restart may be needed "
+                  "after setup resumes automatically.\r\n\r\nRestart now?",
             MB_YESNO | MB_ICONQUESTION | MB_DEFBUTTON2);
         if (choice == IDYES && !restart_windows())
             setup::ui::message_box(
@@ -494,7 +501,7 @@ extern "C" void WINAPI WinMainCRTStartup() {
     } else
         while (*command && *command != ' ' && *command != '\t')
             ++command;
-    bool staging = false, silent = false, valid = true;
+    bool staging = false, silent = false, startup = false, valid = true;
     int action = -1;
     while (*command) {
         while (*command == ' ' || *command == '\t')
@@ -533,10 +540,29 @@ extern "C" void WINAPI WinMainCRTStartup() {
                                                      : 3;
         } else if (!lstrcmpiA(arg, "/silent"))
             silent = true;
+        else if (!lstrcmpiA(arg, "/startup"))
+            startup = true;
         else
             valid = false;
     }
-    unsigned code = execute(staging, action, valid && !(staging && action >= 0), silent);
+    // Keep automatic callbacks single-instance through the result dialog, not
+    // just while journals are locked. Global and runtime Run entries can start
+    // together; a second callback must neither wait nor show the same prompt.
+    setup::Os startup_os = setup::Os::unsupported;
+    if (startup) {
+        OSVERSIONINFOA version{};
+        version.dwOSVersionInfoSize = sizeof(version);
+        if (GetVersionExA(&version))
+            startup_os = setup::select_os(version.dwPlatformId, version.dwMajorVersion,
+                                          version.dwMinorVersion);
+    }
+    setup::SetupLock startup_lock(startup_os, 0, setup::LockScope::startup);
+    unsigned code = startup_os != setup::Os::unsupported && !startup_lock.acquired()
+                        ? 28
+                        : execute(staging, action,
+                                  valid && !(staging && action >= 0) &&
+                                      setup::valid_startup(startup, staging, action),
+                                  silent || startup);
     const char *result = "{\"schema\":1,\"exit_code\":23,\"status\":\"invalid_arguments\",\"system_"
                          "activated\":false}\r\n";
     switch (code) {
@@ -627,10 +653,10 @@ extern "C" void WINAPI WinMainCRTStartup() {
             break;
     }
     receipt(result);
-    if (!silent) {
+    if (setup::notify_result(silent, startup, code)) {
         if (setup::ui::window)
             setup::ui::finish(code);
-        show_result(code);
+        show_result(code, startup);
         if (setup::ui::window)
             DestroyWindow(setup::ui::window);
     }

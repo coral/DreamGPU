@@ -50,7 +50,21 @@ installation. It reports completion only after driver verification and six
 normal-loader tests: OpenGL, Glide2 and Direct3D6/7/8/9. A restart request is
 pending work, not installed success. An owned startup entry resumes the recorded
 operation. New transactions use a persistent owned Run receipt on both OS
-families; historical NT5 RunOnce records retain versioned retirement semantics.
+families. New startup entries use `/continue /startup`: completion is confirmed,
+and a remaining restart or setup failure opens an actionable dialog. Concurrent
+startup callbacks are suppressed while continuation or its result dialog is open.
+Another installer already running does not produce a duplicate warning. Restarts
+always require confirmation. Explicit `/silent` still suppresses all UI, including
+when combined with `/startup`. Historical receipts retain their original silent
+command and exact registry ownership; an existing pending installation can still
+be resumed interactively with its retained `setup.exe /continue`.
+
+Setup currently completes and verifies the display-driver phase before starting
+graphics-library replacement. If both phases require boot-time changes, this
+ordering takes two Windows restarts. This is an installer sequencing choice, not
+a Windows requirement that every update needs two restarts. The first restart
+prompt explains the possibility, and startup continuation requests another when
+needed. Pending work is not reported as an activated graphics update.
 
 | Command | Meaning |
 | --- | --- |

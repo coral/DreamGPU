@@ -99,6 +99,31 @@ int main() {
         assert(!lock.acquired());
     }
     assert(!kernel.waits && !kernel.handles);
+    for (auto os : {setup::Os::win98, setup::Os::nt5}) {
+        kernel = {};
+        {
+            setup::SetupLock startup(os, 0, setup::LockScope::startup);
+            assert(startup.acquired() && kernel.timeout == 0);
+            assert(kernel.name == (os == setup::Os::nt5 ? "Global\\DreamGPU.Setup.Startup"
+                                                        : "DreamGPU.Setup.Startup"));
+            // A second process cannot wait for the first dialog to close and
+            // then repeat the pending-reboot prompt. The mock models two owners.
+            kernel.release_during_wait = true;
+            {
+                setup::SetupLock duplicate(os, 0, setup::LockScope::startup);
+                assert(!duplicate.acquired() && kernel.timeout == 0);
+            }
+            assert(kernel.held && kernel.releases == 0 && kernel.handles == 1);
+        }
+        assert(!kernel.held && kernel.handles == 0 && kernel.releases == 1);
+        kernel = {};
+        kernel.abandoned = true;
+        {
+            setup::SetupLock recovered(os, 0, setup::LockScope::startup);
+            assert(recovered.acquired());
+        }
+        assert(!kernel.handles && kernel.releases == 1);
+    }
     puts("PASS actual setup mutex: retained unowned handle, bounded startup handoff, "
          "timeout/failure/abandonment, exact OS namespace and balanced ownership");
 }

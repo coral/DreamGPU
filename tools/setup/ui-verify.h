@@ -23,6 +23,15 @@ static bool SetupDialogMessage(const char *text, DWORD &code, int &button) {
         {"DreamGPU needs to restart Windows to continue. Setup will resume "
          "automatically.\r\n\r\nRestart now?",
          11, IDNO},
+        {"DreamGPU needs to restart Windows to continue. Setup installs the display "
+         "driver first, then the graphics libraries; another restart may be needed "
+         "after setup resumes automatically.\r\n\r\nRestart now?",
+         11, IDNO},
+        {"DreamGPU setup resumed after Windows started and needs another restart to "
+         "finish. Setup installs the display driver first, then the graphics libraries; "
+         "these steps can require separate restarts. The graphics update is not ready "
+         "yet.\r\n\r\nRestart Windows now?",
+         11, IDNO},
         {"The previous installation has been restored.", 12, IDOK},
         {"DreamGPU has been removed and the previous system drivers restored.", 13, IDOK},
         {"DreamGPU setup is already running.", 28, IDOK},
