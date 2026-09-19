@@ -17,6 +17,8 @@ FN(int, wglDescribePixelFormat, (HDC, int, UINT, PIXELFORMATDESCRIPTOR *));
 FN(BOOL, wglSetPixelFormat, (HDC, int, const PIXELFORMATDESCRIPTOR *));
 FN(void, glClearColor, (GLclampf, GLclampf, GLclampf, GLclampf));
 FN(void, glClear, (GLbitfield));
+FN(void, glClearDepth, (GLdouble));
+FN(void, glClearStencil, (GLint));
 FN(void, glViewport, (GLint, GLint, GLsizei, GLsizei));
 FN(void, glMatrixMode, (GLenum));
 FN(void, glLoadIdentity, (void));
@@ -397,6 +399,30 @@ static BOOL PackedTextureAcceptance(void) {
         for (i = 0; i < sizeof(actual); ++i)
             if (!Check(actual[i] == cases[f].Pixels[i], "FAIL packed texture native pixel oracle"))
                 return FALSE;
+        /* The reverse transfer is essential: DirectDraw saves menu backgrounds
+         * using the original packed format, not RGBA bytes. */
+        for (offset = 0; offset < 2; ++offset) {
+            BYTE packed[18];
+            ULONG byte;
+            for (byte = 0; byte < sizeof(packed); ++byte)
+                packed[byte] = 0xa5;
+            pglPixelStorei(GL_PACK_ALIGNMENT, 1);
+            pglPixelStorei(GL_PACK_SWAP_BYTES, offset);
+            pglGetTexImage(GL_TEXTURE_2D, 0, cases[f].Format, cases[f].Type, packed + 1);
+            for (i = 0; i < 4; ++i)
+                for (byte = 0; byte < cases[f].Bytes; ++byte) {
+                    ULONG shift = 8 * (offset ? cases[f].Bytes - 1 - byte : byte);
+                    if (!Check(packed[1 + i * cases[f].Bytes + byte] ==
+                                   (BYTE)(cases[f].Words[i] >> shift),
+                               "FAIL packed texture readback roundtrip"))
+                        return FALSE;
+                }
+            if (!Check(packed[0] == 0xa5 && packed[1 + 4 * cases[f].Bytes] == 0xa5,
+                       "FAIL packed texture readback guards"))
+                return FALSE;
+        }
+        pglPixelStorei(GL_PACK_SWAP_BYTES, 0);
+        pglPixelStorei(GL_PACK_ALIGNMENT, 4);
         if (!Check(pglGetError() == GL_NO_ERROR, "FAIL packed texture GL error"))
             return FALSE;
     }
@@ -407,6 +433,77 @@ static BOOL PackedTextureAcceptance(void) {
     pglBindTexture(GL_TEXTURE_2D, 73);
     Log("PASS automated packed textures: RGB332/565, RGBA4444/5551, BGRA4444REV/1555REV;24 exact "
         "GPU texture pixels and padded unaligned inputs");
+    return TRUE;
+}
+
+/* Actual driver/transport/native roundtrip, in addition to packer unit tests. */
+static BOOL ReadbackAcceptance(void) {
+    const struct { GLenum Format, Type; ULONG Bytes, Value; } cases[] = {
+        {GL_RGB, 0x8032, 1, 0xe0}, /* 332 */
+        {GL_RGB, 0x8362, 1, 0x07}, /* 233_REV */
+        {GL_RGB, 0x8363, 2, 0xf800},
+        {GL_RGB, 0x8364, 2, 0x001f},
+        {GL_RGBA, 0x8033, 2, 0xf00f},
+        {GL_RGBA, 0x8365, 2, 0xf00f},
+        {GL_RGBA, 0x8034, 2, 0xf801},
+        {GL_RGBA, 0x8366, 2, 0x801f},
+        {GL_RGBA, 0x8035, 4, 0xff0000ff},
+        {GL_RGBA, 0x8367, 4, 0xff0000ff},
+        {GL_RGBA, 0x8036, 4, 0xffc00003},
+        {GL_RGBA, 0x8368, 4, 0xc00003ff},
+        {GL_RED, GL_BYTE, 1, 0x7f},
+        {GL_RED, GL_UNSIGNED_BYTE, 1, 0xff},
+        {GL_RED, GL_SHORT, 2, 0x7fff},
+        {GL_RED, GL_UNSIGNED_SHORT, 2, 0xffff},
+        {GL_RED, GL_INT, 4, 0x7fffffff},
+        {GL_RED, GL_UNSIGNED_INT, 4, 0xffffffff},
+        {GL_RED, GL_FLOAT, 4, 0x3f800000},
+        {GL_BLUE, GL_UNSIGNED_BYTE, 1, 0},
+        {GL_ALPHA, GL_UNSIGNED_BYTE, 1, 255},
+    };
+    BYTE out[24];
+    ULONG f, b, swap;
+    GLfloat depth;
+    GLuint stencil;
+    pglDisable(GL_SCISSOR_TEST);
+    pglDrawBuffer(GL_BACK);
+    pglReadBuffer(GL_BACK);
+    pglClearColor(1, 0, 0, 1);
+    pglClear(GL_COLOR_BUFFER_BIT);
+    pglPixelStorei(GL_PACK_ALIGNMENT, 1);
+    pglPixelStorei(GL_PACK_ROW_LENGTH, 0);
+    pglPixelStorei(GL_PACK_SKIP_ROWS, 0);
+    pglPixelStorei(GL_PACK_SKIP_PIXELS, 0);
+    for (f = 0; f < sizeof(cases) / sizeof(cases[0]); ++f)
+        for (swap = 0; swap < 2; ++swap) {
+            for (b = 0; b < sizeof(out); ++b)
+                out[b] = 0xa5;
+            pglPixelStorei(GL_PACK_SWAP_BYTES, swap);
+            pglReadPixels(0, 0, 1, 1, cases[f].Format, cases[f].Type, out + 1);
+            for (b = 0; b < cases[f].Bytes; ++b) {
+                ULONG shift = 8 * (swap ? cases[f].Bytes - 1 - b : b);
+                if (!Check(out[b + 1] == (BYTE)(cases[f].Value >> shift),
+                           "FAIL framebuffer readback format"))
+                    return FALSE;
+            }
+            if (!Check(out[0] == 0xa5 && out[1 + cases[f].Bytes] == 0xa5 &&
+                           pglGetError() == GL_NO_ERROR, "FAIL framebuffer readback guards/error"))
+                return FALSE;
+        }
+    pglPixelStorei(GL_PACK_SWAP_BYTES, 0);
+    pglPixelStorei(GL_PACK_ALIGNMENT, 4);
+    pglClearDepth(0.25);
+    pglClearStencil(0x5a);
+    pglClear(GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT);
+    depth = -1;
+    stencil = 0;
+    pglReadPixels(0, 0, 1, 1, GL_DEPTH_COMPONENT, GL_FLOAT, &depth);
+    pglReadPixels(0, 0, 1, 1, GL_STENCIL_INDEX, GL_UNSIGNED_INT, &stencil);
+    if (!Check(depth > 0.24999f && depth < 0.25001f && stencil == 0x5a &&
+                   pglGetError() == GL_NO_ERROR, "FAIL depth/stencil readback"))
+        return FALSE;
+    Log("PASS automated readback: packed8/16/32, signed/unsigned scalars, float, byte swap, "
+        "unaligned guards, depth and stencil");
     return TRUE;
 }
 
@@ -674,6 +771,8 @@ static void ArrayAcceptance(void) {
     }
     Log("PASS automated resources: shared generated names,1D texture129pixels, bounded texture "
         "readback and pack guards, attrib restoration");
+    if (!ReadbackAcceptance())
+        return;
     if (!SecondaryAcceptance())
         return;
     Log("PASS automated arrays: indexed immutable colors, context-local pointers, shared texture "
@@ -827,6 +926,8 @@ void WINAPI WinMainCRTStartup(void) {
     LOAD(wglSetPixelFormat);
     LOAD(glClearColor);
     LOAD(glClear);
+    LOAD(glClearDepth);
+    LOAD(glClearStencil);
     LOAD(glViewport);
     LOAD(glMatrixMode);
     LOAD(glLoadIdentity);

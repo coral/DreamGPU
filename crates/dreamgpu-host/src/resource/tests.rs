@@ -830,3 +830,90 @@ fn one_dimensional_zero_covers_both_borders_with_bounded_temporary_storage() {
     );
     assert_eq!(N.with(|v| v.borrow().tiles.len()), 1);
 }
+
+unsafe extern "C" fn read_precise_image(
+    _: u32,
+    level: i32,
+    format: u32,
+    ty: u32,
+    p: *mut core::ffi::c_void,
+) {
+    assert_eq!(level, 0);
+    assert_eq!(format, GL_RGBA);
+    N.with(|v| {
+        let mut v = v.borrow_mut();
+        v.reads += 1;
+        assert_eq!(v.pack, [1, 0, 0, 0, 0]);
+    });
+    match ty {
+        GL_FLOAT => {
+            for i in 0..32 {
+                let f = 0.12345f32 + i as f32 / 100.0;
+                unsafe {
+                    core::ptr::copy_nonoverlapping(
+                        f.to_le_bytes().as_ptr(),
+                        p.cast::<u8>().add(i * 4),
+                        4,
+                    );
+                }
+            }
+        }
+        GL_UNSIGNED_BYTE => unsafe { core::ptr::write_bytes(p.cast::<u8>(), 0x7b, 32) },
+        _ => panic!("unexpected texture read type"),
+    }
+}
+#[test]
+fn float_texture_cache_keeps_precision_and_separates_representation() {
+    let mut a = api();
+    a.dg_glGetTexImage = Some(read_precise_image);
+    let mut alloc = Allocator::default();
+    let m = memory(&a, &mut alloc);
+    let mut cache = ReadCache::EMPTY;
+    let mut t = Texture::default();
+    t.widths[0] = 4;
+    t.heights[0] = 2;
+    let mut errors = 0;
+    let mut out = [0xaa; 130];
+    N.with(|v| {
+        *v.borrow_mut() = Native {
+            pack: [1, 0, 0, 0, 0],
+            ..Native::default()
+        }
+    });
+    for (level, first, capacity) in [
+        (DG_GL_TEXTURE_READ_FLOAT, 0, 32),
+        (0, 1, 4),
+        (DG_GL_TEXTURE_READ_FLOAT, 1, 112),
+    ] {
+        assert_eq!(
+            unsafe {
+                dreamgpu_texture_read(
+                    &m,
+                    &mut cache,
+                    &mut t,
+                    &mut errors,
+                    1,
+                    GL_TEXTURE_2D,
+                    level,
+                    first,
+                    capacity,
+                    out.as_mut_ptr().add(1),
+                )
+            },
+            0
+        );
+        if level != 0 {
+            assert_eq!(
+                f32::from_le_bytes(out[1..5].try_into().unwrap()),
+                0.12345 + first as f32 * 4.0 / 100.0
+            );
+        } else {
+            assert_eq!(&out[1..5], &[0x7b; 4]);
+        }
+        assert_eq!((out[0], out[129]), (0xaa, 0xaa));
+    }
+    N.with(|v| assert_eq!(v.borrow().reads, 3));
+    assert!(alloc.live.is_empty());
+    assert!(cache.pixels.is_null());
+    assert_eq!(errors, 0);
+}

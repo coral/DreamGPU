@@ -19,33 +19,105 @@ static BOOL Multiply(ULONG_PTR a, ULONG_PTR b, ULONG_PTR *out) {
     *out = a * b;
     return TRUE;
 }
+/* Readback transport is canonical RGBA8. Convert to the same packed formats
+ * accepted by texture uploads, without unaligned word stores in x86 callers. */
+static ULONG ReadPixelBytes(GLenum format, GLenum type, BOOL texture) {
+    ULONG components = format == GL_RGB || format == 0x80e0                        ? 3
+                       : format == GL_RGBA || format == 0x80e1                     ? 4
+                       : texture && (format == GL_ALPHA || format == GL_LUMINANCE) ? 1
+                       : texture && format == GL_LUMINANCE_ALPHA                   ? 2
+                                                                                   : 0;
+    if (!components) {
+        JglSetError(GL_INVALID_ENUM);
+        return 0;
+    }
+    if (type == GL_UNSIGNED_BYTE)
+        return components;
+    switch (type) {
+        case 0x8363: /* UNSIGNED_SHORT_5_6_5 */
+            if (format == GL_RGB)
+                return 2;
+            break;
+        case 0x8033: /* UNSIGNED_SHORT_4_4_4_4 */
+        case 0x8034: /* UNSIGNED_SHORT_5_5_5_1 */
+        case 0x8365: /* UNSIGNED_SHORT_4_4_4_4_REV */
+        case 0x8366: /* UNSIGNED_SHORT_1_5_5_5_REV */
+            if (components == 4)
+                return 2;
+            break;
+        case 0x8367: /* UNSIGNED_INT_8_8_8_8_REV */
+            if (components == 4)
+                return 4;
+            break;
+        default:
+            JglSetError(GL_INVALID_ENUM);
+            return 0;
+    }
+    JglSetError(GL_INVALID_OPERATION);
+    return 0;
+}
+static void StoreReadPixel(BYTE *dest, ULONG rgba, GLenum format, GLenum type, BOOL swap) {
+    ULONG r = rgba & 255, g = (rgba >> 8) & 255, b = (rgba >> 16) & 255, a = rgba >> 24;
+    ULONG value, bytes = 2, i;
+    if (format == 0x80e0 || format == 0x80e1) {
+        ULONG tmp = r;
+        r = b;
+        b = tmp;
+    }
+    if (type == GL_UNSIGNED_BYTE) {
+        if (format == GL_ALPHA)
+            dest[0] = (BYTE)a;
+        else {
+            dest[0] = (BYTE)r;
+            if (format == GL_LUMINANCE_ALPHA)
+                dest[1] = (BYTE)a;
+            else if (format != GL_LUMINANCE) {
+                dest[1] = (BYTE)g;
+                dest[2] = (BYTE)b;
+                if (format == GL_RGBA || format == 0x80e1)
+                    dest[3] = (BYTE)a;
+            }
+        }
+        return; /* PACK_SWAP_BYTES has no effect on individual byte components. */
+    }
+    /* Native packed readback takes the high bits of each normalized component. */
+    switch (type) {
+        case 0x8363:
+            value = ((r >> 3) << 11) | ((g >> 2) << 5) | (b >> 3);
+            break;
+        case 0x8033:
+            value = ((r >> 4) << 12) | ((g >> 4) << 8) | ((b >> 4) << 4) | (a >> 4);
+            break;
+        case 0x8034:
+            value = ((r >> 3) << 11) | ((g >> 3) << 6) | ((b >> 3) << 1) | (a >> 7);
+            break;
+        case 0x8365:
+            value = (r >> 4) | ((g >> 4) << 4) | ((b >> 4) << 8) | ((a >> 4) << 12);
+            break;
+        case 0x8366:
+            value = (r >> 3) | ((g >> 3) << 5) | ((b >> 3) << 10) | ((a >> 7) << 15);
+            break;
+        default: /* UNSIGNED_INT_8_8_8_8_REV */
+            value = r | (g << 8) | (b << 16) | (a << 24);
+            bytes = 4;
+            break;
+    }
+    for (i = 0; i < bytes; ++i)
+        dest[swap ? bytes - 1 - i : i] = (BYTE)(value >> (i * 8));
+}
 void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                            GLenum type, void *pixels) {
     JGL_UNPACK *pack;
-    ULONG components, row, column, columns, rows, i, j, args[3], bytes, drawable_width,
+    ULONG pixel_bytes, row, column, columns, rows, i, j, args[3], bytes, drawable_width,
         drawable_height, tile_width;
     ULONG *rgba, capacity;
     ULONG_PTR stride, skip, first, span, end;
     BYTE *output;
-    BOOL reverse, swap = type == 0x8367;
     if (!JglReady())
         return;
-    /* x86 8_8_8_8_REV words have the same component bytes as UBYTE. */
-    if (type == 0x8367) {
-        if (format != GL_RGBA && format != 0x80e1) {
-            JglSetError(GL_INVALID_OPERATION);
-            return;
-        }
-        type = GL_UNSIGNED_BYTE;
-    }
-    reverse = format == 0x80e0 || format == 0x80e1; /* BGR/BGRA */
-    components = format == GL_RGB || format == 0x80e0    ? 3
-                 : format == GL_RGBA || format == 0x80e1 ? 4
-                                                         : 0;
-    if (!components || type != GL_UNSIGNED_BYTE) {
-        JglSetError(GL_INVALID_ENUM);
+    pixel_bytes = ReadPixelBytes(format, type, FALSE);
+    if (!pixel_bytes)
         return;
-    }
     if (width < 0 || height < 0 || width > DG_GL_MAX_DIMENSION || height > DG_GL_MAX_DIMENSION ||
         (int64_t)x + width > INT32_MAX || (int64_t)y + height > INT32_MAX)
         goto invalid;
@@ -54,15 +126,14 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
     if (!pixels)
         goto invalid;
     pack = JglPack();
-    swap = swap && pack->SwapBytes;
-    if (!Multiply(pack->RowLength ? (ULONG_PTR)pack->RowLength : (ULONG_PTR)width, components,
+    if (!Multiply(pack->RowLength ? (ULONG_PTR)pack->RowLength : (ULONG_PTR)width, pixel_bytes,
                   &stride) ||
         !Add(stride, pack->Alignment - 1, &stride))
         goto invalid;
     stride &= ~((ULONG_PTR)pack->Alignment - 1);
     if (!Multiply(pack->SkipRows, stride, &first) ||
-        !Multiply(pack->SkipPixels, components, &skip) || !Add(first, skip, &first) ||
-        !Multiply(height - 1, stride, &span) || !Add(span, (ULONG_PTR)width * components, &span) ||
+        !Multiply(pack->SkipPixels, pixel_bytes, &skip) || !Add(first, skip, &first) ||
+        !Multiply(height - 1, stride, &span) || !Add(span, (ULONG_PTR)width * pixel_bytes, &span) ||
         !Add(first, span, &end) || !Add((ULONG_PTR)pixels, end, &end))
         goto invalid;
     output = (BYTE *)pixels + first;
@@ -107,25 +178,13 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
             for (j = 0; j < rows; ++j)
                 for (i = 0; i < columns; ++i) {
                     ULONG pixel = 0;
-                    BYTE *dest = output + (row + j) * stride + (column + i) * components;
+                    BYTE *dest = output + (row + j) * stride + (column + i) * pixel_bytes;
                     if (clipped_width && clipped_height && left + i >= clipped_left &&
                         left + i < clipped_right && bottom + j >= clipped_bottom &&
                         bottom + j < clipped_top)
                         pixel = rgba[(ULONG)(bottom + j - clipped_bottom) * clipped_width +
                                      (ULONG)(left + i - clipped_left)];
-                    dest[0] = (BYTE)(pixel >> (reverse ? 16 : 0));
-                    dest[1] = (BYTE)(pixel >> 8);
-                    dest[2] = (BYTE)(pixel >> (reverse ? 0 : 16));
-                    if (components == 4)
-                        dest[3] = (BYTE)(pixel >> 24);
-                    if (swap) {
-                        BYTE temp = dest[0];
-                        dest[0] = dest[3];
-                        dest[3] = temp;
-                        temp = dest[1];
-                        dest[1] = dest[2];
-                        dest[2] = temp;
-                    }
+                    StoreReadPixel(dest, pixel, format, type, pack->SwapBytes);
                 }
         }
     }
@@ -135,33 +194,20 @@ invalid:
 }
 
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void *pixels) {
-    ULONG args[3], bytes, components, row, column, i, at = 0, total;
+    ULONG args[3], bytes, pixel_bytes, row, column, i, at = 0, total;
     ULONG *rgba, capacity;
     GLint width = 0, height = 1;
     ULONG_PTR stride, skip, first, span, end;
     JGL_UNPACK *pack;
-    BOOL reverse, swap = type == 0x8367;
     if (!JglReady())
         return;
-    /* x86 8_8_8_8_REV words have the same component bytes as UBYTE. */
-    if (type == 0x8367) {
-        if (format != GL_RGBA && format != 0x80e1) {
-            JglSetError(GL_INVALID_OPERATION);
-            return;
-        }
-        type = GL_UNSIGNED_BYTE;
-    }
-    reverse = format == 0x80e0 || format == 0x80e1;
-    components = format == GL_ALPHA || format == GL_LUMINANCE ? 1
-                 : format == GL_LUMINANCE_ALPHA               ? 2
-                 : format == GL_RGB || format == 0x80e0       ? 3
-                 : format == GL_RGBA || format == 0x80e1      ? 4
-                                                              : 0;
-    if ((target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) || !components ||
-        type != GL_UNSIGNED_BYTE) {
+    if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }
+    pixel_bytes = ReadPixelBytes(format, type, TRUE);
+    if (!pixel_bytes)
+        return;
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || !pixels)
         goto invalid;
     args[0] = target;
@@ -182,15 +228,14 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         height > DG_GL_MAX_TEXTURE_DIMENSION)
         goto invalid;
     pack = JglPack();
-    swap = swap && pack->SwapBytes;
-    if (!Multiply(pack->RowLength ? (ULONG_PTR)pack->RowLength : (ULONG_PTR)width, components,
+    if (!Multiply(pack->RowLength ? (ULONG_PTR)pack->RowLength : (ULONG_PTR)width, pixel_bytes,
                   &stride) ||
         !Add(stride, pack->Alignment - 1, &stride))
         goto invalid;
     stride &= ~((ULONG_PTR)pack->Alignment - 1);
     if (!Multiply(target == GL_TEXTURE_1D ? 0 : pack->SkipRows, stride, &first) ||
-        !Multiply(pack->SkipPixels, components, &skip) || !Add(first, skip, &first) ||
-        !Multiply(height - 1, stride, &span) || !Add(span, (ULONG_PTR)width * components, &span) ||
+        !Multiply(pack->SkipPixels, pixel_bytes, &skip) || !Add(first, skip, &first) ||
+        !Multiply(height - 1, stride, &span) || !Add(span, (ULONG_PTR)width * pixel_bytes, &span) ||
         !Add(first, span, &end) || !Add((ULONG_PTR)pixels, end, &end) ||
         !Add((ULONG_PTR)pixels, first, &first))
         goto invalid;
@@ -221,28 +266,8 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
             BYTE *dest;
             row = (at + i) / (ULONG)width;
             column = (at + i) % (ULONG)width;
-            dest = (BYTE *)first + row * stride + column * components;
-            if (format == GL_ALPHA)
-                dest[0] = (BYTE)(rgba[i] >> 24);
-            else {
-                dest[0] = (BYTE)(rgba[i] >> (reverse ? 16 : 0));
-                if (format == GL_LUMINANCE_ALPHA)
-                    dest[1] = (BYTE)(rgba[i] >> 24);
-                else if (components >= 3) {
-                    dest[1] = (BYTE)(rgba[i] >> 8);
-                    dest[2] = (BYTE)(rgba[i] >> (reverse ? 0 : 16));
-                    if (components == 4)
-                        dest[3] = (BYTE)(rgba[i] >> 24);
-                    if (swap) {
-                        BYTE temp = dest[0];
-                        dest[0] = dest[3];
-                        dest[3] = temp;
-                        temp = dest[1];
-                        dest[1] = dest[2];
-                        dest[2] = temp;
-                    }
-                }
-            }
+            dest = (BYTE *)first + row * stride + column * pixel_bytes;
+            StoreReadPixel(dest, rgba[i], format, type, pack->SwapBytes);
         }
         at += count;
     }

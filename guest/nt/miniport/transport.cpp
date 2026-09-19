@@ -1244,6 +1244,12 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
             CloseClient(t, client);
             result = DG_ESCAPE_OK;
             break;
+        case DG_ESCAPE_CAPABILITIES:
+            if (request.Function)
+                break;
+            reply.FunctionWords = t->GlRegisters.Caps;
+            result = DG_ESCAPE_OK;
+            break;
         case DG_ESCAPE_QUERY:
             reply.FunctionWords = FunctionWords(t, request.Function);
             result = DG_ESCAPE_OK;

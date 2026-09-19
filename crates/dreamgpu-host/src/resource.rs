@@ -787,25 +787,38 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
 ) -> u32 {
     let m = unsafe { &*memory };
     let a = unsafe { &*m.api };
+    let encoded_level = level;
+    let pixel_bytes = if level & DG_GL_TEXTURE_READ_FLOAT != 0 {
+        16
+    } else {
+        4
+    };
+    let level = level & !DG_GL_TEXTURE_READ_FLOAT;
     if level > DG_GL_MAX_TEXTURE_LEVEL || result.is_null() {
         return DG_GL_ERROR_TEXTURE;
     }
     let level = level as usize;
-    let bytes = unsafe { u64::from((*t).widths[level]) * u64::from((*t).heights[level]) * 4 };
+    let bytes = unsafe {
+        u64::from((*t).widths[level]) * u64::from((*t).heights[level]) * u64::from(pixel_bytes)
+    };
     if bytes == 0
-        || u64::from(first) * 4 >= bytes
+        || u64::from(first) * u64::from(pixel_bytes) >= bytes
         || unsafe { (*t).undefined_levels } & (1 << level) != 0
     {
         return DG_GL_ERROR_TEXTURE;
     }
-    if bytes > u64::from(DG_GL_MAX_TEXTURE_DIMENSION) * u64::from(DG_GL_MAX_TEXTURE_DIMENSION) * 4 {
+    if bytes
+        > u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
+            * u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
+            * u64::from(pixel_bytes)
+    {
         return DG_GL_ERROR_LIMIT;
     }
     let reload = unsafe {
         first == 0
             || (*cache).texture != t
             || (*cache).version != (*t).version
-            || (*cache).level != level as u32
+            || (*cache).level != encoded_level
             || u64::from((*cache).bytes) != bytes
     };
     if reload {
@@ -829,7 +842,11 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
                 target,
                 level as i32,
                 GL_RGBA,
-                GL_UNSIGNED_BYTE,
+                if pixel_bytes == 16 {
+                    GL_FLOAT
+                } else {
+                    GL_UNSIGNED_BYTE
+                },
                 pixels.p.cast()
             )
         );
@@ -843,18 +860,18 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
             cache.write(ReadCache {
                 texture: t,
                 version: (*t).version,
-                level: level as u32,
+                level: encoded_level,
                 bytes: bytes as u32,
                 pixels: pixels.p,
             })
         };
         core::mem::forget(pixels);
     }
-    let remaining = unsafe { (*cache).bytes } - first * 4;
+    let remaining = unsafe { (*cache).bytes } - first * pixel_bytes;
     unsafe {
         core::ptr::write_bytes(result, 0, capacity as usize);
         core::ptr::copy_nonoverlapping(
-            (*cache).pixels.add(first as usize * 4),
+            (*cache).pixels.add(first as usize * pixel_bytes as usize),
             result,
             remaining.min(capacity) as usize,
         );

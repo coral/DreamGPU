@@ -301,6 +301,9 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
         Dg9OwnerRetireToken(&dg_gl_owners, token);
         Dg9GlRestoreInterrupts(flags);
         status = DG_ESCAPE_OK;
+    } else if (request.Operation == DG_ESCAPE_CAPABILITIES && !request.Function) {
+        reply.FunctionWords = Dg9GlRead(NULL, DG_REG_CAPS);
+        status = DG_ESCAPE_OK;
     } else if (request.Operation == DG_ESCAPE_QUERY) {
         reply.FunctionWords = Dg9GlWords(NULL, request.Function);
         status = DG_ESCAPE_OK;

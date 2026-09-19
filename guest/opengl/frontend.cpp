@@ -64,6 +64,7 @@ static ULONG Client, NextId;
 static ULONG MaxWords = PACKET_WORDS, MaxRecords = DG_GL_MAX_RECORDS;
 static ULONG MaxResultBytes = DG_ESCAPE_LEGACY_RESULT_BYTES;
 static BOOL SecondarySupported;
+static ULONG HostCapabilities;
 static HDC Display;
 static HANDLE Heap;
 static HINSTANCE Module;
@@ -73,6 +74,27 @@ HINSTANCE JglModule(void) {
 }
 BOOL JglSupportsSecondary(void) {
     return SecondarySupported;
+}
+BOOL JglDepthStencilReadbackAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_DEPTH_STENCIL_READBACK);
+}
+static ULONG QueryCapabilities(void) {
+    DG_ESCAPE_REQUEST request;
+    DG_ESCAPE_REPLY reply;
+    ZeroMemory(&request, sizeof(request));
+    ZeroMemory(&reply, sizeof(reply));
+    request.Version = DG_ESCAPE_VERSION;
+    request.Operation = DG_ESCAPE_CAPABILITIES;
+    request.Client = Client;
+    int result = JglTransportRequest(Display, sizeof(request), (LPCSTR)&request,
+                                     sizeof(reply), (LPSTR)&reply);
+    /* Older drivers reject this operation. Missing or malformed replies must
+     * never opt into a format that an older host interprets as RGBA8. */
+    if (result != 1 || reply.Version != DG_ESCAPE_VERSION || reply.Status != DG_ESCAPE_OK ||
+        reply.Client != Client || reply.ResultType || reply.ResultBytes ||
+        reply.FunctionWords == (ULONG)-1)
+        return 0;
+    return reply.FunctionWords;
 }
 static BOOL SecondaryAvailable(void) {
     DG_ESCAPE_REQUEST request;
@@ -582,6 +604,7 @@ static void CloseIdleClient(PACKET *packet) {
             return;
     if (Client && Request(packet, DG_ESCAPE_CLOSE, 0, &reply)) {
         Client = 0;
+        HostCapabilities = 0;
         ReleaseDC(NULL, Display);
         Display = NULL;
     }
@@ -608,6 +631,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
         goto done;
     pending.reset(c);
     if (!Client) {
+        HostCapabilities = 0;
         Display = GetDC(NULL);
         if (!Display || !Request(&c->Packet, DG_ESCAPE_OPEN, 0, &reply)) {
             if (Display)
@@ -631,6 +655,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
             Display = NULL;
             goto done;
         }
+        HostCapabilities = QueryCapabilities();
         SecondarySupported = SecondaryAvailable();
     }
     c->Unpack.Alignment = c->Pack.Alignment = 4;

@@ -5,7 +5,7 @@
 // GL vocabulary source: vendor/qemu-3dfx/qemu-1/hw/mesa/mglfunci.h
 // @5d40e054a1bc8c4b00c41c533c6b84afd9cdc30b, via guest/include/gl-funcs.h.
 // DreamGPU protocol sources: guest/include/{gpu,gl,cursor}.h and include/dreamgpu/transport.h.
-// Platform declarations: Apple macOS SDK 26.1; OpenGL framework headers:
+// Platform declarations: Apple macOS SDK 27.0; OpenGL framework headers:
 // OpenGL/gl.h SHA-256: f27c61924f0873e2fcc17b5d0cbc6dca8bf9512e28a541f64b5e646cc47302be
 // OpenGL/glext.h SHA-256: af7d1fecba7051d5082eb90ee1c9870f5376468dfe8a5ba1bf9fa0923cfa9fe0
 
@@ -2039,6 +2039,7 @@ pub const DG_CAP_GL_TRANSPORT: u32 = 256;
 pub const DG_CAP_GL_FRONT_BUFFERS: u32 = 512;
 pub const DG_CAP_GL_PRESENT_BOUNDS: u32 = 1024;
 pub const DG_CAP_GL_BULK_READBACK: u32 = 2048;
+pub const DG_CAP_GL_DEPTH_STENCIL_READBACK: u32 = 4096;
 pub const DG_IRQ_GL_COMPLETION: u32 = 2;
 pub const DG_GL_REG_VERSION: u32 = 4352;
 pub const DG_GL_REG_ADDR_LO: u32 = 4356;
@@ -2103,6 +2104,10 @@ pub const DG_GL_PRESENT_FRONT_ONLY: u32 = 4;
 pub const DG_GL_PRESENT_NO_EXPORT: u32 = 8;
 pub const DG_GL_PRESENT_BOUNDED: u32 = 16;
 pub const DG_GL_READ_PIXELS_MAX: u32 = 16384;
+pub const DG_GL_READ_X_MASK: u32 = 65535;
+pub const DG_GL_READ_DEPTH: u32 = 65536;
+pub const DG_GL_READ_STENCIL: u32 = 131072;
+pub const DG_GL_READ_RGBA_FLOAT: u32 = 196608;
 pub const DG_GL_ERROR_NONE: u32 = 0;
 pub const DG_GL_ERROR_BATCH: u32 = 1;
 pub const DG_GL_ERROR_DMA: u32 = 2;
@@ -2182,6 +2187,8 @@ pub const DG_GL_MAX_INDICES: u32 = 262144;
 pub const DG_GL_QUERY_BYTES: u32 = 48;
 pub const DG_GL_MAX_RESULT_BYTES: u32 = 512;
 pub const DG_GL_MAX_READBACK_BYTES: u32 = 65536;
+pub const DG_GL_TEXTURE_READ_FLOAT: u32 = 32768;
+pub const DG_GL_TEXTURE_READ_LEVEL_MASK: u32 = 32767;
 pub const DG_GL_TEXTURE_READ_COUNT_SHIFT: u32 = 16;
 pub const DG_GL_RESULT_BOOL: u32 = 1;
 pub const DG_GL_RESULT_INT: u32 = 2;

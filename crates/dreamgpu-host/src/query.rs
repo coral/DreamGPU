@@ -191,12 +191,20 @@ unsafe fn execute(
         return Ok(());
     }
     if function == FEnum_glReadPixels {
+        let mode = a & !DG_GL_READ_X_MASK;
+        let x = a & DG_GL_READ_X_MASK;
+        let (format, pixel_type) = match mode {
+            DG_GL_READ_DEPTH => (GL_DEPTH_COMPONENT, GL_FLOAT),
+            DG_GL_READ_STENCIL => (GL_STENCIL_INDEX, GL_UNSIGNED_INT),
+            DG_GL_READ_RGBA_FLOAT => (GL_RGBA, GL_FLOAT),
+            _ => (GL_RGBA, GL_UNSIGNED_BYTE),
+        };
         let width = d & 0xffff;
         let height = d >> 16;
         if state.has_drawable == 0
-            || a >= state.width
+            || x >= state.width
             || b >= state.height
-            || width > state.width - a
+            || width > state.width - x
             || height > state.height - b
         {
             return Err(DG_GL_ERROR_DRAWABLE);
@@ -211,12 +219,12 @@ unsafe fn execute(
         let pack = unsafe { Pack::new(api)? };
         unsafe {
             read(
-                a as i32,
+                x as i32,
                 b as i32,
                 width as i32,
                 height as i32,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
+                format,
+                pixel_type,
                 result.cast(),
             );
         }

@@ -9,6 +9,7 @@
 #define DG_CAP_GL_FRONT_BUFFERS 0x200
 #define DG_CAP_GL_PRESENT_BOUNDS 0x400
 #define DG_CAP_GL_BULK_READBACK 0x800
+#define DG_CAP_GL_DEPTH_STENCIL_READBACK 0x1000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104
@@ -111,12 +112,20 @@
  * Combine with normal, FRONT_ONLY or NO_EXPORT presentation semantics. */
 #define DG_GL_PRESENT_BOUNDED 16
 #define DG_GL_READ_PIXELS_MAX 16384
-/* QUERY glReadPixels has three normalized words: nonnegative x, y, and
- * width | (height << 16). Nonempty rectangles contain <=128 pixels and must
- * fit the selected drawable. Result INT words contain canonical RGBA8 bytes
- * in GL bottom-left row order (R in the low byte), <=512 bytes total. Guest
- * frontends tile/convert the public format/type and honor their PACK state.
+/* QUERY glReadPixels uses x | mode, y, width | (height << 16).
+ * Mode zero preserves the original canonical RGBA8 result (R low byte).
+ * With DG_CAP_GL_DEPTH_STENCIL_READBACK, DEPTH returns native float32 depth
+ * words (RESULT_FLOAT), STENCIL returns uint32 indices (RESULT_INT).
+ * RGBA_FLOAT returns four float32 channels (16 bytes/pixel); other modes
+ * return four bytes/pixel in GL bottom-left row order. X occupies
+ * low16 only; reserved mode bits/combinations are rejected. Rectangles must
+ * fit the selected drawable and contain <=DG_GL_READ_PIXELS_MAX pixels.
+ * Frontends tile to negotiated capacity and apply public type/PACK conversion.
  */
+#define DG_GL_READ_X_MASK 0xffff
+#define DG_GL_READ_DEPTH 0x10000
+#define DG_GL_READ_STENCIL 0x20000
+#define DG_GL_READ_RGBA_FLOAT 0x30000
 
 #define DG_GL_ERROR_NONE 0
 #define DG_GL_ERROR_BATCH 1
@@ -263,7 +272,12 @@
 #define DG_GL_QUERY_BYTES 48
 #define DG_GL_MAX_RESULT_BYTES 512
 #define DG_GL_MAX_READBACK_BYTES 65536
-/* GetTexImage: level low16, optional pixel count high16; zero keeps legacy128. */
+/* GetTexImage: level low15, FLOAT bit15 requests RGBA float32 (16 bytes/pixel)
+ * with DG_CAP_GL_DEPTH_STENCIL_READBACK. Optional pixel count high16; zero
+ * keeps legacy128 pixels. FLOAT returns RESULT_FLOAT, default RESULT_INT.
+ * RGBA_FLOAT framebuffer mode uses four FLOAT words per pixel as well. */
+#define DG_GL_TEXTURE_READ_FLOAT 0x8000
+#define DG_GL_TEXTURE_READ_LEVEL_MASK 0x7fff
 #define DG_GL_TEXTURE_READ_COUNT_SHIFT 16
 #define DG_GL_RESULT_BOOL 1
 #define DG_GL_RESULT_INT 2

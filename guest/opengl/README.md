@@ -104,7 +104,7 @@ the accelerated path, combine justified fixes, pass the focused correctness
 gates, and then benchmark the combined candidate. Game throughput measurements
 are separate from host presentation timing and input-to-photon latency.
 
-Pack/unpack state, including swap-byte and bit-order flags, belongs to the frontend context and is answered locally by all typed state-query entrypoints. Supported packed texture uploads and packed32 readbacks honor byte swapping; byte components are unaffected. Bit-order state does not imply bitmap pixel-type support. These queries do not flush the guest stream or cross the driver boundary.
+Pack/unpack state, including swap-byte and bit-order flags, belongs to the frontend context and is answered locally by all typed state-query entrypoints. Supported packed texture uploads and multibyte readbacks honor byte swapping; byte components are unaffected. Stencil bitmap readback honors bit ordering and preserves surrounding destination bits. These queries do not flush the guest stream or cross the driver boundary.
 
 Texture names are tracked in a bounded shared hash table in the frontend.
 `glGenTextures` reserves names locally; `glIsTexture` becomes true only after a
@@ -126,6 +126,29 @@ argument's upper sixteen bits; zero retains the original 128-pixel result. Nativ
 validation checks the count, destination RAM extent and accepted result capacity
 before submission. Large native results use heap ownership through completion;
 ordinary draw batches retain their existing small storage.
+
+Color readback supports RGB/BGR, RGBA/BGRA, individual channels, alpha,
+luminance and luminance-alpha. The output types include signed/unsigned 8-, 16-
+and 32-bit scalars, floats, RGB332/233, RGB565, RGBA4444/5551/8888/1010102,
+and their reversed packed layouts. Framebuffer luminance combines the color
+channels; texture luminance follows texture-query semantics. Invalid packed
+format/type combinations fail before writing the caller's memory.
+
+`DG_CAP_GL_DEPTH_STENCIL_READBACK`, negotiated through the owner-checked
+`DG_ESCAPE_CAPABILITIES` operation, adds native depth-float, stencil-integer,
+and full-precision RGBA-float replies. Older drivers and hosts cannot opt in
+accidentally. Wide color and 1D texture reads preserve native precision before
+conversion; normal 2D byte/packed16 reads retain their existing compact path.
+Stencil supports scalar and bitmap destinations. Color-index readback is invalid
+for the RGBA drawables provided here. These additions do not advertise unsupported
+texture targets, compressed texture queries, or modern integer/half-float APIs.
+
+The Links 2003 regression uses RGB565 readback to save and restore menu backgrounds.
+Both framebuffer and texture readback must support that format: silently leaving
+the destination untouched makes Wine publish black backing surfaces as valid.
+`tests/guest/opengl/test_legacy.py` covers all 65,536 RGB565 values and packed
+readback guards; the packaged OpenGL probe also exercises actual guest-to-native
+format roundtrips, depth, and stencil.
 
 The actual-source packing oracle reads 1024×1024 RGBA texture data in 64 result
 requests instead of 8,192, and 640×480 framebuffer data in 20 instead of 2,400.

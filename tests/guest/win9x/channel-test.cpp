@@ -154,8 +154,8 @@ static void cleaned() {
     assert(m.pins == m.unpins && m.waits == m.signals && !m.held);
 }
 static DG_ESCAPE_REPLY request(DWORD operation, DWORD client = 0, DWORD bytes = 0,
-                               DWORD capacity = 0) {
-    DG_ESCAPE_REQUEST input{DG_ESCAPE_VERSION, operation, client, bytes, 0, 0, capacity, 0};
+                               DWORD capacity = 0, DWORD function = 0) {
+    DG_ESCAPE_REQUEST input{DG_ESCAPE_VERSION, operation, client, bytes, function, 0, capacity, 0};
     std::memcpy(m.input, &input, sizeof(input));
     auto io = control(DG_ESCAPE, sizeof(input) + bytes, sizeof(DG_ESCAPE_REPLY) + capacity);
     DWORD result = 999;
@@ -237,8 +237,19 @@ int main() {
     assert(opened.Status == 0 && opened.Client && opened.MaxResultBytes == 65536);
     const DWORD client = opened.Client;
     assert(request(DG_ESCAPE_QUERY, client).Status == 0);
+    const auto legacy_caps = request(DG_ESCAPE_CAPABILITIES, client);
+    assert(legacy_caps.Status == DG_ESCAPE_OK && legacy_caps.Client == client &&
+           legacy_caps.FunctionWords == m.registers[DG_REG_CAPS / 4] &&
+           !(legacy_caps.FunctionWords & DG_CAP_GL_DEPTH_STENCIL_READBACK) &&
+           !legacy_caps.ResultBytes && !legacy_caps.ResultType);
+    m.registers[DG_REG_CAPS / 4] |= DG_CAP_GL_DEPTH_STENCIL_READBACK;
+    assert(request(DG_ESCAPE_CAPABILITIES, client).FunctionWords &
+           DG_CAP_GL_DEPTH_STENCIL_READBACK);
+    assert(request(DG_ESCAPE_CAPABILITIES, client, 0, 0, 1).Status == DG_ESCAPE_INVALID);
+    assert(request(DG_ESCAPE_CAPABILITIES, client + 100).Status == DG_ESCAPE_OWNER);
     m.context = 23;
     assert(request(DG_ESCAPE_QUERY, client).Status == DG_ESCAPE_OWNER);
+    assert(request(DG_ESCAPE_CAPABILITIES, client).Status == DG_ESCAPE_OWNER);
     m.context = 22;
     DWORD command[12] = {DG_GL_CALL, 36, 999, 0, 0, 0, 0, 999, 0, 0, 0, 0};
     std::memcpy(m.input + 32, command, 36);

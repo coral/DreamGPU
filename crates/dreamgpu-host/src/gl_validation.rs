@@ -759,30 +759,45 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             }
         }
         FEnum_glGetTexImage => {
+            let wide = b & DG_GL_TEXTURE_READ_FLOAT != 0;
+            let pixel_words = if wide { 4 } else { 1 };
+            let n = b >> DG_GL_TEXTURE_READ_COUNT_SHIFT;
+            let n = if n != 0 {
+                n
+            } else {
+                DG_GL_MAX_RESULT_BYTES / 4
+            };
+            if wide {
+                kind = DG_GL_RESULT_FLOAT;
+            }
             if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D)
-                && b & 0xffff <= DG_GL_MAX_TEXTURE_LEVEL
-                && b >> DG_GL_TEXTURE_READ_COUNT_SHIFT <= DG_GL_MAX_READBACK_BYTES / 4
+                && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
+                && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
                 && d < DG_GL_MAX_TEXTURE_DIMENSION * DG_GL_MAX_TEXTURE_DIMENSION
             {
-                let n = b >> DG_GL_TEXTURE_READ_COUNT_SHIFT;
-                if n != 0 {
-                    n
-                } else {
-                    DG_GL_MAX_RESULT_BYTES / 4
-                }
+                n * pixel_words
             } else {
                 0
             }
         }
         FEnum_glReadPixels => {
             let (w, h) = (d & 0xffff, d >> 16);
-            if a < DG_GL_MAX_DIMENSION
+            let mode = a & !DG_GL_READ_X_MASK;
+            if matches!(mode, DG_GL_READ_DEPTH | DG_GL_READ_RGBA_FLOAT) {
+                kind = DG_GL_RESULT_FLOAT;
+            }
+            if matches!(
+                mode,
+                0 | DG_GL_READ_DEPTH | DG_GL_READ_STENCIL | DG_GL_READ_RGBA_FLOAT
+            ) && a & DG_GL_READ_X_MASK < DG_GL_MAX_DIMENSION
                 && b < DG_GL_MAX_DIMENSION
                 && w != 0
                 && h != 0
-                && w <= DG_GL_READ_PIXELS_MAX / h
+                && w <= DG_GL_READ_PIXELS_MAX
+                    / h
+                    / if mode == DG_GL_READ_RGBA_FLOAT { 4 } else { 1 }
             {
-                w * h
+                w * h * if mode == DG_GL_READ_RGBA_FLOAT { 4 } else { 1 }
             } else {
                 0
             }

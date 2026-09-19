@@ -10,6 +10,9 @@
 #define DG_ESCAPE_CLOSE 2
 #define DG_ESCAPE_QUERY 3
 #define DG_ESCAPE_SUBMIT 4
+/* Client-owned capability query. Function must be zero; FunctionWords in the
+ * unchanged reply header contains DG_REG_CAPS, with no result payload. */
+#define DG_ESCAPE_CAPABILITIES 5
 #define DG_ESCAPE_MAX_BYTES 65536
 #define DG_ESCAPE_MAX_CLIENTS 32
 #define DG_ESCAPE_LEGACY_RESULT_BYTES 512
@@ -35,7 +38,8 @@ typedef struct {
     ULONG MaxResultBytes, ResultType, ResultBytes;
     /* Exactly ResultBytes immutable little-endian result bytes follow.
      * Nonquery and failed requests return only this header, with both result
-     * fields zero. FunctionWords includes the native DATA/QUERY kind bits. */
+     * fields zero. FunctionWords includes the native DATA/QUERY kind bits for
+     * QUERY, or the device capability bitmask for CAPABILITIES. */
 } DG_ESCAPE_REPLY;
 typedef char DgEscapeRequestSize[sizeof(DG_ESCAPE_REQUEST) == 32 ? 1 : -1];
 typedef char DgEscapeReplySize[sizeof(DG_ESCAPE_REPLY) == 48 ? 1 : -1];

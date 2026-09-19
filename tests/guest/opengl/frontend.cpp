@@ -17,6 +17,7 @@ static ULONG SharedWith[128];
 static BOOL HostContexts[128], HostDrawables[128];
 static ULONG Width = 320, Height = 240;
 static ULONG HostSecondaryWords;
+static ULONG HostCaps, CapabilityQueries, CapabilityFailure;
 static ULONG HostMaxRecords, HostMaxBytes, LargestSubmission;
 
 void *TlsGetValue(DWORD key) {
@@ -225,6 +226,19 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
         return 1;
     }
     assert(request->Client == 1);
+    if (request->Operation == DG_ESCAPE_CAPABILITIES) {
+        ++CapabilityQueries;
+        assert(!request->Function && !request->Bytes && !request->ResultCapacity);
+        reply->FunctionWords = HostCaps;
+        if (CapabilityFailure == 1) return 0;
+        if (CapabilityFailure == 2) reply->Status = DG_ESCAPE_INVALID; // old driver
+        if (CapabilityFailure == 3) reply->Version = 0;
+        if (CapabilityFailure == 4) reply->Client = 99;
+        if (CapabilityFailure == 5) reply->ResultBytes = 4;
+        if (CapabilityFailure == 6) reply->ResultType = DG_GL_RESULT_INT;
+        if (CapabilityFailure == 7) reply->FunctionWords = (ULONG)-1;
+        return 1;
+    }
     if (request->Operation == DG_ESCAPE_QUERY) {
         assert(request->Function == FEnum_glSecondaryColor3f);
         reply->FunctionWords = HostSecondaryWords;
@@ -320,6 +334,7 @@ static void Reset(void) {
     HostMaxRecords = DG_GL_MAX_RECORDS;
     HostMaxBytes = DG_ESCAPE_MAX_BYTES;
     LargestSubmission = HostSecondaryWords = 0;
+    HostCaps = CapabilityQueries = CapabilityFailure = 0;
     assert(DllMain(NULL, DLL_PROCESS_ATTACH, NULL));
 }
 static HGLRC Create(void) {
@@ -347,6 +362,32 @@ int main(void) {
     HGLRC context, other;
     JGL_CONTEXT *c;
     ULONG calls, flushes, destroyed, i;
+
+    /* Old drivers and malformed responses preserve the RGBA8-only behavior. */
+    for (ULONG failure = 0; failure <= 7; ++failure) {
+        Reset();
+        HostCaps = failure ? DG_CAP_GL_DEPTH_STENCIL_READBACK : DG_CAP_GL_BULK_READBACK;
+        CapabilityFailure = failure;
+        assert(!JglDepthStencilReadbackAvailable());
+        context = Create();
+        assert(!JglDepthStencilReadbackAvailable() && CapabilityQueries == 1);
+        assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+    }
+    Reset();
+    HostCaps = DG_CAP_GL_DEPTH_STENCIL_READBACK;
+    context = Create();
+    assert(JglDepthStencilReadbackAvailable() && CapabilityQueries == 1);
+    {
+        HGLRC second = wglCreateContext((HDC)2);
+        assert(second && JglDepthStencilReadbackAvailable() && CapabilityQueries == 1);
+        assert(wglDeleteContext(second));
+    }
+    assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+    assert(!JglDepthStencilReadbackAvailable());
+    HostCaps = 0;
+    context = Create();
+    assert(!JglDepthStencilReadbackAvailable() && CapabilityQueries == 2);
+    assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
 
     Reset();
     FailHeap = TRUE;

@@ -377,3 +377,260 @@ fn large_texture_callback_is_bounded_and_owns_its_disjoint_outputs() {
         }
     );
 }
+
+unsafe extern "C" fn read_depth_stencil(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    format: u32,
+    ty: u32,
+    out: *mut c_void,
+) {
+    assert_eq!((x, y, w, h), (1, 2, 2, 1));
+    let words = match (format, ty) {
+        (GL_DEPTH_COMPONENT, GL_FLOAT) => [0.125f32.to_bits(), 0.875f32.to_bits()],
+        (GL_STENCIL_INDEX, GL_UNSIGNED_INT) => [0x7b, 0xed],
+        _ => panic!("unexpected depth/stencil format/type"),
+    };
+    NATIVE.with(|n| {
+        let mut n = n.borrow_mut();
+        assert_eq!(n.pack, [1, 0, 0, 0, 0]);
+        n.calls += 1;
+        let error = n.read_error;
+        if error != 0 {
+            n.errors.push_back(error);
+        }
+    });
+    for (i, value) in words.into_iter().enumerate() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                value.to_le_bytes().as_ptr(),
+                out.cast::<u8>().add(i * 4),
+                4,
+            );
+        }
+    }
+}
+
+#[test]
+fn depth_and_stencil_queries_preserve_native_values_and_pack_state() {
+    let mut a = api();
+    a.dg_glReadPixels = Some(read_depth_stencil);
+    let s = state();
+    let mut errors = 0;
+    for (mode, kind, expected) in [
+        (
+            DG_GL_READ_DEPTH,
+            DG_GL_RESULT_FLOAT,
+            [0.125f32.to_bits(), 0.875f32.to_bits()],
+        ),
+        (DG_GL_READ_STENCIL, DG_GL_RESULT_INT, [0x7b, 0xed]),
+    ] {
+        let mut out = [0xee; 10];
+        assert_eq!(
+            run(
+                &a,
+                &s,
+                &mut errors,
+                FEnum_glReadPixels,
+                [mode | 1, 2, (1 << 16) | 2],
+                &mut out[1..9]
+            ),
+            (0, 8, kind)
+        );
+        for (i, value) in expected.into_iter().enumerate() {
+            assert_eq!(&out[1 + i * 4..5 + i * 4], &value.to_le_bytes());
+        }
+        assert_eq!(out[0], 0xee);
+        assert_eq!(out[9], 0xee);
+        assert_eq!(errors, 0);
+        NATIVE.with(|n| assert_eq!(n.borrow().pack, [8, 31, 3, 5, 1]));
+    }
+}
+
+#[test]
+fn depth_stencil_invalid_modes_bounds_capacity_reject_before_native_calls() {
+    let a = api();
+    let s = state();
+    let mut errors = 0;
+    let mut out = [0xaa; 8];
+    for mode in [0x40000, 0x80000000, 0x70000] {
+        assert_eq!(
+            run(
+                &a,
+                &s,
+                &mut errors,
+                FEnum_glReadPixels,
+                [mode | 1, 2, (1 << 16) | 2],
+                &mut out
+            )
+            .0,
+            DG_GL_ERROR_UNSUPPORTED
+        );
+    }
+    for mode in [DG_GL_READ_DEPTH, DG_GL_READ_STENCIL] {
+        assert_eq!(
+            run(
+                &a,
+                &s,
+                &mut errors,
+                FEnum_glReadPixels,
+                [mode | 1, 2, (1 << 16) | 2],
+                &mut out[..7]
+            )
+            .0,
+            DG_GL_ERROR_LIMIT
+        );
+        assert_eq!(
+            run(
+                &a,
+                &s,
+                &mut errors,
+                FEnum_glReadPixels,
+                [mode | 7, 2, (1 << 16) | 2],
+                &mut out
+            )
+            .0,
+            DG_GL_ERROR_DRAWABLE
+        );
+        assert_eq!(
+            run(
+                &a,
+                &s,
+                &mut errors,
+                FEnum_glReadPixels,
+                [mode | DG_GL_MAX_DIMENSION, 2, (1 << 16) | 2],
+                &mut out
+            )
+            .0,
+            DG_GL_ERROR_UNSUPPORTED
+        );
+    }
+    assert_eq!(out, [0xaa; 8]);
+    assert_eq!(errors, 0);
+    NATIVE.with(|n| assert_eq!(n.borrow().calls, 0));
+}
+
+#[test]
+fn failed_depth_read_restores_pack_and_preserves_native_error() {
+    let mut a = api();
+    a.dg_glReadPixels = Some(read_depth_stencil);
+    let s = state();
+    let mut errors = 0;
+    let mut out = [0xee; 10];
+    NATIVE.with(|n| n.borrow_mut().read_error = GL_INVALID_OPERATION);
+    assert_eq!(
+        run(
+            &a,
+            &s,
+            &mut errors,
+            FEnum_glReadPixels,
+            [DG_GL_READ_DEPTH | 1, 2, (1 << 16) | 2],
+            &mut out[1..9]
+        ),
+        (DG_GL_ERROR_HOST, 0, DG_GL_RESULT_FLOAT)
+    );
+    assert_eq!(errors, 4);
+    assert_eq!(out[0], 0xee);
+    assert_eq!(out[9], 0xee);
+    NATIVE.with(|n| assert_eq!(n.borrow().pack, [8, 31, 3, 5, 1]));
+}
+
+unsafe extern "C" fn read_float_color(
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+    format: u32,
+    ty: u32,
+    out: *mut c_void,
+) {
+    assert_eq!((x, y, w, h, format, ty), (1, 2, 2, 1, GL_RGBA, GL_FLOAT));
+    NATIVE.with(|n| {
+        assert_eq!(n.borrow().pack, [1, 0, 0, 0, 0]);
+        n.borrow_mut().calls += 1;
+    });
+    for (i, v) in [
+        0.12345f32, 0.5001, 0.9991, 1.0, 0.00012, 0.20003, 0.7501, 0.0,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                v.to_le_bytes().as_ptr(),
+                out.cast::<u8>().add(i * 4),
+                4,
+            );
+        }
+    }
+}
+#[test]
+fn float_color_readback_retains_more_than_eight_bits_and_bounds_words() {
+    let mut a = api();
+    a.dg_glReadPixels = Some(read_float_color);
+    let s = state();
+    let mut errors = 0;
+    let mut out = [0xee; 34];
+    assert_eq!(
+        run(
+            &a,
+            &s,
+            &mut errors,
+            FEnum_glReadPixels,
+            [DG_GL_READ_RGBA_FLOAT | 1, 2, (1 << 16) | 2],
+            &mut out[1..33]
+        ),
+        (0, 32, DG_GL_RESULT_FLOAT)
+    );
+    assert_eq!(f32::from_le_bytes(out[1..5].try_into().unwrap()), 0.12345);
+    assert_eq!((out[0], out[33]), (0xee, 0xee));
+    NATIVE.with(|n| assert_eq!(n.borrow().pack, [8, 31, 3, 5, 1]));
+    for (fnc, args, expected) in [
+        (
+            FEnum_glReadPixels,
+            [DG_GL_READ_RGBA_FLOAT, 0, (64 << 16) | 64],
+            65536,
+        ),
+        (
+            FEnum_glReadPixels,
+            [DG_GL_READ_RGBA_FLOAT, 0, (65 << 16) | 64],
+            0,
+        ),
+        (
+            FEnum_glGetTexImage,
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_FLOAT | (4096 << 16), 0],
+            65536,
+        ),
+        (
+            FEnum_glGetTexImage,
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_FLOAT | (4097 << 16), 0],
+            0,
+        ),
+        (
+            FEnum_glGetTexImage,
+            [
+                GL_TEXTURE_2D,
+                DG_GL_TEXTURE_READ_FLOAT | DG_GL_MAX_TEXTURE_LEVEL,
+                0,
+            ],
+            2048,
+        ),
+        (
+            FEnum_glGetTexImage,
+            [
+                GL_TEXTURE_2D,
+                DG_GL_TEXTURE_READ_FLOAT | (DG_GL_MAX_TEXTURE_LEVEL + 1),
+                0,
+            ],
+            0,
+        ),
+    ] {
+        let data: Vec<u8> = args.into_iter().flat_map(u32::to_le_bytes).collect();
+        assert_eq!(
+            unsafe { crate::gl_validation::dreamgpu_gl_query_result_bytes(fnc, data.as_ptr()) },
+            expected
+        );
+    }
+}

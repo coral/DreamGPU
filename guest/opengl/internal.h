@@ -67,6 +67,8 @@ ULONG JglNextImageId(void);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);
 void JglDrawableSize(ULONG *width, ULONG *height);
+/* Typed canonical color/depth/stencil reads require explicit host negotiation. */
+BOOL JglDepthStencilReadbackAvailable(void);
 ULONG JglReadbackCapacity(void);
 ULONG *JglReadbackBuffer(void);
 BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output, ULONG capacity,
