@@ -2,6 +2,7 @@
 """Apply reviewed patches to actual pinned Wine source and inspect provenance."""
 import importlib.util
 import json
+import re
 from pathlib import Path
 import shutil
 import subprocess
@@ -35,6 +36,14 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-wine-patches-') as temporary:
             assert (work / 'wined3d/dg-wine-copy-diagnostics.h').read_bytes() == (ROOT / 'guest/d3d/wine-copy-diagnostics.h').read_bytes()
             for path in (output).glob('copy-diagnostic-*.c'):
                 assert path.read_bytes() == (work / 'wined3d' / path.name.removeprefix('copy-diagnostic-')).read_bytes()
+                base_name = path.name.removeprefix('copy-diagnostic-')
+                base_lines = (Path(temporary) / 'False/wined3d' / base_name).read_text().splitlines()
+                for line in path.read_text().splitlines():
+                    call = re.search(r'dg_surface_load_location\((\d+), (\d+), ', line)
+                    if call:
+                        assert source_ids[call[1]] == base_name
+                        original = line[:call.start()] + 'surface_load_location(' + line[call.end():]
+                        assert base_lines[int(call[2]) - 1] == original, (base_name, call[2])
         else:
             assert evidence['copy_sources'] == {}
             assert not (work / 'wined3d/dg-wine-copy-diagnostics.h').exists()

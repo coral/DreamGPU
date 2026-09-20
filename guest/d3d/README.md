@@ -142,9 +142,23 @@ artifacts and limits are recorded in `benchmarks/retro-gpu/ut-d3d-progress.json`
 ## Direct3D 6
 
 `tools/d3d/probe6.cpp` uses the actual legacy `DirectDrawCreate` factory, then queries
-`IDirectDraw4` and `IDirect3D3`. It creates only the HAL Device3 and a Viewport3,
-sets `D3DVIEWPORT2`, clears with `Clear2`, draws a fixed triangle and checks
-512 target pixels through Lock plus512 window-front pixels through GetPixel.
+`IDirectDraw4` and `IDirect3D3`. Separate legacy checks verify Direct3D1 device
+enumeration and an RGB device with system-memory color/depth surfaces. Two
+clears and an intervening writable CPU map check 2,048 RGB565 pixels, including
+preservation outside a partial clear.
+
+The legacy device also enumerates an indexed 8-bit texture format, loads a
+system-memory Texture1 with an attached palette, obtains its handle, and draws
+through a Direct3D1 execute buffer. It checks 512 rendered pixels across palette
+updates, including color-key transparency, and verifies CPU palette indices
+remain unchanged after GPU upload.
+
+The HAL Device3/Viewport3 check sets `D3DVIEWPORT2`, clears on the main thread,
+draws a fixed triangle on a worker, then checks 512 target pixels through Lock
+plus 512 window-front pixels through GetPixel on the main thread. The worker
+remains alive during readback to verify shared graphics resources and command
+publication; bounded waits pump window messages and fail the whole probe process
+if a worker cannot finish safely. The system-loader variant is `DGSYS6.EXE`.
 It deletes/releases its viewport, device, surfaces and window explicitly.
 `DirectDrawCreateEx` accepts the newer interface contract and is not the D3D6
 factory path.

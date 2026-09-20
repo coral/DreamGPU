@@ -1,0 +1,222 @@
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -701,7 +701,12 @@
+         for (x = 0; x < width; ++x)
+         {
+             BYTE src_color = src_row[x];
+-            dst_row[x] = 0xff000000
++            DWORD alpha = palette->flags & WINED3D_PALETTE_ALPHA
++                    ? palette->colors[src_color].rgbReserved : 0xff;
++
++            if (color_key && color_in_range(color_key, src_color))
++                alpha = 0;
++            dst_row[x] = (alpha << 24)
+                     | (palette->colors[src_color].rgbRed << 16)
+                     | (palette->colors[src_color].rgbGreen << 8)
+                     | palette->colors[src_color].rgbBlue;
+@@ -876,8 +881,8 @@
+  *     WINED3DFMT_S4X4_UINT_D24_UNORM
+  *
+  * Only some Geforce/Voodoo3/G400 cards offer 8-bit textures in case of ddraw.
+- * Since it is not widely available, don't offer it. Further no Windows driver
+- * offers WINED3DFMT_P8_UINT_A8_NORM, so don't offer it either.
++ * P8 is enabled separately for CPU-expanded 2D textures on the fixed-function
++ * backend. No Windows driver offers WINED3DFMT_P8_UINT_A8_NORM, so do not offer it.
+  *     WINED3DFMT_P8_UINT
+  *     WINED3DFMT_P8_UINT_A8_UNORM
+  *
+@@ -2719,6 +2724,13 @@
+     init_format_fbo_compat_info(ctx);
+     init_format_filter_info(gl_info, adapter->driver_info.vendor);
+ 
++    /* This backend expands indexed 2D textures and their attached palette to
++     * BGRA before upload. Do not advertise cube/volume or render-target P8,
++     * or the separate fragment-program palette path. */
++    if (!gl_info->supported[ARB_FRAGMENT_PROGRAM])
++        gl_info->formats[getFmtIdx(WINED3DFMT_P8_UINT)].flags[WINED3D_GL_RES_TYPE_TEX_2D]
++                |= WINED3DFMT_FLAG_TEXTURE | WINED3DFMT_FLAG_FILTERING;
++
+     return TRUE;
+ 
+ fail:
+--- a/wined3d/texture.c
++++ b/wined3d/texture.c
+@@ -146,6 +146,8 @@
+ #endif*/
+     wined3d_texture_unload_gl_texture(texture);
+     free(texture->sub_resources);
++    if (texture->palette)
++        wined3d_palette_decref(texture->palette);
+     resource_cleanup(&texture->resource);
+ }
+ 
+@@ -158,6 +160,31 @@
+ void wined3d_texture_set_dirty(struct wined3d_texture *texture)
+ {
+     texture->flags &= ~(WINED3D_TEXTURE_RGB_VALID | WINED3D_TEXTURE_SRGB_VALID);
++}
++
++/* CPU palette indices remain authoritative for converted P8 textures. */
++void wined3d_texture_invalidate_palette(struct wined3d_texture *texture)
++{
++    unsigned int i, count = texture->level_count * texture->layer_count;
++
++    for (i = 0; i < count; ++i)
++        texture->texture_ops->texture_sub_resource_invalidate_location(texture->sub_resources[i],
++                WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB);
++    wined3d_texture_set_dirty(texture);
++}
++
++void CDECL wined3d_texture_set_palette(struct wined3d_texture *texture, struct wined3d_palette *palette)
++{
++    struct wined3d_palette *previous = texture->palette;
++
++    if (previous == palette)
++        return;
++    if (palette)
++        wined3d_palette_incref(palette);
++    texture->palette = palette;
++    if (previous)
++        wined3d_palette_decref(previous);
++    wined3d_texture_invalidate_palette(texture);
+ }
+ 
+ /* Context activation is done by the caller. */
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -3755,10 +3755,10 @@
+         gl_info->gl_ops.gl.p_glEnable(GL_ALPHA_TEST);
+         checkGLcall("glEnable(GL_ALPHA_TEST)");
+ 
+-        /* For P8 surfaces, the alpha component contains the palette index.
+-         * Which means that the colorkey is one of the palette entries. In
+-         * other cases pixels that should be masked away have alpha set to 0. */
+-        if (src_surface->resource.format->id == WINED3DFMT_P8_UINT)
++        /* Only unconverted P8 stores the palette index in alpha. CPU-expanded
++         * P8 and other converted formats mark color-keyed pixels with alpha 0. */
++        if (src_surface->resource.format->id == WINED3DFMT_P8_UINT
++                && !(src_surface->container->flags & WINED3D_TEXTURE_CONVERTED))
+             gl_info->gl_ops.gl.p_glAlphaFunc(GL_NOTEQUAL,
+                     (float)src_surface->container->async.src_blt_color_key.color_space_low_value / 255.0f);
+         else
+@@ -4454,7 +4454,7 @@
+     else if (conversion)
+     {
+         /* This code is only entered for color keying fixups */
+-        struct wined3d_palette *palette = NULL;
++        struct wined3d_palette *palette = texture->palette;
+         UINT height = surface->resource.height;
+ 
+         dst_pitch = wined3d_format_calculate_pitch(&format, width);
+@@ -4466,10 +4466,11 @@
+             context_release(context);
+             return E_OUTOFMEMORY;
+         }
+-        if (texture->swapchain && texture->swapchain->palette)
++        if (!palette && texture->swapchain)
+             palette = texture->swapchain->palette;
+         conversion->convert(data.addr, src_pitch, mem, dst_pitch,
+-                width, height, palette, &texture->async.gl_color_key);
++                width, height, palette, texture->async.flags & WINED3D_TEXTURE_ASYNC_COLOR_KEY
++                ? &texture->async.gl_color_key : NULL);
+         src_pitch = dst_pitch;
+         data.addr = mem;
+     }
+--- a/wined3d/palette.c
++++ b/wined3d/palette.c
+@@ -92,11 +92,17 @@
+ HRESULT CDECL wined3d_palette_set_entries(struct wined3d_palette *palette,
+         DWORD flags, DWORD start, DWORD count, const PALETTEENTRY *entries)
+ {
++    struct wined3d_resource *resource;
+     unsigned int i;
+ 
+     TRACE("palette %p, flags %#x, start %u, count %u, entries %p.\n",
+             palette, flags, start, count, entries);
+     TRACE("Palette flags: %#x.\n", palette->flags);
++
++    if (flags || start > palette->size || count > palette->size - start || (!entries && count))
++        return WINED3DERR_INVALIDCALL;
++    if (!count)
++        return WINED3D_OK;
+ 
+     if (palette->flags & WINED3D_PALETTE_8BIT_ENTRIES)
+     {
+@@ -127,6 +133,17 @@
+             palette->colors[255].rgbGreen = 255;
+             palette->colors[255].rgbBlue = 255;
+         }
++    }
++
++    LIST_FOR_EACH_ENTRY(resource, &palette->device->resources, struct wined3d_resource, resource_list_entry)
++    {
++        struct wined3d_texture *texture;
++
++        if (resource->type != WINED3D_RTYPE_TEXTURE)
++            continue;
++        texture = wined3d_texture_from_resource(resource);
++        if (texture->palette == palette)
++            wined3d_texture_invalidate_palette(texture);
+     }
+ 
+     return WINED3D_OK;
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2316,6 +2316,7 @@
+     struct gl_texture texture_rgb, texture_srgb;
+     struct wined3d_resource **sub_resources;
+     struct wined3d_swapchain *swapchain;
++    struct wined3d_palette *palette;
+     UINT layer_count;
+     UINT level_count;
+     float pow2_matrix[16];
+@@ -2364,6 +2365,7 @@
+ void wined3d_texture_bind_and_dirtify(struct wined3d_texture *texture,
+         struct wined3d_context *context, BOOL srgb) DECLSPEC_HIDDEN;
+ void wined3d_texture_force_reload(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
++void wined3d_texture_invalidate_palette(struct wined3d_texture *texture) DECLSPEC_HIDDEN;
+ void wined3d_texture_load(struct wined3d_texture *texture,
+         struct wined3d_context *context, BOOL srgb) DECLSPEC_HIDDEN;
+ void wined3d_texture_prepare_texture(struct wined3d_texture *texture,
+--- a/include/wine/wined3d.h
++++ b/include/wine/wined3d.h
+@@ -2554,6 +2554,7 @@
+ HRESULT __cdecl wined3d_texture_set_color_key(struct wined3d_texture *texture,
+         DWORD flags, const struct wined3d_color_key *color_key);
+ DWORD __cdecl wined3d_texture_set_lod(struct wined3d_texture *texture, DWORD lod);
++void __cdecl wined3d_texture_set_palette(struct wined3d_texture *texture, struct wined3d_palette *palette);
+ HRESULT __cdecl wined3d_texture_release_dc(struct wined3d_texture *texture, unsigned int sub_resource_idx, HDC dc);
+ HRESULT __cdecl wined3d_texture_update_desc(struct wined3d_texture *texture,
+         UINT width, UINT height, enum wined3d_format_id format_id,
+--- a/wined3d/wined3d.spec
++++ b/wined3d/wined3d.spec
+@@ -276,6 +276,7 @@
+ @ cdecl wined3d_texture_set_autogen_filter_type(ptr long)
+ @ cdecl wined3d_texture_set_color_key(ptr long ptr)
+ @ cdecl wined3d_texture_set_lod(ptr long)
++@ cdecl wined3d_texture_set_palette(ptr ptr)
+ @ cdecl wined3d_texture_update_desc(ptr long long long long long ptr long)
+ 
+ @ cdecl wined3d_vertex_declaration_create(ptr ptr long ptr ptr ptr)
+--- a/wined3d/wined3d.def
++++ b/wined3d/wined3d.def
+@@ -279,6 +279,7 @@
+   wined3d_texture_set_autogen_filter_type
+   wined3d_texture_set_color_key
+   wined3d_texture_set_lod
++  wined3d_texture_set_palette
+   wined3d_texture_update_desc
+ 
+   wined3d_vertex_declaration_create
+--- a/ddraw/surface.c
++++ b/ddraw/surface.c
+@@ -477,6 +477,9 @@
+     wined3d_mutex_lock();
+ 
+     prev = surface->palette;
++    if (surface->wined3d_texture)
++        wined3d_texture_set_palette(surface->wined3d_texture,
++                palette_impl ? palette_impl->wineD3DPalette : NULL);
+     if (surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+     {
+         if (prev)

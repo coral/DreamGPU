@@ -1,0 +1,69 @@
+--- a/ddraw/surface.c
++++ b/ddraw/surface.c
+@@ -5954,9 +5954,29 @@
+         return dg_surface_failure(__LINE__, surface_desc, version, DDERR_NOOVERLAYHW);
+     }
+ 
++    /* If the surface is of the 'ALLOCONLOAD' type, ignore the LPSURFACE
++     * field. Frank Herbert's Dune specifies a NULL pointer for lpSurface. */
++    if ((desc->ddsCaps.dwCaps & DDSCAPS_ALLOCONLOAD) || !desc->lpSurface)
++        desc->dwFlags &= ~DDSD_LPSURFACE;
+     if (desc->ddsCaps.dwCaps & DDSCAPS_SYSTEMMEMORY)
+     {
+         wined3d_desc.pool = WINED3D_POOL_SYSTEM_MEM;
++        /* Legacy RGB devices render into lockable system-memory surfaces.
++         * Keep the public caps, but give owned 3D surfaces GPU backing and
++         * CPU access so normal location tracking handles Lock/Blt readback.
++         * Caller-owned memory retains its existing pool and validation. */
++        if ((desc->ddsCaps.dwCaps & (DDSCAPS_3DDEVICE | DDSCAPS_ZBUFFER))
++                && !(desc->dwFlags & DDSD_LPSURFACE))
++        {
++            wined3d_desc.pool = WINED3D_POOL_DEFAULT;
++            wined3d_desc.usage |= WINED3DUSAGE_DYNAMIC;
++            if (desc->ddsCaps.dwCaps & DDSCAPS_TEXTURE)
++                wined3d_desc.usage |= WINED3DUSAGE_TEXTURE;
++            if (desc->ddsCaps.dwCaps & DDSCAPS_ZBUFFER)
++                wined3d_desc.usage |= WINED3DUSAGE_DEPTHSTENCIL;
++            else
++                wined3d_desc.usage |= WINED3DUSAGE_RENDERTARGET;
++        }
+     }
+     else
+     {
+@@ -5982,10 +6002,6 @@
+         }
+     }
+ 
+-    /* If the surface is of the 'ALLOCONLOAD' type, ignore the LPSURFACE
+-     * field. Frank Herbert's Dune specifies a NULL pointer for lpSurface. */
+-    if ((desc->ddsCaps.dwCaps & DDSCAPS_ALLOCONLOAD) || !desc->lpSurface)
+-        desc->dwFlags &= ~DDSD_LPSURFACE;
+     if (desc->dwFlags & DDSD_LPSURFACE)
+     {
+         if (wined3d_desc.pool != WINED3D_POOL_SYSTEM_MEM)
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -3316,6 +3316,12 @@
+         return WINED3D_OK;
+     }
+ 
++    if ((flags & WINED3DCLEAR_TARGET) && !device->fb.render_targets[0])
++    {
++        WARN("Clearing color without a render target attached.\n");
++        return WINED3DERR_INVALIDCALL;
++    }
++
+     if (flags & (WINED3DCLEAR_ZBUFFER | WINED3DCLEAR_STENCIL))
+     {
+         struct wined3d_rendertarget_view *ds = device->fb.depth_stencil;
+@@ -4106,9 +4112,7 @@
+     if (view && !(view->resource->usage & WINED3DUSAGE_RENDERTARGET))
+     {
+         WARN("View resource %p doesn't have render target usage.\n", view->resource);
+-        //return WINED3DERR_INVALIDCALL;
+-        // JH: this will happen if surface hasn't flag DDSCAPS_VIDEOMEMORY, ignore the rest of code, but return success
+-        return WINED3D_OK;
++        return WINED3DERR_INVALIDCALL;
+     }
+ 
+     /* Set the viewport and scissor rectangles, if requested. Tests show that

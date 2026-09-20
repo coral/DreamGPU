@@ -6,37 +6,37 @@
   "patches": [
     {
       "file": "0001-bounded-copy-diagnostics.patch",
-      "sha256": "10a34b4617965527bc239b61640b9e47818ccf9c3cb2bd2974d9cc5a4ef633ca"
+      "sha256": "d5a5d41e8c3d54d6fa53890e0c3f95bb9aa0a0cabf48231eff165bf540f2c540"
     }
   ],
   "files": {
     "wined3d/context.c": {
-      "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
-      "after_sha256": "8f3e9341ce8715d884b35f6f3069a4c6c4d83b40f7930f910b0a7a135bf4bec7"
+      "before_sha256": "f261f86e49bb27845a91196aaa909f3b1b413527716002b751f74e89a463efa1",
+      "after_sha256": "f7486f18aa70747e71f8db29ae6c8af22207360514592df10006af9209a0dbcd"
     },
     "wined3d/device.c": {
-      "before_sha256": "0a5880a762561579c5a93c36bc32ab51f5f441e4f290f1dbbe83b8064cebf3c4",
-      "after_sha256": "505e5318f9e9bf54d65923d8908f107d73c450a9c558c7a35522a163dd68d8de"
+      "before_sha256": "85e7063070d17b90c4f852c29abc1b610bbf5361249260d3a5d77147066e002a",
+      "after_sha256": "8b53ff01716e279eaad0d8857c8727c227d38e6576f98b4ff741599484a9f119"
     },
     "wined3d/drawprim.c": {
       "before_sha256": "bace9e3719f4d6a09370e724d11daab378d0184dc93e4396aabcd00ffd0e6ce1",
-      "after_sha256": "db47791bde3738a55c61a222b5228e11fdfaa3f6828a859437a144009f9f9217"
+      "after_sha256": "75ddeb706e5f7dd5c0b186298860a487dc62b436a77cf720ddfd9770350b8390"
     },
     "wined3d/surface.c": {
-      "before_sha256": "d518f285b5cfe0d7a07ceb4f25f529917c7af2f30033365f02828ca71bc28ffe",
-      "after_sha256": "db1db32ff8c6bb36d110eb7631566adbf74988030284085dd58982a908366eb8"
+      "before_sha256": "c295c059b69efd313a6f002b2afb1c1e27867e6d90fc4763ca730768f5c62465",
+      "after_sha256": "45f1ad85a86fdacc218bfcd5d7a6e67fc9e36acf929a6d280904814b30828a69"
     },
     "wined3d/swapchain.c": {
-      "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
-      "after_sha256": "16a92ceda65770b2567dffa9c4da2142189ab590f91a03ee967273fe9a26bdf4"
+      "before_sha256": "9359c39e90570330276f98641ebdb465dbb79b5ab5ef49345ee323f9dc40928f",
+      "after_sha256": "15fff50d8f60103cd9da57656fb6e3256ce0852abbebbda00a02702ac573424b"
     },
     "wined3d/texture.c": {
-      "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",
-      "after_sha256": "3d0b87705ec1de4397af5112c639f54de12e29a63972ce7394e5947f81d7ad93"
+      "before_sha256": "a4cc3d03ff3ba3e80ebdb8343dcf5989891ab8a65af54fede12312849e38e5a7",
+      "after_sha256": "7f1e3137a618549ef7287cdc04227c37ed162cdd2cc5ed1387a3023c74f8ab62"
     },
     "wined3d/wined3d_private.h": {
-      "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
-      "after_sha256": "df79ae7e9935532ff88c17918578b50e8db66c7d5ee2107e31446c1036e0b261"
+      "before_sha256": "2ed5d92037f7ddf1bd6de32b844afa63ac658fe825c9596a2286b2370e9dd757",
+      "after_sha256": "613ed0aa83db80af105fe05cbc446cea76c1f06296d510d8c4a4752a2b6e484d"
     }
   },
   "source_ids": {

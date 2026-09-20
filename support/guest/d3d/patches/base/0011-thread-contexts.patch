@@ -1,0 +1,63 @@
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -904,7 +904,15 @@
+ 		0, 0, 0         
+ 	};
+ 	
+-	GLint  iPixelFormat; 
++	GLint  iPixelFormat;
++
++    /* The pixel format belongs to the window, not to a thread's GL context.
++     * A second rendering thread must reuse it; WGL rejects setting it twice. */
++    if (context->gl_info->gl_ops.wgl.p_wglGetPixelFormat(dc) == format)
++    {
++        return TRUE;
++    }
++
+ 	wglMakeCurrent(dc, NULL);
+ 
+ 	if((iPixelFormat = ChoosePixelFormat(dc, &pfd)) == 0)
+@@ -1254,6 +1262,12 @@
+ 
+     TRACE("Releasing context %p, level %u.\n", context, context->level);
+     
++    if (!context->level)
++    {
++        WARN("Context is not acquired.\n");
++        return;
++    }
++
+     if (WARN_ON(d3d))
+     {
+         if (!context->level)
+@@ -1264,6 +1278,13 @@
+ 
+     if (!--context->level)
+     {
++#ifdef WIN32_NATIVE
++        /* Publish commands on their owning thread before another thread uses
++         * the device's shared objects. Never flush a restored or failed context. */
++        if (context->valid && context->glCtx && context == context_get_current()
++                && context->glCtx == wglGetCurrentContext())
++            context->gl_info->gl_ops.gl.p_glFlush();
++#endif
+         if (context_restore_pixel_format(context))
+             context->needs_set = 1;
+         if (context->restore_ctx)
+@@ -1739,6 +1760,16 @@
+     {
+     	//JHFIX: debug only!
+     	TRACE("Create context success!\n");
++    }
++
++    /* All thread contexts of a device use the same texture/list namespace. */
++    if (device->context_count && !wglShareLists(device->contexts[0]->glCtx, ctx))
++    {
++        ERR("Failed to share the device's GL objects with the new context.\n");
++        context_release(ret);
++        if (!wglDeleteContext(ctx))
++            ERR("Failed to delete the unshared context.\n");
++        goto out;
+     }
+ #endif
+ 
