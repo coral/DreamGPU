@@ -1,0 +1,399 @@
+--- a/ddraw/surface.c
++++ b/ddraw/surface.c
+@@ -41,79 +41,63 @@
+  * applications from drawing to the screen while we've locked the frontbuffer.
+  * We'd like to do this in wined3d instead, but for that to work wined3d needs
+  * to support windowless rendering first. */
++static HRESULT ddraw_surface_copy_screen(struct wined3d_surface *surface,
++        struct ddraw_palette *palette, int x, int y, int w, int h, BOOL read)
++{
++    HDC surface_dc, screen_dc;
++    HRESULT hr;
++    BOOL ret;
++
++    if (FAILED(hr = wined3d_surface_getdc(surface, &surface_dc)))
++        return hr;
++    if (palette)
++        wined3d_palette_apply_to_dc(palette->wineD3DPalette, surface_dc);
++    if (!(screen_dc = GetDC(NULL)))
++    {
++        wined3d_surface_releasedc(surface, surface_dc);
++        return E_FAIL;
++    }
++
++    if (read)
++        ret = BitBlt(surface_dc, x, y, w, h, screen_dc, x, y, SRCCOPY);
++    else
++        ret = BitBlt(screen_dc, x, y, w, h, surface_dc, x, y, SRCCOPY);
++    ReleaseDC(NULL, screen_dc);
++    hr = wined3d_surface_releasedc(surface, surface_dc);
++    return ret ? hr : E_FAIL;
++}
++
+ HRESULT ddraw_surface_update_frontbuffer(struct ddraw_surface *surface, const RECT *rect, BOOL read)
+ {
+-    HDC surface_dc, screen_dc;
+     int x, y, w, h;
+     HRESULT hr;
+-    BOOL ret;
+-    
+-    if(surface == NULL)
+-    {
++
++    if (!surface)
+         return E_FAIL;
+-    }
+-
+-    if (!rect)
+-    {
+-        x = 0;
+-        y = 0;
+-        w = surface->surface_desc.dwWidth;
+-        h = surface->surface_desc.dwHeight;
+-    }
+-    else
+-    {
+-        x = rect->left;
+-        y = rect->top;
+-        w = rect->right - rect->left;
+-        h = rect->bottom - rect->top;
+-    }
+-
++    x = rect ? rect->left : 0;
++    y = rect ? rect->top : 0;
++    w = rect ? rect->right - rect->left : surface->surface_desc.dwWidth;
++    h = rect ? rect->bottom - rect->top : surface->surface_desc.dwHeight;
+     if (w <= 0 || h <= 0)
+         return DD_OK;
+ 
+-    if (surface->ddraw->swapchain_window)
+-    {
+-        /* Nothing to do, we control the frontbuffer, or at least the parts we
+-         * care about. */
+-        if (read)
+-            return DD_OK;
+-
+-        return wined3d_surface_blt(surface->ddraw->wined3d_frontbuffer, rect,
+-                surface->wined3d_surface, rect, 0, NULL, WINED3D_TEXF_POINT);
+-    }
+-
+-    if (FAILED(hr = wined3d_surface_getdc(surface->wined3d_surface, &surface_dc)))
+-    {
+-        ERR("Failed to get surface DC, hr %#x.\n", hr);
+-        return hr;
+-    }
+-    if (surface->palette)
+-        wined3d_palette_apply_to_dc(surface->palette->wineD3DPalette, surface_dc);
+-
+-    if (!(screen_dc = GetDC(NULL)))
+-    {
+-        wined3d_surface_releasedc(surface->wined3d_surface, surface_dc);
+-        ERR("Failed to get screen DC.\n");
+-        return E_FAIL;
+-    }
+-
+-    if (read)
+-        ret = BitBlt(surface_dc, x, y, w, h,
+-                screen_dc, x, y, SRCCOPY);
+-    else
+-        ret = BitBlt(screen_dc, x, y, w, h,
+-                surface_dc, x, y, SRCCOPY);
+-
+-    ReleaseDC(NULL, screen_dc);
+-    wined3d_surface_releasedc(surface->wined3d_surface, surface_dc);
+-
+-    if (!ret)
+-    {
+-        ERR("Failed to blit to/from screen.\n");
+-        return E_FAIL;
+-    }
+-
+-    return DD_OK;
++    /* GDI can modify a primary even while a GL swapchain exists. The public
++     * primary's CPU contents must come from the completed desktop image. */
++    if (read || !surface->ddraw->swapchain_window)
++        return ddraw_surface_copy_screen(surface->wined3d_surface, surface->palette, x, y, w, h, read);
++
++    /* Publishing GL_FRONT replaces the drawable's visible region, including
++     * pixels outside this blit. Seed it from the desktop before a partial
++     * update, so menus and CPU sprites outside the rectangle survive. */
++    if (x || y || w != surface->surface_desc.dwWidth || h != surface->surface_desc.dwHeight)
++    {
++        if (FAILED(hr = ddraw_surface_copy_screen(surface->ddraw->wined3d_frontbuffer,
++                surface->palette, 0, 0, surface->surface_desc.dwWidth,
++                surface->surface_desc.dwHeight, TRUE)))
++            return hr;
++    }
++    return wined3d_surface_blt(surface->ddraw->wined3d_frontbuffer, rect,
++            surface->wined3d_surface, rect, 0, NULL, WINED3D_TEXF_POINT);
+ }
+ 
+ /*****************************************************************************
+@@ -1412,6 +1396,16 @@
+     RGNDATA *clip_list;
+     HRESULT hr = DD_OK;
+     UINT i;
++
++    /* A keyed write leaves holes inside its destination rectangle. Refresh
++     * those pixels too; preserving only the native front outside it is not enough. */
++    if ((dst_surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
++            && (flags & (WINEDDBLT_KEYSRC | WINEDDBLT_KEYSRCOVERRIDE
++            | WINEDDBLT_KEYDEST | WINEDDBLT_KEYDESTOVERRIDE)))
++    {
++        if (FAILED(hr = ddraw_surface_update_frontbuffer(dst_surface, dst_rect_in, TRUE)))
++            return hr;
++    }
+ 
+     if (!dst_surface->clipper)
+     {
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -3089,6 +3089,11 @@
+         return WINEDDERR_NODC;
+     }
+ 
++    /* CreateDIBSection bits cannot be read until this thread's batched GDI
++     * work completes. Keep the acquired DC and DIB authority on failure. */
++    if (!GdiFlush())
++        return E_FAIL;
++
+     if (surface->resource.map_binding == WINED3D_LOCATION_USER_MEMORY
+             || (surface->container->flags & WINED3D_TEXTURE_PIN_SYSMEM
+             && surface->resource.map_binding != WINED3D_LOCATION_DIB))
+@@ -3753,7 +3758,7 @@
+ }
+ 
+ /* Context activation is done by the caller. */
+-static void surface_blt_to_drawable(const struct wined3d_device *device,
++static HRESULT surface_blt_to_drawable(const struct wined3d_device *device,
+         struct wined3d_context *old_ctx,
+         enum wined3d_texture_filter_type filter, BOOL alpha_test,
+         struct wined3d_surface *src_surface, const RECT *src_rect_in,
+@@ -3763,23 +3768,39 @@
+     struct wined3d_context *context = old_ctx;
+     struct wined3d_surface *restore_rt = NULL;
+     RECT src_rect, dst_rect;
++    HRESULT hr;
+ 
+     src_rect = *src_rect_in;
+     dst_rect = *dst_rect_in;
+ 
+ 
++    if (!old_ctx || !old_ctx->valid || context_get_current() != old_ctx)
++        return WINED3DERR_INVALIDCALL;
++
+     if (old_ctx->current_rt != dst_surface)
+     {
+         restore_rt = old_ctx->current_rt;
+         context = context_acquire(device, dst_surface);
+     }
+ 
++    if (!context || !context->valid || context_get_current() != context)
++    {
++        hr = WINED3DERR_INVALIDCALL;
++        goto done;
++    }
+     gl_info = context->gl_info;
+ 
+-    /* Make sure the surface is up-to-date. This should probably use
+-     * surface_load_location() and worry about the destination surface too,
+-     * unless we're overwriting it completely. */
++    /* Save the source before loading the destination: without FBOs they may
++     * share the physical backbuffer. Keep texture_load's color-key conversion. */
+     wined3d_texture_load(src_surface->container, context, FALSE);
++    if (FAILED(hr = surface_load_location(src_surface, context, WINED3D_LOCATION_TEXTURE_RGB)))
++        goto done;
++    if (alpha_test || !surface_is_full_rect(dst_surface, dst_rect_in))
++    {
++        if (FAILED(hr = surface_load_location(dst_surface, context,
++                dst_surface->container->resource.draw_binding)))
++            goto done;
++    }
+ 
+     /* Activate the destination context, set it up for blitting */
+     context_apply_blit_state(context, device);
+@@ -3793,7 +3814,8 @@
+ #endif
+     }
+ 
+-    device->blitter->set_shader(device->blit_priv, context, src_surface, NULL);
++    if (FAILED(hr = device->blitter->set_shader(device->blit_priv, context, src_surface, NULL)))
++        goto done;
+ 
+     if (alpha_test)
+     {
+@@ -3832,8 +3854,11 @@
+             && dst_surface->container->swapchain->front_buffer == dst_surface->container))
+         gl_info->gl_ops.gl.p_glFlush(); /* Flush to ensure ordering across contexts. */
+ 
+-    if (restore_rt)
++    hr = WINED3D_OK;
++done:
++    if (context && restore_rt)
+         context_restore(context, restore_rt);
++    return hr;
+ }
+ 
+ HRESULT surface_color_fill(struct wined3d_surface *s, const RECT *rect, const struct wined3d_color *color)
+@@ -4593,11 +4618,9 @@
+     }
+ 
+     surface_get_rect(surface, NULL, &r);
+-    surface_load_location(surface, context, WINED3D_LOCATION_TEXTURE_RGB);
+-    surface_blt_to_drawable(surface->resource.device, context,
++    return surface_blt_to_drawable(surface->resource.device, context,
+             WINED3D_TEXF_POINT, FALSE, surface, &r, surface, &r);
+ 
+-    return WINED3D_OK;
+ }
+ 
+ static HRESULT surface_load_texture(struct wined3d_surface *surface,
+@@ -5023,12 +5046,13 @@
+     return WINED3D_OK;
+ }
+ 
+-static void ffp_blit_blit_surface(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
++static HRESULT ffp_blit_blit_surface(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
+         struct wined3d_surface *src_surface, const RECT *src_rect,
+         struct wined3d_surface *dst_surface, const RECT *dst_rect,
+         const struct wined3d_color_key *color_key)
+ {
+     struct wined3d_context *context;
++    HRESULT hr;
+ 
+     /* Blit from offscreen surface to render target */
+     struct wined3d_color_key old_blt_key = src_surface->container->async.src_blt_color_key;
+@@ -5045,7 +5069,7 @@
+         glEnable(GL_ALPHA_TEST);
+ #endif
+ 
+-    surface_blt_to_drawable(device, context, filter,
++    hr = surface_blt_to_drawable(device, context, filter,
+             !!color_key, src_surface, src_rect, dst_surface, dst_rect);
+ 
+ #ifdef VBOX_WITH_WINE_FIX_BLIT_ALPHATEST 
+@@ -5053,14 +5077,19 @@
+         glDisable(GL_ALPHA_TEST);
+ #endif
+             
+-    context_release(context);
++    if (context)
++        context_release(context);
+ 
+     /* Restore the color key parameters */
+     wined3d_texture_set_color_key(src_surface->container, WINED3D_CKEY_SRC_BLT,
+             (old_color_key_flags & WINED3D_CKEY_SRC_BLT) ? &old_blt_key : NULL);
+ 
++    if (FAILED(hr))
++        return hr;
++
+     surface_validate_location(dst_surface, dst_surface->container->resource.draw_binding);
+     surface_invalidate_location(dst_surface, ~dst_surface->container->resource.draw_binding);
++    return WINED3D_OK;
+ }
+ 
+ const struct blit_shader ffp_blit =  {
+@@ -5729,13 +5758,13 @@
+     return WINED3DERR_INVALIDCALL;
+ }
+ 
+-static void cpu_blit_blit_surface(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
++static HRESULT cpu_blit_blit_surface(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
+         struct wined3d_surface *src_surface, const RECT *src_rect,
+         struct wined3d_surface *dst_surface, const RECT *dst_rect,
+         const struct wined3d_color_key *color_key)
+ {
+-    /* FIXME: Remove error returns from surface_blt_cpu. */
+     ERR("Blit method not implemented by cpu_blit.\n");
++    return WINED3DERR_INVALIDCALL;
+ }
+ 
+ const struct blit_shader cpu_blit =  {
+@@ -6068,7 +6097,9 @@
+             }
+             else if (dst_swapchain && dst_swapchain->back_buffers
+                     && dst_surface->container == dst_swapchain->front_buffer
+-                    && src_surface->container == dst_swapchain->back_buffers[0])
++                    && src_surface->container == dst_swapchain->back_buffers[0]
++                    && !src_rect.left && !src_rect.top && surface_is_full_rect(src_surface, &src_rect)
++                    && !dst_rect.left && !dst_rect.top && surface_is_full_rect(dst_surface, &dst_rect))
+             {
+                 /* Use present for back -> front blits. The idea behind this is
+                  * that present is potentially faster than a blit, in particular
+@@ -6113,8 +6144,8 @@
+                     &dst_rect, dg_surface_blit_usage(dst_surface), dst_surface->resource.pool, dst_surface->resource.format);
+             if (blitter)
+             {
+-                blitter->blit_surface(device, blit_op, filter, src_surface, &src_rect, dst_surface, &dst_rect, color_key);
+-                return WINED3D_OK;
++                return blitter->blit_surface(device, blit_op, filter,
++                        src_surface, &src_rect, dst_surface, &dst_rect, color_key);
+             }
+         }
+     }
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1399,7 +1399,7 @@
+             const RECT *dst_rect, const struct wined3d_color *color);
+     HRESULT (*depth_fill)(struct wined3d_device *device,
+             struct wined3d_surface *surface, const RECT *rect, float depth);
+-    void (*blit_surface)(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
++    HRESULT (*blit_surface)(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
+             struct wined3d_surface *src_surface, const RECT *src_rect,
+             struct wined3d_surface *dst_surface, const RECT *dst_rect,
+             const struct wined3d_color_key *color_key);
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -7854,18 +7854,25 @@
+     }
+ }
+ 
+-static void arbfp_blit_surface(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
++static HRESULT arbfp_blit_surface(struct wined3d_device *device, enum wined3d_blit_op op, DWORD filter,
+         struct wined3d_surface *src_surface, const RECT *src_rect_in,
+         struct wined3d_surface *dst_surface, const RECT *dst_rect_in,
+         const struct wined3d_color_key *color_key)
+ {
+     struct wined3d_context *context;
++    HRESULT hr;
+     RECT src_rect = *src_rect_in;
+     RECT dst_rect = *dst_rect_in;
+     struct wined3d_color_key alpha_test_key;
+ 
+     /* Activate the destination context, set it up for blitting */
+     context = context_acquire(device, dst_surface);
++    if (!context || !context->valid || context_get_current() != context)
++    {
++        if (context)
++            context_release(context);
++        return WINED3DERR_INVALIDCALL;
++    }
+ 
+     /* Now load the surface */
+     if (wined3d_settings.offscreen_rendering_mode != ORM_FBO
+@@ -7886,6 +7893,17 @@
+     else
+         wined3d_texture_load(src_surface->container, context, FALSE);
+ 
++    if (color_key || dst_rect.left || dst_rect.top
++            || dst_rect.right != dst_surface->resource.width
++            || dst_rect.bottom != dst_surface->resource.height)
++    {
++        if (FAILED(hr = surface_load_location(dst_surface, context,
++                dst_surface->container->resource.draw_binding)))
++        {
++            context_release(context);
++            return hr;
++        }
++    }
+     context_apply_blit_state(context, device);
+ 
+     if (!wined3d_resource_is_offscreen(&dst_surface->container->resource))
+@@ -7918,6 +7936,7 @@
+ 
+     surface_validate_location(dst_surface, dst_surface->container->resource.draw_binding);
+     surface_invalidate_location(dst_surface, ~dst_surface->container->resource.draw_binding);
++    return WINED3D_OK;
+ }
+ 
+ static HRESULT arbfp_blit_color_fill(struct wined3d_device *device, struct wined3d_surface *dst_surface,

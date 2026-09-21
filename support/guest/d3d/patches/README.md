@@ -217,3 +217,58 @@ without issuing GL work or changing authoritative storage. Downloads remain
 available when only an upload operation is absent. The prepared-source test
 checks pointer failures, complete preflight coverage, and agreement with the
 private provider's export definition; its implementations share the ICD helpers.
+
+
+`0024-primary-gdi-coherence.patch` reads accelerated primaries from the actual
+GDI desktop instead of treating a live swapchain as proof that its private GL
+image is current. Partial primary publication seeds the native front from that
+desktop; keyed primary writes also refresh pixels inside the destination before
+applying the key. Full replacements retain their fast path. FFP blits load the
+source before the destination (which can share a physical backbuffer), preserve
+the destination for partial/keyed writes, and propagate transfer failures before
+invalidating CPU storage. Back-to-front Present applies only to complete positive
+rectangles. ReleaseDC flushes this thread's GDI batch before accessing DIB bits,
+retaining the DC and its authoritative image if flushing or copying fails.
+
+`test_frontbuffer_coherence.py` executes the prepared primary and FFP helpers
+under ASan/UBSan with independent desktop, logical primary and native front
+storage. Exact pixels cover partial publication, keyed holes, whole copies and
+failed transfers. `test_map_dc_failures.py` includes delayed GDI writes and flush
+failure/retry. These source checks do not establish Golf acceptance; the public
+installed fullscreen probe and game lifecycle remain required.
+
+`0025-fullscreen-mode-handoff.patch` keeps windowed swapchains out of fullscreen
+activation handling: losing focus must not restore the desktop mode or minimize
+and resize a window that never owned fullscreen state. Explicit display-mode
+requests always reach native `CDS_FULLSCREEN`, including a game's request for
+the launcher's existing resolution. Equal dimensions alone do not establish
+native process ownership. Wine's [native user32 regression](https://list.winehq.org/hyperkitty/list/wine-gitlab@list.winehq.org/thread/MWHNDHCGDELZ2O6UF4SOXBMYI2MHOT6N/)
+checks two processes requesting the same mode: exiting the earlier caller leaves
+the later caller's mode active. Redundant restoration still avoids a native call
+and updates the adapter's reported format. Native failures retain the prior format
+and refresh-rate fallback remains available.
+
+`test_fullscreen_activation.py` exercises the prepared activation and display-mode
+functions, including windowed no-ops, fullscreen focus changes, same-mode native
+ownership requests and failure paths. Launcher-to-game acceptance still requires
+a disposable Windows guest; these source tests do not establish cross-process
+message ordering or native process-exit restoration by themselves.
+
+
+`0026-primary-surface-loss.patch` keeps DirectDraw primary loss visible after an
+exclusive application relinquishes scanout or receives a display-mode change.
+Window callbacks cannot take the Wine mutex, so an atomic primary-loss epoch
+records this transition without walking live surfaces. IsLost, Lock, GetDC,
+Blt/BltFast, Flip and pending primary publication reject the lost primary until
+Restore. Restore requires exclusive availability and matching display dimensions
+and format, restores implicit primary flip buffers together, and retains loss on
+failure or a concurrent mode change. RestoreAllSurfaces propagates restore errors.
+Windowed focus changes alone do not mark storage lost. System-memory surfaces
+and unrelated video textures keep their contents and existing Wine loss state.
+
+This models lost scanout ownership, not blanket loss of native GL allocations:
+those remain retained across ordinary display-mode changes. The API contract is
+[IDirectDrawSurface7::Restore](https://learn.microsoft.com/en-us/windows/win32/api/ddraw/nf-ddraw-idirectdrawsurface7-restore).
+`test_primary_loss.py` executes prepared callbacks, IsLost and Restore under
+ASan/UBSan; public entrypoint ordering is checked alongside the existing pixel
+coherence regressions. Actual game focus recovery remains an installed test.

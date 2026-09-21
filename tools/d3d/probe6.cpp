@@ -63,6 +63,7 @@ static BOOL HR(HRESULT result, const char *stage) {
 #ifdef DG_CAPABILITY_D3D
 #include "indexed-probe.inc"
 #include "depth-probe.inc"
+#include "fullscreen-probe.inc"
 #endif
 typedef HRESULT(WINAPI *CreateDraw)(GUID *, IDirectDraw **, IUnknown *);
 struct LegacyEnumeration {
@@ -712,6 +713,10 @@ static void Run(void) {
         !Check(GetClientRect(window, &client) && client.right == 320 && client.bottom == 240,
                "FAIL drawable size", 0))
         return;
+#ifdef DG_CAPABILITY_D3D
+    if (!FullscreenProbe())
+        return;
+#endif
     if (!LegacySystemMemoryClearProbe(create, window))
         return;
     if (!HR(IDirectDraw4_SetCooperativeLevel(draw, window, DDSCL_NORMAL), "FAIL cooperative level"))

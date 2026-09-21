@@ -118,6 +118,20 @@ and rasterization comparisons need stated tolerances.
 
 Golf acceptance requires a visible animated golfer and a completed shot.
 Terrain/HUD rendering, a triangle, or a successful installer alone is insufficient.
+The Win2000 regression also starts at **Quick Start**, when the launcher hands
+off to the course process: the initial course must retain its requested display
+mode without an Alt+Tab workaround. Open and close menus, click and drag the shot
+control, and switch away and back; UI and golfer pixels must survive without
+hovering to repaint them. A correctly sized launcher menu does not cover this
+handoff. Equal-sized fullscreen mode requests still need the native ownership
+call, and windowed swapchains must not restore a fullscreen display mode.
+
+`capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
+It compares exact RGB565 pixels through primary Lock, GetDC, source blits,
+batched GDI writes followed by ReleaseDC, and partial/keyed primary blits over
+changing GDI backgrounds. This tests destination preservation at the installed
+API boundary; the native compositor's clipped-copy tests alone cannot establish
+that Wine supplies the correct untouched pixels when publishing a whole window.
 Glide, execute buffers, D3D7/8/9 fixed-function behavior, resource pressure and
 lifecycle cases still need the expanded installed suite. Live GPU snapshot
 restoration remains unsupported.

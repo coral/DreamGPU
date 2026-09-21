@@ -187,6 +187,26 @@
     "probe-failure-evidence": {
       "scope": "source",
       "path": "tools/benchmark/test_probe_failure.py"
+    },
+    "fullscreen-probe": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fullscreen_probe.py"
+    },
+    "guest-fullscreen": {
+      "scope": "installed-api",
+      "path": "tools/d3d/fullscreen-probe.inc"
+    },
+    "frontbuffer-coherence": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_frontbuffer_coherence.py"
+    },
+    "fullscreen-activation": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fullscreen_activation.py"
+    },
+    "primary-loss": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_primary_loss.py"
     }
   },
   "contracts": [
@@ -245,7 +265,9 @@
       "implementation": "implemented",
       "tests": [
         "map",
-        "readback"
+        "readback",
+        "fullscreen-probe",
+        "guest-fullscreen"
       ],
       "remaining": "Prepared Wine source verifies rectangle/slice bounds before pointer publication, transfer failures and retry; installed API chain and all copy callsites remain unverified."
     },
@@ -298,9 +320,11 @@
       "advertised": "unverified",
       "implementation": "implemented",
       "tests": [
-        "map"
+        "map",
+        "fullscreen-probe",
+        "guest-fullscreen"
       ],
-      "remaining": "Installed API GDI overlay and subsequent GPU draw remain unverified."
+      "remaining": "Prepared source covers delayed GDI batch writes and flush failure/retry; installed API GDI overlay and subsequent GPU draw remain unverified."
     },
     {
       "id": "format.p8",
@@ -952,9 +976,10 @@
       "implementation": "partial",
       "tests": [
         "context",
-        "gl-frontend"
+        "gl-frontend",
+        "fullscreen-activation"
       ],
-      "remaining": "Recovery candidate is not live-verified; distinct lost-device contracts and fullscreen ownership remain open."
+      "remaining": "Prepared source verifies windowed activation leaves global mode alone, explicit same-mode fullscreen requests reach the native ownership call, fullscreen Alt+Tab and mode-setting failures preserve state. Both historical defects fail mutation controls. Installed launcher/game handoff, broader recovery and distinct lost-device contracts remain open."
     },
     {
       "id": "gdi.coherence",
@@ -967,12 +992,16 @@
       "pool": "system/default",
       "mandatory": true,
       "advertised": "unverified",
-      "implementation": "unverified",
+      "implementation": "partial",
       "tests": [
         "map",
-        "native"
+        "native",
+        "fullscreen-probe",
+        "guest-fullscreen",
+        "frontbuffer-coherence",
+        "primary-loss"
       ],
-      "remaining": "GetDC failure handling is implemented; complete installed mixed-rendering chain remains open."
+      "remaining": "Prepared-source checks cover GDI completion, primary read/write preservation, and persistent primary loss/restoration across exclusive focus and mode changes. Installed Golf focus/modal recovery remains unverified."
     },
     {
       "id": "display.modes",
@@ -987,7 +1016,10 @@
       "advertised": "unverified",
       "implementation": "unverified",
       "tests": [
-        "native"
+        "native",
+        "fullscreen-probe",
+        "guest-fullscreen",
+        "fullscreen-activation"
       ],
       "remaining": "Capture mode enumeration and verify exposed gamma/vblank semantics across hosts/OSes."
     },

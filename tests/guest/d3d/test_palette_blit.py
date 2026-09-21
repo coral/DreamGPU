@@ -19,7 +19,11 @@ PREAMBLE = r'''
 #include <assert.h>
 #include <stddef.h>
 #include <stdio.h>
-typedef int BOOL;
+typedef int BOOL; typedef int HRESULT;
+#define FAILED(x) ((x)<0)
+#define WINED3DERR_INVALIDCALL -1
+#define WINED3D_OK 0
+#define WINED3D_LOCATION_TEXTURE_RGB 1
 #define FALSE 0
 #define TRUE 1
 #define WINED3DFMT_P8_UINT 1
@@ -31,7 +35,7 @@ struct rect { int left, top, right, bottom; };
 typedef struct rect RECT;
 enum wined3d_texture_filter_type { POINT };
 struct wined3d_format { unsigned id; };
-struct wined3d_resource { const struct wined3d_format *format; };
+struct wined3d_resource { const struct wined3d_format *format; unsigned draw_binding; };
 struct wined3d_surface;
 struct wined3d_texture;
 struct wined3d_swapchain { struct wined3d_texture *front_buffer; };
@@ -54,13 +58,18 @@ struct wined3d_context {
     struct wined3d_surface *current_rt;
     const struct wined3d_gl_info *gl_info;
     void *win_handle;
+    BOOL valid;
 };
 struct blitter {
-    void (*set_shader)(void *, struct wined3d_context *, struct wined3d_surface *, void *);
+    HRESULT (*set_shader)(void *, struct wined3d_context *, struct wined3d_surface *, void *);
     void (*unset_shader)(const struct wined3d_gl_info *);
 };
 struct wined3d_device { const struct blitter *blitter; void *blit_priv; };
 static struct { int strict_draw_ordering; } wined3d_settings;
+static struct wined3d_context *current;
+static struct wined3d_context *context_get_current(void){return current;}
+static BOOL surface_is_full_rect(struct wined3d_surface*s,const RECT*r){assert(s&&r);return 1;}
+static HRESULT surface_load_location(struct wined3d_surface*s,struct wined3d_context*c,unsigned loc){assert(s&&c);(void)loc;return 0;}
 static unsigned alpha_calls, enabled, disabled, draws, loads, converted_on_load;
 static float alpha_reference;
 static void enable(unsigned cap) { assert(cap == GL_ALPHA_TEST); ++enabled; }
@@ -71,8 +80,8 @@ static void alpha(unsigned op, float reference)
     ++alpha_calls; alpha_reference = reference;
 }
 static void flush(void) { assert(0); }
-static void shader(void *p, struct wined3d_context *c, struct wined3d_surface *s, void *d)
-{ (void)p; assert(c && s && !d); }
+static HRESULT shader(void *p, struct wined3d_context *c, struct wined3d_surface *s, void *d)
+{ (void)p; assert(c && s && !d); return 0; }
 static void unshader(const struct wined3d_gl_info *g) { assert(g); }
 static struct wined3d_context *context_acquire(const struct wined3d_device *d, struct wined3d_surface *s)
 { (void)d; (void)s; assert(0); return NULL; }
@@ -94,9 +103,10 @@ int main(void)
 {
     struct wined3d_format format = {WINED3DFMT_P8_UINT};
     struct wined3d_texture texture = {0}, target = {0};
-    struct wined3d_surface source = {{&format}, &texture}, destination = {{&format}, &target};
+    struct wined3d_surface source = {{&format,0}, &texture}, destination = {{&format,0}, &target};
     const struct wined3d_gl_info gl = {{{enable, disable, alpha, flush}}};
-    struct wined3d_context context = {&destination, &gl, NULL};
+    struct wined3d_context context = {&destination, &gl, NULL, TRUE};
+    current = &context;
     const struct blitter blit = {shader, unshader};
     const struct wined3d_device device = {&blit, NULL};
     const RECT rect = {0, 0, 8, 8};
@@ -136,7 +146,7 @@ with tempfile.TemporaryDirectory(prefix="dreamgpu-palette-blit-") as directory:
         shutil.copyfile(ROOT / "vendor/wine9x" / name, destination)
     patches.apply(work, MANIFEST)
     source = (work / "wined3d/surface.c").read_text()
-    start = source.index("static void surface_blt_to_drawable(")
+    start = source.index("static HRESULT surface_blt_to_drawable(")
     function = source[start:source.index("\n}", start) + 2]
     test = work / "test.c"
     test.write_text(PREAMBLE + function + TEST)

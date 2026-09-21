@@ -1,0 +1,254 @@
+--- a/ddraw/surface.c
++++ b/ddraw/surface.c
+@@ -35,6 +35,18 @@
+ static inline struct ddraw_surface *impl_from_IDirectDrawGammaControl(IDirectDrawGammaControl *iface)
+ {
+     return CONTAINING_RECORD(iface, struct ddraw_surface, IDirectDrawGammaControl_iface);
++}
++
++/* Scanout ownership is lost independently of Wine's retained texture storage.
++ * The epoch remains lost after focus returns until the application restores it. */
++static BOOL ddraw_surface_is_lost(const struct ddraw_surface *surface)
++{
++    return (surface->primary_chain
++            && (surface->restored_primary_epoch != InterlockedCompareExchange(
++            &surface->ddraw->primary_loss_epoch, 0, 0)
++            || ((surface->ddraw->cooperative_level & DDSCL_EXCLUSIVE)
++            && surface->ddraw->device_state != DDRAW_DEVICE_STATE_OK)))
++            || wined3d_surface_is_lost(surface->wined3d_surface) == WINED3DERR_DEVICELOST;
+ }
+ 
+ /* This is slow, of course. Also, in case of locks, we can't prevent other
+@@ -74,6 +86,8 @@
+ 
+     if (!surface)
+         return E_FAIL;
++    if (ddraw_surface_is_lost(surface))
++        return DDERR_SURFACELOST;
+     x = rect ? rect->left : 0;
+     y = rect ? rect->top : 0;
+     w = rect ? rect->right - rect->left : surface->surface_desc.dwWidth;
+@@ -959,6 +973,12 @@
+ 
+     /* This->surface_desc.dwWidth and dwHeight are changeable, thus lock */
+     wined3d_mutex_lock();
++
++    if (ddraw_surface_is_lost(This))
++    {
++        wined3d_mutex_unlock();
++        return DDERR_SURFACELOST;
++    }
+ 
+     /* Should I check for the handle to be NULL?
+      *
+@@ -1558,6 +1578,12 @@
+ 
+     wined3d_mutex_lock();
+ 
++    if (ddraw_surface_is_lost(dst_surface) || (src_surface && ddraw_surface_is_lost(src_surface)))
++    {
++        wined3d_mutex_unlock();
++        return DDERR_SURFACELOST;
++    }
++
+     if (Flags & (DDBLT_COLORFILL | DDBLT_DEPTHFILL))
+     {
+         if (Flags & DDBLT_ROP)
+@@ -2121,6 +2147,12 @@
+         return DDERR_INVALIDPARAMS;
+ 
+     wined3d_mutex_lock();
++
++    if (ddraw_surface_is_lost(surface))
++    {
++        wined3d_mutex_unlock();
++        return DDERR_SURFACELOST;
++    }
+     if (surface->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE)
+         hr = ddraw_surface_update_frontbuffer(surface, NULL, TRUE);
+     if (SUCCEEDED(hr))
+@@ -3515,7 +3547,7 @@
+     TRACE("iface %p.\n", iface);
+ 
+     wined3d_mutex_lock();
+-    hr = wined3d_surface_is_lost(surface->wined3d_surface);
++    hr = ddraw_surface_is_lost(surface) ? WINED3DERR_DEVICELOST : WINED3D_OK;
+     wined3d_mutex_unlock();
+ 
+     switch(hr)
+@@ -3575,17 +3607,59 @@
+  *  See IWineD3DSurface::Restore for more details
+  *
+  *****************************************************************************/
++static HRESULT ddraw_surface_restore(struct ddraw_surface *surface)
++{
++    struct ddraw_surface *current;
++    struct wined3d_display_mode mode;
++    LONG epoch;
++    HRESULT hr;
++
++    if (!surface->primary_chain)
++        return wined3d_surface_restore(surface->wined3d_surface);
++    if (!surface->is_complex_root)
++        return DDERR_IMPLICITLYCREATED;
++    if ((surface->ddraw->cooperative_level & DDSCL_EXCLUSIVE)
++            && surface->ddraw->device_state != DDRAW_DEVICE_STATE_OK)
++        return DDERR_NOEXCLUSIVEMODE;
++
++    epoch = InterlockedCompareExchange(&surface->ddraw->primary_loss_epoch, 0, 0);
++    if (FAILED(hr = wined3d_get_adapter_display_mode(surface->ddraw->wined3d,
++            WINED3DADAPTER_DEFAULT, &mode, NULL)))
++        return hr;
++    if (mode.width != surface->surface_desc.dwWidth || mode.height != surface->surface_desc.dwHeight
++            || mode.format_id != wined3dformat_from_ddrawformat(&surface->surface_desc.u4.ddpfPixelFormat))
++        return DDERR_WRONGMODE;
++
++    current = surface;
++    do
++    {
++        if (FAILED(hr = wined3d_surface_restore(current->wined3d_surface)))
++            return hr;
++        current = current->complex_array[0];
++    } while (current && current != surface);
++    if (epoch != InterlockedCompareExchange(&surface->ddraw->primary_loss_epoch, 0, 0))
++        return DDERR_WRONGMODE;
++
++    /* Implicit flip buffers form a ring. Explicit attachments do not belong
++     * to this restoration and retain their own loss state. */
++    current = surface;
++    do
++    {
++        current->restored_primary_epoch = epoch;
++        current = current->complex_array[0];
++    } while (current && current != surface);
++    return DD_OK;
++}
++
+ static HRESULT WINAPI ddraw_surface7_Restore(IDirectDrawSurface7 *iface)
+ {
+     struct ddraw_surface *surface = impl_from_IDirectDrawSurface7(iface);
+     HRESULT hr;
+ 
+     TRACE("iface %p.\n", iface);
+-
+     wined3d_mutex_lock();
+-    hr = wined3d_surface_restore(surface->wined3d_surface);
++    hr = ddraw_surface_restore(surface);
+     wined3d_mutex_unlock();
+-
+     return hr;
+ }
+ 
+@@ -4159,6 +4233,12 @@
+         flags |= WINEDDBLT_DONOTWAIT;
+ 
+     wined3d_mutex_lock();
++
++    if (ddraw_surface_is_lost(This) || (src && ddraw_surface_is_lost(src)))
++    {
++        wined3d_mutex_unlock();
++        return DDERR_SURFACELOST;
++    }
+     if (This->clipper)
+     {
+         wined3d_mutex_unlock();
+@@ -6221,6 +6301,7 @@
+             resource = wined3d_texture_get_sub_resource(wined3d_texture, 0);
+             last = wined3d_resource_get_parent(resource);
+             last->wined3d_texture = wined3d_texture;
++            last->primary_chain = root->primary_chain;
+             texture->root = last;
+ 
+             if (desc->dwFlags & DDSD_CKDESTOVERLAY)
+@@ -6277,6 +6358,8 @@
+     surface->iface_count = 1;
+     surface->version = version;
+     surface->ddraw = ddraw;
++    surface->primary_chain = !!(texture->surface_desc.ddsCaps.dwCaps & DDSCAPS_PRIMARYSURFACE);
++    surface->restored_primary_epoch = InterlockedCompareExchange(&ddraw->primary_loss_epoch, 0, 0);
+ 
+     if (version == 7)
+     {
+--- a/ddraw/ddraw.c
++++ b/ddraw/ddraw.c
+@@ -2716,18 +2716,28 @@
+ 
+ static HRESULT CALLBACK restore_callback(IDirectDrawSurface7 *surface, DDSURFACEDESC2 *desc, void *context)
+ {
+-    IDirectDrawSurface_Restore(surface);
+-    IDirectDrawSurface_Release(surface);
+-
++    HRESULT hr = IDirectDrawSurface7_Restore(surface);
++    IDirectDrawSurface7_Release(surface);
++
++    /* Implicit buffers are restored by their root, never independently. */
++    if (hr == DDERR_IMPLICITLYCREATED)
++        return DDENUMRET_OK;
++    if (FAILED(hr))
++    {
++        *(HRESULT *)context = hr;
++        return DDENUMRET_CANCEL;
++    }
+     return DDENUMRET_OK;
+ }
+ 
+ static HRESULT WINAPI ddraw7_RestoreAllSurfaces(IDirectDraw7 *iface)
+ {
++    HRESULT hr, restore_hr = DD_OK;
++
+     TRACE("iface %p.\n", iface);
+-
+-    return IDirectDraw7_EnumSurfaces(iface, DDENUMSURFACES_ALL | DDENUMSURFACES_DOESEXIST,
+-            NULL, NULL, restore_callback);
++    hr = IDirectDraw7_EnumSurfaces(iface, DDENUMSURFACES_ALL | DDENUMSURFACES_DOESEXIST,
++            NULL, &restore_hr, restore_callback);
++    return FAILED(hr) ? hr : restore_hr;
+ }
+ 
+ static HRESULT WINAPI ddraw4_RestoreAllSurfaces(IDirectDraw4 *iface)
+@@ -4760,6 +4770,11 @@
+ 
+     TRACE("device_parent %p.\n", device_parent);
+ 
++    /* WM_DISPLAYCHANGE invalidates scanout, not retained offscreen textures.
++     * Record the loss without traversing the mutex-protected surface list. */
++    if (ddraw->primary)
++        InterlockedIncrement(&ddraw->primary_loss_epoch);
++
+     if (!(ddraw->cooperative_level & DDSCL_EXCLUSIVE) || !ddraw->swapchain_window)
+     {
+         TRACE("Nothing to resize.\n");
+@@ -4802,7 +4817,12 @@
+     TRACE("device_parent %p, activate %#x.\n", device_parent, activate);
+ 
+     if (!activate)
+-        InterlockedCompareExchange(&ddraw->device_state, DDRAW_DEVICE_STATE_LOST, DDRAW_DEVICE_STATE_OK);
++    {
++        if (InterlockedCompareExchange(&ddraw->device_state, DDRAW_DEVICE_STATE_LOST,
++                DDRAW_DEVICE_STATE_OK) == DDRAW_DEVICE_STATE_OK
++                && (ddraw->cooperative_level & DDSCL_EXCLUSIVE))
++            InterlockedIncrement(&ddraw->primary_loss_epoch);
++    }
+     else
+         InterlockedCompareExchange(&ddraw->device_state, DDRAW_DEVICE_STATE_OK, DDRAW_DEVICE_STATE_LOST);
+ }
+--- a/ddraw/ddraw_private.h
++++ b/ddraw/ddraw_private.h
+@@ -88,6 +88,8 @@
+     struct wined3d_device *wined3d_device;
+     DWORD flags;
+     LONG device_state;
++    /* Atomic: window callbacks cannot acquire the wined3d mutex. */
++    LONG primary_loss_epoch;
+ 
+     struct ddraw_surface *primary;
+     RECT primary_lock;
+@@ -181,6 +183,8 @@
+      * but no pointer to prevent temptations to traverse it in the wrong direction.
+      */
+     BOOL                    is_complex_root;
++    BOOL                    primary_chain;
++    LONG                    restored_primary_epoch;
+ 
+     /* Surface description, for GetAttachedSurface */
+     DDSURFACEDESC2          surface_desc;

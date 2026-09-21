@@ -31,6 +31,7 @@ typedef int HRESULT, BOOL; typedef void *HDC;
 #define WINED3D_OK 0
 #define WINED3DERR_INVALIDCALL -1
 #define E_OUTOFMEMORY -2
+#define E_FAIL -5
 #define WINEDDERR_DCALREADYCREATED -3
 #define WINEDDERR_NODC -4
 #define WINED3DFMT_FLAG_BLOCKS 1
@@ -74,6 +75,9 @@ static unsigned acquire_mode,acquires,releases,loads,invalidations,validations,c
 static HRESULT load_error,dib_error;
 static BOOL pbo_fail;
 static BYTE cpu[64],dib[64],user[64];
+static BOOL flush_fail, pending_gdi;
+static unsigned flushes;
+static BOOL GdiFlush(void) { ++flushes;if(flush_fail)return 0;if(pending_gdi){dib[19]=0x93;pending_gdi=0;}return 1; }
 static struct wined3d_context *context_acquire(struct wined3d_device *d,void *target)
 { assert(d&&!target);++acquires;ctx.valid=acquire_mode!=2;tls=acquire_mode==3?NULL:&ctx;return acquire_mode==1?NULL:&ctx; }
 static void context_release(struct wined3d_context *c) { assert(c==&ctx);++releases;tls=NULL; }
@@ -118,6 +122,7 @@ static void reset(void)
  surface.user_memory=user;surface.dib.bitmap_data=dib;surface.pbo=7;
  map=(struct wined3d_map_desc){99,98,(void *)(uintptr_t)0x1234};
  acquire_mode=acquires=releases=loads=invalidations=validations=client_releases=gl_calls=0;
+ flush_fail=pending_gdi=0;flushes=0;
  load_error=dib_error=0;pbo_fail=0;device.d3d_initialized=1;
  memset(cpu,0xaa,64);memset(dib,0xbb,64);memset(user,0xcc,64);
 }
@@ -200,6 +205,14 @@ int main(void)
  assert(!surface.resource.map_count&&!(surface.flags&SFLAG_DCINUSE));
  assert(surface.locations==WINED3D_LOCATION_USER_MEMORY&&user[19]==0x37&&user[18]==0x75);
  assert(wined3d_surface_releasedc(&surface,dc)==WINEDDERR_NODC);
+ // GDI batches must finish before DIB bytes are copied to user memory.
+ reset();surface.resource.map_binding=WINED3D_LOCATION_USER_MEMORY;
+ assert(!wined3d_surface_getdc(&surface,&dc));pending_gdi=1;flush_fail=1;
+ assert(wined3d_surface_releasedc(&surface,dc)==E_FAIL&&flushes==1);
+ assert(surface.resource.map_count==1&&(surface.flags&SFLAG_DCINUSE));
+ assert(surface.locations==WINED3D_LOCATION_DIB&&user[19]==0xcc&&pending_gdi);
+ flush_fail=0;assert(!wined3d_surface_releasedc(&surface,dc));
+ assert(flushes==2&&!pending_gdi&&user[19]==0x93&&user[18]==0x75);
  puts("PASS prepared Lock/GetDC/ReleaseDC: transfer/context/allocation failure, authority, balanced lifetime, CPU copies, offsets, read-only/discard and retry");
 }
 '''

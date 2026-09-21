@@ -206,6 +206,109 @@ fn qemu_rgb565_primary_seed_gl_blit_patch_readback_and_mode_return() {
         let frame = cpu_frame(&mut cpu, Some(&server), width, height);
         assert_eq!((frame.width, frame.height), (width, height));
         drop(frame);
+
+        // GDI can modify the authoritative primary after RETURN. A subsequent
+        // mixed epoch must seed those exact bytes before applying clipped GPU
+        // damage; neither the old native image nor the old canvas may erase
+        // the software overlay or the previous CPU patch outside that damage.
+        let unit = (bpp / 8) as usize;
+        let overlay_at = 12 * stride as usize + 12 * unit;
+        let overlay = if bpp == 16 { "e0ff" } else { "00ffffff" };
+        qemu.command(&format!(
+            "write {:#x} {} 0x{}",
+            0xe0000000u32 + overlay_at as u32,
+            unit,
+            overlay
+        ));
+        seq += 1;
+        qemu.batch(seq, &[(9, command(1, bpp, width, height, 0, stride))]);
+        drive_desktop(
+            &mut qemu,
+            seq,
+            1,
+            true,
+            &server,
+            &mut canvas,
+            &device,
+            &queue,
+            &ready,
+        );
+        seq += 1;
+        // Retain the same front image without exchanging the undefined back.
+        qemu.batch_for(seq, 1, id, id, 2 | 4, &[(7, vec![])]);
+        qemu.await_completion(seq);
+        let mut partial = command(6, bpp, 2, 2, qemu.read(0x1140), 0);
+        partial[1] = 1;
+        partial[2] = 1;
+        partial[3] = 1;
+        for (word, reg) in [(12, 0x1144), (13, 0x1148), (14, 0x114c), (15, 0x1150)] {
+            partial[word] = qemu.read(reg);
+        }
+        seq += 1;
+        qemu.batch_for(
+            seq,
+            1,
+            id,
+            id,
+            0,
+            &[(9, partial), (9, command(7, bpp, width, height, 0, stride))],
+        );
+        drive_desktop(
+            &mut qemu,
+            seq,
+            3,
+            true,
+            &server,
+            &mut canvas,
+            &device,
+            &queue,
+            &ready,
+        );
+        let mut expected = pixels;
+        let yellow = if bpp == 16 {
+            vec![0xe0, 0xff]
+        } else {
+            vec![0, 255, 255, 255]
+        };
+        let green = if bpp == 16 {
+            vec![0xe0, 0x07]
+        } else {
+            vec![0, 255, 0, 255]
+        };
+        expected[overlay_at..overlay_at + unit].copy_from_slice(&yellow);
+        for y in 1..3 {
+            for x in 1..3 {
+                let at = y * stride as usize + x * unit;
+                expected[at..at + unit].copy_from_slice(&green);
+            }
+        }
+        let reply = qemu.command(&format!("read 0xe0000000 {}", stride * height + 16));
+        let hex = reply
+            .split_whitespace()
+            .nth(1)
+            .unwrap()
+            .trim_start_matches("0x");
+        let actual: Vec<u8> = (0..hex.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&hex[i..i + 2], 16).unwrap())
+            .collect();
+        assert_eq!(
+            actual, expected,
+            "CPU overlay/GPU damage preservation at {bpp}bpp"
+        );
+        seq += 1;
+        qemu.batch(seq, &[(9, command(3, bpp, width, height, 0, stride))]);
+        drive_desktop(
+            &mut qemu,
+            seq,
+            4,
+            false,
+            &server,
+            &mut canvas,
+            &device,
+            &queue,
+            &ready,
+        );
     }
     drop(qemu);
     drop(server);

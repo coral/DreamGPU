@@ -1,0 +1,45 @@
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -4512,12 +4512,15 @@
+         new_format_id = pixelformat_for_depth(new_mode.dmBitsPerPel);
+     }
+ 
+-    /* Only change the mode if necessary. */
++    /* An explicit fullscreen request also transfers native process ownership.
++     * A game may request exactly the launcher's current mode; suppressing the
++     * CDS_FULLSCREEN call leaves the launcher owning that mode, so its exit
++     * can restore the desktop behind the game. Only restoration is redundant. */
+     if (!EnumDisplaySettingsA95(adapter->DeviceName, ENUM_CURRENT_SETTINGS, &current_mode))
+     {
+         ERR("Failed to get current display mode.\n");
+     }
+-    else if (current_mode.dmPelsWidth == new_mode.dmPelsWidth
++    else if (!mode && current_mode.dmPelsWidth == new_mode.dmPelsWidth
+             && current_mode.dmPelsHeight == new_mode.dmPelsHeight
+             && current_mode.dmBitsPerPel == new_mode.dmBitsPerPel
+             && (current_mode.dmDisplayFrequency == new_mode.dmDisplayFrequency
+@@ -4525,7 +4528,8 @@
+             && (DUMMYACCESS1(current_mode, u2, dmDisplayFlags) == DUMMYACCESS1(new_mode, u2, dmDisplayFlags)
+             || !(new_mode.dmFields & DM_DISPLAYFLAGS)))
+     {
+-        TRACE("Skipping redundant mode setting call.\n");
++        TRACE("Skipping redundant display restoration.\n");
++        adapter->screen_format = new_format_id;
+         return WINED3D_OK;
+     }
+ 
+--- a/wined3d/swapchain.c
++++ b/wined3d/swapchain.c
+@@ -1206,6 +1206,12 @@
+     struct wined3d_device *device = swapchain->device;
+     volatile BOOL filter_messages;
+ 
++    /* A windowed swapchain has no display-mode ownership. In particular, a
++     * launcher's windowed chain must not restore the desktop after its game
++     * has acquired a fullscreen mode. */
++    if (swapchain->desc.windowed)
++        return;
++
+     /* This code is not protected by the wined3d mutex, so it may run while
+      * wined3d_device_reset is active. Testing on Windows shows that changing
+      * focus during resets and resetting during focus change events causes
