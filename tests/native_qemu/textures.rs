@@ -935,12 +935,11 @@ fn qemu_texture_copies_vectors_and_homogeneous_vertices_preserve_pixels() {
     ] {
         sequence += 1;
         qemu.batch(sequence, &[call(0x15a, &args)]);
-        let deadline = Instant::now() + Duration::from_secs(5);
-        while qemu.read(0x1120) != sequence {
-            assert!(Instant::now() < deadline);
-            std::thread::sleep(Duration::from_millis(2));
-        }
-        assert_eq!(qemu.read(0x1124), 11); // DG_GL_ERROR_TEXTURE
+        qemu.await_completion(sequence);
+        assert_eq!(
+            words(&query(&mut qemu, &mut sequence, 0x2fc, &[]).1),
+            [0x501]
+        );
     }
     sequence += 1;
     qemu.batch_for(
@@ -1586,6 +1585,28 @@ fn qemu_gl_queries_return_bounded_guest_state_and_hide_host_objects() {
         ],
     );
     qemu.await_completion(sequence);
+    // Mandatory GL1.1 rasterization precision must report the native limit in
+    // every typed getter, rather than fail frontend capability capture.
+    let (kind, data) = query(&mut qemu, &mut sequence, 809, &[0x0d50]);
+    assert_eq!((kind, data.len()), (2, 4));
+    let subpixel = i32::from_le_bytes(data.try_into().unwrap());
+    assert!(subpixel >= 4);
+    let (kind, data) = query(&mut qemu, &mut sequence, 773, &[0x0d50]);
+    assert_eq!((kind, data.len()), (3, 4));
+    assert_eq!(
+        f32::from_le_bytes(data.try_into().unwrap()),
+        subpixel as f32
+    );
+    let (kind, data) = query(&mut qemu, &mut sequence, 763, &[0x0d50]);
+    assert_eq!((kind, data.len()), (4, 8));
+    assert_eq!(
+        f64::from_le_bytes(data.try_into().unwrap()),
+        subpixel as f64
+    );
+    let (kind, data) = query(&mut qemu, &mut sequence, 715, &[0x0d50]);
+    assert_eq!(kind, 1);
+    assert_eq!(data, [1]);
+    assert_eq!(words(&query(&mut qemu, &mut sequence, 0x2fc, &[]).1), [0]);
     let (kind, data) = query(&mut qemu, &mut sequence, 0x329, &[0x0ba2]);
     assert_eq!(kind, 2);
     assert_eq!(words(&data), [0, 0, 32, 32]);
@@ -2596,4 +2617,389 @@ fn qemu_compact_arrays_preserve_native_types_pixels_current_state_and_lists() {
     drop(qemu);
     drop(server);
     std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+#[ignore = "requires native GPU; typed upload precision, proxy isolation and empty redefinition"]
+fn qemu_texture_scalar_precision_proxy_and_redefinition() {
+    let (_, _, host) = native_gpu();
+    let dir = std::env::temp_dir().join(format!("dg-ts-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&dir).unwrap();
+    let socket = dir.join("g.sock");
+    let server = GpuServer::new(&socket, host).unwrap();
+    let mut q = Qemu::start(&dir, &socket);
+    let mut seq = 1;
+    q.batch(
+        seq,
+        &[
+            (1, vec![0]),
+            (3, vec![16, 16]),
+            (5, vec![]),
+            call(BIND_TEXTURE, &[TEXTURE_2D, 71]),
+        ],
+    );
+    q.await_completion(seq);
+    let submit = |q: &mut Qemu, seq: &mut u32, records: &[(u32, Vec<u32>)]| {
+        *seq += 1;
+        q.batch(*seq, records);
+        q.await_completion(*seq);
+    };
+    let values = [0x1234u16, 0x5678, 0x9abc, 0xffff];
+    let source = values
+        .iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>()
+        .repeat(4);
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_IMAGE_2D,
+            &[TEXTURE_2D, 0, 0x805b, 2, 2, 0, 0x1908, 0x1403],
+            &source,
+        )],
+    );
+    q.command("memset 0x100000 512 0xff");
+    let floats = query_capacity(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0x48000, 0], 64).1;
+    for (actual, expected) in words(&floats).into_iter().zip(values.repeat(4)) {
+        assert!((f32::from_bits(actual) - f32::from(expected) / 65535.).abs() < 2. / 65535.);
+    }
+    // Partial FLOAT replacement must preserve the other three high-precision texels.
+    let patch = [0.2f32, 0.3, 0.4, 0.5]
+        .into_iter()
+        .flat_map(|v| v.to_le_bytes())
+        .collect::<Vec<_>>();
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_SUB_IMAGE_2D,
+            &[TEXTURE_2D, 0, 1, 0, 1, 1, 0x1908, 0x1406],
+            &patch,
+        )],
+    );
+    let actual = words(&query_capacity(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0x48000, 0], 64).1);
+    for (i, value) in actual.into_iter().enumerate() {
+        let expected = if i / 4 == 1 {
+            [0.2, 0.3, 0.4, 0.5][i % 4]
+        } else {
+            f32::from(values[i % 4]) / 65535.
+        };
+        assert!((f32::from_bits(value) - expected).abs() < 2. / 65535.);
+    }
+    // Invalid subimages report GL errors without destroying the live context or contents.
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_SUB_IMAGE_2D,
+            &[TEXTURE_2D, 0, 2, 0, 1, 1, 0x1908, 0x1406],
+            &patch,
+        )],
+    );
+    assert_eq!(words(&query(&mut q, &mut seq, 0x2fc, &[]).1), [0x501]);
+    let before_proxy = query_capacity(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0x48000, 0], 64).1;
+    for (target, function) in [(0x8063, 0x8d3), (0x8064, TEX_IMAGE_2D)] {
+        for (width, expected) in [(16, 16), (4096, 0), (16, 16)] {
+            submit(
+                &mut q,
+                &mut seq,
+                &[data_call(
+                    function,
+                    &[
+                        target,
+                        0,
+                        0x805b,
+                        width,
+                        if target == 0x8063 { 1 } else { 16 },
+                        0,
+                        0x1908,
+                        0x1406,
+                    ],
+                    &[],
+                )],
+            );
+            assert_eq!(
+                words(&query(&mut q, &mut seq, 0x2fc, &[]).1),
+                [0],
+                "proxy {target:x} width {width}"
+            );
+            assert_eq!(
+                words(&query(&mut q, &mut seq, 0x416, &[target, 0, 0x1000]).1),
+                [expected],
+                "proxy {target:x} width {width}"
+            );
+            if expected == 0 {
+                for pname in [0x1001, 0x1003, 0x1005, 0x805c, 0x805d, 0x805e, 0x805f] {
+                    assert_eq!(
+                        words(&query(&mut q, &mut seq, 0x416, &[target, 0, pname]).1),
+                        [0],
+                        "failed proxy property {pname:x}"
+                    );
+                }
+            }
+        }
+    }
+    assert_eq!(
+        query_capacity(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0x48000, 0], 64).1,
+        before_proxy
+    );
+    // Proxy definitions execute while compiling and cannot overwrite later proxy state on replay.
+    query(&mut q, &mut seq, 1592, &[81, 0x1300, 0]);
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_IMAGE_2D,
+            &[0x8064, 0, 0x805b, 8, 8, 0, 0x1908, 0x1401],
+            &[],
+        )],
+    );
+    assert_eq!(
+        words(&query(&mut q, &mut seq, 0x416, &[0x8064, 0, 0x1000]).1),
+        [8]
+    );
+    query(&mut q, &mut seq, 539, &[0, 0, 0]);
+    submit(
+        &mut q,
+        &mut seq,
+        &[
+            data_call(
+                TEX_IMAGE_2D,
+                &[0x8064, 0, 0x805b, 4, 4, 0, 0x1908, 0x1401],
+                &[],
+            ),
+            call(146, &[81]),
+        ],
+    );
+    assert_eq!(
+        words(&query(&mut q, &mut seq, 0x416, &[0x8064, 0, 0x1000]).1),
+        [4]
+    );
+    for (w, h) in [(0, 2), (2, 0), (0, 0)] {
+        submit(
+            &mut q,
+            &mut seq,
+            &[data_call(
+                TEX_IMAGE_2D,
+                &[TEXTURE_2D, 0, 0x805b, w, h, 0, 0x1908, 0x1406],
+                &[],
+            )],
+        );
+        let native_width = words(&query(&mut q, &mut seq, 0x416, &[TEXTURE_2D, 0, 0x1000]).1)[0];
+        let native_height = words(&query(&mut q, &mut seq, 0x416, &[TEXTURE_2D, 0, 0x1001]).1)[0];
+        assert!(native_width <= w && native_height <= h);
+        assert_eq!(native_width * native_height, 0);
+        assert_eq!(words(&query(&mut q, &mut seq, 0x2fc, &[]).1), [0]);
+    }
+    // A subsequent definition and readback prove zero-sized redefinition did not poison ownership.
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_IMAGE_2D,
+            &[TEXTURE_2D, 0, 0x8058, 1, 1, 0, 0x1908, 0x1401],
+            &[7, 11, 19, 255],
+        )],
+    );
+    assert_eq!(
+        &query(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0, 0]).1[..4],
+        &[7, 11, 19, 255]
+    );
+    drop(q);
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires native GPU; full 2D border storage, sampling, partial updates and copies"]
+fn qemu_texture_2d_border_lifecycle() {
+    let (_, _, host) = native_gpu();
+    let dir = std::env::temp_dir().join(format!("dg-t2b-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&dir).unwrap();
+    let socket = dir.join("g.sock");
+    let server = GpuServer::new(&socket, host).unwrap();
+    let mut q = Qemu::start(&dir, &socket);
+    let mut seq = 1;
+    q.batch(
+        seq,
+        &[
+            (1, vec![0]),
+            (3, vec![16, 16]),
+            (5, vec![]),
+            call(BIND_TEXTURE, &[TEXTURE_2D, 71]),
+        ],
+    );
+    q.await_completion(seq);
+    let submit = |q: &mut Qemu, seq: &mut u32, records: &[(u32, Vec<u32>)]| {
+        *seq += 1;
+        q.batch(*seq, records);
+        q.await_completion(*seq);
+    };
+    let mut pixels = Vec::new();
+    for y in 0..4 {
+        for x in 0..4 {
+            pixels.extend_from_slice(if x == 0 || y == 0 || x == 3 || y == 3 {
+                &[0, 255, 0, 255]
+            } else {
+                &[255, 0, 0, 255]
+            });
+        }
+    }
+    submit(
+        &mut q,
+        &mut seq,
+        &[
+            call(TEX_PARAMETER_I, &[TEXTURE_2D, 0x2801, 0x2601]),
+            call(TEX_PARAMETER_I, &[TEXTURE_2D, 0x2800, 0x2601]),
+            call(TEX_PARAMETER_I, &[TEXTURE_2D, 0x2802, 0x2900]),
+            call(TEX_PARAMETER_I, &[TEXTURE_2D, 0x2803, 0x2900]),
+            data_call(
+                TEX_IMAGE_2D,
+                &[TEXTURE_2D, 0, 0x8058, 4, 4, 1, 0x1908, 0x1401],
+                &pixels,
+            ),
+        ],
+    );
+    assert_eq!(
+        words(&query(&mut q, &mut seq, 0x416, &[TEXTURE_2D, 0, 0x1000]).1),
+        [4]
+    );
+    assert_eq!(
+        words(&query(&mut q, &mut seq, 0x416, &[TEXTURE_2D, 0, 0x1001]).1),
+        [4]
+    );
+    assert_eq!(
+        words(&query(&mut q, &mut seq, 0x416, &[TEXTURE_2D, 0, 0x1005]).1),
+        [1]
+    );
+    assert_eq!(
+        &query(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0, 0]).1[..64],
+        &pixels
+    );
+    let mut records = vec![call(0x209, &[TEXTURE_2D]), call(0x01a, &[7])];
+    for (x, y) in [(-1f32, -1f32), (1., -1.), (1., 1.), (-1., 1.)] {
+        records.push(call(0x883, &[0, 0]));
+        records.push(call(0x9dc, &[x.to_bits(), y.to_bits()]));
+    }
+    records.push(call(0x216, &[]));
+    submit(&mut q, &mut seq, &records);
+    let rendered = query(&mut q, &mut seq, 0x7a4, &[0, 0, 1 | (1 << 16)]).1;
+    for (&actual, expected) in rendered.iter().zip([64i16, 191, 0, 255]) {
+        assert!(
+            (i16::from(actual) - expected).abs() <= 1,
+            "linear border sample {rendered:?}"
+        );
+    }
+    // Write one independent corner through a signed border coordinate.
+    pixels[..4].copy_from_slice(&[0, 0, 255, 255]);
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_SUB_IMAGE_2D,
+            &[TEXTURE_2D, 0, u32::MAX, u32::MAX, 1, 1, 0x1908, 0x1401],
+            &pixels[..4],
+        )],
+    );
+    assert_eq!(
+        &query(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0, 0]).1[..64],
+        &pixels
+    );
+    // A cached sampler must observe writes to the same texture object, without
+    // requiring a rebind or redefinition. The corner contributes one quarter.
+    submit(&mut q, &mut seq, &records);
+    let rendered = query(&mut q, &mut seq, 0x7a4, &[0, 0, 1 | (1 << 16)]).1;
+    for (&actual, expected) in rendered.iter().zip([64i16, 128, 64, 255]) {
+        assert!(
+            (i16::from(actual) - expected).abs() <= 1,
+            "updated border sample {rendered:?}"
+        );
+    }
+    // Copies must also address a border texel and preserve the other fifteen pixels.
+    submit(
+        &mut q,
+        &mut seq,
+        &[call(346, &[TEXTURE_2D, 0, u32::MAX, u32::MAX, 0, 0, 1, 1])],
+    );
+    pixels[..4].copy_from_slice(&rendered);
+    assert_eq!(
+        &query(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0, 0]).1[..64],
+        &pixels
+    );
+    submit(
+        &mut q,
+        &mut seq,
+        &[call(342, &[TEXTURE_2D, 0, 0x8058, 0, 0, 4, 4, 1])],
+    );
+    assert_eq!(
+        &query(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0, 0]).1[..64],
+        &rendered.repeat(16)
+    );
+    // Allocation-only definitions initialize every border and interior texel.
+    submit(
+        &mut q,
+        &mut seq,
+        &[data_call(
+            TEX_IMAGE_2D,
+            &[TEXTURE_2D, 0, 0x8058, 4, 4, 1, 0x1908, 0x1401],
+            &[],
+        )],
+    );
+    assert_eq!(
+        &query(&mut q, &mut seq, 0x414, &[TEXTURE_2D, 0, 0]).1[..64],
+        &[0; 64]
+    );
+    assert_eq!(words(&query(&mut q, &mut seq, 0x2fc, &[]).1), [0]);
+    drop(q);
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+#[ignore = "requires native GPU; supplied 1D border texels must participate in linear filtering"]
+fn qemu_texture_1d_image_borders_are_sampled() {
+    let (_, _, host) = native_gpu();
+    let dir = std::env::temp_dir().join(format!("dg-t1s-{}", uuid::Uuid::new_v4().simple()));
+    std::fs::create_dir(&dir).unwrap();
+    let socket = dir.join("g.sock");
+    let server = GpuServer::new(&socket, host).unwrap();
+    let mut q = Qemu::start(&dir, &socket);
+    let mut seq = 1;
+    let target = 0x0de0;
+    let mut records = vec![
+        (1, vec![0]),
+        (3, vec![16, 16]),
+        (5, vec![]),
+        call(BIND_TEXTURE, &[target, 71]),
+        call(TEX_PARAMETER_I, &[target, 0x2801, 0x2601]),
+        call(TEX_PARAMETER_I, &[target, 0x2800, 0x2601]),
+        call(TEX_PARAMETER_I, &[target, 0x2802, 0x2900]),
+        data_call(
+            0x8d3,
+            &[target, 0, 0x8058, 4, 1, 1, 0x1908, 0x1401],
+            &[
+                0, 255, 0, 255, 255, 0, 0, 255, 255, 0, 0, 255, 0, 255, 0, 255,
+            ],
+        ),
+        call(0x209, &[target]),
+        call(0x01a, &[7]),
+    ];
+    for (x, y) in [(-1f32, -1f32), (1., -1.), (1., 1.), (-1., 1.)] {
+        records.push(call(0x883, &[0, 0]));
+        records.push(call(0x9dc, &[x.to_bits(), y.to_bits()]));
+    }
+    records.push(call(0x216, &[]));
+    q.batch(seq, &records);
+    q.await_completion(seq);
+    let rendered = query(&mut q, &mut seq, 0x7a4, &[0, 0, 1 | (1 << 16)]).1;
+    for (&actual, expected) in rendered.iter().zip([128i16, 128, 0, 255]) {
+        assert!(
+            (i16::from(actual) - expected).abs() <= 1,
+            "linear 1D border sample {rendered:?}"
+        );
+    }
+    drop(q);
+    drop(server);
+    std::fs::remove_dir_all(dir).unwrap();
 }

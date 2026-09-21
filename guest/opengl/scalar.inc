@@ -74,8 +74,7 @@ JGL_PACKING_ONLY void APIENTRY glScalef(GLfloat a0, GLfloat a1, GLfloat a2) {
     __builtin_memcpy(words + 2, &a2, 4);
     Scalar(FEnum_glScalef, 3, words);
 }
-JGL_PACKING_ONLY void APIENTRY glOrtho(GLdouble a0, GLdouble a1, GLdouble a2, GLdouble a3,
-                                       GLdouble a4, GLdouble a5) {
+JGL_PACKING_ONLY void APIENTRY glOrtho(GLdouble a0, GLdouble a1, GLdouble a2, GLdouble a3, GLdouble a4, GLdouble a5) {
     ULONG words[12];
     __builtin_memcpy(words + 0, &a0, 8);
     __builtin_memcpy(words + 2, &a1, 8);
@@ -85,8 +84,7 @@ JGL_PACKING_ONLY void APIENTRY glOrtho(GLdouble a0, GLdouble a1, GLdouble a2, GL
     __builtin_memcpy(words + 10, &a5, 8);
     Scalar(FEnum_glOrtho, 12, words);
 }
-JGL_PACKING_ONLY void APIENTRY glFrustum(GLdouble a0, GLdouble a1, GLdouble a2, GLdouble a3,
-                                         GLdouble a4, GLdouble a5) {
+JGL_PACKING_ONLY void APIENTRY glFrustum(GLdouble a0, GLdouble a1, GLdouble a2, GLdouble a3, GLdouble a4, GLdouble a5) {
     ULONG words[12];
     __builtin_memcpy(words + 0, &a0, 8);
     __builtin_memcpy(words + 2, &a1, 8);
@@ -341,8 +339,7 @@ JGL_PACKING_ONLY void APIENTRY glHint(GLenum a0, GLenum a1) {
     words[1] = (ULONG)a1;
     Scalar(FEnum_glHint, 2, words);
 }
-JGL_PACKING_ONLY void APIENTRY glCopyTexImage2D(GLenum a0, GLint a1, GLenum a2, GLint a3, GLint a4,
-                                                GLsizei a5, GLsizei a6, GLint a7) {
+JGL_PACKING_ONLY void APIENTRY glCopyTexImage2D(GLenum a0, GLint a1, GLenum a2, GLint a3, GLint a4, GLsizei a5, GLsizei a6, GLint a7) {
     ULONG words[8];
     words[0] = (ULONG)a0;
     words[1] = (ULONG)a1;
@@ -354,8 +351,7 @@ JGL_PACKING_ONLY void APIENTRY glCopyTexImage2D(GLenum a0, GLint a1, GLenum a2, 
     words[7] = (ULONG)a7;
     Scalar(FEnum_glCopyTexImage2D, 8, words);
 }
-JGL_PACKING_ONLY void APIENTRY glCopyTexSubImage2D(GLenum a0, GLint a1, GLint a2, GLint a3,
-                                                   GLint a4, GLint a5, GLsizei a6, GLsizei a7) {
+JGL_PACKING_ONLY void APIENTRY glCopyTexSubImage2D(GLenum a0, GLint a1, GLint a2, GLint a3, GLint a4, GLint a5, GLsizei a6, GLsizei a7) {
     ULONG words[8];
     words[0] = (ULONG)a0;
     words[1] = (ULONG)a1;
@@ -367,19 +363,7 @@ JGL_PACKING_ONLY void APIENTRY glCopyTexSubImage2D(GLenum a0, GLint a1, GLint a2
     words[7] = (ULONG)a7;
     Scalar(FEnum_glCopyTexSubImage2D, 8, words);
 }
-JGL_PACKING_ONLY void APIENTRY glLoadMatrixf(const GLfloat *matrix) {
-    if (matrix)
-        Scalar(FEnum_glLoadMatrixf, 16, matrix);
-}
-JGL_PACKING_ONLY void APIENTRY glMultMatrixf(const GLfloat *matrix) {
-    if (matrix)
-        Scalar(FEnum_glMultMatrixf, 16, matrix);
-}
-JGL_PACKING_ONLY void APIENTRY glLoadMatrixd(const GLdouble *matrix) {
-    if (matrix)
-        Scalar(FEnum_glLoadMatrixd, 32, matrix);
-}
-JGL_PACKING_ONLY void APIENTRY glMultMatrixd(const GLdouble *matrix) {
-    if (matrix)
-        Scalar(FEnum_glMultMatrixd, 32, matrix);
-}
+JGL_PACKING_ONLY void APIENTRY glLoadMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixf, 16, matrix); }
+JGL_PACKING_ONLY void APIENTRY glMultMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glMultMatrixf, 16, matrix); }
+JGL_PACKING_ONLY void APIENTRY glLoadMatrixd(const GLdouble *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixd, 32, matrix); }
+JGL_PACKING_ONLY void APIENTRY glMultMatrixd(const GLdouble *matrix) { if (matrix) Scalar(FEnum_glMultMatrixd, 32, matrix); }

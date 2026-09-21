@@ -230,13 +230,20 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
         ++CapabilityQueries;
         assert(!request->Function && !request->Bytes && !request->ResultCapacity);
         reply->FunctionWords = HostCaps;
-        if (CapabilityFailure == 1) return 0;
-        if (CapabilityFailure == 2) reply->Status = DG_ESCAPE_INVALID; // old driver
-        if (CapabilityFailure == 3) reply->Version = 0;
-        if (CapabilityFailure == 4) reply->Client = 99;
-        if (CapabilityFailure == 5) reply->ResultBytes = 4;
-        if (CapabilityFailure == 6) reply->ResultType = DG_GL_RESULT_INT;
-        if (CapabilityFailure == 7) reply->FunctionWords = (ULONG)-1;
+        if (CapabilityFailure == 1)
+            return 0;
+        if (CapabilityFailure == 2)
+            reply->Status = DG_ESCAPE_INVALID; // old driver
+        if (CapabilityFailure == 3)
+            reply->Version = 0;
+        if (CapabilityFailure == 4)
+            reply->Client = 99;
+        if (CapabilityFailure == 5)
+            reply->ResultBytes = 4;
+        if (CapabilityFailure == 6)
+            reply->ResultType = DG_GL_RESULT_INT;
+        if (CapabilityFailure == 7)
+            reply->FunctionWords = (ULONG)-1;
         return 1;
     }
     if (request->Operation == DG_ESCAPE_QUERY) {
@@ -369,13 +376,16 @@ int main(void) {
         HostCaps = failure ? DG_CAP_GL_DEPTH_STENCIL_READBACK : DG_CAP_GL_BULK_READBACK;
         CapabilityFailure = failure;
         assert(!JglDepthStencilReadbackAvailable());
+        assert(!JglTextureImagesAvailable() && !JglTextureBordersAvailable());
         context = Create();
         assert(!JglDepthStencilReadbackAvailable() && CapabilityQueries == 1);
         assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
     }
     Reset();
-    HostCaps = DG_CAP_GL_DEPTH_STENCIL_READBACK;
+    HostCaps =
+        DG_CAP_GL_DEPTH_STENCIL_READBACK | DG_CAP_GL_TEXTURE_IMAGES | DG_CAP_GL_TEXTURE_BORDERS;
     context = Create();
+    assert(JglTextureImagesAvailable() && JglTextureBordersAvailable());
     assert(JglDepthStencilReadbackAvailable() && CapabilityQueries == 1);
     {
         HGLRC second = wglCreateContext((HDC)2);
@@ -384,6 +394,7 @@ int main(void) {
     }
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
     assert(!JglDepthStencilReadbackAvailable());
+    assert(!JglTextureImagesAvailable() && !JglTextureBordersAvailable());
     HostCaps = 0;
     context = Create();
     assert(!JglDepthStencilReadbackAvailable() && CapabilityQueries == 2);
@@ -814,6 +825,48 @@ int main(void) {
     assert(Presents == calls + 3);
     assert(wglDeleteContext(context));
     BindCapabilities = 0;
+    /* Minimize must preserve the drawable through thread handoff/readback,
+     * without trying to publish an empty native window or poisoning GL. */
+    Reset();
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    context = Create();
+    c = Lookup(context);
+    glDrawBuffer(GL_FRONT);
+    glClear(GL_COLOR_BUFFER_BIT);
+    calls = Presents;
+    ULONG oldBinds = Binds;
+    Width = Height = 0;
+    assert(wglMakeCurrent(NULL, NULL));
+    Thread = 1;
+    assert(wglMakeCurrent((HDC)1, context));
+    assert(c->Width == 320 && c->Height == 240 && !DestroyDrawables);
+    assert(wglSwapBuffers((HDC)1) && Presents == calls && Binds == oldBinds);
+    assert(!c->Failed && glGetError() == GL_NO_ERROR);
+    assert(wglMakeCurrent(NULL, NULL));
+    Thread = 0;
+    Width = 320;
+    Height = 240;
+    assert(wglMakeCurrent((HDC)1, context));
+    assert(!DestroyDrawables && wglSwapBuffers((HDC)1));
+    assert(Presents == calls + 1 && !c->Failed);
+    assert(wglDeleteContext(context));
+    BindCapabilities = 0;
+    /* Initial native binding needs visible geometry; failure must be
+     * recoverable when the window becomes visible, without a fake drawable. */
+    Reset();
+    Width = Height = 0;
+    assert(!wglCreateContext((HDC)1));
+    Width = 320;
+    Height = 240;
+    context = wglCreateContext((HDC)1);
+    assert(context);
+    Width = Height = 0;
+    assert(!wglMakeCurrent((HDC)1, context) && !Lookup(context)->Drawable);
+    assert(!Lookup(context)->Failed && !wglGetCurrentContext());
+    Width = 320;
+    Height = 240;
+    assert(wglMakeCurrent((HDC)1, context) && !DestroyDrawables);
+    assert(wglDeleteContext(context));
     /* Failed resize must never present the old attachment, retain thread
      * ownership, or leak the already-destroyed drawable during cleanup. */
     Reset();

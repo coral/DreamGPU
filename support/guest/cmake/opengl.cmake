@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-set(frontend_sources frontend query texture compatibility readback arrays secondary fixed transport transport9-window)
+set(frontend_sources frontend query texture compatibility readback arrays secondary fixed provider transport transport9-window)
 set(frontend_units "${DREAMGPU_GUEST}/nt/memory.cpp")
 foreach(unit IN LISTS frontend_sources)
   list(APPEND frontend_units "${DREAMGPU_GUEST}/opengl/${unit}.cpp")

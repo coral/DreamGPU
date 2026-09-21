@@ -1,0 +1,143 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -2841,6 +2841,7 @@
+     struct wined3d_context *context;
+     const struct wined3d_gl_info *gl_info;
+     BYTE *base_memory;
++    HRESULT hr;
+ 
+     TRACE("surface %p, map_desc %p, box %p, flags %#x.\n",
+             surface, map_desc, box, flags);
+@@ -2882,6 +2883,15 @@
+     }
+ 
+     surface_prepare_map_memory(surface);
++    /* Allocation helpers predate HRESULT propagation. Do not download to a
++     * missing CPU destination or discard the only correct GPU copy. */
++    if ((surface->resource.map_binding == WINED3D_LOCATION_SYSMEM && !surface->resource.heap_memory)
++            || (surface->resource.map_binding == WINED3D_LOCATION_USER_MEMORY && !surface->user_memory)
++            || (surface->resource.map_binding == WINED3D_LOCATION_DIB && !surface->dib.bitmap_data))
++    {
++        --surface->resource.map_count;
++        return E_OUTOFMEMORY;
++    }
+     if (flags & WINED3D_MAP_DISCARD)
+     {
+         TRACE("WINED3D_MAP_DISCARD flag passed, marking %s as up to date.\n",
+@@ -2899,10 +2909,15 @@
+                     surface->locations, surface->resource.map_binding))
+             context2 = context_acquire(surface->resource.device, NULL);
+         
++        /* CPU-to-CPU copies also need loading when no GL context is needed.
++         * The loader rejects GPU transfers without a valid current context. */
++        hr = surface_load_location(surface, context2, surface->resource.map_binding);
+         if (context2)
+-        {
+-            surface_load_location(surface, context2, surface->resource.map_binding);
+             context_release(context2);
++        if (FAILED(hr))
++        {
++            --surface->resource.map_count;
++            return hr;
+         }
+     }
+ 
+@@ -2922,6 +2937,13 @@
+ 
+         case WINED3D_LOCATION_BUFFER:
+             context = context_acquire(device, NULL);
++            if (!context || !context->valid || context_get_current() != context)
++            {
++                if (context)
++                    context_release(context);
++                --surface->resource.map_count;
++                return WINED3DERR_INVALIDCALL;
++            }
+             gl_info = context->gl_info;
+ 
+             GL_EXTCALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, surface->pbo));
+@@ -3016,35 +3038,33 @@
+     {
+         if (surface->flags & SFLAG_CLIENT)
+         {
+-            surface_load_location(surface, context, WINED3D_LOCATION_SYSMEM);
++            if (FAILED(hr = surface_load_location(surface, context, WINED3D_LOCATION_SYSMEM)))
++                goto done;
+             surface_release_client_storage(surface);
+         }
+         hr = surface_create_dib_section(surface);
+         if (FAILED(hr))
+-        {
+-            if (context)
+-                context_release(context);
+-             return WINED3DERR_INVALIDCALL;
+-        }
++            goto done;
+         if (!(surface->resource.map_binding == WINED3D_LOCATION_USER_MEMORY
+                 || surface->container->flags & WINED3D_TEXTURE_PIN_SYSMEM
+                 || surface->pbo))
+             surface->resource.map_binding = WINED3D_LOCATION_DIB;
+     }
+ 
+-    surface_load_location(surface, context, WINED3D_LOCATION_DIB);
++    if (FAILED(hr = surface_load_location(surface, context, WINED3D_LOCATION_DIB)))
++        goto done;
+     surface_invalidate_location(surface, ~WINED3D_LOCATION_DIB);
+ 
++    surface->flags |= SFLAG_DCINUSE;
++    surface->resource.map_count++;
++
++    *dc = surface->hDC;
++    TRACE("Returning dc %p.\n", *dc);
++
++done:
+     if (context)
+         context_release(context);
+-
+-    surface->flags |= SFLAG_DCINUSE;
+-    surface->resource.map_count++;
+-
+-    *dc = surface->hDC;
+-    TRACE("Returning dc %p.\n", *dc);
+-
+-    return WINED3D_OK;
++    return hr;
+ }
+ 
+ HRESULT CDECL wined3d_surface_releasedc(struct wined3d_surface *surface, HDC dc)
+@@ -3060,9 +3080,6 @@
+                 dc, surface->hDC);
+         return WINEDDERR_NODC;
+     }
+-
+-    surface->resource.map_count--;
+-    surface->flags &= ~SFLAG_DCINUSE;
+ 
+     if (surface->resource.map_binding == WINED3D_LOCATION_USER_MEMORY
+             || (surface->container->flags & WINED3D_TEXTURE_PIN_SYSMEM
+@@ -3077,16 +3094,21 @@
+          * The same consideration applies to user memory surfaces. */
+         struct wined3d_device *device = surface->resource.device;
+         struct wined3d_context *context = NULL;
++        HRESULT hr;
+ 
+         if (device->d3d_initialized)
+             context = context_acquire(device, NULL);
+ 
+-        surface_load_location(surface, context, surface->resource.map_binding);
+-        surface_invalidate_location(surface, WINED3D_LOCATION_DIB);
++        hr = surface_load_location(surface, context, surface->resource.map_binding);
+         if (context)
+             context_release(context);
+-    }
+-
++        if (FAILED(hr))
++            return hr;
++        surface_invalidate_location(surface, WINED3D_LOCATION_DIB);
++    }
++
++    surface->resource.map_count--;
++    surface->flags &= ~SFLAG_DCINUSE;
+     return WINED3D_OK;
+ }
+ 

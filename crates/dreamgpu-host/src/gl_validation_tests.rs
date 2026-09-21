@@ -484,8 +484,8 @@ fn packed_texture_words_require_exact_pairs_and_complete_payloads() {
         (GL_RGBA, GL_UNSIGNED_SHORT_5_6_5),
         (GL_RGB, GL_UNSIGNED_SHORT_4_4_4_4),
         (GL_ALPHA, GL_UNSIGNED_SHORT_5_5_5_1),
-        (GL_LUMINANCE, GL_UNSIGNED_SHORT),
-        (GL_RGBA, GL_UNSIGNED_INT),
+        (GL_LUMINANCE, GL_DOUBLE),
+        (GL_RGBA, GL_BITMAP),
     ] {
         let a = [GL_TEXTURE_2D, 0, GL_RGBA8, 1, 1, 0, format, kind];
         assert_eq!(
@@ -496,5 +496,96 @@ fn packed_texture_words_require_exact_pairs_and_complete_payloads() {
             data_validate(FEnum_glTexImage2D, &a, &[0; 2]),
             DG_GL_ERROR_TEXTURE
         );
+    }
+}
+
+#[test]
+fn texture_scalar_payloads_keep_native_precision_and_empty_definitions() {
+    for (kind, unit) in [
+        (GL_BYTE, 1),
+        (GL_UNSIGNED_BYTE, 1),
+        (GL_SHORT, 2),
+        (GL_UNSIGNED_SHORT, 2),
+        (GL_INT, 4),
+        (GL_UNSIGNED_INT, 4),
+        (GL_FLOAT, 4),
+    ] {
+        for (format, components) in [
+            (GL_COLOR_INDEX, 1),
+            (GL_RED, 1),
+            (GL_GREEN, 1),
+            (GL_BLUE, 1),
+            (GL_ALPHA, 1),
+            (GL_LUMINANCE, 1),
+            (GL_LUMINANCE_ALPHA, 2),
+            (GL_RGB, 3),
+            (GL_RGBA, 4),
+        ] {
+            let a = [GL_TEXTURE_2D, 0, GL_RGBA16, 2, 2, 0, format, kind];
+            let pixels = vec![0; 4 * components * unit];
+            assert_eq!(data_validate(FEnum_glTexImage2D, &a, &pixels), 0);
+            assert_eq!(
+                data_validate(FEnum_glTexImage2D, &a, &pixels[..pixels.len() - 1]),
+                DG_GL_ERROR_TEXTURE
+            );
+            assert_eq!(
+                data_validate(
+                    FEnum_glTexSubImage2D,
+                    &[GL_TEXTURE_2D, 0, 0, 0, 2, 2, format, kind],
+                    &pixels
+                ),
+                0
+            );
+        }
+    }
+    for internal in (0x803b..=0x804d)
+        .chain(0x804f..=0x805b)
+        .chain([GL_R3_G3_B2])
+    {
+        assert_eq!(
+            data_validate(
+                FEnum_glTexImage2D,
+                &[GL_TEXTURE_2D, 0, internal, 0, 2, 0, GL_RGBA, GL_FLOAT],
+                &[]
+            ),
+            0
+        );
+        assert_eq!(
+            data_validate(
+                FEnum_glTexImage1D,
+                &[GL_TEXTURE_1D, 0, internal, 0, 1, 0, GL_RGBA, GL_FLOAT],
+                &[]
+            ),
+            0
+        );
+    }
+    assert_eq!(
+        data_validate(
+            FEnum_glTexImage2D,
+            &[GL_TEXTURE_2D, 0, GL_RGBA, 2, 0, 0, GL_RGBA, GL_FLOAT],
+            &[]
+        ),
+        0
+    );
+}
+
+#[test]
+fn proxy_definitions_accept_virtual_limit_probes_but_never_payloads_or_wrong_targets() {
+    for (target, function, height) in [
+        (GL_PROXY_TEXTURE_1D, FEnum_glTexImage1D, 1),
+        (GL_PROXY_TEXTURE_2D, FEnum_glTexImage2D, 4096),
+    ] {
+        let mut a = [target, 0, GL_RGBA16, 4096, height, 0, GL_RGBA, GL_FLOAT];
+        assert_eq!(data_validate(function, &a, &[]), 0);
+        assert_eq!(data_validate(function, &a, &[0; 4]), DG_GL_ERROR_TEXTURE);
+        a[3] = u32::MAX;
+        assert_eq!(data_validate(function, &a, &[]), DG_GL_ERROR_TEXTURE);
+        a[3] = 1;
+        a[0] = if target == GL_PROXY_TEXTURE_1D {
+            GL_PROXY_TEXTURE_2D
+        } else {
+            GL_PROXY_TEXTURE_1D
+        };
+        assert_eq!(data_validate(function, &a, &[]), DG_GL_ERROR_TEXTURE);
     }
 }

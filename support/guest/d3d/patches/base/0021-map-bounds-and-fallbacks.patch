@@ -1,0 +1,107 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -2845,6 +2845,14 @@
+ 
+     TRACE("surface %p, map_desc %p, box %p, flags %#x.\n",
+             surface, map_desc, box, flags);
++
++    /* D3D9 forwards its signed RECT through an unsigned box without the
++     * DirectDraw/D3D8 frontend checks. Reject it before allocation, transfers,
++     * dirty-state publication, or pointer arithmetic can occur. */
++    if (!map_desc || (box && (box->left >= box->right || box->top >= box->bottom
++            || box->right > surface->resource.width || box->bottom > surface->resource.height
++            || box->front || box->back != 1)))
++        return WINED3DERR_INVALIDCALL;
+ 
+     if (surface->resource.map_count)
+     {
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2860,6 +2860,7 @@
+     GLenum buffer_type_hint;
+     DWORD flags;
+     void *map_ptr;
++    DWORD map_access; /* Access granted by the outermost native map. */
+ 
+     struct wined3d_map_range *maps;
+     ULONG maps_size, modified_areas;
+--- a/wined3d/buffer.c
++++ b/wined3d/buffer.c
+@@ -1124,6 +1124,7 @@
+ {
+     LONG count;
+     BYTE *base;
++    DWORD access = 0, requested_access;
+ 
+     TRACE("buffer %p, offset %u, size %u, data %p, flags %#x\n", buffer, offset, size, data, flags);
+ 
+@@ -1145,6 +1146,11 @@
+      * appears to do this unconditionally. */
+     if (buffer->flags & WINED3D_BUFFER_DISCARD)
+         flags &= ~WINED3D_MAP_DISCARD;
++    requested_access = wined3d_resource_gl_map_flags(flags) & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
++    if (buffer->resource.map_count && buffer->buffer_object
++            && !(buffer->flags & WINED3D_BUFFER_DOUBLEBUFFER)
++            && (requested_access & ~buffer->map_access))
++        return WINED3DERR_INVALIDCALL;
+     count = ++buffer->resource.map_count;
+ 
+     if (buffer->buffer_object)
+@@ -1174,12 +1180,14 @@
+                 if (gl_info->supported[ARB_MAP_BUFFER_RANGE])
+                 {
+                     GLbitfield mapflags = wined3d_resource_gl_map_flags(flags);
++                    access = mapflags & (GL_MAP_READ_BIT | GL_MAP_WRITE_BIT);
+                     buffer->map_ptr = GL_EXTCALL(glMapBufferRange(buffer->buffer_type_hint,
+                             0, buffer->resource.size, mapflags));
+                     checkGLcall("glMapBufferRange");
+                 }
+                 else
+                 {
++                    access = GL_MAP_READ_BIT | GL_MAP_WRITE_BIT;
+                     if (buffer->flags & WINED3D_BUFFER_APPLESYNC)
+                         buffer_sync_apple(buffer, flags, gl_info);
+                     buffer->map_ptr = GL_EXTCALL(glMapBuffer(buffer->buffer_type_hint,
+@@ -1202,25 +1210,13 @@
+                     checkGLcall("glUnmapBuffer");
+                     buffer->map_ptr = NULL;
+ 
+-                    if (buffer->resource.usage & WINED3DUSAGE_DYNAMIC)
+-                    {
+-                        /* The extra copy is more expensive than not using VBOs at
+-                         * all on the Nvidia Linux driver, which is the only driver
+-                         * that returns unaligned pointers
+-                         */
+-                        TRACE("Dynamic buffer, dropping VBO\n");
+-                        buffer_unload(&buffer->resource);
+-                        buffer->flags &= ~WINED3D_BUFFER_CREATEBO;
+-                        if (buffer->resource.bind_count)
+-                            device_invalidate_state(device, STATE_STREAMSRC);
+-                    }
+-                    else
+-                    {
+-                        TRACE("Falling back to doublebuffered operation\n");
+-                        buffer_get_sysmem(buffer, context);
+-                    }
+-                    TRACE("New pointer is %p.\n", buffer->resource.heap_memory);
+-                    buffer->map_ptr = NULL;
++                    /* The old fallback downloaded through unchecked CPU
++                     * allocation and could delete the sole correct GPU copy.
++                     * Reject unsupported native alignment without allocating,
++                     * downloading, deleting the BO, or publishing dirty state. */
++                    context_release(context);
++                    --buffer->resource.map_count;
++                    return WINED3DERR_INVALIDCALL;
+                 }
+                 context_release(context);
+             }
+@@ -1234,6 +1230,9 @@
+         --buffer->resource.map_count;
+         return E_OUTOFMEMORY;
+     }
++
++    if (count == 1)
++        buffer->map_access = buffer->map_ptr ? access : 0;
+ 
+     /* Mapping may fail even with an existing GPU allocation. Publish dirty
+      * ranges and synchronization intent only after obtaining valid storage. */

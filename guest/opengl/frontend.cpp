@@ -78,6 +78,12 @@ BOOL JglSupportsSecondary(void) {
 BOOL JglDepthStencilReadbackAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_DEPTH_STENCIL_READBACK);
 }
+BOOL JglTextureImagesAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_IMAGES);
+}
+BOOL JglTextureBordersAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_BORDERS);
+}
 static ULONG QueryCapabilities(void) {
     DG_ESCAPE_REQUEST request;
     DG_ESCAPE_REPLY reply;
@@ -86,8 +92,8 @@ static ULONG QueryCapabilities(void) {
     request.Version = DG_ESCAPE_VERSION;
     request.Operation = DG_ESCAPE_CAPABILITIES;
     request.Client = Client;
-    int result = JglTransportRequest(Display, sizeof(request), (LPCSTR)&request,
-                                     sizeof(reply), (LPSTR)&reply);
+    int result = JglTransportRequest(Display, sizeof(request), (LPCSTR)&request, sizeof(reply),
+                                     (LPSTR)&reply);
     /* Older drivers reject this operation. Missing or malformed replies must
      * never opt into a format that an older host interprets as RGBA8. */
     if (result != 1 || reply.Version != DG_ESCAPE_VERSION || reply.Status != DG_ESCAPE_OK ||
@@ -241,6 +247,11 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
     if (!SecondarySupported && (function == FEnum_glEnable || function == FEnum_glDisable) &&
         *(const ULONG *)arguments == 0x8458) {
         CommandError(c, GL_INVALID_ENUM);
+        return;
+    }
+    if (function == FEnum_glCopyTexImage2D && words == 8 && ((const ULONG *)arguments)[7] &&
+        !JglTextureBordersAvailable()) {
+        CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (c->Failed || (!c->Arrays.ListMode && StateUnchanged(&c->State, function, arguments)))
@@ -537,7 +548,7 @@ static BOOL WindowGeometry(HDC dc, HWND *window, ULONG *width, ULONG *height) {
     DWORD owner;
     *window = WindowFromDC(dc);
     if (!*window || !GetWindowThreadProcessId(*window, &owner) || owner != GetCurrentProcessId() ||
-        !GetClientRect(*window, &rect) || rect.right <= 0 || rect.bottom <= 0 ||
+        !GetClientRect(*window, &rect) || rect.right < 0 || rect.bottom < 0 ||
         rect.right > DG_GL_MAX_DIMENSION || rect.bottom > DG_GL_MAX_DIMENSION)
         return FALSE;
     *width = rect.right;
@@ -547,8 +558,8 @@ static BOOL WindowGeometry(HDC dc, HWND *window, ULONG *width, ULONG *height) {
 static BOOL MatchingGeometry(JGL_CONTEXT *c) {
     HWND window;
     ULONG width, height;
-    return WindowGeometry(c->DC, &window, &width, &height) && window == c->Window &&
-           width == c->Width && height == c->Height;
+    return WindowGeometry(c->DC, &window, &width, &height) && window == c->Window && width &&
+           height && width == c->Width && height == c->Height;
 }
 static BOOL Bind(JGL_CONTEXT *c) {
     DG_WINDOW_BIND request;
@@ -576,6 +587,11 @@ static BOOL Bind(JGL_CONTEXT *c) {
  * replay GL commands or retry an outcome whose completion is uncertain. */
 static BOOL PresentWindow(JGL_CONTEXT *c, ULONG flags) {
     DG_WINDOW_PRESENT present = {DG_WINDOW_MAGIC, DG_WINDOW_VERSION, c->Binding, flags};
+    if (!c->Binding) {
+        if (!Bind(c))
+            return FALSE;
+        present.Binding = c->Binding;
+    }
     int status = JglTransportPresent(c->DC, &present);
     if (status == DG_WINDOW_PRESENT_REBIND) {
         if (!Bind(c)) {
@@ -617,7 +633,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
     HWND window;
     ULONG width, height;
     dreamgpu::unique_owner<JGL_CONTEXT, ContextDeleter> pending;
-    if (!WindowGeometry(dc, &window, &width, &height)) {
+    if (!WindowGeometry(dc, &window, &width, &height) || !width || !height) {
         SetLastError(ERROR_INVALID_WINDOW_HANDLE);
         return NULL;
     }
@@ -874,7 +890,7 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
     LONG thread = GetCurrentThreadId();
     ULONG width, height, size[2];
     HWND window;
-    BOOL result = FALSE;
+    BOOL result = FALSE, visible;
     EnterCriticalSection(&Lock);
     if (old && old->InBegin && !old->Failed) {
         Error(old, GL_INVALID_OPERATION);
@@ -893,6 +909,21 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
     if (!c || !c->Created || c->Failed || c->Deleting || c->InBegin ||
         (c->Owner && c->Owner != thread) || !WindowGeometry(dc, &window, &width, &height))
         goto done;
+    /* A minimized window has a zero-sized client rect, but its GL context
+     * and pixels remain usable (including worker-thread readback). Keep the
+     * last drawable for this window. Initial binding still needs a client
+     * area so the native driver can establish presentation capabilities. */
+    visible = width && height;
+    if (!visible) {
+        if (!c->Drawable || c->Window != window)
+            goto done;
+        width = c->Width;
+        height = c->Height;
+        if (c->Binding) {
+            JglTransportUnbind(c->Binding);
+            c->Binding = 0;
+        }
+    }
     /* A drawable belongs to this context in the initial frontend. Rebinding a
      * context to a resized/different window recreates its bounded backbuffer. */
     if (c->Drawable && (c->Window != window || c->Width != width || c->Height != height)) {
@@ -913,7 +944,7 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
         c->Drawable = TRUE;
     }
     c->EverCurrent = TRUE;
-    if (!Record(c, DG_GL_MAKE_CURRENT, c->Id, c->Id, 0) || !Flush(c) || !Bind(c))
+    if (!Record(c, DG_GL_MAKE_CURRENT, c->Id, c->Id, 0) || !Flush(c) || (visible && !Bind(c)))
         goto done;
     if (!TlsSetValue(Current, c))
         goto done;
@@ -1004,6 +1035,10 @@ BOOL WINAPI wglSwapBuffers(HDC dc) {
         SetLastError(ERROR_INVALID_WINDOW_HANDLE);
         return FALSE;
     }
+    /* There is no visible destination while minimized. Flush outstanding GL
+     * work without resizing or discarding its offscreen framebuffer. */
+    if (!width || !height)
+        return FlushCurrent(c);
     if (width != c->Width || height != c->Height) {
         /* Windows can resize a current drawable without another MakeCurrent
          * call (UT's XP fullscreen transition does this). Reuse the existing

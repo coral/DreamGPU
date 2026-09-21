@@ -15,6 +15,19 @@ class DriverList final {
     bool no_copy_ = false;
     char source_[MAX_PATH]{};
     unsigned media_ = 0;
+    static bool same_inf(const char *expected, const char *reported) {
+        if (!lstrcmpiA(expected, reported))
+            return true;
+        // Win98 may store an OEM INF's DOS basename while SetupAPI reports
+        // its long name. Resolve both existing paths through the filesystem;
+        // matching contents alone cannot establish that they are the same INF.
+        char left[MAX_PATH]{}, right[MAX_PATH]{};
+        DWORD a = GetShortPathNameA(expected, left, sizeof(left));
+        DWORD b = GetShortPathNameA(reported, right, sizeof(right));
+        return a && a < sizeof(left) && b && b < sizeof(right) && !left[a] && !right[b] &&
+               DWORD(lstrlenA(left)) == a && DWORD(lstrlenA(right)) == b &&
+               !lstrcmpiA(left, right);
+    }
     static UINT CALLBACK queue(void *opaque, UINT notification, UINT_PTR first, UINT_PTR second) {
         auto &self = *static_cast<DriverList *>(opaque);
         switch (notification) {
@@ -127,7 +140,7 @@ class DriverList final {
                 !bounded(detail->InfFileName, sizeof(detail->InfFileName)) ||
                 !bounded(detail->SectionName, sizeof(detail->SectionName)))
                 return false;
-            if (lstrcmpiA(detail->InfFileName, expected.inf) ||
+            if (!same_inf(expected.inf, detail->InfFileName) ||
                 lstrcmpA(detail->SectionName, expected.section))
                 continue;
             // SetupAPI created a COMPATDRIVER list for this exact present

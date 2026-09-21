@@ -15,7 +15,7 @@ enum class Phase : uint32_t {
 };
 enum class Result { verified, pending_reboot, restored, invalid, conflict, io_error };
 enum class Actual { original, desired, pending, other, error };
-enum class Binding : uint32_t { stock = 0, dreamgpu = 1, unbound = 2 };
+enum class Binding : uint32_t { stock = 0, dreamgpu = 1, unbound = 2, legacy_win98 = 3 };
 struct Node {
     char device[256] = {}, inf[260] = {}, section[256] = {}, provider[256] = {},
          description[256] = {};
@@ -40,7 +40,7 @@ struct Journal {
     uint8_t resume_value[512] = {};
     char installer_sha[68] = {}, helper_sha[68] = {}, audit_sha[68] = {};
 };
-static_assert(sizeof(Journal) == 11076, "driver journal V1/V2/V3 durable layout");
+static_assert(sizeof(Journal) == 11076, "driver journal V1-V5 durable layout");
 static_assert(offsetof(Journal, original_binding) == 10352, "V1 binding field offset");
 inline bool bounded(const char *text, size_t capacity) {
     for (size_t n = 0; n < capacity; ++n)
@@ -69,13 +69,16 @@ template <size_t N> inline bool empty(const char (&value)[N]) {
 // V2 preserves V1's byte layout; only the formerly boolean binding field gains
 // an explicit unbound kind. Old V1 records accept only stock/owned bindings.
 // V3 uses persistent Run on Win98; V4 does so on NT. Layout is unchanged.
+// V5 records a Win98 legacy pair preserved in place with private before-images.
 // Earlier journals retain their RunOnce baseline for exact terminal cleanup.
 inline bool valid(const Journal &j) {
     if (j.magic != 0x31424744 ||
-        (j.version != 1 && j.version != 2 && j.version != 3 && j.version != 4) ||
+        (j.version != 1 && j.version != 2 && j.version != 3 && j.version != 4 && j.version != 5) ||
         (j.os != Os::win98 && j.os != Os::nt5) || uint32_t(j.phase) > uint32_t(Phase::restored) ||
         (j.version == 3 && j.os != Os::win98) || (j.version == 4 && j.os != Os::nt5) ||
-        j.count > 16 || uint32_t(j.original_binding) > uint32_t(Binding::unbound) ||
+        j.count > 16 || uint32_t(j.original_binding) > uint32_t(Binding::legacy_win98) ||
+        ((j.version == 5) != (j.original_binding == Binding::legacy_win98)) ||
+        (j.original_binding == Binding::legacy_win98 && j.os != Os::win98) ||
         (j.original_binding == Binding::unbound && (j.version < 2 || j.os != Os::nt5)) ||
         j.resume_existed > 1 || j.resume_bytes > sizeof(j.resume_value) || !hash(j.installer_sha) ||
         !hash(j.helper_sha) || !hash(j.audit_sha))
@@ -100,6 +103,18 @@ inline bool valid(const Journal &j) {
     }
     if (!equal_fold(j.original.device, j.desired.device))
         return false;
+    if (j.original_binding == Binding::legacy_win98) {
+        if (j.count != 4)
+            return false;
+        for (unsigned n = 0; n < 4; ++n)
+            if (j.files[n].replaced != (n < 2) || j.files[n].exists != (n >= 2))
+                return false;
+        if (!bounded(j.files[2].backup, sizeof(j.files[2].backup)) ||
+            !bounded(j.files[3].backup, sizeof(j.files[3].backup)) ||
+            !equal_fold(j.files[2].backup, "\\driver-backup\\qemumini.drv") ||
+            !equal_fold(j.files[3].backup, "\\driver-backup\\qemumini.vxd"))
+            return false;
+    }
     for (uint32_t n = 0; n < j.count; ++n) {
         const auto &f = j.files[n];
         if (f.exists > 1 || f.replaced > 1 || !bounded(f.path, sizeof(f.path)) ||

@@ -15,6 +15,7 @@ PREAMBLE=r'''
 #define USE_WIN32_OPENGL
 #define TRACE(...) ((void)0)
 #define WARN(...) ((void)0)
+#define FIXME(...) ((void)0)
 #define ERR(...) log_error(__VA_ARGS__)
 static void log_error(const char *fmt,...) { (void)fmt; }
 #define WARN_ON(...) 0
@@ -44,7 +45,12 @@ static BOOL wglMakeCurrent(HDC dc,HGLRC gl) {
  if((gl&&fail_bind)||(!gl&&fail_unbind)) { fail_bind=fail_unbind=0;return FALSE; }
  current_gl=gl;current_dc=dc;if(gl)++binds;return TRUE;
 }
-static BOOL context_set_gl_context(struct wined3d_context *c) { if(!wglMakeCurrent(c->hdc,c->glCtx))return FALSE;c->needs_set=0;return TRUE; }
+// Exercise the production binding helper, including failed backup and recovery.
+static BOOL context_set_current(struct wined3d_context *c);
+static BOOL context_set_pixel_format(struct wined3d_context *c,HDC dc,BOOL priv,int format) {
+ (void)c;(void)priv;assert(dc&&format==1);return TRUE;
+}
+static HDC swapchain_get_backup_dc(struct wined3d_swapchain *s) { assert(s);return NULL; }
 static void context_destroy_gl_resources(struct wined3d_context *c) { (void)c;assert(0); }
 static BOOL context_restore_pixel_format(struct wined3d_context *c) { (void)c;return FALSE; }
 static int get_format(HDC dc) { assert(dc);return 1; }
@@ -111,16 +117,32 @@ int main(void) {
  before=setup_calls;unsigned old_tid=c1.tid;thread=3;fail_bind=1;
  assert(context_acquire(&d1,&t1)==&c1&&!c1.valid&&c1.tid==old_tid&&setup_calls==before);
  context_release(&c1);assert(!tls&&!current_gl&&!c1.current&&!c1.level);
- c1.valid=1;assert(context_acquire(&d1,&t1)==&c1&&c1.tid==3);
+ assert(context_acquire(&d1,&t1)==&c1&&c1.valid&&c1.current&&c1.tid==3);
  // Failed unbind follows WGL failure semantics and invalidates context for reuse.
  fail_unbind=1;context_release(&c1);assert(!c1.valid&&!tls&&!current_gl&&!c1.current);
- c1.valid=1;thread=1;assert(context_acquire(&d1,&t1)==&c1);
+ thread=1;assert(context_acquire(&d1,&t1)==&c1&&c1.valid&&c1.current);
  assert(context_acquire(&d2,&f2)==&c2);fail_bind=1;context_release(&c2);
  assert(!current_gl&&!tls&&!c2.current);context_release(&c1);
  assert(!current_gl&&!tls&&!c1.current);
+ // Same TLS identity is not proof that a previously failed binding recovered.
+ tls=&c1;c1.current=0;c1.valid=0;before=binds;
+ assert(context_acquire(&d1,&t1)==&c1&&c1.valid&&c1.current&&binds==before+1);
+ context_release(&c1);assert(!tls&&!current_gl&&!c1.current&&!c1.level);
+ // Direct activation must retry an invalid TLS-identical context too.
+ tls=&c1;c1.current=0;c1.valid=0;before=binds;
+ assert(context_set_current(&c1)&&c1.valid&&c1.current&&binds==before+1);
+ assert(context_set_current(NULL)&&!tls&&!current_gl&&!c1.current);
+ // Destruction is permanent: neither acquire nor direct activation may revive it.
+ c1.destroyed=1;before=binds;unsigned old_setup=setup_calls;
+ assert(!context_set_current(&c1)&&binds==before&&!tls&&!current_gl);
+ assert(context_acquire(&d1,&t1)==&c1&&!c1.valid&&setup_calls==old_setup&&binds==before);
+ context_release(&c1);assert(!tls&&!current_gl&&!c1.level);
+ // Even a stale TLS pointer cannot make a destroyed context appear usable.
+ tls=&c1;assert(!context_set_current(&c1)&&binds==before&&!current_gl);
+ tls=NULL;c1.destroyed=0;
  before=flushes;context_release(&c1);context_release(NULL);assert(!c1.level&&flushes==before);
  struct wined3d_swapchain empty={0};assert(!swapchain_get_context(&empty)&&creates==1);
- puts("PASS prepared native Wine migration: same drawable across threads, target-copy activation order, nested levels, multiple swapchains/devices, foreign restoration and failed ownership transitions");
+ puts("PASS prepared native Wine migration: same drawable across threads, target-copy activation order, nested levels, multiple swapchains/devices, foreign restoration, failed-bind retry, stale TLS recovery and destroyed-context rejection");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dreamgpu-context-migration-') as directory:
@@ -132,7 +154,7 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-context-migration-') as direct
     assert '-DUSE_WIN32_OPENGL' in (ROOT/'vendor/wine9x/Makefile').read_text()
     source=(work/'wined3d/context.c').read_text();swap=(work/'wined3d/swapchain.c').read_text()
     code=[]
-    for text,prefix in [(source,'BOOL context_set_current('),(source,'static void context_restore_gl_context('),(source,'void context_release('),(source,'static void context_enter('),(swap,'struct wined3d_context *swapchain_get_context('),(source,'struct wined3d_context *context_acquire(')]:
+    for text,prefix in [(source,'static BOOL context_set_gl_context('),(source,'BOOL context_set_current('),(source,'static void context_restore_gl_context('),(source,'void context_release('),(source,'static void context_enter('),(swap,'struct wined3d_context *swapchain_get_context('),(source,'struct wined3d_context *context_acquire(')]:
         start=text.index(prefix);end=text.index('\n}',start)+2;code.append(text[start:end])
     test=work/'test.c';test.write_text(PREAMBLE+'\n'.join(code)+TEST)
     subprocess.run([os.environ.get('CC','cc'),'-std=c99','-Wall','-Wextra','-Werror','-Wno-unused-parameter','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(test),'-o',str(work/'test')],check=True)

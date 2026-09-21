@@ -1,6 +1,11 @@
 # DreamGPU plan
 
-Updated September 14, 2026. **Current milestones completed.**
+Updated September 20, 2026. **The dependable-API milestone is in progress.**
+See [graphics-contracts.md](graphics-contracts.md) for the current scope,
+implementation and required milestone verification. The earlier September 14
+milestones below remain workload-specific evidence, not complete API coverage.
+
+Historical September 14 status:
 Fullscreen graphics recovery and captured movement chords pass, and ordinary
 Juke now selects the verified Windows 2000 image. See [progress.md](progress.md)
 for evidence, exact artifacts and limits. Further performance work starts from
@@ -14,10 +19,11 @@ on macOS and Linux. DreamGPU remains independent; Juke is its development consum
 Keep the desktop responsive and idle workers asleep. Rendering should run as fast
 as possible: 120 Hz is a selectable guest refresh rate, **not an FPS target or cap**.
 
-The user cancelled rollback, perfect uninstallation, unattended installation,
-Windows 98-to-XP migration and broad smoke/fault-test campaigns. They are not
-release gates or deferred milestones. Preserve completed useful code; do not
-extend that work or reactivate historical checklists.
+Rollback, perfect uninstallation, unattended installation and Windows 98-to-XP
+migration remain outside scope. The current request explicitly authorizes API
+capability and lifecycle verification, superseding the earlier cancellation of
+broad graphics test campaigns. Batch changes into milestones and use one
+installer/disposable-VM acceptance cycle per milestone.
 
 ## Milestone 1 — System graphics and display capabilities: completed
 

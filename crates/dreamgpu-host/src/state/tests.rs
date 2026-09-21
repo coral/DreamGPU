@@ -368,5 +368,7 @@ fn context_state_c_abi_layout() {
             + core::mem::size_of::<crate::pixel_image::State>()
             + core::mem::size_of::<crate::selection::State>()
             + 2 * pointer
+            + 8
+            + pointer
     );
 }

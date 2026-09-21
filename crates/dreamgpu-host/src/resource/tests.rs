@@ -583,7 +583,7 @@ fn texture_copy_preserves_signed_source_and_commits_accounting_only_on_success()
                 wire.as_ptr(),
             )
         },
-        DG_GL_ERROR_TEXTURE
+        0 // Native API failure is a GL error, not a fatal transport error.
     );
     assert_eq!((total, t.levels[0], t.version), (32, 32, version));
     assert_ne!(errors, 0);

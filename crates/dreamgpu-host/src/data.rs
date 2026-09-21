@@ -238,6 +238,9 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 return e;
             }
         }
+        if let Err(e) = unsafe { crate::texture::border::prepare(m, state) } {
+            return e;
+        }
         let mut gl_error = 0;
         let e = unsafe {
             crate::arrays::dreamgpu_gl_arrays(
@@ -249,7 +252,10 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 &mut gl_error,
             )
         };
-        unsafe { query::store(errors, gl_error) };
+        unsafe {
+            crate::texture::border::finish(m, state);
+            query::store(errors, gl_error)
+        };
         return e;
     }
     if function == FEnum_glDeleteTextures {
@@ -265,6 +271,44 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 addr_of_mut!((*state).bound_texture_1d),
             )
         };
+        return 0;
+    }
+    if matches!(function, FEnum_glTexImage1D | FEnum_glTexImage2D)
+        && matches!(a[0], GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D)
+    {
+        unsafe {
+            if let Err(e) = query::remember(api, errors) {
+                return e;
+            }
+            let one = a[0] == GL_PROXY_TEXTURE_1D;
+            let limit = (DG_GL_MAX_TEXTURE_DIMENSION >> a[1]) + 2 * a[5];
+            let rejected = (a[5] != 0 && !crate::texture::BORDER_IMAGES)
+                || a[3] > limit
+                || (!one && a[4] > limit)
+                || a[3] < 2 * a[5]
+                || (!one && a[4] < 2 * a[5]);
+            let mask = &mut (*state).proxy_rejected[usize::from(!one)];
+            if rejected {
+                // Native limits can exceed the guest contract. Reject without
+                // native allocation or a driver-dependent fake image request.
+                *mask |= 1 << a[1];
+            } else {
+                let error = crate::texture::proxy(api, &a);
+                if error == 0 {
+                    *mask &= !(1 << a[1]);
+                }
+                query::store(errors, error);
+            }
+        }
+        return 0;
+    }
+    if matches!(function, FEnum_glTexImage1D | FEnum_glTexImage2D)
+        && a[5] != 0
+        && !crate::texture::BORDER_IMAGES
+    {
+        unsafe {
+            query::store(errors, GL_INVALID_OPERATION);
+        }
         return 0;
     }
     unsafe {

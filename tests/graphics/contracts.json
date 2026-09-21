@@ -1,0 +1,1146 @@
+{
+  "schema": 1,
+  "catalog_complete": false,
+  "scope": "Shipped OpenGL 1.1/WGL, DirectDraw and legacy D3D through D3D8/9, Glide2x. This initial inventory records known contracts and gaps; broad rows still require expansion. Presence of a test is not proof of semantic completion.",
+  "platforms": [
+    {
+      "guest": "windows98",
+      "host": "macos"
+    },
+    {
+      "guest": "windows98",
+      "host": "linux"
+    },
+    {
+      "guest": "windows2000",
+      "host": "macos"
+    },
+    {
+      "guest": "windows2000",
+      "host": "linux"
+    },
+    {
+      "guest": "windowsxp",
+      "host": "macos"
+    },
+    {
+      "guest": "windowsxp",
+      "host": "linux"
+    }
+  ],
+  "areas": {
+    "1": "Capability reporting",
+    "2": "Resource storage and identity",
+    "3": "CPU/GPU coherence",
+    "4": "Locking and mapping",
+    "5": "Color and texture formats",
+    "6": "Depth and stencil",
+    "7": "Readback",
+    "8": "Texture storage and sampling",
+    "9": "Palettes and color keys",
+    "10": "Copy, blit, and render targets",
+    "11": "Geometry and fixed-function rendering",
+    "12": "State and queries",
+    "13": "Synchronization and completion",
+    "14": "Handles, threads, and processes",
+    "15": "Resizing and device lifecycle",
+    "16": "Desktop/GDI interoperability",
+    "17": "Display and presentation",
+    "18": "Transport and failure handling",
+    "19": "Juke integration",
+    "20": "Installation and compatibility",
+    "21": "Performance and resource pressure"
+  },
+  "tests": {
+    "map": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_map_dc_failures.py"
+    },
+    "readback": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_readback_recovery.py"
+    },
+    "indexed": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_indexed_immediate.py"
+    },
+    "palettes": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_paletted_textures.py"
+    },
+    "keyed-blit": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_palette_blit.py"
+    },
+    "context": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_context_migration.py"
+    },
+    "cpu-target": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_system_memory_targets.py"
+    },
+    "patches": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_wine_patches.py"
+    },
+    "gl-texture": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_texture.py"
+    },
+    "gl-readback": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_readback.py"
+    },
+    "gl-icd": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_icd.py"
+    },
+    "gl-frontend": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_frontend.py"
+    },
+    "glide-mips": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_mipmaps.py"
+    },
+    "glide-download": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_downloads.py"
+    },
+    "native": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu.rs"
+    },
+    "guest-indexed": {
+      "scope": "installed-api",
+      "path": "tools/d3d/indexed-probe.inc"
+    },
+    "gl-packing-i686": {
+      "scope": "source-i686",
+      "path": "tests/guest/opengl/test_frontend_packing.py"
+    },
+    "buffer-map": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_buffer_map.py"
+    },
+    "depth-transfer": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_depth_transfer.py"
+    },
+    "capability-capture": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_capability_capture.py"
+    },
+    "capability-transport": {
+      "scope": "source",
+      "path": "tools/benchmark/test_capability_result.py"
+    },
+    "capability-collector": {
+      "scope": "source",
+      "path": "scripts/tests/test_halflife.py"
+    },
+    "capability-staging": {
+      "scope": "source",
+      "path": "scripts/tests/test_guest_tools.py"
+    },
+    "guest-depth": {
+      "scope": "installed-api",
+      "path": "tools/d3d/depth-probe.inc"
+    },
+    "guest-caps-d3d": {
+      "scope": "installed-api",
+      "path": "tools/d3d/capability.cpp"
+    },
+    "guest-caps-gl": {
+      "scope": "installed-api",
+      "path": "tools/opengl/capability.cpp"
+    },
+    "graphics-job": {
+      "scope": "source",
+      "path": "scripts/tests/test_graphics.py"
+    },
+    "capability-capture-gl": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_capability_capture.py"
+    },
+    "depth-ownership": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_depth_ownership.py"
+    },
+    "installer-metadata": {
+      "scope": "source",
+      "path": "tests/guest/setup/test_driver_lifecycle.py"
+    },
+    "installer-generations": {
+      "scope": "source",
+      "path": "tests/guest/setup/test_driver_actions.py"
+    },
+    "guest-borders": {
+      "scope": "installed-api",
+      "path": "tools/opengl/border-probe.inc"
+    },
+    "native-border-environment": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/border_sampling.rs"
+    },
+    "probe-failure-evidence": {
+      "scope": "source",
+      "path": "tools/benchmark/test_probe_failure.py"
+    }
+  },
+  "contracts": [
+    {
+      "id": "caps.usage",
+      "area": 1,
+      "api": "all",
+      "operation": "capability query",
+      "format": "all exposed",
+      "resource": "all",
+      "usage": "per operation",
+      "pool": "all",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "capability-capture",
+        "capability-transport",
+        "capability-collector",
+        "capability-staging",
+        "guest-caps-d3d",
+        "guest-caps-gl",
+        "graphics-job",
+        "capability-capture-gl"
+      ],
+      "remaining": "D3D8/9 format/resource/usage and GL/WGL runtime capture tools implemented. Run against installed providers on six combinations, reconcile claims, and expand DirectDraw/Glide/pool coverage. Capture is not execution validation."
+    },
+    {
+      "id": "resource.identity",
+      "area": 2,
+      "api": "OpenGL/WGL",
+      "operation": "share, reference, delete",
+      "format": "RGBA8",
+      "resource": "texture/context",
+      "usage": "shared sampling",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native"
+      ],
+      "remaining": "Transport tests exist; installed API lifetime and process failure coverage remains incomplete."
+    },
+    {
+      "id": "directdraw.map-failure",
+      "area": 3,
+      "api": "DirectDraw",
+      "operation": "Lock/LockRect failure then retry",
+      "format": "color/depth",
+      "resource": "surface",
+      "usage": "CPU read/write",
+      "pool": "default/system/managed",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "implemented",
+      "tests": [
+        "map",
+        "readback"
+      ],
+      "remaining": "Prepared Wine source verifies rectangle/slice bounds before pointer publication, transfer failures and retry; installed API chain and all copy callsites remain unverified."
+    },
+    {
+      "id": "d3d8.map-failure",
+      "area": 3,
+      "api": "D3D8",
+      "operation": "Lock/LockRect failure then retry",
+      "format": "color/depth",
+      "resource": "surface",
+      "usage": "CPU read/write",
+      "pool": "default/system/managed",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "implemented",
+      "tests": [
+        "map",
+        "readback"
+      ],
+      "remaining": "Prepared Wine source verifies rectangle/slice bounds before pointer publication, transfer failures and retry; installed API chain and all copy callsites remain unverified."
+    },
+    {
+      "id": "d3d9.map-failure",
+      "area": 3,
+      "api": "D3D9",
+      "operation": "Lock/LockRect failure then retry",
+      "format": "color/depth",
+      "resource": "surface",
+      "usage": "CPU read/write",
+      "pool": "default/system/managed",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "implemented",
+      "tests": [
+        "map",
+        "readback"
+      ],
+      "remaining": "Prepared Wine source verifies rectangle/slice bounds before pointer publication, transfer failures and retry; installed API chain and all copy callsites remain unverified."
+    },
+    {
+      "id": "ddraw.dc",
+      "area": 4,
+      "api": "DirectDraw",
+      "operation": "GetDC/edit/ReleaseDC/failure/retry",
+      "format": "RGB",
+      "resource": "surface",
+      "usage": "GDI read/write",
+      "pool": "system/default/user",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "implemented",
+      "tests": [
+        "map"
+      ],
+      "remaining": "Installed API GDI overlay and subsequent GPU draw remain unverified."
+    },
+    {
+      "id": "format.p8",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "P8",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "palettes"
+      ],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.a8p8",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "A8P8",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.rgb332",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "RGB332",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.rgb555",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "RGB555",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.rgb565",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "RGB565",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.argb1555",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "ARGB1555",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.argb4444",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "ARGB4444",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.rgb24",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "RGB24",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.bgr24",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "BGR24",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.rgba32",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "RGBA32",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.bgra32",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "BGRA32",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.a8",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "A8",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.l8",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "L8",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.a8l8",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "A8L8",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.dxt1",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "DXT1",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.dxt2",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "DXT2",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.dxt3",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "DXT3",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.dxt4",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "DXT4",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.dxt5",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "DXT5",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.bump-map",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "bump-map",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.yuv",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "YUV",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "format.floating-point",
+      "area": 5,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "query/create/upload/sample/lock",
+      "format": "floating-point",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "default/system/managed",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [],
+      "remaining": "Optional format support is usage-specific. Capture advertised checks and expand resource/operation/pool combinations; mandatory format requirements vary by API and device type."
+    },
+    {
+      "id": "depth.d16",
+      "area": 6,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "render/read/edit/upload/render",
+      "format": "D16",
+      "resource": "depth-stencil surface",
+      "usage": "CPU/GPU round trip",
+      "pool": "default/system",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "map",
+        "depth-transfer",
+        "guest-depth",
+        "native",
+        "depth-ownership"
+      ],
+      "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
+    },
+    {
+      "id": "depth.d24x8",
+      "area": 6,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "render/read/edit/upload/render",
+      "format": "D24X8",
+      "resource": "depth-stencil surface",
+      "usage": "CPU/GPU round trip",
+      "pool": "default/system",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "map",
+        "depth-transfer",
+        "guest-depth",
+        "native",
+        "depth-ownership"
+      ],
+      "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
+    },
+    {
+      "id": "depth.d24s8",
+      "area": 6,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "render/read/edit/upload/render",
+      "format": "D24S8",
+      "resource": "depth-stencil surface",
+      "usage": "CPU/GPU round trip",
+      "pool": "default/system",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "map",
+        "depth-transfer",
+        "guest-depth",
+        "native",
+        "depth-ownership"
+      ],
+      "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
+    },
+    {
+      "id": "depth.d32",
+      "area": 6,
+      "api": "DirectDraw/D3D8/D3D9",
+      "operation": "render/read/edit/upload/render",
+      "format": "D32",
+      "resource": "depth-stencil surface",
+      "usage": "CPU/GPU round trip",
+      "pool": "default/system",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "map",
+        "depth-transfer",
+        "guest-depth",
+        "native",
+        "depth-ownership"
+      ],
+      "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
+    },
+    {
+      "id": "depth.preservation",
+      "area": 6,
+      "api": "all",
+      "operation": "clear/compare/masks/target switching",
+      "format": "exposed depth/stencil",
+      "resource": "attachment",
+      "usage": "render",
+      "pool": "native/default",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native",
+        "depth-ownership"
+      ],
+      "remaining": "Verify real depth and stencil contents and target A/B/A through installed APIs."
+    },
+    {
+      "id": "gl.readback",
+      "area": 7,
+      "api": "OpenGL 1.1",
+      "operation": "ReadPixels/GetTexImage pack and conversion",
+      "format": "color/depth/stencil",
+      "resource": "framebuffer/texture level",
+      "usage": "CPU read",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "gl-readback",
+        "native"
+      ],
+      "remaining": "Native and isolated frontend tests do not establish all installed API format/pack combinations."
+    },
+    {
+      "id": "gl.texture.1d",
+      "area": 8,
+      "api": "OpenGL 1.1",
+      "operation": "TexImage1D definition/upload",
+      "format": "GL1.1 base and sized",
+      "resource": "texture level",
+      "usage": "sampling",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-texture",
+        "native",
+        "guest-borders",
+        "native-border-environment"
+      ],
+      "remaining": "Scalar/component/index/bitmap uploads, sized/zero-sized storage, proxies and partial updates implemented and negotiated. Linux supplied-border storage/sampling passed patched Mesa softpipe. macOS supplied borders use a private fixed-function-compatible fragment sampler with native protocol checks; six-platform installed verification remains open."
+    },
+    {
+      "id": "gl.texture.2d",
+      "area": 8,
+      "api": "OpenGL 1.1",
+      "operation": "TexImage2D definition/upload",
+      "format": "GL1.1 base and sized",
+      "resource": "texture level",
+      "usage": "sampling",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-texture",
+        "native",
+        "guest-borders",
+        "native-border-environment"
+      ],
+      "remaining": "Scalar/component/index/bitmap uploads, sized/zero-sized storage, proxies and partial updates implemented and negotiated. Linux supplied-border storage/sampling passed patched Mesa softpipe. macOS supplied borders use a private fixed-function-compatible fragment sampler with native protocol checks; six-platform installed verification remains open."
+    },
+    {
+      "id": "gl.subimage",
+      "area": 8,
+      "api": "OpenGL 1.1",
+      "operation": "TexSubImage/partial update",
+      "format": "GL1.1 input formats",
+      "resource": "texture level",
+      "usage": "sampling",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-texture",
+        "native",
+        "guest-borders",
+        "native-border-environment"
+      ],
+      "remaining": "Scalar/component/index/bitmap uploads, sized/zero-sized storage, proxies and partial updates implemented and negotiated. Linux supplied-border storage/sampling passed patched Mesa softpipe. macOS supplied borders use a private fixed-function-compatible fragment sampler with native protocol checks; six-platform installed verification remains open."
+    },
+    {
+      "id": "ddraw.palette",
+      "area": 9,
+      "api": "DirectDraw",
+      "operation": "attach/edit/shared palette/color key",
+      "format": "P8",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "system/default",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "implemented",
+      "tests": [
+        "palettes",
+        "keyed-blit"
+      ],
+      "remaining": "Installed multi-texture palette sharing and all key/alpha combinations remain unverified."
+    },
+    {
+      "id": "copy.preservation",
+      "area": 10,
+      "api": "all",
+      "operation": "partial/keyed/overlap/stretch/target A-B-A",
+      "format": "color/depth",
+      "resource": "surface/texture",
+      "usage": "copy/render target",
+      "pool": "all",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native",
+        "cpu-target"
+      ],
+      "remaining": "Complete operation/format matrix and failure propagation across every copy caller."
+    },
+    {
+      "id": "d3d.indexed",
+      "area": 11,
+      "api": "Direct3D2/3",
+      "operation": "BeginIndexed/Index/End",
+      "format": "vertex/FVF",
+      "resource": "immediate vertex array",
+      "usage": "draw",
+      "pool": "caller memory",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "emulated",
+      "tests": [
+        "indexed",
+        "guest-indexed"
+      ],
+      "remaining": "Expanded into ordinary DrawPrimitive. Run DGCAP6.EXE on six installed API combinations; no live result yet."
+    },
+    {
+      "id": "fixed.rendering",
+      "area": 11,
+      "api": "OpenGL/D3D/Glide2x",
+      "operation": "transforms/lighting/fog/stages/blend/clip",
+      "format": "all exposed",
+      "resource": "draw",
+      "usage": "render",
+      "pool": "all",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native"
+      ],
+      "remaining": "Complete public operation chains, including execute buffers and pretransformed/untransformed vertices."
+    },
+    {
+      "id": "state.isolation",
+      "area": 12,
+      "api": "all",
+      "operation": "default/get/push/pop/state block/list",
+      "format": "state",
+      "resource": "context/device",
+      "usage": "state",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native",
+        "gl-icd"
+      ],
+      "remaining": "Public API cross-context and failure-state consistency remains unverified."
+    },
+    {
+      "id": "sync.completion",
+      "area": 13,
+      "api": "all",
+      "operation": "WAIT/DONOTWAIT/status/delete ordering",
+      "format": "all",
+      "resource": "shared resource",
+      "usage": "synchronization",
+      "pool": "all",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native"
+      ],
+      "remaining": "Audit advertised busy/completion semantics, not only submission ordering."
+    },
+    {
+      "id": "handles.lifetime",
+      "area": 14,
+      "api": "WGL/D3D",
+      "operation": "thread exit/crash/share/delete/reuse",
+      "format": "all",
+      "resource": "context/resource handle",
+      "usage": "lifetime",
+      "pool": "all",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "context",
+        "native"
+      ],
+      "remaining": "Run installed API failure and process cleanup chains."
+    },
+    {
+      "id": "lifecycle.recovery",
+      "area": 15,
+      "api": "WGL/DirectDraw/D3D8/D3D9",
+      "operation": "minimize/restore/fullscreen/reset",
+      "format": "color/depth",
+      "resource": "drawable/device",
+      "usage": "presentation",
+      "pool": "default/managed",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "context",
+        "gl-frontend"
+      ],
+      "remaining": "Recovery candidate is not live-verified; distinct lost-device contracts and fullscreen ownership remain open."
+    },
+    {
+      "id": "gdi.coherence",
+      "area": 16,
+      "api": "DirectDraw/GDI",
+      "operation": "GPU scene/GDI sprite/read/GPU draw",
+      "format": "RGB565/BGRA32",
+      "resource": "primary/target",
+      "usage": "mixed rendering",
+      "pool": "system/default",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "map",
+        "native"
+      ],
+      "remaining": "GetDC failure handling is implemented; complete installed mixed-rendering chain remains open."
+    },
+    {
+      "id": "display.modes",
+      "area": 17,
+      "api": "all",
+      "operation": "mode/stride/flip/vblank/gamma",
+      "format": "RGB565/BGRA32",
+      "resource": "scanout",
+      "usage": "presentation",
+      "pool": "native",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native"
+      ],
+      "remaining": "Capture mode enumeration and verify exposed gamma/vblank semantics across hosts/OSes."
+    },
+    {
+      "id": "transport.failures",
+      "area": 18,
+      "api": "DreamGPU",
+      "operation": "bounds/owner/version/timeout/order",
+      "format": "packets",
+      "resource": "transport",
+      "usage": "commands/readback",
+      "pool": "shared",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native"
+      ],
+      "remaining": "Audit all failure paths and version negotiation; never replay uncertain commands."
+    },
+    {
+      "id": "juke.integration",
+      "area": 19,
+      "api": "Juke",
+      "operation": "inactive/minimized/pause/resume/screenshot/input",
+      "format": "RGB/native image",
+      "resource": "VM/view",
+      "usage": "presentation/readback",
+      "pool": "shared",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [],
+      "remaining": "Juke screenshots now identify source, publication freshness and CPU generation, with legacy-event compatibility tests in Juke. VM frame authority, leases, minimize/pause completion and released input remain live-unverified."
+    },
+    {
+      "id": "install.identity",
+      "area": 20,
+      "api": "all",
+      "operation": "install/reboot/loaded module identity",
+      "format": "providers/drivers",
+      "resource": "installed binaries",
+      "usage": "deployment",
+      "pool": "guest",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "patches",
+        "installer-metadata",
+        "installer-generations",
+        "probe-failure-evidence"
+      ],
+      "remaining": "Win98 migration now captures the exact legacy qemumini pair with private verified backups and rollback; short/long OEM INF aliases and bounded nonterminated registry strings are accepted. Failure-injection and generation tests pass. Loaded provider verification on six supported combinations remains open."
+    },
+    {
+      "id": "pressure.limits",
+      "area": 21,
+      "api": "all",
+      "operation": "allocate/evict/reclaim/measure",
+      "format": "all",
+      "resource": "resource",
+      "usage": "memory pressure",
+      "pool": "all",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "native"
+      ],
+      "remaining": "Correctness under allocation pressure and completed-work latency must precede optimization."
+    },
+    {
+      "id": "glide.download",
+      "area": 8,
+      "api": "Glide2x",
+      "operation": "download/mips/update/sample",
+      "format": "exposed packed/indexed",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "texture memory",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "glide-mips",
+        "glide-download"
+      ],
+      "remaining": "Verify through public installed Glide API, including palette and LFB interaction."
+    },
+    {
+      "id": "modern.shaders",
+      "area": 1,
+      "api": "OpenGL/D3D",
+      "operation": "programmable shaders",
+      "format": "n/a",
+      "resource": "n/a",
+      "usage": "n/a",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "guest-caps-d3d"
+      ],
+      "remaining": "Modern shader implementation is outside this baseline unless advertised. Capture actual D3D shader versions before asserting absence or support; host use alone establishes neither."
+    },
+    {
+      "id": "modern.fbo",
+      "area": 1,
+      "api": "OpenGL",
+      "operation": "FBO extension",
+      "format": "n/a",
+      "resource": "n/a",
+      "usage": "n/a",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": false,
+      "implementation": "unsupported",
+      "tests": [],
+      "remaining": "Outside baseline; do not infer public support from host implementation."
+    },
+    {
+      "id": "snapshot.live",
+      "area": 1,
+      "api": "DreamGPU/Juke",
+      "operation": "restore live GPU snapshot",
+      "format": "n/a",
+      "resource": "n/a",
+      "usage": "n/a",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": false,
+      "implementation": "unsupported",
+      "tests": [],
+      "remaining": "Outside baseline; do not infer public support from host implementation."
+    },
+    {
+      "id": "d3d.buffer-map-failure",
+      "area": 4,
+      "api": "D3D8/D3D9",
+      "operation": "Lock bounds/allocation/context failure and retry",
+      "format": "vertex/index bytes",
+      "resource": "buffer",
+      "usage": "read/write/discard/no-overwrite",
+      "pool": "default/system/managed",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "partial",
+      "tests": [
+        "buffer-map"
+      ],
+      "remaining": "Checked bounds, failed-map rollback and nested native access checks are implemented. Unsupported unaligned native maps reject without CPU download or BO deletion. Failed unmap, other unload/readback callers and the public installed buffer lifecycle remain unverified."
+    }
+  ]
+}

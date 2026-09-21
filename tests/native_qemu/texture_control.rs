@@ -326,7 +326,7 @@ fn qemu_texture_1d_invalid_rectangle_preserves_pixels_and_context() {
 #[ignore = "requires native GPU; focused packed16 texture transport pixels"]
 fn qemu_packed16_texture_uploads_preserve_pixels_mips_zero_and_unpack() {
     let (_, _, host) = native_gpu();
-    let dir = std::env::temp_dir().join(format!("dg-packed16-{}", uuid::Uuid::new_v4().simple()));
+    let dir = std::env::temp_dir().join(format!("dg-p16-{}", uuid::Uuid::new_v4().simple()));
     std::fs::create_dir(&dir).unwrap();
     let socket = dir.join("g.sock");
     let server = GpuServer::new(&socket, host).unwrap();

@@ -10,8 +10,13 @@
 #include "../common/provider-clean.h"
 
 namespace {
+#ifdef DG_GL_BORDER_PROBE
+constexpr const char *probe_log = "C:\\DGBORDER.LOG";
+#else
+constexpr const char *probe_log = "C:\\DGSYSGL.LOG";
+#endif
 class Log {
-    HANDLE file_ = CreateFileA("C:\\DGSYSGL.LOG", GENERIC_WRITE, FILE_SHARE_READ, nullptr,
+    HANDLE file_ = CreateFileA(probe_log, GENERIC_WRITE, FILE_SHARE_READ, nullptr,
                                CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
 
   public:
@@ -173,6 +178,10 @@ class Context {
     }
 };
 
+#ifdef DG_GL_BORDER_PROBE
+#include "border-probe.inc"
+#endif
+
 bool run(Log &log) {
     if (!clean_application_directory()) {
         log.line("FAIL private provider, mismatched cwd, or unreadable helper directory");
@@ -296,7 +305,13 @@ bool run(Log &log) {
             return false;
         }
     }
+#ifdef DG_GL_BORDER_PROBE
+    if (!border_probe(module.value, log))
+        return false;
+    log.line("PASS automated bordergl: dimensions=1,2 sampling_cases=10 storage_roundtrips=4 provider=dgpuicd.dll");
+#else
     log.line("PASS automated sysgl: system_gl_basic_pixels=8192 swaps=2 provider=dgpuicd.dll");
+#endif
     return true;
 }
 

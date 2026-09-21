@@ -1,7 +1,11 @@
 //! Diskless QEMU guest-command → native image IPC → renderer import acceptance.
 
+#[path = "native_qemu/border_sampling.rs"]
+mod border_sampling;
 #[path = "native_qemu/cursor.rs"]
 mod cursor;
+#[path = "native_qemu/depth.rs"]
+mod depth;
 #[path = "native_qemu/discard.rs"]
 mod discard;
 #[path = "native_qemu/evaluator.rs"]

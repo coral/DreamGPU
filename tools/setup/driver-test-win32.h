@@ -83,6 +83,9 @@ inline setup::driver::Node current;
 inline std::vector<setup::driver::Node> compatible;
 inline SP_DEVINSTALL_PARAMS_A params;
 inline std::function<void(const std::string &)> execute;
+inline std::function<void(const setup::driver::Node &)> node_changed;
+inline std::map<std::string, std::string> short_paths;
+inline std::string detail_inf_override;
 inline std::string executable;
 inline unsigned selected = 0, binds = 0, launches = 0, resumes = 0, destroys = 0;
 inline uint32_t created_low = 1, created_high = 1;
@@ -119,8 +122,24 @@ inline void set_node(const setup::driver::Node &node) {
     reg("InfSection", node.section);
     reg("DriverDesc", node.description);
     reg("ProviderName", node.provider);
+    if (node_changed)
+        node_changed(node);
 }
 } // namespace driver_fake
+inline DWORD GetShortPathNameA(const char *path, char *out, DWORD capacity) {
+    auto name = fake_win32::canon(path);
+    auto alias = driver_fake::short_paths.find(name);
+    if (alias != driver_fake::short_paths.end())
+        name = fake_win32::canon(alias->second.c_str());
+    if (!fake_win32::files.count(name)) {
+        SetLastError(ERROR_FILE_NOT_FOUND);
+        return 0;
+    }
+    if (name.size() >= capacity)
+        return DWORD(name.size() + 1);
+    strcpy(out, name.c_str());
+    return DWORD(name.size());
+}
 inline DWORD GetWindowsDirectoryA(char *out, DWORD n) {
     constexpr char p[] = "C:\\WINDOWS";
     if (n < sizeof(p))
@@ -230,6 +249,8 @@ inline BOOL SetupDiGetDriverInfoDetailA(HDEVINFO, SP_DEVINFO_DATA *, SP_DRVINFO_
     auto entries = driver_matches();
     auto &node = entries[item->Reserved];
     strcpy(out->InfFileName, node.inf);
+    if (!driver_fake::detail_inf_override.empty())
+        strcpy(out->InfFileName, driver_fake::detail_inf_override.c_str());
     strcpy(out->SectionName, node.section);
     *required = driver_fake::malformed_detail ? 5000 : sizeof(*out);
     return TRUE;

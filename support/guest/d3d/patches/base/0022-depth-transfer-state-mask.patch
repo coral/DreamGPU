@@ -1,0 +1,16 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4155,7 +4155,12 @@
+      * dead transport that continually reports an error. */
+     for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
+     if (i == 16) { free(depth); return WINED3DERR_INVALIDCALL; }
+-    gl_info->gl_ops.gl.p_glPushAttrib(GL_ALL_ATTRIB_BITS);
++    /* Wine's generated wgl.h defines GL_ALL_ATTRIB_BITS as 0xffffffff,
++     * which includes invalid bits in the shipped OpenGL 1.1 interface. Save
++     * only the groups this transfer changes, using their stable GL1.1 bits. */
++    gl_info->gl_ops.gl.p_glPushAttrib(GL_CURRENT_BIT | GL_PIXEL_MODE_BIT | GL_DEPTH_BUFFER_BIT
++            | GL_STENCIL_BUFFER_BIT | GL_ENABLE_BIT | GL_COLOR_BUFFER_BIT
++            | GL_VIEWPORT_BIT | GL_TRANSFORM_BIT);
+     if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
+     attrib = TRUE;
+     gl_info->gl_ops.gl.p_glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);

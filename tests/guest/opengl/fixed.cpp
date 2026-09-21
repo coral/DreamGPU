@@ -60,6 +60,14 @@ BOOL JglQuery(ULONG fn, const ULONG args[3], ULONG type, void *output, ULONG cap
     }
     return TRUE;
 }
+/* This isolated vector/query harness models ordinary execution outside lists. */
+void JglCommandError(GLenum error) {
+    JglSetError(error);
+}
+BOOL JglCommandReady(void) {
+    return JglReady();
+}
+
 int main(void) {
     GLfloat four[4] = {1, 2, 3, 4}, three[3] = {5, 6, 7};
     GLdouble plane[4] = {1, 0, 0, 3};
@@ -125,6 +133,26 @@ int main(void) {
     ResultCount = 1;
     glIsEnabled(GL_VERTEX_ARRAY_SIZE);
     assert(Queries == saved + 1); /* Invalid cap must reach enum validation. */
+    {
+        const GLenum subpixelBits = 0x0d50;
+        struct { GLint value, guard; } iv = {0, 99};
+        struct { GLboolean value, guard; } bv = {0, 99};
+        struct { GLfloat value, guard; } fv = {0, 99};
+        struct { GLdouble value, guard; } dv = {0, 99};
+        saved = Queries;
+        ResultCount = 1;
+        glGetIntegerv(subpixelBits, &iv.value);
+        assert(Function == FEnum_glGetIntegerv && Arguments[0] == subpixelBits);
+        glGetBooleanv(subpixelBits, &bv.value);
+        assert(Function == FEnum_glGetBooleanv && Arguments[0] == subpixelBits);
+        glGetFloatv(subpixelBits, &fv.value);
+        assert(Function == FEnum_glGetFloatv && Arguments[0] == subpixelBits);
+        glGetDoublev(subpixelBits, &dv.value);
+        assert(Function == FEnum_glGetDoublev && Arguments[0] == subpixelBits);
+        assert(iv.value == 1 && bv.value == TRUE && fv.value == 0.5f && dv.value == 0.5);
+        assert(iv.guard == 99 && bv.guard == 99 && fv.guard == 99 && dv.guard == 99);
+        assert(Queries == saved + 4);
+    }
     {
         const GLenum names[] = {GL_UNPACK_SWAP_BYTES, GL_UNPACK_LSB_FIRST, GL_PACK_SWAP_BYTES,
                                 GL_PACK_LSB_FIRST,    GL_PACK_ALIGNMENT,   GL_UNPACK_ALIGNMENT};
@@ -195,12 +223,4 @@ int main(void) {
     puts("PASS actual fixed-function wrappers: bounded vector sizes, immutable bits, material "
          "Begin exception, typed query canaries and local array queries");
     return 0;
-}
-
-/* This isolated vector/query harness models ordinary execution outside lists. */
-void JglCommandError(GLenum error) {
-    JglSetError(error);
-}
-BOOL JglCommandReady(void) {
-    return JglReady();
 }

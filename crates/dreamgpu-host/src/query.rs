@@ -122,6 +122,23 @@ unsafe fn execute(
     let a = u32::from_le_bytes(words[0..4].try_into().unwrap());
     let b = u32::from_le_bytes(words[4..8].try_into().unwrap());
     let d = u32::from_le_bytes(words[8..12].try_into().unwrap());
+    if matches!(
+        function,
+        FEnum_glGetTexLevelParameteriv | FEnum_glGetTexLevelParameterfv
+    ) && matches!(a, GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D)
+        && !state.context.is_null()
+        && unsafe { (*state.context).proxy_rejected[usize::from(a == GL_PROXY_TEXTURE_2D)] }
+            & (1 << b)
+            != 0
+    {
+        // Feasibility of the virtual device, not just its larger native GPU.
+        // Both integer and floating properties encode zero as all-zero bytes.
+        unsafe {
+            core::ptr::write_bytes(result, 0, required as usize);
+            *bytes = required;
+        }
+        return Ok(());
+    }
     if crate::lists::query_function(function) {
         if state.context.is_null() || state.memory.is_null() {
             return Err(DG_GL_ERROR_CONTEXT);

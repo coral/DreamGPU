@@ -92,7 +92,7 @@ pub(crate) fn texture_env_params(target: u32, pname: u32) -> u32 {
 
 pub(crate) fn texture_components(format: u32) -> u32 {
     match format {
-        GL_ALPHA | GL_LUMINANCE => 1,
+        GL_COLOR_INDEX | GL_RED | GL_GREEN | GL_BLUE | GL_ALPHA | GL_LUMINANCE => 1,
         GL_LUMINANCE_ALPHA => 2,
         GL_RGB | GL_BGR => 3,
         GL_RGBA | GL_BGRA => 4,
@@ -102,7 +102,9 @@ pub(crate) fn texture_components(format: u32) -> u32 {
 
 pub(crate) fn texture_pixel_bytes(format: u32, kind: u32) -> u32 {
     match kind {
-        GL_UNSIGNED_BYTE => texture_components(format),
+        GL_BYTE | GL_UNSIGNED_BYTE => texture_components(format),
+        GL_SHORT | GL_UNSIGNED_SHORT => 2 * texture_components(format),
+        GL_INT | GL_UNSIGNED_INT | GL_FLOAT => 4 * texture_components(format),
         GL_UNSIGNED_SHORT_5_6_5 if format == GL_RGB => 2,
         GL_UNSIGNED_SHORT_4_4_4_4
         | GL_UNSIGNED_SHORT_5_5_5_1
@@ -231,6 +233,7 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_SHADE_MODEL
         | GL_FRONT_FACE
         | GL_CULL_FACE_MODE
+        | GL_SUBPIXEL_BITS
         | GL_RED_BITS
         | GL_GREEN_BITS
         | GL_BLUE_BITS
@@ -383,28 +386,7 @@ fn copy_1d_internal_format(format: u32) -> bool {
     matches!(format,GL_ALPHA|GL_LUMINANCE|GL_LUMINANCE_ALPHA|GL_INTENSITY|GL_RGB|GL_RGBA|GL_R3_G3_B2|0x803b..=0x8048|0x804a..=0x804d|0x804f..=0x805b)
 }
 fn texture_internal_format(format: u32) -> bool {
-    matches!(
-        format,
-        1 | 2
-            | 3
-            | 4
-            | GL_ALPHA
-            | GL_LUMINANCE
-            | GL_LUMINANCE_ALPHA
-            | GL_RGB
-            | GL_RGBA
-            | GL_R3_G3_B2
-            | GL_LUMINANCE4_ALPHA4
-            | GL_RGB4
-            | GL_RGB5
-            | GL_RGBA4
-            | GL_RGB5_A1
-            | GL_ALPHA8
-            | GL_LUMINANCE8
-            | GL_LUMINANCE8_ALPHA8
-            | GL_RGB8
-            | GL_RGBA8
-    )
+    (1..=4).contains(&format) || copy_1d_internal_format(format)
 }
 
 fn buffer_selection(mode: u32, draw: bool) -> bool {
@@ -538,14 +520,16 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
     let (wi, hi) = if image { (5, 6) } else { (6, 7) };
     if a[0] != GL_TEXTURE_2D
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
-        || a[wi] > DG_GL_MAX_TEXTURE_DIMENSION
-        || a[hi] > DG_GL_MAX_TEXTURE_DIMENSION
+        || a[wi] > DG_GL_MAX_TEXTURE_DIMENSION + 2
+        || a[hi] > DG_GL_MAX_TEXTURE_DIMENSION + 2
         || (image
-            && (a[7] != 0
+            && (a[7] > 1
+                || a[wi] < 2 * a[7]
+                || a[hi] < 2 * a[7]
                 || a[2] <= 4
                 || !texture_internal_format(a[2])
-                || a[wi] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
-                || a[hi] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])))
+                || a[wi] - 2 * a[7] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
+                || a[hi] - 2 * a[7] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])))
     {
         DG_GL_ERROR_TEXTURE
     } else {
@@ -674,27 +658,49 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let w = a[if image { 3 } else { 4 }];
     let h = a[if image { 4 } else { 5 }];
     let pixel_bytes = texture_pixel_bytes(a[6], a[7]);
+    if image
+        && a[0]
+            == if one {
+                GL_PROXY_TEXTURE_1D
+            } else {
+                GL_PROXY_TEXTURE_2D
+            }
+    {
+        return if a[1] <= DG_GL_MAX_TEXTURE_LEVEL
+            && a[5] <= 1
+            && w <= i32::MAX as u32
+            && h <= i32::MAX as u32
+            && (!one || h == 1)
+            && pixel_bytes != 0
+            && texture_internal_format(a[2])
+            && data.is_empty()
+        {
+            0
+        } else {
+            DG_GL_ERROR_TEXTURE
+        };
+    }
     let allocate_only = image && data.is_empty();
     if a[0] != (if one { GL_TEXTURE_1D } else { GL_TEXTURE_2D })
         || (one && (h != 1 || (!image && a[3] != 0)))
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
-        || w == 0
-        || h == 0
-        || w > DG_GL_MAX_TEXTURE_DIMENSION + if one { 2 } else { 0 }
-        || h > DG_GL_MAX_TEXTURE_DIMENSION
+        || (!image && (w == 0 || h == 0))
+        || w > DG_GL_MAX_TEXTURE_DIMENSION + 2
+        || h > DG_GL_MAX_TEXTURE_DIMENSION + 2
         || pixel_bytes == 0
         || (!allocate_only
             && u64::from(w) * u64::from(h) * u64::from(pixel_bytes) != data.len() as u64)
         || (image
-            && (a[5] > u32::from(one)
+            && (a[5] > 1
                 || w < 2 * a[5]
+                || (!one && h < 2 * a[5])
                 || !(if one {
                     (1..=4).contains(&a[2]) || copy_1d_internal_format(a[2])
                 } else {
                     texture_internal_format(a[2])
                 })
                 || w - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
-                || h > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])))
+                || (!one && h - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1]))))
     {
         DG_GL_ERROR_TEXTURE
     } else {
@@ -773,7 +779,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D)
                 && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
                 && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
-                && d < DG_GL_MAX_TEXTURE_DIMENSION * DG_GL_MAX_TEXTURE_DIMENSION
+                && d < (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
             {
                 n * pixel_words
             } else {
@@ -859,8 +865,10 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 DG_GL_RESULT_INT
             };
             u32::from(
-                matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D)
-                    && b <= DG_GL_MAX_TEXTURE_LEVEL
+                matches!(
+                    a,
+                    GL_TEXTURE_1D | GL_TEXTURE_2D | GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D
+                ) && b <= DG_GL_MAX_TEXTURE_LEVEL
                     && matches!(
                         d,
                         GL_TEXTURE_WIDTH

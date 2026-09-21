@@ -119,8 +119,15 @@ Within that private tree, GLOBAL coordinates driver and provider transactions.
 Independent immutable generations retain both the original baseline and the
 immediate predecessor. Before-images and intent records are flushed before
 public mutations. The initial driver transaction supports prior DreamGPU,
-Microsoft VGA and an unbound NT5 PCI device; unsupported prior drivers are
-rejected before public changes. The currently loaded driver protocol cannot
+Microsoft VGA, an unbound NT5 PCI device, and the Win98 legacy
+`qemumini.drv`/`qemumini.vxd` pair. Other prior drivers are rejected before public
+changes. Legacy migration uses a version 5 journal with the existing byte layout:
+it retains the exact compatible INF and both legacy binaries in place, captures
+verified private backups, and requires the new DreamGPU destinations to be absent.
+Rollback reselects that original INF without copying files, verifies the restored
+pair and started device, and removes only the recorded DreamGPU images. Changed
+originals, backups, or unexpected binding pairs stop recovery with a conflict.
+The currently loaded driver protocol cannot
 report a resident build hash, so verification makes no such claim.
 
 NT5 protected-runtime replacement uses an owned boot rename transaction without

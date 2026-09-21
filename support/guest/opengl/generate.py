@@ -45,6 +45,9 @@ exports.update({'glGenTextures':8,'glLightModelfv':8,'glLightModeliv':8,'glClipP
 exports.update({'glVertex2i':8,'glVertex2sv':4,'glVertex4s':16,'glTexCoord1f':4,'glTexCoord3f':12,
  'glTexCoord1fv':4,'glTexCoord3fv':4,'glTexCoord2sv':4,'glTexCoord4sv':4,'glColor4sv':4,'glColor4usv':4,'glFogiv':8,'glLightModeli':8})
 exports.update({'glPushAttrib':4,'glPopAttrib':0,'glGetTexImage':20,'glTexImage1D':32,'glTexSubImage1D':28})
+# Shared ICD implementations linked into the private Wine provider.
+exports.update({'glPushClientAttrib':4,'glPopClientAttrib':0,'glPixelTransferf':8,
+ 'glPixelTransferi':8,'glPixelZoom':8,'glRasterPos3f':12,'glDrawPixels':20})
 exports['glSecondaryColorPointerEXT']=16
 for suffix in ('b','s','i','d','ub','us','ui'):
  exports['glSecondaryColor3'+suffix+'EXT']=24 if suffix=='d' else 12

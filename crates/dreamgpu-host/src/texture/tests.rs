@@ -11,6 +11,7 @@ struct Mock {
     fences: u32,
     deletes: u32,
     width: i32,
+    height: i32,
     border: i32,
     strip_border: bool,
     query_error: u32,
@@ -64,13 +65,19 @@ unsafe extern "C" fn image2(
     _: u32,
     _: i32,
     _: i32,
-    _: i32,
-    _: i32,
-    _: i32,
+    width: i32,
+    height: i32,
+    border: i32,
     _: u32,
     _: u32,
     pixels: *const c_void,
 ) {
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        v.width = width;
+        v.height = height;
+        v.border = border;
+    });
     image(2, pixels);
 }
 unsafe extern "C" fn sub1(
@@ -130,6 +137,8 @@ unsafe extern "C" fn level(_: u32, _: i32, key: u32, out: *mut i32) {
         unsafe {
             *out = if key == GL_TEXTURE_WIDTH {
                 v.width
+            } else if key == GL_TEXTURE_HEIGHT {
+                v.height
             } else {
                 v.border
             };
@@ -240,7 +249,7 @@ fn allocation_accounting_zero_failure_recovery_and_pixelstore() {
     ];
     assert_eq!(
         run(&api, &mut t, &mut total, FEnum_glTexImage2D, bigger, 256),
-        (Err(11), GL_OUT_OF_MEMORY)
+        (Ok(()), GL_OUT_OF_MEMORY)
     );
     assert_eq!(total, 64);
     assert_eq!(t.widths[0], 4);
@@ -249,8 +258,8 @@ fn allocation_accounting_zero_failure_recovery_and_pixelstore() {
     let mut bad = tile;
     bad[2] = 1;
     assert_eq!(
-        run(&api, &mut t, &mut total, FEnum_glTexSubImage2D, bad, 64).0,
-        Err(11)
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage2D, bad, 64),
+        (Ok(()), GL_INVALID_VALUE)
     );
     total = u64::from(DG_GL_MAX_TEXTURE_BYTES);
     assert_eq!(
@@ -454,4 +463,47 @@ fn undefined_native_array_uses_its_actual_error_without_poisoning_later_uploads(
         (Ok(()), 0)
     );
     assert_eq!((t.version, total), (2, 16));
+}
+
+#[test]
+fn empty_redefinition_releases_full_precision_storage_without_zero_fill() {
+    let api = api();
+    MOCK.with(|v| *v.borrow_mut() = Mock::default());
+    let mut t = Texture::default();
+    let mut total = 0;
+    let mut a = [
+        GL_TEXTURE_2D,
+        0,
+        GL_RGBA16,
+        4,
+        4,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_SHORT,
+    ];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexImage2D, a, 128),
+        (Ok(()), 0)
+    );
+    assert_eq!(total, 128);
+    assert_eq!(t.levels[0], 128);
+    for (w, h) in [(0, 4), (4, 0), (0, 0)] {
+        a[3] = w;
+        a[4] = h;
+        assert_eq!(
+            run(&api, &mut t, &mut total, FEnum_glTexImage2D, a, 0),
+            (Ok(()), 0)
+        );
+        assert_eq!(
+            (
+                total,
+                t.levels[0],
+                t.widths[0],
+                t.heights[0],
+                t.undefined_levels
+            ),
+            (0, 0, w, h, 0)
+        );
+    }
+    assert_eq!(MOCK.with(|v| v.borrow().zeros), 0);
 }

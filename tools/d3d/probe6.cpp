@@ -13,8 +13,13 @@
 #include <stddef.h>
 #ifdef DG_SYSTEM_D3D
 #include "system-loader.h"
+#ifdef DG_CAPABILITY_D3D
+#define DG_LOG_PATH "C:\\DGCAP6.LOG"
+#define DG_PROBE_NAME "capd3d6"
+#else
 #define DG_LOG_PATH "C:\\DGSYS6.LOG"
 #define DG_PROBE_NAME "sysd3d6"
+#endif
 #else
 #define DG_LOG_PATH "C:\\DGD3D6.LOG"
 #define DG_PROBE_NAME "d3d6"
@@ -55,6 +60,10 @@ static BOOL Check(BOOL condition, const char *stage, DWORD code) {
 static BOOL HR(HRESULT result, const char *stage) {
     return Check(SUCCEEDED(result), stage, (DWORD)result);
 }
+#ifdef DG_CAPABILITY_D3D
+#include "indexed-probe.inc"
+#include "depth-probe.inc"
+#endif
 typedef HRESULT(WINAPI *CreateDraw)(GUID *, IDirectDraw **, IUnknown *);
 struct LegacyEnumeration {
     UINT count;
@@ -433,6 +442,10 @@ static BOOL LegacySystemMemoryClearProbe(CreateDraw create, HWND hwnd) {
             if (!HR(IDirectDrawSurface_Unlock(color_surface, NULL), "FAIL legacy clear unlock"))
                 break;
         }
+#ifdef DG_CAPABILITY_D3D
+        if (!failed)
+            LegacyDepthProbe(depth_surface, viewport);
+#endif
         if (!failed)
             LegacyPalettedTextureProbe(legacy, rgb, viewport, material, color_surface);
     } while (FALSE);
@@ -541,11 +554,85 @@ static void FinishWorker(void) {
         }
         WaitForWorker(worker.thread, "FAIL drawing worker exit wait");
         CloseHandle(worker.thread);
+        worker.thread = NULL;
     }
     if (worker.ready)
         CloseHandle(worker.ready);
     if (worker.release)
         CloseHandle(worker.release);
+    worker.ready = worker.release = NULL;
+}
+
+static void PumpWindowMessages(void) {
+    MSG message;
+    for (UINT count = 0; count < 64 && PeekMessageA(&message, NULL, 0, 0, PM_REMOVE); ++count) {
+        TranslateMessage(&message);
+        DispatchMessageA(&message);
+    }
+}
+
+static BOOL CheckTransitionPixels(DWORD background, DWORD center) {
+    DDSURFACEDESC2 locked = {};
+    locked.dwSize = sizeof(locked);
+    if (!HR(IDirectDrawSurface4_Lock(target, NULL, &locked, DDLOCK_READONLY | DDLOCK_WAIT, NULL),
+            "FAIL transition readback lock"))
+        return FALSE;
+    if (Check(locked.lpSurface && locked.lPitch >= 1280,
+              "FAIL transition readback layout", locked.lPitch)) {
+        for (UINT region = 0; region < 2 && !failed; ++region)
+            for (UINT y = 0; y < 16 && !failed; ++y)
+                for (UINT x = 0; x < 16; ++x) {
+                    UINT xx = x + (region ? 152 : 0), yy = y + (region ? 92 : 0);
+                    DWORD expected = region ? center : background;
+                    DWORD actual = *(DWORD *)((BYTE *)locked.lpSurface + yy * locked.lPitch + xx * 4)
+                                   & 0xffffff;
+                    if (!Check(actual == expected, "FAIL exact transition pixel", actual)) {
+                        Number("pixel x", xx);
+                        Number("pixel y", yy);
+                        Number("expected", expected);
+                        break;
+                    }
+                }
+    }
+    HR(IDirectDrawSurface4_Unlock(target, NULL), "FAIL transition unlock");
+    return !failed;
+}
+
+static BOOL WindowTransitionProbe(void) {
+    D3DRECT rect = {.x1 = 0, .y1 = 0, .x2 = 320, .y2 = 240};
+    RECT client;
+    // The earlier check keeps the worker parked during readback. Now require
+    // the same drawable to survive normal worker exit and a minimized HWND.
+    FinishWorker();
+    Log("STAGE minimize zero-client window, worker draw and exit, main readback");
+    if (!HR(IDirect3DViewport3_Clear2(view, 1, &rect, D3DCLEAR_TARGET, 0xff304050, 1, 0),
+            "FAIL transition initial clear"))
+        return FALSE;
+    ShowWindow(window, SW_MINIMIZE);
+    PumpWindowMessages();
+    if (!Check(IsIconic(window) && GetClientRect(window, &client) &&
+               client.right == client.left && client.bottom == client.top,
+               "FAIL minimized zero-client window", GetLastError()))
+        return FALSE;
+    if (!StartWorkerDraw())
+        return FALSE;
+    FinishWorker();
+    // No explicit WGL call: normal thread-detach cleanup must leave the shared
+    // drawable reusable by a different thread while its window stays minimized.
+    if (!CheckTransitionPixels(0x304050, 0xff0000))
+        return FALSE;
+    Log("STAGE restore window and main-thread clear/readback after worker exit");
+    ShowWindow(window, SW_RESTORE);
+    PumpWindowMessages();
+    if (!Check(!IsIconic(window) && GetClientRect(window, &client) &&
+               client.right == 320 && client.bottom == 240,
+               "FAIL restored drawable size", GetLastError()) ||
+        !HR(IDirect3DViewport3_Clear2(view, 1, &rect, D3DCLEAR_TARGET, 0xff506070, 1, 0),
+            "FAIL restored main-thread clear") ||
+        !CheckTransitionPixels(0x506070, 0x506070))
+        return FALSE;
+    Log("PASS minimized/restored window: worker exit, main-thread reuse, 1024 exact target pixels");
+    return TRUE;
 }
 
 static LRESULT CALLBACK WindowProc(HWND w, UINT message, WPARAM a, LPARAM b) {
@@ -793,6 +880,12 @@ static void Run(void) {
                 }
         ReleaseDC(window, dc);
     }
+#ifdef DG_CAPABILITY_D3D
+    if (!failed)
+        IndexedImmediateProbe();
+#endif
+    if (!failed)
+        WindowTransitionProbe();
 }
 extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);

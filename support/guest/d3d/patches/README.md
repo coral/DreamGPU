@@ -116,3 +116,104 @@ The drawable blitter compares converted P8 against transparent alpha zero;
 only the unconverted fragment-program path compares palette indices in alpha.
 `test_palette_blit.py` executes the prepared blitter with zero, nonzero and 255
 keys, including conversion during texture loading.
+
+`0014-context-readback-recovery.patch` lets a retained native GL context recover
+from a temporary binding failure instead of remaining permanently invalid.
+A successful real bind restores validity; destroyed contexts are rejected,
+including stale TLS cases. Golf's minimized-window crash reached a framebuffer
+read with an invalid cached context and then dereferenced null Wine TLS in the
+fog wrapper. Framebuffer, texture and PBO downloads now propagate binding
+failure without validating an unread CPU copy. CPU-only copies still work
+without a GL context. `test_context_migration.py` executes the actual binding
+helper and recovery paths; `test_readback_recovery.py` executes the prepared
+readback/location pipeline through failures and a later successful retry. The
+frontend separately retains existing drawable storage while the window has a
+zero-sized client area.
+
+`0015-map-dc-transfer-failures.patch` checks map storage and download results
+before publishing CPU pointers or invalidating valid copies. GetDC keeps its
+output unpublished on allocation, download or DIB failure; ReleaseDC keeps DC
+ownership and CPU data when writeback fails, allowing a retry. CPU-only location
+copies do not require a current GL context. `test_map_dc_failures.py` executes
+the prepared public boundaries with allocation, context, transfer and retry
+failures under ASan/UBSan.
+
+`0016-legacy-indexed-immediate.patch` replaces silent BeginIndexed/Index success
+with an owned copy of input vertices and checked index expansion into the
+existing DrawPrimitive path. Begin/End nesting, invalid indices and vertex
+strides, allocation overflow/failure and submitted-draw failures are handled
+without dangling caller memory. Destruction releases both buffers.
+`test_indexed_immediate.py` executes the prepared functions with caller-memory
+mutation, interleaved devices and failures; `DGCAP6.EXE` adds public pixel checks.
+
+`0017-depth-cpu-transfers.patch` supplies CPU depth transfers for the GL 1.1
+backbuffer renderer. D16/D16_LOCKABLE, D32_UNORM, D24/S8, X8D24, D15/S1 and
+D24/X4/S4 use the masks exposed by DirectDraw. Separate normalized depth and
+integer stencil staging avoids requiring depth textures or packed GL extensions.
+Readback commits only after both native reads succeed; uploads retain CPU
+authority on failure, finish before validating GPU storage, and preserve pixel
+transfer, matrix, raster and packing state. Transfers honor padded CPU pitch and
+the onscreen/offscreen row orientation. Missing contexts, oversized surfaces,
+unsupported layouts, PBO mappings and allocation/native failures return errors.
+The upstream FBO path remains separate; this does not claim FBO CPU depth access
+or floating depth formats.
+
+Draw and clear preparation now reload CPU depth, stop after failed preservation,
+and retain the untouched aspect of a depth-only or stencil-only clear. Stencil
+rendering also participates in location invalidation. Switching an onscreen depth
+buffer saves its backbuffer contents to CPU storage before changing ownership.
+`test_depth_transfer.py` executes the prepared conversion, transfer and clear
+preparation functions under ASan/UBSan, including guarded rows, both orientations,
+all seven layouts, failed reads/writes and retries. The separate capability probe
+uses public DirectDraw D16 Lock/Unlock, CPU edits and a partial GPU clear to verify
+2,048 actual depth values. That installed-API probe still requires guest execution;
+source tests alone do not establish GPU or game acceptance.
+
+`0018-buffer-map-failures.patch` validates buffer lock ranges without overflow,
+normalizes whole-buffer locks, checks acquired contexts, and rejects failed
+native/CPU maps before publishing discard, dirty-range or synchronization state.
+Failed attempts roll back map counts and preserve the output pointer for retry.
+`test_buffer_map.py` runs boundary, read-only, discard, no-overwrite, nested-map
+and retry cases against the prepared implementation under ASan/UBSan. Buffer
+unmap failure behavior is not covered by this patch.
+
+`0019-depth-state-guards.patch` handles overflow of attribute, client-attribute,
+projection and modelview stacks before transferring pixels. Cleanup pops only
+successfully saved frames. Depth transfer tests inject every push failure and
+verify that prior frames, authoritative locations and CPU bytes are preserved.
+
+`0021-map-bounds-and-fallbacks.patch` validates surface rectangles and the 2D
+slice before allocation, transfers, pointer arithmetic or dirty-state publication.
+This closes the unchecked D3D9 LockRect path; the prepared source tests reject
+negative casts, reversed/empty rectangles, out-of-range edges and invalid slices,
+while accepting the final valid pixel.
+
+Native buffer maps record the access granted by the outermost mapping. Nested
+locks cannot upgrade a read-only mapping to writable storage or read a write-only
+mapping; compatible nested access and ordinary CPU double buffers remain valid.
+A native pointer with unsupported alignment is unmapped and rejected without
+entering the old unchecked allocation/download/delete-buffer fallback. The GPU
+object and CPU storage remain owned and no dirty range is published. This is a
+safe rejection, not a new aligned-copy implementation. `test_buffer_map.py`
+executes both native mapping APIs, both nested access failures, compatible locks,
+and dynamic/static unaligned failures under ASan/UBSan. Other buffer unload paths
+and native unmap failures remain outside this fix.
+
+`0022-depth-transfer-state-mask.patch` fixes the installed DirectDraw D16 Lock
+failure exposed by the Win98 capability suite. Wine's generated header defines
+`GL_ALL_ATTRIB_BITS` as `0xffffffff`, which the shipped OpenGL 1.1 frontend
+rejects. The transfer now saves the eight state groups it actually changes,
+using their defined GL 1.1 bits. The actual-source sanitizer harness imports the
+pinned Wine GL constants and rejects unknown attribute bits, so it reproduces
+this cross-layer failure instead of accepting every push through a no-op mock.
+The public Clear → Lock → CPU edit → partial Clear → Lock probe remains the
+installed acceptance check.
+
+`0023-depth-transfer-entrypoints.patch` checks every core GL function needed by
+a depth transfer before calling the private provider. The Wine loader resolves
+`dgpugl.dll` exports; functions reachable only through the system ICD table do
+not satisfy that contract. Missing state or read/write operations now fail
+without issuing GL work or changing authoritative storage. Downloads remain
+available when only an upload operation is absent. The prepared-source test
+checks pointer failures, complete preflight coverage, and agreement with the
+private provider's export definition; its implementations share the ICD helpers.

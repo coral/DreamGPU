@@ -5,8 +5,8 @@
      */
     struct st_compressed_data* compressed_data;
 +
-+   /* Compatibility 1D border image: native-format texels, including both
-+    * independently writable border texels. Uploaded to a GPU sampling atlas.
++   /* Compatibility 1D/2D border image: native-format texels, including all
++    * independently writable edges and corners. Uploaded to a GPU sampling atlas.
 +    * This is image storage, not GL_TEXTURE_BORDER_COLOR or query shadow state.
 +    */
 +   uint8_t *border_data;
@@ -17,37 +17,40 @@
  
 --- a/src/mesa/main/teximage.c
 +++ b/src/mesa/main/teximage.c
-@@ -3224,7 +3224,7 @@
+@@ -3224,7 +3224,9 @@
        /* check that the texture won't take too much memory, etc */
        sizeOK = st_TestProxyTexImage(ctx, proxy_target(target),
                                      0, level, texFormat, 1,
 -                                    width, height, depth);
-+                                    (target == GL_TEXTURE_1D || target == GL_PROXY_TEXTURE_1D) && border && width >= 2 ? width - 2 : width, height, depth);
++                                    (target == GL_TEXTURE_1D || target == GL_PROXY_TEXTURE_1D ||
++                                     target == GL_TEXTURE_2D || target == GL_PROXY_TEXTURE_2D) && border && width >= 2 ? width - 2 : width,
++                                    (target == GL_TEXTURE_2D || target == GL_PROXY_TEXTURE_2D) && border && height >= 2 ? height - 2 : height, depth);
     }
  
     if (_mesa_is_proxy_texture(target)) {
-@@ -3267,7 +3267,7 @@
+@@ -3267,7 +3269,7 @@
         * reliable but slightly incorrect hardware rendering instead of
         * rarely-tested software fallback rendering.
         */
 -      if (border) {
-+      if (border && target != GL_TEXTURE_1D) {
++      if (border && target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
           strip_texture_border(target, &width, &height, &depth, unpack,
                                &unpack_no_border);
           border = 0;
-@@ -4633,13 +4633,13 @@
+@@ -4633,13 +4635,14 @@
  
     if (!st_TestProxyTexImage(ctx, proxy_target(target),
                               0, level, texFormat, 1,
 -                             width, height, 1)) {
-+                             target == GL_TEXTURE_1D && border ? width - 2 : width, height, 1)) {
++                             (target == GL_TEXTURE_1D || target == GL_TEXTURE_2D) && border ? width - 2 : width,
++                             target == GL_TEXTURE_2D && border ? height - 2 : height, 1)) {
        _mesa_error(ctx, GL_OUT_OF_MEMORY,
                    "glCopyTexImage%uD(image too large)", dims);
        return;
     }
  
 -   if (border) {
-+   if (border && target != GL_TEXTURE_1D) {
++   if (border && target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
        x += border;
        width -= border * 2;
        if (dims == 2) {
@@ -57,29 +60,31 @@
        GLuint enabled:1;
        GLuint source_index:4;   /**< TEXTURE_x_INDEX */
        GLuint shadow:1;
-+      GLuint border_width;
++      GLuint border_width, border_height;
 +      GLuint border_max_level;
-+      GLenum border_wrap, border_min, border_mag;
++      GLenum border_wrap, border_wrap_t, border_min, border_mag;
  
        /***
         * These are taken from struct gl_tex_env_combine_packed
-@@ -276,6 +279,15 @@
+@@ -276,6 +279,17 @@
        key->unit[i].source_index = texObj->TargetIndex;
  
        const struct gl_sampler_object *samp = _mesa_get_samplerobj(ctx, i);
 +      const struct gl_texture_image *im = _mesa_base_tex_image(texObj);
 +      if (im && im->border_data) {
 +         key->unit[i].border_width = im->Width2;
++         key->unit[i].border_height = texObj->Target == GL_TEXTURE_2D ? im->Height2 : 0;
 +         key->unit[i].border_max_level = texObj->_MipmapComplete ?
 +            texObj->_MaxLevel - texObj->Attrib.BaseLevel : 0;
 +         key->unit[i].border_wrap = samp->Attrib.WrapS;
++         key->unit[i].border_wrap_t = samp->Attrib.WrapT;
 +         key->unit[i].border_min = samp->Attrib.MinFilter;
 +         key->unit[i].border_mag = samp->Attrib.MagFilter;
 +      }
        if (samp->Attrib.CompareMode == GL_COMPARE_R_TO_TEXTURE) {
           const GLenum format = _mesa_texture_base_format(texObj);
           key->unit[i].shadow = (format == GL_DEPTH_COMPONENT ||
-@@ -742,6 +754,125 @@
+@@ -742,6 +756,242 @@
  /**
   * Generate instruction for getting a texture source term.
   */
@@ -168,6 +173,111 @@
 +   return nir_flrp(b, a, c, nir_ffract(b, u));
 +}
 +
++/* One axis of legacy wrapping. Clamp precedes the linear filter footprint;
++ * consequently GL_CLAMP blends the real image edge at exactly s/t=0 and 1. */
++static nir_def *
++border_coord_2d(nir_builder *b, nir_def *s, GLenum wrap)
++{
++   if (wrap == GL_MIRRORED_REPEAT)
++      s = nir_fsub(b, nir_imm_float(b, 1), nir_fabs(b,
++         nir_fadd_imm(b, nir_fmul_imm(b, nir_ffract(b, nir_fmul_imm(b, s, .5f)), 2), -1)));
++   else if (wrap == GL_MIRROR_CLAMP_EXT || wrap == GL_MIRROR_CLAMP_TO_EDGE_EXT ||
++            wrap == GL_MIRROR_CLAMP_TO_BORDER_EXT)
++      s = nir_fabs(b, s);
++   if (wrap == GL_REPEAT)
++      return nir_ffract(b, s);
++   if (wrap == GL_CLAMP_TO_BORDER || wrap == GL_MIRROR_CLAMP_TO_BORDER_EXT)
++      return nir_fclamp(b, s, nir_imm_float(b, -1), nir_imm_float(b, 2));
++   return nir_fsat(b, s);
++}
++
++static nir_def *
++border_index_2d(nir_builder *b, nir_def *index, nir_def *size, GLenum wrap)
++{
++   if (wrap == GL_REPEAT)
++      return nir_iadd_imm(b, nir_imod(b, index, size), 1);
++   bool edge = wrap == GL_CLAMP_TO_EDGE || wrap == GL_MIRRORED_REPEAT ||
++               wrap == GL_MIRROR_CLAMP_TO_EDGE_EXT;
++   index = nir_iclamp(b, index, nir_imm_int(b, edge ? 0 : -1),
++                     nir_iadd_imm(b, size, edge ? -1 : 0));
++   return nir_iadd_imm(b, index, 1);
++}
++
++static nir_def *
++border_fetch_2d(struct texenv_fragment_program *p, unsigned unit, nir_def *level,
++                nir_def *width, nir_def *height, nir_def *x, nir_def *y)
++{
++   nir_builder *b = p->b;
++   x = border_index_2d(b, x, width, p->state->unit[unit].border_wrap);
++   y = border_index_2d(b, y, height, p->state->unit[unit].border_wrap_t);
++   unsigned base_height = p->state->unit[unit].border_height;
++   for (unsigned l = 0; l < p->state->unit[unit].border_max_level; ++l) {
++      unsigned rows = MAX2(base_height >> l, 1) + 2;
++      y = nir_iadd(b, y, nir_bcsel(b, nir_ilt(b, nir_imm_int(b, l), level),
++                                 nir_imm_int(b, rows), nir_imm_int(b, 0)));
++   }
++   nir_variable *var = p->sampler_vars[unit];
++   if (!var) {
++      var = nir_variable_create(b->shader, nir_var_uniform,
++         glsl_sampler_type(GLSL_SAMPLER_DIM_2D, false, false, GLSL_TYPE_FLOAT),
++         ralloc_asprintf(b->shader, "border_sampler_%u", unit));
++      var->data.binding = unit;
++      var->data.explicit_binding = true;
++      p->sampler_vars[unit] = var;
++   }
++   nir_deref_instr *deref = nir_build_deref_var(b, var);
++   nir_tex_instr *tex = nir_tex_instr_create(b->shader, 3);
++   tex->op = nir_texop_txf;
++   tex->dest_type = nir_type_float32;
++   tex->texture_index = unit;
++   tex->sampler_index = unit;
++   tex->sampler_dim = GLSL_SAMPLER_DIM_2D;
++   tex->coord_components = 2;
++   tex->src[0] = nir_tex_src_for_ssa(nir_tex_src_texture_deref, &deref->def);
++   tex->src[1] = nir_tex_src_for_ssa(nir_tex_src_coord, nir_vec2(b, x, y));
++   tex->src[2] = nir_tex_src_for_ssa(nir_tex_src_lod, nir_imm_int(b, 0));
++   nir_def_init(&tex->instr, &tex->def, 4, 32);
++   nir_builder_instr_insert(b, &tex->instr);
++   return &tex->def;
++}
++
++static nir_def *
++border_sample_level_2d(struct texenv_fragment_program *p, unsigned unit,
++                       nir_def *s, nir_def *t, nir_def *level, bool linear)
++{
++   nir_builder *b = p->b;
++   GLenum wrap_s = p->state->unit[unit].border_wrap;
++   GLenum wrap_t = p->state->unit[unit].border_wrap_t;
++   nir_def *width = nir_imax(b, nir_ushr(b,
++      nir_imm_int(b, p->state->unit[unit].border_width), level), nir_imm_int(b, 1));
++   nir_def *height = nir_imax(b, nir_ushr(b,
++      nir_imm_int(b, p->state->unit[unit].border_height), level), nir_imm_int(b, 1));
++   nir_def *u = nir_fmul(b, border_coord_2d(b, s, wrap_s), nir_i2f32(b, width));
++   nir_def *v = nir_fmul(b, border_coord_2d(b, t, wrap_t), nir_i2f32(b, height));
++   if (!linear) {
++      nir_def *x = nir_f2i32(b, nir_ffloor(b, u));
++      nir_def *y = nir_f2i32(b, nir_ffloor(b, v));
++      if (wrap_s != GL_REPEAT && wrap_s != GL_CLAMP_TO_BORDER &&
++          wrap_s != GL_MIRROR_CLAMP_TO_BORDER_EXT)
++         x = nir_imin(b, x, nir_iadd_imm(b, width, -1));
++      if (wrap_t != GL_REPEAT && wrap_t != GL_CLAMP_TO_BORDER &&
++          wrap_t != GL_MIRROR_CLAMP_TO_BORDER_EXT)
++         y = nir_imin(b, y, nir_iadd_imm(b, height, -1));
++      return border_fetch_2d(p, unit, level, width, height, x, y);
++   }
++   u = nir_fadd_imm(b, u, -0.5f);
++   v = nir_fadd_imm(b, v, -0.5f);
++   nir_def *x = nir_f2i32(b, nir_ffloor(b, u));
++   nir_def *y = nir_f2i32(b, nir_ffloor(b, v));
++   nir_def *a = border_fetch_2d(p, unit, level, width, height, x, y);
++   nir_def *c = border_fetch_2d(p, unit, level, width, height, nir_iadd_imm(b, x, 1), y);
++   nir_def *d = border_fetch_2d(p, unit, level, width, height, x, nir_iadd_imm(b, y, 1));
++   nir_def *e = border_fetch_2d(p, unit, level, width, height,
++                              nir_iadd_imm(b, x, 1), nir_iadd_imm(b, y, 1));
++   return nir_flrp(b, nir_flrp(b, a, c, nir_ffract(b, u)),
++                  nir_flrp(b, d, e, nir_ffract(b, u)), nir_ffract(b, v));
++}
++
 +static nir_def *
 +load_border_texture(struct texenv_fragment_program *p, unsigned unit,
 +                    nir_def *coords)
@@ -184,17 +294,29 @@
 +   nir_def *s = nir_fdiv(b, nir_channel(b, coords, 0), nir_channel(b, coords, 3));
 +   nir_def *u = nir_fmul_imm(b, s, p->state->unit[unit].border_width);
 +   nir_def *rho = nir_fmax(b, nir_fabs(b, nir_ddx(b, u)), nir_fabs(b, nir_ddy(b, u)));
++   bool two_d = p->state->unit[unit].border_height != 0;
++   nir_def *t = NULL;
++   if (two_d) {
++      t = nir_fdiv(b, nir_channel(b, coords, 1), nir_channel(b, coords, 3));
++      nir_def *v = nir_fmul_imm(b, t, p->state->unit[unit].border_height);
++      nir_def *dx = nir_vec2(b, nir_ddx(b, u), nir_ddx(b, v));
++      nir_def *dy = nir_vec2(b, nir_ddy(b, u), nir_ddy(b, v));
++      rho = nir_fsqrt(b, nir_fmax(b, nir_fdot2(b, dx, dx), nir_fdot2(b, dy, dy)));
++   }
 +   nir_def *lambda = nir_flog2(b, rho);
-+   nir_def *mag = border_sample_level(p, unit, s, nir_imm_int(b, 0), mag_linear);
++   nir_def *mag = two_d ? border_sample_level_2d(p, unit, s, t, nir_imm_int(b, 0), mag_linear) :
++                         border_sample_level(p, unit, s, nir_imm_int(b, 0), mag_linear);
 +   nir_def *lod = nir_fclamp(b, lambda, nir_imm_float(b, 0),
 +      nir_imm_float(b, p->state->unit[unit].border_max_level));
 +   nir_def *lev = mip ? nir_f2i32(b, mip_linear ? nir_ffloor(b, lod) :
 +                     nir_fceil(b, nir_fadd_imm(b, lod, -.5f))) : nir_imm_int(b, 0);
-+   nir_def *value = border_sample_level(p, unit, s, lev, min_linear);
++   nir_def *value = two_d ? border_sample_level_2d(p, unit, s, t, lev, min_linear) :
++                           border_sample_level(p, unit, s, lev, min_linear);
 +   if (mip_linear) {
 +      nir_def *next = nir_imin(b, nir_iadd_imm(b, lev, 1),
 +                        nir_imm_int(b, p->state->unit[unit].border_max_level));
-+      nir_def *other = border_sample_level(p, unit, s, next, min_linear);
++      nir_def *other = two_d ? border_sample_level_2d(p, unit, s, t, next, min_linear) :
++                              border_sample_level(p, unit, s, next, min_linear);
 +      value = nir_flrp(b, value, other, nir_ffract(b, lod));
 +   }
 +   BITSET_SET(b->shader->info.textures_used, unit);
@@ -205,7 +327,7 @@
  static void
  load_texture(struct texenv_fragment_program *p, GLuint unit)
  {
-@@ -760,6 +891,11 @@
+@@ -760,6 +1010,11 @@
     if (!p->state->unit[unit].enabled) {
        p->src_texture[unit] = nir_imm_zero(p->b, 4, 32);
        return ;
@@ -219,25 +341,26 @@
     bool tex_is_array = false;
 --- a/src/mesa/state_tracker/st_texture.c
 +++ b/src/mesa/state_tracker/st_texture.c
-@@ -298,6 +298,17 @@
+@@ -298,6 +298,18 @@
  
     DBG("%s \n", __func__);
  
 +   if (stImage->border_data) {
-+      if (y || z || h != 1 || d != 1 || x > stImage->Width ||
-+          w > stImage->Width - x)
++      if (z || !h || d != 1 || x > stImage->Width || y >= stImage->Height ||
++          w > stImage->Width - x || h > stImage->Height - y)
 +         return NULL;
 +      assert(!stImage->border_transfer.usage);
 +      stImage->border_transfer.usage = usage;
 +      stImage->border_transfer.stride =
 +         _mesa_format_row_stride(stImage->TexFormat, stImage->Width);
 +      *transfer = &stImage->border_transfer;
-+      return stImage->border_data + x * _mesa_get_format_bytes(stImage->TexFormat);
++      return stImage->border_data + (size_t)y * stImage->border_transfer.stride +
++             x * _mesa_get_format_bytes(stImage->TexFormat);
 +   }
     if (!stImage->pt)
        return NULL;
  
-@@ -333,6 +344,42 @@
+@@ -333,6 +345,61 @@
     struct gl_texture_object *stObj = stImage->TexObject;
     struct pipe_transfer **transfer;
  
@@ -252,6 +375,25 @@
 +         unsigned level = stImage->Level;
 +         const struct gl_texture_image *base_image = first < MAX_TEXTURE_LEVELS ?
 +            stObj->Image[0][first] : NULL;
++         if (stObj->Target == GL_TEXTURE_2D) {
++            unsigned row = 0;
++            for (unsigned l = first; base_image && l < level; ++l)
++               row += u_minify(base_image->Height2, l - first) + 2;
++            if (atlas && base_image && atlas->target == PIPE_TEXTURE_2D &&
++                level >= first && level <= stObj->validated_last_level &&
++                atlas->format == st_mesa_format_to_pipe_format(st, stImage->TexFormat) &&
++                stImage->Width2 == u_minify(base_image->Width2, level - first) &&
++                stImage->Height2 == u_minify(base_image->Height2, level - first) &&
++                stImage->Width <= atlas->width0 && row <= atlas->height0 &&
++                stImage->Height <= atlas->height0 - row) {
++               struct pipe_box box;
++               u_box_2d(0, row, stImage->Width, stImage->Height, &box);
++               pipe->texture_subdata(pipe, atlas, 0, 0, &box, stImage->border_data,
++                  _mesa_format_row_stride(stImage->TexFormat, stImage->Width), 0);
++            } else {
++               stObj->needs_validation = true;
++            }
++         } else
 +         if (atlas && base_image && atlas->target == PIPE_TEXTURE_2D &&
 +             level >= first && level <= stObj->validated_last_level &&
 +             atlas->format == st_mesa_format_to_pipe_format(st, stImage->TexFormat) &&
@@ -295,15 +437,20 @@
     free(stImage->transfer);
     stImage->transfer = NULL;
     stImage->num_transfers = 0;
-@@ -1189,6 +1195,23 @@
+@@ -1189,6 +1195,28 @@
  
     stObj->needs_validation = true;
  
-+   if (texImage->Border && stObj->Target == GL_TEXTURE_1D) {
++   if (texImage->Border && (stObj->Target == GL_TEXTURE_1D || stObj->Target == GL_TEXTURE_2D)) {
 +      assert(!_mesa_is_format_compressed(texImage->TexFormat));
-+      size_t bytes = _mesa_format_row_stride(texImage->TexFormat, width);
++      size_t stride = _mesa_format_row_stride(texImage->TexFormat, width);
++      if (!height || stride > SIZE_MAX / height) {
++         _mesa_error(ctx, GL_OUT_OF_MEMORY, "border image size overflow");
++         return false;
++      }
++      size_t bytes = stride * height;
 +      if (!util_border_storage_reserve(bytes)) {
-+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border storage budget");
++         _mesa_error(ctx, GL_OUT_OF_MEMORY, "border storage budget");
 +         return false;
 +      }
 +      texImage->border_data = calloc(1, bytes);
@@ -312,14 +459,14 @@
 +      else
 +         util_border_storage_release(bytes);
 +      if (!texImage->border_data)
-+         _mesa_error(ctx, GL_OUT_OF_MEMORY, "1D border image storage");
++         _mesa_error(ctx, GL_OUT_OF_MEMORY, "border image storage");
 +      return texImage->border_data != NULL;
 +   }
 +
     compressed_tex_fallback_allocate(st, stImage);
     const bool allowAllocateToStObj = !stObj->pt ||
                                       stObj->pt->last_level == 0 ||
-@@ -2670,6 +2693,8 @@
+@@ -2670,6 +2698,8 @@
            texImage->TexFormat != MESA_FORMAT_ETC1_RGB8);
  
     st_flush_bitmap_cache(st);
@@ -328,7 +475,7 @@
     if (st->force_compute_based_texture_transfer)
        goto non_blit_transfer;
  
-@@ -2910,7 +2935,7 @@
+@@ -2910,7 +2940,7 @@
              unpack.Invert = GL_TRUE;
           }
  
@@ -337,7 +484,7 @@
              dstRowStride = transfer->layer_stride;
           }
           else {
-@@ -3011,6 +3036,9 @@
+@@ -3011,6 +3041,9 @@
     assert(!_mesa_is_format_etc2(texImage->TexFormat) &&
            !_mesa_is_format_astc_2d(texImage->TexFormat) &&
            texImage->TexFormat != MESA_FORMAT_ETC1_RGB8);
@@ -347,7 +494,7 @@
  
     if (!rb || !rb->texture || !stImage->pt) {
        debug_printf("%s: null rb or stImage\n", __func__);
-@@ -3148,6 +3176,73 @@
+@@ -3148,6 +3181,139 @@
   * the texture object should be ready for rendering.
   * \return GL_TRUE for success, GL_FALSE for failure (out of mem)
   */
@@ -418,10 +565,76 @@
 +   return true;
 +}
 +
++/* Bordered 2D mips keep all four edges and four corners in native format.
++ * Each complete image is a band of the atlas; bands have decreasing heights
++ * and share the largest image's row stride. No driver mip inference is used. */
++static bool
++finalize_border_2d(struct gl_context *ctx, struct pipe_context *pipe,
++                   struct gl_texture_object *obj)
++{
++   struct st_context *st = st_context(ctx);
++   unsigned base = obj->Attrib.BaseLevel;
++   if (base >= MAX_TEXTURE_LEVELS || obj->lastLevel < base ||
++       obj->lastLevel >= MAX_TEXTURE_LEVELS)
++      return false;
++   const struct gl_texture_image *first = obj->Image[0][base];
++   if (!first || !first->Width2 || !first->Height2)
++      return false;
++   unsigned levels = obj->lastLevel - base + 1;
++   uint64_t rows = 0;
++   for (unsigned l = 0; l < levels; ++l) {
++      const struct gl_texture_image *im = obj->Image[0][base+l];
++      if (!im || !im->border_data || im->Border != 1 ||
++          im->Width2 != u_minify(first->Width2, l) ||
++          im->Height2 != u_minify(first->Height2, l) ||
++          im->Width != im->Width2 + 2 || im->Height != im->Height2 + 2 ||
++          im->TexFormat != first->TexFormat)
++         return false;
++      rows += im->Height;
++   }
++   enum pipe_format fmt = st_mesa_format_to_pipe_format(st, first->TexFormat);
++   unsigned bpp = _mesa_get_format_bytes(first->TexFormat);
++   uint64_t bytes = (uint64_t)first->Width * rows * bpp;
++   if (rows > UINT_MAX || bytes > SIZE_MAX || !util_border_storage_reserve(bytes)) {
++      _mesa_error(ctx, GL_OUT_OF_MEMORY, "2D border atlas budget");
++      return false;
++   }
++   struct pipe_resource *atlas = st_texture_create(st, PIPE_TEXTURE_2D, fmt, 0,
++       first->Width, rows, 1, 1, 0, 0,
++       PIPE_BIND_SAMPLER_VIEW, false, PIPE_COMPRESSION_FIXED_RATE_NONE);
++   if (!atlas) {
++      util_border_storage_release(bytes);
++      _mesa_error(ctx, GL_OUT_OF_MEMORY, "2D border sampling image");
++      return false;
++   }
++   if (!util_border_resource_register(atlas, bytes)) {
++      pipe_resource_reference(&atlas, NULL);
++      util_border_storage_release(bytes);
++      _mesa_error(ctx, GL_OUT_OF_MEMORY, "2D border atlas ownership");
++      return false;
++   }
++   unsigned row = 0;
++   for (unsigned l = 0; l < levels; ++l) {
++      const struct gl_texture_image *im = obj->Image[0][base+l];
++      struct pipe_box box;
++      u_box_2d(0, row, im->Width, im->Height, &box);
++      pipe->texture_subdata(pipe, atlas, 0, 0, &box, im->border_data,
++                           _mesa_format_row_stride(im->TexFormat, im->Width), 0);
++      row += im->Height;
++   }
++   pipe_resource_reference(&obj->pt, atlas);
++   pipe_resource_reference(&atlas, NULL);
++   st_texture_release_all_sampler_views(st, obj);
++   obj->needs_validation = false;
++   obj->validated_first_level = base;
++   obj->validated_last_level = obj->lastLevel;
++   return true;
++}
++
  GLboolean
  st_finalize_texture(struct gl_context *ctx,
                      struct pipe_context *pipe,
-@@ -3174,7 +3269,10 @@
+@@ -3174,7 +3340,10 @@
      * changed.  But if the GL_BASE_LEVEL or GL_MAX_LEVEL change to something we
      * haven't looked at, then we do need to look at those new images.
      */
@@ -432,29 +645,36 @@
         tObj->Attrib.BaseLevel >= tObj->validated_first_level &&
         tObj->lastLevel <= tObj->validated_last_level) {
        return GL_TRUE;
-@@ -3189,6 +3287,8 @@
+@@ -3189,6 +3358,9 @@
                                         [tObj->Attrib.BaseLevel]);
     if (!firstImage)
        return false;
 +   if (firstImage->border_data)
-+      return finalize_border_1d(ctx, pipe, tObj);
++      return tObj->Target == GL_TEXTURE_2D ? finalize_border_2d(ctx, pipe, tObj) :
++             finalize_border_1d(ctx, pipe, tObj);
  
     /* If both firstImage and tObj point to a texture which can contain
      * all active images, favour firstImage.  Note that because of the
 --- a/src/mesa/state_tracker/st_sampler_view.c
 +++ b/src/mesa/state_tracker/st_sampler_view.c
-@@ -525,6 +525,11 @@
-    assert(templ.u.tex.first_layer <= templ.u.tex.last_layer);
-    assert(templ.u.tex.first_level <= templ.u.tex.last_level);
-    templ.target = gl_target_to_pipe(texObj->Target);
+@@ -522,10 +522,15 @@
+       templ.u.tex.first_layer = texObj->Attrib.MinLayer;
+       templ.u.tex.last_layer = last_layer(texObj);
+    }
++   templ.target = gl_target_to_pipe(texObj->Target);
 +   if (_mesa_base_tex_image(texObj)->border_data) {
 +      templ.target = PIPE_TEXTURE_2D;
 +      templ.u.tex.first_level = templ.u.tex.last_level = 0;
 +      templ.u.tex.first_layer = templ.u.tex.last_layer = 0;
 +   }
- 
++
+    assert(templ.u.tex.first_layer <= templ.u.tex.last_layer);
+    assert(templ.u.tex.first_level <= templ.u.tex.last_level);
+-   templ.target = gl_target_to_pipe(texObj->Target);
+-
     templ.swizzle_r = GET_SWZ(swizzle, 0);
     templ.swizzle_g = GET_SWZ(swizzle, 1);
+    templ.swizzle_b = GET_SWZ(swizzle, 2);
 @@ -566,11 +571,12 @@
        assert(texObj->pt == view->texture);
        assert(!check_sampler_swizzle(st, texObj, view, glsl130_or_later));

@@ -1,0 +1,489 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4054,17 +4054,188 @@
+     surface->locations = location;
+ }
+ 
++/* DirectDraw's CPU depth layout uses the masks returned by ddraw/utils.c.
++ * Keep GL's normalized depth and unnormalized stencil in separate staging
++ * arrays: packed depth/stencil textures are not a GL 1.1 capability. */
++static BOOL surface_depth_layout(const struct wined3d_surface *surface, DWORD *depth_mask, DWORD *stencil_mask)
++{
++    *stencil_mask = 0;
++    switch (surface->resource.format->id)
++    {
++        case WINED3DFMT_D16_LOCKABLE:
++        case WINED3DFMT_D16_UNORM: *depth_mask = 0xffff; return TRUE;
++        case WINED3DFMT_D32_UNORM: *depth_mask = 0xffffffff; return TRUE;
++        case WINED3DFMT_D24_UNORM_S8_UINT: *stencil_mask = 0xff; /* fall through */
++        case WINED3DFMT_X8D24_UNORM: *depth_mask = 0xffffff; return TRUE;
++        case WINED3DFMT_S1_UINT_D15_UNORM: *depth_mask = 0x7fff; *stencil_mask = 1; return TRUE;
++        case WINED3DFMT_S4X4_UINT_D24_UNORM: *depth_mask = 0xffffff; *stencil_mask = 15; return TRUE;
++        default: return FALSE;
++    }
++}
++
++static void surface_depth_convert(struct wined3d_surface *surface, BYTE *memory,
++        GLuint *depth, BYTE *stencil, BOOL upload, BOOL flip, DWORD depth_mask, DWORD stencil_mask)
++{
++    UINT x, y, width = surface->resource.width, height = surface->resource.height;
++    UINT bytes = surface->resource.format->byte_count, pitch = wined3d_surface_get_pitch(surface);
++    UINT shift = depth_mask == 0x7fff ? 15 : 24;
++    for (y = 0; y < height; ++y)
++    {
++        BYTE *row = memory + (flip ? height - 1 - y : y) * pitch;
++        for (x = 0; x < width; ++x)
++        {
++            DWORD value = 0;
++            UINT i = y * width + x;
++            if (upload)
++            {
++                memcpy(&value, row + x * bytes, bytes);
++                depth[i] = (GLuint)(((ULONGLONG)(value & depth_mask) * 0xffffffffu + depth_mask / 2) / depth_mask);
++                if (stencil_mask) stencil[i] = (value >> shift) & stencil_mask;
++            }
++            else
++            {
++                value = (DWORD)(((ULONGLONG)depth[i] * depth_mask + 0x7fffffffu) / 0xffffffffu);
++                if (stencil_mask) value |= (DWORD)(stencil[i] & stencil_mask) << shift;
++                memcpy(row + x * bytes, &value, bytes);
++            }
++        }
++    }
++}
++
++/* Transfer the active backbuffer's depth without exposing partially read CPU
++ * memory. A failed upload leaves CPU storage authoritative so a later draw can
++ * retry. Unavailable bindings and unsupported layouts are errors, never copies.
++ * The FBO/depth-texture path remains the upstream implementation. */
++static HRESULT surface_transfer_depth(struct wined3d_surface *surface,
++        struct wined3d_context *context, DWORD location)
++{
++    const struct wined3d_gl_info *gl_info;
++    struct wined3d_bo_address memory;
++    DWORD depth_mask, stencil_mask;
++    UINT width = surface->resource.width, height = surface->resource.height;
++    UINT drawable_width, drawable_height, i;
++    GLuint *depth;
++    BYTE *stencil;
++    SIZE_T count;
++    BOOL upload = location == WINED3D_LOCATION_DRAWABLE, flip;
++    GLenum error;
++
++    if (!context || !context->valid || context_get_current() != context || !context->current_rt
++            || wined3d_settings.offscreen_rendering_mode != ORM_BACKBUFFER
++            || !surface_depth_layout(surface, &depth_mask, &stencil_mask))
++        return WINED3DERR_INVALIDCALL;
++    if (upload ? !(surface->locations & surface_simple_locations)
++            : !(surface->locations & WINED3D_LOCATION_DRAWABLE))
++        return WINED3DERR_INVALIDCALL;
++    surface_get_drawable_size(context->current_rt, context, &drawable_width, &drawable_height);
++    if (!width || !height || width > drawable_width || height > drawable_height
++            || width > ~(SIZE_T)0 / height / (sizeof(*depth) + sizeof(*stencil)))
++        return WINED3DERR_INVALIDCALL;
++    surface_get_memory(surface, &memory, upload ? surface->locations : location);
++    if (!memory.addr || memory.buffer_object)
++        return WINED3DERR_INVALIDCALL;
++    count = (SIZE_T)width * height;
++    if (!(depth = malloc(count * (sizeof(*depth) + sizeof(*stencil)))))
++        return E_OUTOFMEMORY;
++    stencil = (BYTE *)(depth + count);
++    flip = !context->render_offscreen;
++    if (upload) surface_depth_convert(surface, memory.addr, depth, stencil, TRUE, flip, depth_mask, stencil_mask);
++    gl_info = context->gl_info;
++    /* Drain prior errors before measuring this transaction, with a bound for a
++     * dead transport that continually reports an error. */
++    for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
++    if (i == 16) { free(depth); return WINED3DERR_INVALIDCALL; }
++    gl_info->gl_ops.gl.p_glPushAttrib(GL_ALL_ATTRIB_BITS);
++    gl_info->gl_ops.gl.p_glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, 1);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ROW_LENGTH, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_SKIP_ROWS, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_SKIP_PIXELS, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_SWAP_BYTES, GL_FALSE);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_SKIP_ROWS, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_SWAP_BYTES, GL_FALSE);
++    gl_info->gl_ops.gl.p_glPixelTransferf(GL_DEPTH_SCALE, 1.0f);
++    gl_info->gl_ops.gl.p_glPixelTransferf(GL_DEPTH_BIAS, 0.0f);
++    gl_info->gl_ops.gl.p_glPixelTransferi(GL_INDEX_SHIFT, 0);
++    gl_info->gl_ops.gl.p_glPixelTransferi(GL_INDEX_OFFSET, 0);
++    gl_info->gl_ops.gl.p_glPixelTransferi(GL_MAP_STENCIL, GL_FALSE);
++    if (upload)
++    {
++        gl_info->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
++        gl_info->gl_ops.gl.p_glDisable(GL_ALPHA_TEST);
++        gl_info->gl_ops.gl.p_glDisable(GL_STENCIL_TEST);
++        gl_info->gl_ops.gl.p_glDisable(GL_BLEND);
++        gl_info->gl_ops.gl.p_glDisable(GL_FOG);
++        for (i = 0; i < 6; ++i) gl_info->gl_ops.gl.p_glDisable(GL_CLIP_PLANE0 + i);
++        gl_info->gl_ops.gl.p_glEnable(GL_DEPTH_TEST);
++        gl_info->gl_ops.gl.p_glDepthFunc(GL_ALWAYS);
++        gl_info->gl_ops.gl.p_glDepthMask(GL_TRUE);
++        gl_info->gl_ops.gl.p_glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
++        gl_info->gl_ops.gl.p_glStencilMask(stencil_mask);
++        gl_info->gl_ops.gl.p_glViewport(0, 0, width, height);
++        gl_info->gl_ops.gl.p_glPixelZoom(1.0f, 1.0f);
++        gl_info->gl_ops.gl.p_glMatrixMode(GL_PROJECTION);
++        gl_info->gl_ops.gl.p_glPushMatrix();
++        gl_info->gl_ops.gl.p_glLoadIdentity();
++        gl_info->gl_ops.gl.p_glMatrixMode(GL_MODELVIEW);
++        gl_info->gl_ops.gl.p_glPushMatrix();
++        gl_info->gl_ops.gl.p_glLoadIdentity();
++        gl_info->gl_ops.gl.p_glRasterPos3f(-1.0f, -1.0f, 0.0f);
++        gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, depth);
++        if (stencil_mask)
++            gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);
++        gl_info->gl_ops.gl.p_glPopMatrix();
++        gl_info->gl_ops.gl.p_glMatrixMode(GL_PROJECTION);
++        gl_info->gl_ops.gl.p_glPopMatrix();
++        /* Completion is part of upload success; queued transfer errors must not
++         * validate the destination before the native driver executes them. */
++        gl_info->gl_ops.gl.p_glFinish();
++    }
++    else
++    {
++        gl_info->gl_ops.gl.p_glReadPixels(0, 0, width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, depth);
++        if (stencil_mask)
++            gl_info->gl_ops.gl.p_glReadPixels(0, 0, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);
++    }
++    gl_info->gl_ops.gl.p_glPopClientAttrib();
++    gl_info->gl_ops.gl.p_glPopAttrib();
++    error = gl_info->gl_ops.gl.p_glGetError();
++    if (error == GL_NO_ERROR)
++    {
++        if (!upload) surface_depth_convert(surface, memory.addr, depth, stencil, FALSE, flip, depth_mask, stencil_mask);
++        surface_validate_location(surface, location);
++        surface->ds_current_size.cx = width;
++        surface->ds_current_size.cy = height;
++    }
++    free(depth);
++    return error == GL_NO_ERROR ? WINED3D_OK : WINED3DERR_INVALIDCALL;
++}
++
+ /* Context activation is done by the caller. */
+-void surface_load_ds_location(struct wined3d_surface *surface, struct wined3d_context *context, DWORD location)
+-{
+-    const struct wined3d_gl_info *gl_info = context->gl_info;
++HRESULT surface_load_ds_location(struct wined3d_surface *surface, struct wined3d_context *context, DWORD location)
++{
++    const struct wined3d_gl_info *gl_info;
+     struct wined3d_device *device = surface->resource.device;
+     GLsizei w, h;
+ 
+     TRACE("surface %p, context %p, new location %#x.\n", surface, context, location);
+ 
+-    /* TODO: Make this work for modes other than FBO */
+-    if (wined3d_settings.offscreen_rendering_mode != ORM_FBO) return;
++    if (!context || !context->valid) return WINED3DERR_INVALIDCALL;
++    gl_info = context->gl_info;
++    if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
++    {
++        if (surface->locations & location) return WINED3D_OK;
++        if (surface->locations & WINED3D_LOCATION_DISCARDED)
++        {
++            surface_modify_ds_location(surface, location, surface->resource.width, surface->resource.height);
++            return WINED3D_OK;
++        }
++        return surface_transfer_depth(surface, context, location);
++    }
++    if (wined3d_settings.offscreen_rendering_mode != ORM_FBO) return WINED3DERR_INVALIDCALL;
+ 
+     if (!(surface->locations & location))
+     {
+@@ -4083,13 +4254,13 @@
+             && surface->ds_current_size.cy == surface->resource.height)
+     {
+         TRACE("Location (%#x) is already up to date.\n", location);
+-        return;
++        return WINED3D_OK;
+     }
+ 
+     if (surface->current_renderbuffer)
+     {
+         FIXME("Not supported with fixed up depth stencil.\n");
+-        return;
++        return WINED3DERR_INVALIDCALL;
+     }
+ 
+     if (surface->locations & WINED3D_LOCATION_DISCARDED)
+@@ -4100,7 +4271,7 @@
+         surface->locations |= location;
+         surface->ds_current_size.cx = surface->resource.width;
+         surface->ds_current_size.cy = surface->resource.height;
+-        return;
++        return WINED3D_OK;
+     }
+ 
+     if (!surface->locations)
+@@ -4109,7 +4280,7 @@
+         surface->locations |= location;
+         surface->ds_current_size.cx = surface->resource.width;
+         surface->ds_current_size.cy = surface->resource.height;
+-        return;
++        return WINED3D_OK;
+     }
+ 
+     if (location == WINED3D_LOCATION_TEXTURE_RGB)
+@@ -4197,6 +4368,7 @@
+     surface->locations |= location;
+     surface->ds_current_size.cx = surface->resource.width;
+     surface->ds_current_size.cy = surface->resource.height;
++    return WINED3D_OK;
+ }
+ 
+ void surface_validate_location(struct wined3d_surface *surface, DWORD location)
+@@ -4562,24 +4734,16 @@
+ 
+     if (surface->resource.usage & WINED3DUSAGE_DEPTHSTENCIL)
+     {
+-        if (location == WINED3D_LOCATION_TEXTURE_RGB
+-                && surface->locations & (WINED3D_LOCATION_DRAWABLE | WINED3D_LOCATION_DISCARDED))
+-        {
+-            surface_load_ds_location(surface, context, location);
++        if (surface->locations & location) return WINED3D_OK;
++        if ((location & surface_simple_locations) && (surface->locations & surface_simple_locations))
++        {
++            if (FAILED(hr = surface_copy_simple_location(surface, location))) return hr;
++            surface_validate_location(surface, location);
+             return WINED3D_OK;
+         }
+-        else if (location & surface->locations
+-                && surface->container->resource.draw_binding != WINED3D_LOCATION_DRAWABLE)
+-        {
+-            /* Already up to date, nothing to do. */
+-            return WINED3D_OK;
+-        }
+-        else
+-        {
+-            FIXME("Unimplemented copy from %s to %s for depth/stencil buffers.\n",
+-                    wined3d_debug_location(surface->locations), wined3d_debug_location(location));
+-            return WINED3DERR_INVALIDCALL;
+-        }
++        if (location & surface_simple_locations)
++            return surface_transfer_depth(surface, context, location);
++        return surface_load_ds_location(surface, context, location);
+     }
+ 
+     if (surface->locations & location)
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -664,12 +664,17 @@
+                 : WINED3D_LOCATION_DRAWABLE;
+         struct wined3d_surface *ds = wined3d_rendertarget_view_get_surface(device->fb.depth_stencil);
+ 
+-        if (state->render_states[WINED3D_RS_ZWRITEENABLE] || state->render_states[WINED3D_RS_ZENABLE])
++        if (state->render_states[WINED3D_RS_ZWRITEENABLE] || state->render_states[WINED3D_RS_ZENABLE]
++                || state->render_states[WINED3D_RS_STENCILENABLE])
+         {
+             RECT current_rect, draw_rect, r;
+ 
+-            if (!context->render_offscreen && ds != device->onscreen_depth_stencil)
+-                device_switch_onscreen_ds(device, context, ds);
++            if (!context->render_offscreen && ds != device->onscreen_depth_stencil
++                    && FAILED(device_switch_onscreen_ds(device, context, ds)))
++            {
++                context_release(context);
++                return;
++            }
+ 
+             if (ds->locations & location)
+                 SetRect(&current_rect, 0, 0, ds->ds_current_size.cx, ds->ds_current_size.cy);
+@@ -680,7 +685,13 @@
+ 
+             IntersectRect(&r, &draw_rect, &current_rect);
+             if (!EqualRect(&r, &draw_rect))
+-                surface_load_ds_location(ds, context, location);
++            {
++                if (FAILED(surface_load_ds_location(ds, context, location)))
++                {
++                    context_release(context);
++                    return;
++                }
++            }
+             else
+                 wined3d_surface_prepare(ds, context, location);
+         }
+@@ -710,7 +721,8 @@
+     device->czvDrawVertices = 0;
+ #endif
+ 
+-    if (device->fb.depth_stencil && state->render_states[WINED3D_RS_ZWRITEENABLE])
++    if (device->fb.depth_stencil && (state->render_states[WINED3D_RS_ZWRITEENABLE]
++            || state->render_states[WINED3D_RS_STENCILENABLE]))
+     {
+         struct wined3d_surface *ds = wined3d_rendertarget_view_get_surface(device->fb.depth_stencil);
+         DWORD location = context->render_offscreen ? ds->container->resource.draw_binding : WINED3D_LOCATION_DRAWABLE;
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -198,20 +198,27 @@
+     device->contexts = new_array;
+ }
+ 
+-void device_switch_onscreen_ds(struct wined3d_device *device,
++HRESULT device_switch_onscreen_ds(struct wined3d_device *device,
+         struct wined3d_context *context, struct wined3d_surface *depth_stencil)
+ {
+-    if (device->onscreen_depth_stencil)
+-    {
+-        surface_load_ds_location(device->onscreen_depth_stencil, context, WINED3D_LOCATION_TEXTURE_RGB);
+-
+-        surface_modify_ds_location(device->onscreen_depth_stencil, WINED3D_LOCATION_TEXTURE_RGB,
+-                device->onscreen_depth_stencil->ds_current_size.cx,
+-                device->onscreen_depth_stencil->ds_current_size.cy);
+-        wined3d_texture_decref(device->onscreen_depth_stencil->container);
++    struct wined3d_surface *old = device->onscreen_depth_stencil;
++    HRESULT hr;
++    DWORD location;
++    if (old)
++    {
++        location = WINED3D_LOCATION_TEXTURE_RGB;
++        if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
++        {
++            surface_prepare_map_memory(old);
++            location = old->resource.map_binding;
++        }
++        if (FAILED(hr = surface_load_location(old, context, location))) return hr;
++        surface_modify_ds_location(old, location, old->ds_current_size.cx, old->ds_current_size.cy);
++        wined3d_texture_decref(old->container);
+     }
+     device->onscreen_depth_stencil = depth_stencil;
+-    wined3d_texture_incref(device->onscreen_depth_stencil->container);
++    wined3d_texture_incref(depth_stencil->container);
++    return WINED3D_OK;
+ }
+ 
+ static BOOL is_full_clear(const struct wined3d_surface *target, const RECT *draw_rect, const RECT *clear_rect)
+@@ -231,17 +238,27 @@
+     return TRUE;
+ }
+ 
+-static void prepare_ds_clear(struct wined3d_surface *ds, struct wined3d_context *context,
+-        DWORD location, const RECT *draw_rect, UINT rect_count, const RECT *clear_rect, RECT *out_rect)
++static HRESULT prepare_ds_clear(struct wined3d_surface *ds, struct wined3d_context *context,
++        DWORD location, DWORD clear_flags, const RECT *draw_rect, UINT rect_count, const RECT *clear_rect, RECT *out_rect)
+ {
+     RECT current_rect, r;
++    HRESULT hr;
+ 
+     if (ds->locations & WINED3D_LOCATION_DISCARDED)
+     {
+         /* Depth buffer was discarded, make it entirely current in its new location since
+          * there is no other place where we would get data anyway. */
+         SetRect(out_rect, 0, 0, ds->resource.width, ds->resource.height);
+-        return;
++        return WINED3D_OK;
++    }
++
++    /* A full clear of one aspect still has to preserve the other aspect. */
++    if ((ds->resource.format->depth_size && !(clear_flags & WINED3DCLEAR_ZBUFFER))
++            || (ds->resource.format->stencil_size && !(clear_flags & WINED3DCLEAR_STENCIL)))
++    {
++        if (FAILED(hr = surface_load_ds_location(ds, context, location))) return hr;
++        SetRect(out_rect, 0, 0, ds->ds_current_size.cx, ds->ds_current_size.cy);
++        return WINED3D_OK;
+     }
+ 
+     if (ds->locations & location)
+@@ -256,7 +273,7 @@
+     {
+         /* current_rect ⊇ draw_rect, modify only. */
+         SetRect(out_rect, 0, 0, ds->ds_current_size.cx, ds->ds_current_size.cy);
+-        return;
++        return WINED3D_OK;
+     }
+ 
+     if (EqualRect(&r, &current_rect))
+@@ -267,7 +284,7 @@
+         {
+             /* Full clear, modify only. */
+             *out_rect = *draw_rect;
+-            return;
++            return WINED3D_OK;
+         }
+ 
+         IntersectRect(&r, draw_rect, clear_rect);
+@@ -275,13 +292,14 @@
+         {
+             /* clear_rect ⊇ draw_rect, modify only. */
+             *out_rect = *draw_rect;
+-            return;
++            return WINED3D_OK;
+         }
+     }
+ 
+     /* Full load. */
+-    surface_load_ds_location(ds, context, location);
++    if (FAILED(hr = surface_load_ds_location(ds, context, location))) return hr;
+     SetRect(out_rect, 0, 0, ds->ds_current_size.cx, ds->ds_current_size.cy);
++    return WINED3D_OK;
+ }
+ 
+ void device_clear_render_targets(struct wined3d_device *device, UINT rt_count, const struct wined3d_fb_state *fb,
+@@ -347,14 +365,19 @@
+     if (depth_stencil && render_offscreen)
+         wined3d_surface_prepare(depth_stencil, context, depth_stencil->container->resource.draw_binding);
+ 
+-    if (flags & WINED3DCLEAR_ZBUFFER)
++    if (flags & (WINED3DCLEAR_ZBUFFER | WINED3DCLEAR_STENCIL))
+     {
+         DWORD location = render_offscreen ? fb->depth_stencil->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
+ 
+-        if (!render_offscreen && depth_stencil != device->onscreen_depth_stencil)
+-            device_switch_onscreen_ds(device, context, depth_stencil);
+-        prepare_ds_clear(depth_stencil, context, location,
+-                draw_rect, rect_count, clear_rect, &ds_rect);
++        if ((!render_offscreen && depth_stencil != device->onscreen_depth_stencil
++                && FAILED(device_switch_onscreen_ds(device, context, depth_stencil)))
++                || FAILED(prepare_ds_clear(depth_stencil, context, location, flags,
++                        draw_rect, rect_count, clear_rect, &ds_rect)))
++        {
++            context_release(context);
++            WARN("Depth preservation failed, skipping clear.\n");
++            return;
++        }
+     }
+ 
+     if (!context_apply_clear_state(context, device, rt_count, fb))
+@@ -379,12 +402,14 @@
+         clear_mask = clear_mask | GL_STENCIL_BUFFER_BIT;
+     }
+ 
++    if (flags & (WINED3DCLEAR_ZBUFFER | WINED3DCLEAR_STENCIL))
++    {
++        DWORD location = render_offscreen ? fb->depth_stencil->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
++        surface_modify_ds_location(depth_stencil, location, ds_rect.right, ds_rect.bottom);
++    }
++
+     if (flags & WINED3DCLEAR_ZBUFFER)
+     {
+-        DWORD location = render_offscreen ? fb->depth_stencil->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
+-
+-        surface_modify_ds_location(depth_stencil, location, ds_rect.right, ds_rect.bottom);
+-
+         gl_info->gl_ops.gl.p_glDepthMask(GL_TRUE);
+         context_invalidate_state(context, STATE_RENDER(WINED3D_RS_ZWRITEENABLE));
+         gl_info->gl_ops.gl.p_glClearDepth(depth);
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2190,7 +2190,7 @@
+         UINT message, WPARAM wparam, LPARAM lparam, WNDPROC proc) DECLSPEC_HIDDEN;
+ void device_resource_add(struct wined3d_device *device, struct wined3d_resource *resource) DECLSPEC_HIDDEN;
+ void device_resource_released(struct wined3d_device *device, struct wined3d_resource *resource) DECLSPEC_HIDDEN;
+-void device_switch_onscreen_ds(struct wined3d_device *device, struct wined3d_context *context,
++HRESULT device_switch_onscreen_ds(struct wined3d_device *device, struct wined3d_context *context,
+         struct wined3d_surface *depth_stencil) DECLSPEC_HIDDEN;
+ void device_invalidate_state(const struct wined3d_device *device, DWORD state) DECLSPEC_HIDDEN;
+ 
+@@ -2513,7 +2513,7 @@
+         unsigned int *width, unsigned int *height) DECLSPEC_HIDDEN;
+ void surface_invalidate_location(struct wined3d_surface *surface, DWORD location) DECLSPEC_HIDDEN;
+ void surface_load(struct wined3d_surface *surface, struct wined3d_context *context, BOOL srgb) DECLSPEC_HIDDEN;
+-void surface_load_ds_location(struct wined3d_surface *surface,
++HRESULT surface_load_ds_location(struct wined3d_surface *surface,
+         struct wined3d_context *context, DWORD location) DECLSPEC_HIDDEN;
+ void surface_load_fb_texture(struct wined3d_surface *surface, BOOL srgb,
+         struct wined3d_context *context) DECLSPEC_HIDDEN;

@@ -168,10 +168,26 @@ class Serial:
             return parts[0], parts[2] if len(parts) == 3 else None
 
 
-PROBES = ("sysui", "sysrecover", "hlevidence", "sysrepair", "sysinstall", "sysresume", "sysupgrade", "sysrollback", "sysremove", "drvbind", "drvcheck", "drvrestore", "sysgl", "sysglide", "setupcheck", "ntloader", "ntrename", "ntrestore", "ntruntime", "sysddraw", "sysddrawnative", "sysd3d6", "sysd3d7", "sysd3d8", "sysd3d9", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
+PROBES = ("sysui", "sysrecover", "hlevidence", "sysrepair", "sysinstall", "sysresume", "sysupgrade", "sysrollback", "sysremove", "drvbind", "drvcheck", "drvrestore", "sysgl", "bordergl", "sysglide", "setupcheck", "ntloader", "ntrename", "ntrestore", "ntruntime", "sysddraw", "sysddrawnative", "sysd3d6", "sysd3d7", "sysd3d8", "sysd3d9", "capd3d6", "capd3d8", "capd3d9", "capgl", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
 
 
 def parse_probe(raw, name="arrays"):
+    if name in ("capd3d8", "capd3d9", "capgl"):
+        try:
+            capture = json.loads(raw.decode('ascii'))
+            expected_kind = 'dreamgpu.opengl.capabilities' if name == 'capgl' else 'dreamgpu.d3d.capabilities'
+            if (not isinstance(capture, dict) or capture.get('schema') != 1 or
+                    capture.get('kind') != expected_kind or capture.get('complete') is not True or
+                    capture.get('evidence') != 'reported_capabilities_only' or
+                    capture.get('execution_validation') is not False):
+                raise ValueError('incomplete or mismatched capability capture')
+            if name != 'capgl' and (capture.get('api_version') != int(name[-1]) or
+                                    capture.get('pool_validation') is not False):
+                raise ValueError('wrong D3D API or unsupported pool-validation claim')
+        except (ValueError, UnicodeError) as error:
+            raise ProtocolError('invalid capability capture: ' + str(error)) from error
+        return {'probe': name, 'captured': True, 'evidence': 'reported_capabilities_only',
+                'capabilities': capture}
     lines = raw.decode('latin-1').splitlines()
     operation = 'sysresume' if name == 'sysui' else name
     if any(line.startswith('FAIL') for line in lines) or not any(
@@ -329,6 +345,8 @@ def run_demo(endpoint, demo, output, manifest=None, ready_timeout=30, start_time
             report.update(state="completed", result=parse_probe(raw, demo) if probe else parse_result(raw),
                           raw_text=raw.decode("latin-1"), result_bytes=len(raw),
                           result_sha256=hashlib.sha256(raw).hexdigest())
+            if probe and demo in ("capd3d8", "capd3d9", "capgl"):
+                (output / "capability.json").write_bytes(raw)
             if not probe:
                 report["renderer_proof"] = parse_renderer_proof(raw)
             report["latency_seconds"].update(completion_after_run=completed - submitted,

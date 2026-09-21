@@ -94,6 +94,10 @@ unsafe fn execute(
             unsafe {
                 api.dg_glEnd.ok_or(3u32)?();
                 *in_begin = 0;
+                let error = hook(opaque, FEnum_glEnd, args.as_ptr());
+                if error != 0 {
+                    return Err(error);
+                }
             }
         }
         FEnum_glListBase => unsafe { api.dg_glListBase.ok_or(3u32)?(u(0)?) },
@@ -147,7 +151,9 @@ unsafe fn execute(
                 return Err(admission);
             }
             if crate::evaluator::terminal(function, &a) {
-                return unsafe { crate::evaluator::terminal_mesh(api, function, &a) };
+                let result = unsafe { crate::evaluator::terminal_mesh(api, function, &a) };
+                let restored = unsafe { hook(opaque, FEnum_glEnd, mode.as_ptr()) };
+                return result.and(if restored == 0 { Ok(()) } else { Err(restored) });
             }
             unsafe {
                 if function == FEnum_glEvalMesh1 {
@@ -161,6 +167,10 @@ unsafe fn execute(
                         a[4] as i32,
                     )
                 }
+            }
+            let restored = unsafe { hook(opaque, FEnum_glEnd, mode.as_ptr()) };
+            if restored != 0 {
+                return Err(restored);
             }
         }
         FEnum_glEdgeFlag => unsafe { api.dg_glEdgeFlag.ok_or(3u32)?((u(0)? != 0) as u8) },

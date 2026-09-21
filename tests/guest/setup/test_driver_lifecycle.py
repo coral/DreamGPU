@@ -17,3 +17,11 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-driver-lifecycle-') as directo
                     '-fsanitize=address,undefined', '-fno-omit-frame-pointer',
                     str(ROOT / 'tools/setup/driver-tests.cpp'), '-o', str(binary)], check=True)
     subprocess.run([str(binary)], check=True)
+    source = (ROOT / 'tools/win9x/driver32.cpp').read_text()
+    value = source[source.index('static bool Value('):source.index('static bool DriverPair(')]
+    (Path(directory) / 'driver-value.inc').write_text(value)
+    binary = Path(directory) / 'driver-value-tests'
+    subprocess.run([compiler, '-std=c++23', '-Wall', '-Wextra', '-Werror',
+                    '-fsanitize=address,undefined', '-fno-omit-frame-pointer', '-I', directory,
+                    str(ROOT / 'tools/setup/driver-value-tests.cpp'), '-o', str(binary)], check=True)
+    subprocess.run([str(binary)], check=True)

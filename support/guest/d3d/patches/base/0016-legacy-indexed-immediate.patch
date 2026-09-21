@@ -1,0 +1,239 @@
+--- a/ddraw/device.c
++++ b/ddraw/device.c
+@@ -321,6 +321,9 @@
+         if (This->ddraw)
+             This->ddraw->d3ddevice = NULL;
+ 
++        /* An application can release a device during an immediate block. */
++        free(This->immediate_vertices);
++        free(This->sysmem_vertex_buffer);
+         /* Now free the structure */
+         free(This);
+         wined3d_mutex_unlock();
+@@ -2095,18 +2098,24 @@
+         D3DPRIMITIVETYPE primitive_type, DWORD fvf, DWORD flags)
+ {
+     struct d3d_device *device = impl_from_IDirect3DDevice3(iface);
+-
+-    TRACE("iface %p, primitive_type %#x, fvf %#x, flags %#x.\n",
+-            iface, primitive_type, fvf, flags);
++    DWORD size = get_flexible_vertex_size_ddraw(fvf);
++
++    if (primitive_type < D3DPT_POINTLIST || primitive_type > D3DPT_TRIANGLEFAN || !size)
++        return DDERR_INVALIDPARAMS;
+ 
+     wined3d_mutex_lock();
++    if (device->immediate_active)
++    {
++        wined3d_mutex_unlock();
++        return D3DERR_INBEGIN;
++    }
+     device->primitive_type = primitive_type;
+     device->vertex_type = fvf;
+     device->render_flags = flags;
+-    device->vertex_size = get_flexible_vertex_size_ddraw(device->vertex_type);
++    device->vertex_size = size;
+     device->nb_vertices = 0;
++    device->immediate_active = TRUE;
+     wined3d_mutex_unlock();
+-
+     return D3D_OK;
+ }
+ 
+@@ -2148,17 +2157,43 @@
+  *  Flags: Some flags ...
+  *
+  * Returns:
+- *  D3D_OK, because it's a stub
++ *  D3D_OK on success
+  *
+  *****************************************************************************/
+ static HRESULT WINAPI d3d_device3_BeginIndexed(IDirect3DDevice3 *iface,
+         D3DPRIMITIVETYPE primitive_type, DWORD fvf,
+         void *vertices, DWORD vertex_count, DWORD flags)
+ {
+-    FIXME("iface %p, primitive_type %#x, fvf %#x, vertices %p, vertex_count %u, flags %#x stub!\n",
+-            iface, primitive_type, fvf, vertices, vertex_count, flags);
+-
+-    return D3D_OK;
++    struct d3d_device *device = impl_from_IDirect3DDevice3(iface);
++    DWORD size = get_flexible_vertex_size_ddraw(fvf);
++    BYTE *copy;
++    HRESULT hr;
++
++    if (!vertices || !vertex_count || !size || vertex_count > ~(DWORD)0 / size)
++        return DDERR_INVALIDPARAMS;
++
++    wined3d_mutex_lock();
++    if (device->immediate_active)
++    {
++        wined3d_mutex_unlock();
++        return D3DERR_INBEGIN;
++    }
++    if (!(copy = malloc(vertex_count * size)))
++    {
++        wined3d_mutex_unlock();
++        return E_OUTOFMEMORY;
++    }
++    hr = d3d_device3_Begin(iface, primitive_type, fvf, flags);
++    if (FAILED(hr))
++        free(copy);
++    else
++    {
++        memcpy(copy, vertices, vertex_count * size);
++        device->immediate_vertices = copy;
++        device->immediate_vertex_count = vertex_count;
++    }
++    wined3d_mutex_unlock();
++    return hr;
+ }
+ 
+ 
+@@ -2203,34 +2238,48 @@
+  *  DDERR_INVALIDPARAMS if Vertex is NULL
+  *
+  *****************************************************************************/
++/* Expand indexed immediate vertices into the ordinary draw stream. This keeps
++ * topology, FVF translation, clipping and submission on the existing draw path.
++ * Caller holds the Wine mutex; failed allocation never consumes a vertex. */
++static HRESULT d3d_device_append_vertex(struct d3d_device *device, const void *vertex)
++{
++    DWORD required, capacity;
++    BYTE *buffer;
++
++    if (!device->vertex_size || device->nb_vertices >= ~(DWORD)0 / device->vertex_size)
++        return E_OUTOFMEMORY;
++    required = (device->nb_vertices + 1) * device->vertex_size;
++    if (required > device->buffer_size)
++    {
++        capacity = device->buffer_size <= ~(DWORD)0 / 2 ? device->buffer_size * 2 : required;
++        if (capacity < required)
++            capacity = required;
++        if (!(buffer = realloc(device->sysmem_vertex_buffer, capacity)))
++            return E_OUTOFMEMORY;
++        device->sysmem_vertex_buffer = buffer;
++        device->buffer_size = capacity;
++    }
++    memcpy(device->sysmem_vertex_buffer + device->nb_vertices * device->vertex_size, vertex, device->vertex_size);
++    ++device->nb_vertices;
++    return D3D_OK;
++}
++
+ static HRESULT WINAPI d3d_device3_Vertex(IDirect3DDevice3 *iface, void *vertex)
+ {
+     struct d3d_device *device = impl_from_IDirect3DDevice3(iface);
+-
+-    TRACE("iface %p, vertex %p.\n", iface, vertex);
++    HRESULT hr;
+ 
+     if (!vertex)
+         return DDERR_INVALIDPARAMS;
+-
+     wined3d_mutex_lock();
+-    if ((device->nb_vertices + 1) * device->vertex_size > device->buffer_size)
+-    {
+-        BYTE *old_buffer;
+-
+-        device->buffer_size = device->buffer_size ? device->buffer_size * 2 : device->vertex_size * 3;
+-        old_buffer = device->sysmem_vertex_buffer;
+-        device->sysmem_vertex_buffer = malloc(device->buffer_size);
+-        if (old_buffer)
+-        {
+-            memcpy(device->sysmem_vertex_buffer, old_buffer, device->nb_vertices * device->vertex_size);
+-            free(old_buffer);
+-        }
+-    }
+-
+-    memcpy(device->sysmem_vertex_buffer + device->nb_vertices++ * device->vertex_size, vertex, device->vertex_size);
++    if (!device->immediate_active)
++        hr = D3DERR_NOTINBEGIN;
++    else if (device->immediate_vertices)
++        hr = DDERR_INVALIDPARAMS;
++    else
++        hr = d3d_device_append_vertex(device, vertex);
+     wined3d_mutex_unlock();
+-
+-    return D3D_OK;
++    return hr;
+ }
+ 
+ static HRESULT WINAPI d3d_device2_Vertex(IDirect3DDevice2 *iface, void *vertex)
+@@ -2252,14 +2301,24 @@
+  *  VertexIndex: The index of the vertex to draw
+  *
+  * Returns:
+- *  D3D_OK because it's a stub
++ *  D3D_OK on success
+  *
+  *****************************************************************************/
+ static HRESULT WINAPI d3d_device3_Index(IDirect3DDevice3 *iface, WORD index)
+ {
+-    FIXME("iface %p, index %#x stub!\n", iface, index);
+-
+-    return D3D_OK;
++    struct d3d_device *device = impl_from_IDirect3DDevice3(iface);
++    HRESULT hr;
++
++    wined3d_mutex_lock();
++    if (!device->immediate_active)
++        hr = D3DERR_NOTINBEGIN;
++    else if (!device->immediate_vertices || index >= device->immediate_vertex_count)
++        hr = DDERR_INVALIDPARAMS;
++    else
++        hr = d3d_device_append_vertex(device,
++                device->immediate_vertices + index * device->vertex_size);
++    wined3d_mutex_unlock();
++    return hr;
+ }
+ 
+ static HRESULT WINAPI d3d_device2_Index(IDirect3DDevice2 *iface, WORD index)
+@@ -3814,8 +3873,7 @@
+  * Ends a draw begun with IDirect3DDevice3::Begin or
+  * IDirect3DDevice::BeginIndexed. The vertices specified with
+  * IDirect3DDevice::Vertex or IDirect3DDevice::Index are drawn using
+- * the IDirect3DDevice3::DrawPrimitive method. So far only
+- * non-indexed mode is supported
++ * the IDirect3DDevice3::DrawPrimitive method after expanding indexed vertices.
+  *
+  * Version 2 and 3
+  *
+@@ -3829,11 +3887,25 @@
+ static HRESULT WINAPI d3d_device3_End(IDirect3DDevice3 *iface, DWORD flags)
+ {
+     struct d3d_device *device = impl_from_IDirect3DDevice3(iface);
++    HRESULT hr;
+ 
+     TRACE("iface %p, flags %#x.\n", iface, flags);
+ 
+-    return d3d_device3_DrawPrimitive(&device->IDirect3DDevice3_iface, device->primitive_type,
+-            device->vertex_type, device->sysmem_vertex_buffer, device->nb_vertices, device->render_flags);
++    wined3d_mutex_lock();
++    if (!device->immediate_active)
++    {
++        wined3d_mutex_unlock();
++        return D3DERR_NOTINBEGIN;
++    }
++    hr = device->nb_vertices ? d3d_device3_DrawPrimitive(iface, device->primitive_type,
++            device->vertex_type, device->sysmem_vertex_buffer, device->nb_vertices, device->render_flags) : D3D_OK;
++    device->immediate_active = FALSE;
++    free(device->immediate_vertices);
++    device->immediate_vertices = NULL;
++    device->immediate_vertex_count = 0;
++    device->nb_vertices = 0;
++    wined3d_mutex_unlock();
++    return hr;
+ }
+ 
+ static HRESULT WINAPI d3d_device2_End(IDirect3DDevice2 *iface, DWORD flags)
+--- a/ddraw/ddraw_private.h
++++ b/ddraw/ddraw_private.h
+@@ -331,6 +331,9 @@
+     BYTE *sysmem_vertex_buffer;
+     DWORD vertex_size;
+     DWORD buffer_size;
++    BOOL immediate_active;
++    BYTE *immediate_vertices;
++    DWORD immediate_vertex_count;
+ 
+     /* Handle management */
+     struct ddraw_handle_table handle_table;

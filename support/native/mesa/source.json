@@ -7,7 +7,7 @@
   "patches": {
     "patches/0001-integer-pixel-transfer.patch": "1033f75b98ed6cf7b46dc2b38d7184a847e78d831edfbac75caaf7afe4a1c8ce",
     "patches/0002-fractional-pixel-raster.patch": "f6976cf36a615b5e8ae5093adee7c3cf0a1588e47e97f63d2940c39576d77216",
-    "patches/0003-legacy-1d-border-images.patch": "b32acf3a93c1535347213ab98e5845d6a54425a4aa65b6068ee58a6dc0d3e3ff"
+    "patches/0003-legacy-1d-border-images.patch": "a499292f371e0a53eff78d8e26ff1583e171062a2bd3b3ed1e57be5be24ed346"
   },
   "files": {
     "src/mesa/main/pixel.c": {
@@ -28,27 +28,27 @@
     },
     "src/mesa/main/mtypes.h": {
       "before": "700744951f994dbd8117fc0345a7ebce42f37a0a197b11bab30351614d01a67e",
-      "after": "86a87ccd2bccc9df55f424a68dcaaf8e68f0b71f63d64e88e67c876020a10ace"
+      "after": "46c4181531ad0d3b3439d90d36415b2e38ed869ffdeb0f6a13cff232cd66c50a"
     },
     "src/mesa/main/teximage.c": {
       "before": "d00fb2944cebb7553953f4ffb9e288482d967738ec53e3aed323ddeb69949cc4",
-      "after": "bbfd8abbdc317e277f2d1c1362064c650d68daa6231f46ca2ac14230c6d3b42c"
+      "after": "0769d90820242d96df5fd5e09e96e337ce24650d3c5f2f99dd3d0180f80f861e"
     },
     "src/mesa/main/ff_fragment_shader.c": {
       "before": "75d4d5da2c4fa404615d31695db6d323eee3281cc29265dfb0a8b64ebf3fe5cc",
-      "after": "e1e5a777769417afbea94a4c326832626675020061fa81dfabdb9d6516025c58"
+      "after": "768a79a2c4169d7fc3bd2623b92d029be34e99f609c391a2b8df63d3a25993f7"
     },
     "src/mesa/state_tracker/st_texture.c": {
       "before": "76690b6b838315d5e34350d8bfe0f1b9333b8afb685e5cedab4ad1ff63549850",
-      "after": "88008d219a60435031b56ab39e5e7d17cac4443bbe6f63d72df35291b0c31357"
+      "after": "78d1a5522b79e60e51ca6e51a9335bf6d3ea33afc97b3b16e6ef03fbcda14e9c"
     },
     "src/mesa/state_tracker/st_cb_texture.c": {
       "before": "b56ccecf65ed6d31ff4f1dc78fbc691ce93e461e467e91eaaaee32728bdc3ad4",
-      "after": "604c9b76445451736ef7e1b6b3cc50f7d005701ec71b61a2542802ec99de7386"
+      "after": "a21ee7d27444e5622a6c7649cf4ffef2fcea1f93a9971577ae4ea0391ec91347"
     },
     "src/mesa/state_tracker/st_sampler_view.c": {
       "before": "875d1a0bcf78f7625e92cc00c23c8f316b0704445de8c05a8cd599332e6f0c0c",
-      "after": "460da5700c2f0821788a4b72c8ac29777a29a7080df47c8f2c2ae2b2dd447084"
+      "after": "b8883f25d1d5fa0fb3f12e6c73663c860a1525b759fbe06e37b065cf7e9ba138"
     },
     "src/mesa/main/draw_validate.c": {
       "before": "0867fb0a72415894c9fe33368eef6b5f3002b1cea623d2ff87d0a4ca165cc4be",

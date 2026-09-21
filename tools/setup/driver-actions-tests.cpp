@@ -56,6 +56,9 @@ static void next_payload(unsigned id, const char *value) {
         p.size = unsigned(bytes.size());
     }
     Node desired = driver_fake::current;
+    strcpy(desired.provider, "DreamGPU");
+    strcpy(desired.description, "DreamGPU");
+    strcpy(desired.section, "Dg");
     const auto &p = payloads[0];
     std::string inf = std::string(next_root) + "\\drivers\\win98\\dg9x.inf";
     strcpy(desired.inf, inf.c_str());
@@ -120,7 +123,37 @@ static void abandon_unpublished() {
         result = act_at(Os::win98, 1, root, payloads);
     assert(result == Result::restored); // Never attempts to restore abandoned id2.
 }
+static void legacy_generations() {
+    setup_legacy_win98();
+    const auto before = fake_win32::files;
+    simulator();
+    assert(act_at(Os::win98, 0, root, payloads) == Result::pending_reboot);
+    assert(act_at(Os::win98, 1, root, payloads) == Result::verified);
+    next_payload(2, "legacy migration upgrade");
+    assert(act_at(Os::win98, 3, root, payloads) == Result::pending_reboot);
+    assert(act_at(Os::win98, 1, root, payloads) == Result::verified);
+    auto removed = act_at(Os::win98, 4, root, payloads);
+    for (unsigned n = 0; n < 5 && removed == Result::pending_reboot; ++n)
+        removed = act_at(Os::win98, 1, root, payloads);
+    assert(removed == Result::restored);
+    GenerationInfo current;
+    assert(query_generation_at(Os::win98, root, current) == GenerationRead::present &&
+           current.id == 2 && current.baseline == 1);
+    assert(verify_generation_at(Os::win98, root, current, true));
+    for (const char *name : {"c:\\windows\\system\\qemumini.drv", "c:\\windows\\system\\qemumini.vxd"}) {
+        assert(fake_win32::files.at(name).bytes == before.at(name).bytes);
+        assert(fake_win32::files.at(name).attributes == before.at(name).attributes);
+    }
+    assert(!fake_win32::files.count("c:\\windows\\system\\dgpumini.drv"));
+    assert(!fake_win32::files.count("c:\\windows\\system\\dgpumini.vxd"));
+    next_payload(3, "legacy migration fresh cycle");
+    assert(act_at(Os::win98, 3, root, payloads) == Result::pending_reboot);
+    assert(act_at(Os::win98, 1, root, payloads) == Result::verified);
+    assert(query_generation_at(Os::win98, root, current) == GenerationRead::present &&
+           current.id == 3 && current.baseline == 3);
+}
 int main() {
+    legacy_generations();
     abandon_unpublished();
     const unsigned failures = upgrade_failure(0);
     for (unsigned n = 1; n <= failures; ++n)

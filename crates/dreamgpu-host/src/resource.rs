@@ -333,6 +333,12 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     }) {
         *w = u32::from_le(unsafe { args.add(i * 4).cast::<u32>().read_unaligned() });
     }
+    if image && words[if one { 6 } else { 7 }] != 0 && !crate::texture::BORDER_IMAGES {
+        unsafe {
+            query::store(errors, GL_INVALID_OPERATION);
+        }
+        return 0;
+    }
     let level = words[1] as usize;
     let x = words[if image || one { 3 } else { 4 }] as i32;
     let y = words[if image || one { 4 } else { 5 }] as i32;
@@ -342,20 +348,32 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     } else {
         words[if image { 6 } else { 7 }]
     };
-    // Full GL1.1 CopyImage1D formats include RGBA16: conservatively charge eight bytes.
-    let allocation = u64::from(w) * u64::from(h) * if one { 8 } else { 4 };
+    let texel_bytes = if one
+        || matches!(
+            words[2],
+            GL_RGB10 | GL_RGB12 | GL_RGB16 | GL_RGBA12 | GL_RGBA16
+        ) {
+        8
+    } else {
+        4
+    };
+    let allocation = u64::from(w) * u64::from(h) * texel_bytes;
     if has_drawable == 0 {
         return DG_GL_ERROR_TEXTURE;
     }
     let next = unsafe {
-        if !image
-            && !one
-            && (words[2] > (*t).widths[level]
-                || words[3] > (*t).heights[level]
-                || w > (*t).widths[level] - words[2]
-                || h > (*t).heights[level] - words[3])
-        {
-            return DG_GL_ERROR_TEXTURE;
+        if !image && !one {
+            let border = i64::from((*t).borders[level]);
+            let x = i64::from(words[2] as i32);
+            let y = i64::from(words[3] as i32);
+            if x < -border
+                || y < -border
+                || x + i64::from(w) > i64::from((*t).widths[level]) - border
+                || y + i64::from(h) > i64::from((*t).heights[level]) - border
+            {
+                query::store(errors, GL_INVALID_VALUE);
+                return 0;
+            }
         }
         if image {
             match (*total)
@@ -441,7 +459,7 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
                 y,
                 w as i32,
                 h as i32,
-                0
+                words[7] as i32
             )
         );
     } else {
@@ -462,18 +480,21 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     let e = gl!(a, dg_glGetError());
     if e != 0 {
         unsafe { query::store(errors, e) };
-        return if one { 0 } else { DG_GL_ERROR_TEXTURE };
+        return 0;
     }
     let mut defined_width = w;
+    let mut defined_height = h;
+    let mut defined_border = 0;
     let mut defined_allocation = allocation;
     let mut defined_total = next;
-    if one && image {
+    if image && (one || words[7] != 0) {
         let mut native_width = 0;
         let mut native_border = 0;
+        let mut native_height = 1;
         gl!(
             a,
             dg_glGetTexLevelParameteriv(
-                GL_TEXTURE_1D,
+                words[0],
                 level as i32,
                 GL_TEXTURE_WIDTH,
                 &mut native_width
@@ -482,12 +503,23 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
         gl!(
             a,
             dg_glGetTexLevelParameteriv(
-                GL_TEXTURE_1D,
+                words[0],
                 level as i32,
                 GL_TEXTURE_BORDER,
                 &mut native_border
             )
         );
+        if !one {
+            gl!(
+                a,
+                dg_glGetTexLevelParameteriv(
+                    words[0],
+                    level as i32,
+                    GL_TEXTURE_HEIGHT,
+                    &mut native_height
+                )
+            );
+        }
         let error = gl!(a, dg_glGetError());
         if error != 0 {
             unsafe { query::store(errors, error) };
@@ -497,13 +529,18 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
             || native_width as u32 > w
             || !(0..=1).contains(&native_border)
             || native_width < 2 * native_border
+            || native_height < 0
+            || native_height as u32 > h
+            || (!one && native_height < 2 * native_border)
         {
             return DG_GL_ERROR_HOST;
         }
         // Some native providers discard legacy border texels. Keep exact native
         // dimensions; do not publish requested dimensions the object lacks.
         defined_width = native_width as u32;
-        defined_allocation = u64::from(defined_width) * 8;
+        defined_height = native_height as u32;
+        defined_border = native_border as u32;
+        defined_allocation = u64::from(defined_width) * u64::from(defined_height) * texel_bytes;
         defined_total = next - allocation + defined_allocation;
     }
     unsafe {
@@ -512,7 +549,8 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
             *total = defined_total;
             (*t).levels[level] = defined_allocation;
             (*t).widths[level] = defined_width;
-            (*t).heights[level] = h;
+            (*t).heights[level] = defined_height;
+            (*t).borders[level] = defined_border;
             (*t).undefined_levels &= !(1 << level);
         }
     }
@@ -534,7 +572,7 @@ impl<'a> OwnedBytes<'a> {
         Some(Self { memory: m, p })
     }
 
-    unsafe fn zeroed(m: &'a Memory, bytes: usize) -> Option<Self> {
+    pub(crate) unsafe fn zeroed(m: &'a Memory, bytes: usize) -> Option<Self> {
         let p = unsafe { (m.allocate)(m.opaque, bytes) }.cast::<u8>();
         if p.is_null() {
             return None;
@@ -600,8 +638,8 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
     let one = unsafe { (*t).target } == GL_TEXTURE_1D;
     if w == 0
         || h == 0
-        || w > DG_GL_MAX_TEXTURE_DIMENSION + if one { 2 } else { 0 }
-        || h > DG_GL_MAX_TEXTURE_DIMENSION
+        || w > DG_GL_MAX_TEXTURE_DIMENSION + 2
+        || h > DG_GL_MAX_TEXTURE_DIMENSION + 2
         || level > DG_GL_MAX_TEXTURE_LEVEL
     {
         return GL_INVALID_VALUE;
@@ -640,7 +678,11 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         );
         return gl!(a, dg_glGetError());
     }
-    if unsafe { (*t).name != 0 && (*t).deleted == 0 } {
+    let border = unsafe { (*t).borders[level as usize] } as i32;
+    if !(0..=1).contains(&border) || w < 2 * border as u32 || h < 2 * border as u32 {
+        return GL_INVALID_OPERATION;
+    }
+    if border == 0 && unsafe { (*t).name != 0 && (*t).deleted == 0 } {
         let mut saved = ClearState {
             api: a,
             read: 0,
@@ -713,8 +755,8 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
             dg_glTexSubImage2D(
                 GL_TEXTURE_2D,
                 level as i32,
-                0,
-                y as i32,
+                -border,
+                y as i32 - border,
                 w as i32,
                 (rows as u32).min(h - y) as i32,
                 GL_RGBA,
@@ -810,8 +852,8 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
     // Cache length and offsets are u32 even on a 64-bit host.
     if bytes > u64::from(u32::MAX)
         || bytes
-            > u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
-                * u64::from(DG_GL_MAX_TEXTURE_DIMENSION)
+            > u64::from(DG_GL_MAX_TEXTURE_DIMENSION + 2)
+                * u64::from(DG_GL_MAX_TEXTURE_DIMENSION + 2)
                 * u64::from(pixel_bytes)
     {
         return DG_GL_ERROR_LIMIT;

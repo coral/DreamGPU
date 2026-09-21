@@ -1,5 +1,8 @@
 # Building DreamGPU
 
+Graphics changes also require the [explicit graphics verification jobs](graphics-contracts.md).
+Installer smoke tests and ordinary Cargo tests alone do not establish API coverage.
+
 `build.rs` calls the Rust `dreamgpu-build` crate. The sequence is source checks,
 native QEMU compilation, optional guest preparation, CMake compilation, binary
 audits, then per-OS packaging. A failed step fails Cargo. No Python script in

@@ -57,6 +57,29 @@ class ResultTests(unittest.TestCase):
                         b"RENDERER_PROOF system-icd-and-engine-strings\r\n"):
             self.assertEqual(hl.parse_renderer_proof(invalid)["status"], "not_established")
 
+    def test_capability_capture_has_no_rendering_pass_claim(self):
+        for name, version, kind in [('capd3d8', 8, 'dreamgpu.d3d.capabilities'),
+                                    ('capd3d9', 9, 'dreamgpu.d3d.capabilities'),
+                                    ('capgl', None, 'dreamgpu.opengl.capabilities')]:
+            capture = {'schema': 1, 'kind': kind, 'api_version': version, 'complete': True,
+                       'evidence': 'reported_capabilities_only', 'execution_validation': False,
+                       'pool_validation': False}
+            result = hl.parse_probe(json.dumps(capture).encode(), name)
+            self.assertTrue(result['captured'])
+            self.assertNotIn('passed', result)
+            self.assertEqual(result['capabilities'], capture)
+            for change in ({'complete': False}, {'kind': 'other'}, {'schema': 2},
+                           {'evidence': 'rendering_validated'}, {'execution_validation': True}):
+                with self.subTest(name=name, change=change), self.assertRaises(hl.ProtocolError):
+                    hl.parse_probe(json.dumps(dict(capture, **change)).encode(), name)
+            if version:
+                for change in ({'api_version': 6}, {'pool_validation': True}):
+                    with self.assertRaises(hl.ProtocolError):
+                        hl.parse_probe(json.dumps(dict(capture, **change)).encode(), name)
+        for bad in (b'{"schema":1,', b'[]', b'null', b'PASS automated capd3d8: ok', b'\xff'):
+            with self.subTest(raw=bad), self.assertRaises(hl.ProtocolError):
+                hl.parse_probe(bad, 'capd3d8')
+
     def test_command_is_bounded_and_rejects_injected_demo(self):
         self.assertIn("-toconsole -condebug", hl.launch_command("dgperf.dem"))
         for name in ["../x", "a b", "x;+quit", "a" * 65, "a\nquit"]:
@@ -114,6 +137,21 @@ class ProtocolTests(unittest.TestCase):
         self.assertEqual(report['state'], 'completed')
         self.assertEqual(report['result'], {'probe': 'arrays', 'passed': True})
         self.assertEqual((output / 'engine-output.txt').read_bytes(), raw)
+
+    def test_capability_probe_preserves_json_artifact(self):
+        capture = {'schema': 1, 'kind': 'dreamgpu.d3d.capabilities', 'api_version': 8,
+                   'complete': True, 'evidence': 'reported_capabilities_only',
+                   'execution_validation': False, 'pool_validation': False}
+        raw = json.dumps(capture).encode()
+        def behavior(stream, request_id):
+            stream.write(f'READY {request_id}\n'.encode())
+            self.assertEqual(stream.readline(), f'PROBE {request_id} capd3d8\n'.encode())
+            stream.write(f'STARTED {request_id}\nRESULT {request_id} {raw.hex()}\n'.encode())
+        report, output = self.run_server(behavior, demo='capd3d8', probe=True)
+        self.assertEqual(report['state'], 'completed')
+        self.assertTrue(report['result']['captured'])
+        self.assertNotIn('passed', report['result'])
+        self.assertEqual((output / 'capability.json').read_bytes(), raw)
 
     def test_dual_work_ack_requires_successful_observation_callback(self):
         seen=[];raw=b'PASS automated dual: bounded real GPU process work\n'
@@ -260,7 +298,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertIn('timedemo boundary',report['error']['message'])
 
     def test_probe_requires_matching_api_pass(self):
-        for name in ('sysgl', 'sysglide', 'setupcheck', 'win9xinstall', 'win9xdiag', 'd3d6', 'd3d7', 'd3d8', 'd3d9', 'glide', 'windows', 'modes', 'win98', 'utlogs', 'utdsetup', 'utd3d', 'ntupdate'):
+        for name in ('sysgl', 'bordergl', 'sysglide', 'setupcheck', 'win9xinstall', 'win9xdiag', 'd3d6', 'd3d7', 'd3d8', 'd3d9', 'glide', 'windows', 'modes', 'win98', 'utlogs', 'utdsetup', 'utd3d', 'ntupdate'):
             with self.subTest(name=name):
                 raw = f'PASS automated {name}: real GPU pixels\n'.encode()
                 self.assertEqual(hl.parse_probe(raw, name), {'probe': name, 'passed': True})

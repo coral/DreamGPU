@@ -10,6 +10,10 @@
 #define DG_CAP_GL_PRESENT_BOUNDS 0x400
 #define DG_CAP_GL_BULK_READBACK 0x800
 #define DG_CAP_GL_DEPTH_STENCIL_READBACK 0x1000
+/* Existing DATA records with complete scalar/proxy/empty image semantics. */
+#define DG_CAP_GL_TEXTURE_IMAGES 0x2000
+/* Supplied border texels participate in sampling, not just storage/readback. */
+#define DG_CAP_GL_TEXTURE_BORDERS 0x4000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

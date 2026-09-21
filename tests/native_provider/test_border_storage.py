@@ -14,6 +14,7 @@ body=source[start:end]
 prefix=r'''
 #include <assert.h>
 #include <stdint.h>
+#include <limits.h>
 #include <stdlib.h>
 #include <string.h>
 #include <stdbool.h>
@@ -35,8 +36,8 @@ void util_border_resource_retire(void *token);
 #define PIPE_COMPRESSION_FIXED_RATE_NONE 0
 #define GL_OUT_OF_MEMORY 0x505
 enum pipe_format { RGBA8=1 };
-struct pipe_resource {unsigned refs,w,h;uint8_t pixels[128];};
-struct gl_texture_image {unsigned Width,Width2,Border,TexFormat;uint8_t *border_data;};
+struct pipe_resource {unsigned refs,w,h;uint8_t pixels[1024];};
+struct gl_texture_image {unsigned Width,Width2,Border,TexFormat;uint8_t *border_data;unsigned Height,Height2;};
 struct gl_texture_object {struct {unsigned BaseLevel;} Attrib;unsigned lastLevel;
  struct gl_texture_image *Image[1][16]; struct pipe_resource *pt;
  bool needs_validation;unsigned validated_first_level,validated_last_level;};
@@ -47,24 +48,25 @@ static bool fail_alloc;static unsigned allocations,frees,uploads,invalidations,e
 static unsigned u_minify(unsigned x,unsigned l){return MAX2(x>>l,1);}
 static struct st_context *st_context(struct gl_context *c){return &c->st;}
 static enum pipe_format st_mesa_format_to_pipe_format(struct st_context *s,unsigned f){(void)s;return f;}
+static unsigned _mesa_format_row_stride(unsigned f,unsigned w){assert(f==RGBA8);return w*4;}
 static unsigned _mesa_get_format_bytes(unsigned f){assert(f==RGBA8);return 4;}
 static void _mesa_error(struct gl_context*c,unsigned e,const char*m){(void)c;(void)m;assert(e==GL_OUT_OF_MEMORY);errors++;}
 static struct pipe_resource *st_texture_create(struct st_context*s,unsigned target,enum pipe_format fmt,unsigned last,unsigned w,unsigned h,unsigned d,unsigned layers,unsigned samples,unsigned flags,unsigned bind,bool sparse,unsigned compression){
  (void)s;assert(target==PIPE_TEXTURE_2D&&fmt==RGBA8&&!last&&d==1&&layers==1&&!samples&&!flags&&bind==1&&!sparse&&!compression);
- if(fail_alloc)return NULL;assert(w*h*4<=128);struct pipe_resource*r=calloc(1,sizeof*r);assert(r);r->refs=1;r->w=w;r->h=h;allocations++;return r;}
+ if(fail_alloc)return NULL;assert(w*h*4<=1024);struct pipe_resource*r=calloc(1,sizeof*r);assert(r);r->refs=1;r->w=w;r->h=h;allocations++;return r;}
 static void pipe_resource_reference(struct pipe_resource **to,struct pipe_resource *from){
  if(from)from->refs++;struct pipe_resource *old=*to;*to=from;if(old&&!--old->refs){void *token=util_border_resource_detach((uintptr_t)old);free(old);frees++;util_border_resource_retire(token);}}
 static void st_texture_release_all_sampler_views(struct st_context*s,struct gl_texture_object*o){(void)s;(void)o;invalidations++;}
 static void u_box_2d(unsigned x,unsigned y,unsigned w,unsigned h,struct pipe_box*b){*b=(struct pipe_box){x,y,w,h};}
 static void upload(struct pipe_context*p,struct pipe_resource*r,unsigned l,unsigned use,const struct pipe_box*b,const void*src,unsigned stride,unsigned layer){
- (void)p;assert(!l&&!use&&!layer&&b->height==1&&b->y<r->h&&b->x<=r->w&&b->width<=r->w-b->x&&stride==b->width*4);
- memcpy(r->pixels+4*(r->w*b->y+b->x),src,4*b->width);uploads++;}
+ (void)p;assert(!l&&!use&&!layer&&b->height<=r->h-b->y&&b->y<r->h&&b->x<=r->w&&b->width<=r->w-b->x&&stride==b->width*4);
+ for(unsigned y=0;y<b->height;++y)memcpy(r->pixels+4*(r->w*(b->y+y)+b->x),(const uint8_t*)src+y*stride,4*b->width);uploads++;}
 '''
 tests=r'''
 int main(void){
  struct gl_context ctx={0};struct pipe_context pipe={upload};struct gl_texture_object o={0};
  uint8_t a[24],b[16],c[12];for(unsigned i=0;i<24;i++)a[i]=i;for(unsigned i=0;i<16;i++)b[i]=40+i;for(unsigned i=0;i<12;i++)c[i]=80+i;
- struct gl_texture_image ims[3]={{6,4,1,RGBA8,a},{4,2,1,RGBA8,b},{3,1,1,RGBA8,c}};
+ struct gl_texture_image ims[3]={{6,4,1,RGBA8,a,1,1},{4,2,1,RGBA8,b,1,1},{3,1,1,RGBA8,c,1,1}};
  for(unsigned i=0;i<3;i++)o.Image[0][i]=&ims[i];o.lastLevel=2;o.needs_validation=true;
  o.pt=calloc(1,sizeof*o.pt);assert(o.pt);o.pt->refs=1;struct pipe_resource *old=o.pt;
  fail_alloc=true;assert(!finalize_border_1d(&ctx,&pipe,&o));assert(o.pt==old&&o.needs_validation&&errors==1&&!frees&&!uploads&&!invalidations);
@@ -88,6 +90,19 @@ int main(void){
  unsigned prior=allocations;assert(!finalize_border_1d(&ctx,&pipe,&o));assert(allocations==prior);
  util_border_storage_release(BORDER_STORAGE_LIMIT-live);
  pipe_resource_reference(&o.pt,NULL);assert(frees==3&&!border_storage_bytes&&!border_resource_count);
+ // 2D uses complete native-format rectangles, including all edge/corner texels.
+ uint8_t planes[3][96];
+ for(unsigned l=0;l<3;++l){for(unsigned i=0;i<96;++i)planes[l][i]=i+30*l;ims[l].border_data=planes[l];ims[l].Height2=l?1:2;ims[l].Height=ims[l].Height2+2;}
+ o.needs_validation=true;
+ assert(finalize_border_2d(&ctx,&pipe,&o));assert(o.pt->w==6&&o.pt->h==10);
+ unsigned row=0;
+ for(unsigned l=0;l<3;++l){for(unsigned y=0;y<ims[l].Height;++y)assert(!memcmp(o.pt->pixels+4*o.pt->w*(row+y),planes[l]+4*ims[l].Width*y,4*ims[l].Width));row+=ims[l].Height;}
+ old=o.pt;live=border_storage_bytes;
+ fail_alloc=true;assert(!finalize_border_2d(&ctx,&pipe,&o));fail_alloc=false;assert(o.pt==old&&border_storage_bytes==live);
+ ims[1].Height2=2;assert(!finalize_border_2d(&ctx,&pipe,&o));ims[1].Height2=1;assert(o.pt==old&&border_storage_bytes==live);
+ o.Attrib.BaseLevel=1;assert(finalize_border_2d(&ctx,&pipe,&o));assert(o.pt->w==4&&o.pt->h==6&&o.validated_first_level==1);
+ assert(!memcmp(o.pt->pixels,planes[1],4*ims[1].Width*ims[1].Height));
+ pipe_resource_reference(&o.pt,NULL);assert(!border_storage_bytes&&!border_resource_count);
  puts("PASS actual atlas ownership: allocation rollback, preflight, exact mip/border upload, atomic publication, final release");
 }
 '''

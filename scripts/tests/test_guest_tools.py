@@ -1,4 +1,10 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
+# Keep the registered source job runnable by file path as well as as a module.
+if __package__ in (None, ""):
+    import sys as _sys
+    from pathlib import Path as _Path
+    _sys.path.insert(0, str(_Path(__file__).resolve().parents[2]))
+
 import unittest
 from scripts.fixtures import guest_tools
 
@@ -14,6 +20,16 @@ class ProbeDeployment(unittest.TestCase):
         self.assertEqual(str(paths['sysui']), r'C:\DGSETUI.EXE')
         self.assertEqual(str(paths['utglide']), r'C:\SIERRA\Half-Life\DGUT.EXE')
         self.assertEqual(len(guest_tools.validate(self.manifest())), 1)
+
+    def test_capability_helpers_use_fixed_root_paths(self):
+        for probe, filename in [('capd3d6', 'DGCAP6.EXE'), ('capd3d8', 'DGCAP8.EXE'),
+                                ('capd3d9', 'DGCAP9.EXE'), ('capgl', 'DGCAPGL.EXE'), ('bordergl', 'DGBORDER.EXE')]:
+            value = {'files': [{'destination': '/' + filename, 'sha256': 'a' * 64}],
+                     'probe_helpers': {probe: 'a' * 64}}
+            self.assertEqual(guest_tools.validate(value)[0]['probe'], probe)
+            value['files'][0]['destination'] = '/SIERRA/Half-Life/' + filename
+            with self.assertRaises(ValueError):
+                guest_tools.validate(value)
 
     def test_case_insensitive_windows_path(self):
         self.assertEqual(len(guest_tools.validate(self.manifest('/sierra/HALF-LIFE/dgut.exe'))), 1)

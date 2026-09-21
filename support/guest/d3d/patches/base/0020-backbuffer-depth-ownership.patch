@@ -1,0 +1,204 @@
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -165,6 +165,12 @@
+ 
+     TRACE("Removing context %p.\n", context);
+ 
++    if (device->backbuffer_ds_context == context)
++    {
++        device->backbuffer_ds_context = NULL;
++        device->backbuffer_ds_rt = NULL;
++    }
++
+     for (i = 0; i < device->context_count; ++i)
+     {
+         if (device->contexts[i] == context)
+@@ -198,26 +204,60 @@
+     device->contexts = new_array;
+ }
+ 
++/* Pointer equality alone is insufficient: a context may be rebound to another
++ * drawable, or its render target may change while sharing the physical depth. */
++BOOL device_owns_backbuffer_ds(const struct wined3d_device *device,
++        const struct wined3d_context *context, const struct wined3d_surface *surface)
++{
++    return context && context->valid && context->current_rt
++            && device->onscreen_depth_stencil == surface
++            && device->backbuffer_ds_context == context
++            && device->backbuffer_ds_rt == context->current_rt
++            && device->backbuffer_ds_hdc == context->hdc
++            && device->backbuffer_ds_glctx == context->glCtx;
++}
++
++HRESULT device_preserve_backbuffer_ds(struct wined3d_device *device, struct wined3d_context *context)
++{
++    struct wined3d_surface *old = device->onscreen_depth_stencil;
++    HRESULT hr;
++
++    if (!old) return WINED3D_OK;
++    surface_prepare_map_memory(old);
++    /* surface_load_location accepts an already valid CPU copy independently of
++     * the current drawable. GPU-only copies require the exact recorded owner. */
++    if (FAILED(hr = surface_load_location(old, context, old->resource.map_binding))) return hr;
++    surface_modify_ds_location(old, old->resource.map_binding,
++            old->ds_current_size.cx, old->ds_current_size.cy);
++    return WINED3D_OK;
++}
++
+ HRESULT device_switch_onscreen_ds(struct wined3d_device *device,
+         struct wined3d_context *context, struct wined3d_surface *depth_stencil)
+ {
+     struct wined3d_surface *old = device->onscreen_depth_stencil;
+     HRESULT hr;
+-    DWORD location;
+-    if (old)
+-    {
+-        location = WINED3D_LOCATION_TEXTURE_RGB;
+-        if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
+-        {
+-            surface_prepare_map_memory(old);
+-            location = old->resource.map_binding;
+-        }
+-        if (FAILED(hr = surface_load_location(old, context, location))) return hr;
+-        surface_modify_ds_location(old, location, old->ds_current_size.cx, old->ds_current_size.cy);
+-        wined3d_texture_decref(old->container);
+-    }
++
++    if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
++    {
++        if (device_owns_backbuffer_ds(device, context, depth_stencil)) return WINED3D_OK;
++        if (FAILED(hr = device_preserve_backbuffer_ds(device, context))) return hr;
++    }
++    else if (old)
++    {
++        if (FAILED(hr = surface_load_location(old, context, WINED3D_LOCATION_TEXTURE_RGB))) return hr;
++        surface_modify_ds_location(old, WINED3D_LOCATION_TEXTURE_RGB,
++                old->ds_current_size.cx, old->ds_current_size.cy);
++    }
++    /* Take the new reference before dropping the old one: changing targets can
++     * rebind the same depth surface after preserving its CPU copy. */
++    wined3d_texture_incref(depth_stencil->container);
+     device->onscreen_depth_stencil = depth_stencil;
+-    wined3d_texture_incref(depth_stencil->container);
++    device->backbuffer_ds_context = context;
++    device->backbuffer_ds_rt = context->current_rt;
++    device->backbuffer_ds_hdc = context->hdc;
++    device->backbuffer_ds_glctx = context->glCtx;
++    if (old) wined3d_texture_decref(old->container);
+     return WINED3D_OK;
+ }
+ 
+@@ -369,7 +409,8 @@
+     {
+         DWORD location = render_offscreen ? fb->depth_stencil->resource->draw_binding : WINED3D_LOCATION_DRAWABLE;
+ 
+-        if ((!render_offscreen && depth_stencil != device->onscreen_depth_stencil
++        if (((wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER
++                || (!render_offscreen && depth_stencil != device->onscreen_depth_stencil))
+                 && FAILED(device_switch_onscreen_ds(device, context, depth_stencil)))
+                 || FAILED(prepare_ds_clear(depth_stencil, context, location, flags,
+                         draw_rect, rect_count, clear_rect, &ds_rect)))
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -689,7 +689,12 @@
+         const struct wined3d_gl_info *gl_info = context->gl_info;
+         struct fbo_entry *entry, *entry2;
+ 
+-        if (context->current_rt == surface) context->current_rt = NULL;
++        if (context->current_rt == surface)
++        {
++            if (context->swapchain->device->backbuffer_ds_rt == surface)
++                context->swapchain->device->backbuffer_ds_rt = NULL;
++            context->current_rt = NULL;
++        }
+ 
+         LIST_FOR_EACH_ENTRY_SAFE(entry, entry2, &context->fbo_list, struct fbo_entry, entry)
+         {
+@@ -3461,6 +3466,19 @@
+     render_offscreen = wined3d_resource_is_offscreen(&target->container->resource);
+     if (context->current_rt == target && render_offscreen == old_render_offscreen) return;
+ 
++    if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
++    {
++        struct wined3d_device *device = context->swapchain->device;
++        if (device_owns_backbuffer_ds(device, context, device->onscreen_depth_stencil)
++                && FAILED(device_preserve_backbuffer_ds(device, context)))
++        {
++            /* Do not read a changed drawable under the old depth surface's
++             * name. Retain its last authoritative location; a later depth
++             * switch rejects the unmatched owner until preservation can retry. */
++            WARN("Unable to preserve depth before changing the render target.\n");
++        }
++    }
++
+     /* To compensate the lack of format switching with some offscreen rendering methods and on onscreen buffers
+      * the alpha blend state changes with different render target formats. */
+     if (!context->current_rt)
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -669,7 +669,8 @@
+         {
+             RECT current_rect, draw_rect, r;
+ 
+-            if (!context->render_offscreen && ds != device->onscreen_depth_stencil
++            if ((wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER
++                    || (!context->render_offscreen && ds != device->onscreen_depth_stencil))
+                     && FAILED(device_switch_onscreen_ds(device, context, ds)))
+             {
+                 context_release(context);
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4123,6 +4123,7 @@
+ 
+     if (!context || !context->valid || context_get_current() != context || !context->current_rt
+             || wined3d_settings.offscreen_rendering_mode != ORM_BACKBUFFER
++            || !device_owns_backbuffer_ds(surface->resource.device, context, surface)
+             || !surface_depth_layout(surface, &depth_mask, &stencil_mask))
+         return WINED3DERR_INVALIDCALL;
+     if (upload ? !(surface->locations & surface_simple_locations)
+@@ -4251,6 +4252,8 @@
+     gl_info = context->gl_info;
+     if (wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER)
+     {
++        if (location == WINED3D_LOCATION_DRAWABLE
++                && !device_owns_backbuffer_ds(device, context, surface)) return WINED3DERR_INVALIDCALL;
+         if (surface->locations & location) return WINED3D_OK;
+         if (surface->locations & WINED3D_LOCATION_DISCARDED)
+         {
+@@ -4758,6 +4761,10 @@
+ 
+     if (surface->resource.usage & WINED3DUSAGE_DEPTHSTENCIL)
+     {
++        if (location == WINED3D_LOCATION_DRAWABLE
++                && wined3d_settings.offscreen_rendering_mode == ORM_BACKBUFFER
++                && !device_owns_backbuffer_ds(surface->resource.device, context, surface))
++            return WINED3DERR_INVALIDCALL;
+         if (surface->locations & location) return WINED3D_OK;
+         if ((location & surface_simple_locations) && (surface->locations & surface_simple_locations))
+         {
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2121,6 +2121,12 @@
+     /* Render Target Support */
+     struct wined3d_fb_state fb;
+     struct wined3d_surface *onscreen_depth_stencil;
++    /* ORM_BACKBUFFER depth shares the drawable even for offscreen RTs. These
++     * weak identities never authorize a transfer after the drawable changes. */
++    struct wined3d_context *backbuffer_ds_context;
++    struct wined3d_surface *backbuffer_ds_rt;
++    HDC backbuffer_ds_hdc;
++    HGLRC backbuffer_ds_glctx;
+     struct wined3d_rendertarget_view *auto_depth_stencil_view;
+ 
+     /* For rendering to a texture using glCopyTexImage */
+@@ -2190,6 +2196,10 @@
+         UINT message, WPARAM wparam, LPARAM lparam, WNDPROC proc) DECLSPEC_HIDDEN;
+ void device_resource_add(struct wined3d_device *device, struct wined3d_resource *resource) DECLSPEC_HIDDEN;
+ void device_resource_released(struct wined3d_device *device, struct wined3d_resource *resource) DECLSPEC_HIDDEN;
++BOOL device_owns_backbuffer_ds(const struct wined3d_device *device,
++        const struct wined3d_context *context, const struct wined3d_surface *surface) DECLSPEC_HIDDEN;
++HRESULT device_preserve_backbuffer_ds(struct wined3d_device *device,
++        struct wined3d_context *context) DECLSPEC_HIDDEN;
+ HRESULT device_switch_onscreen_ds(struct wined3d_device *device, struct wined3d_context *context,
+         struct wined3d_surface *depth_stencil) DECLSPEC_HIDDEN;
+ void device_invalidate_state(const struct wined3d_device *device, DWORD state) DECLSPEC_HIDDEN;

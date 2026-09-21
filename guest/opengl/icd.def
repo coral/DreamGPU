@@ -193,3 +193,10 @@ EXPORTS
     glMultMatrixf=glMultMatrixf@4
     glLoadMatrixd=glLoadMatrixd@4
     glMultMatrixd=glMultMatrixd@4
+    glPushClientAttrib=glPushClientAttrib@4
+    glPopClientAttrib=glPopClientAttrib@0
+    glPixelTransferf=glPixelTransferf@8
+    glPixelTransferi=glPixelTransferi@8
+    glPixelZoom=glPixelZoom@8
+    glRasterPos3f=glRasterPos3f@12
+    glDrawPixels=glDrawPixels@20

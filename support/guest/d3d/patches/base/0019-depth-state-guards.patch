@@ -1,0 +1,85 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4118,7 +4118,8 @@
+     BYTE *stencil;
+     SIZE_T count;
+     BOOL upload = location == WINED3D_LOCATION_DRAWABLE, flip;
+-    GLenum error;
++    GLenum error, cleanup_error;
++    BOOL attrib = FALSE, client = FALSE, projection = FALSE, modelview = FALSE;
+ 
+     if (!context || !context->valid || context_get_current() != context || !context->current_rt
+             || wined3d_settings.offscreen_rendering_mode != ORM_BACKBUFFER
+@@ -4146,7 +4147,11 @@
+     for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
+     if (i == 16) { free(depth); return WINED3DERR_INVALIDCALL; }
+     gl_info->gl_ops.gl.p_glPushAttrib(GL_ALL_ATTRIB_BITS);
++    if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
++    attrib = TRUE;
+     gl_info->gl_ops.gl.p_glPushClientAttrib(GL_CLIENT_PIXEL_STORE_BIT);
++    if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
++    client = TRUE;
+     gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, 1);
+     gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ROW_LENGTH, 0);
+     gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_SKIP_ROWS, 0);
+@@ -4162,6 +4167,7 @@
+     gl_info->gl_ops.gl.p_glPixelTransferi(GL_INDEX_SHIFT, 0);
+     gl_info->gl_ops.gl.p_glPixelTransferi(GL_INDEX_OFFSET, 0);
+     gl_info->gl_ops.gl.p_glPixelTransferi(GL_MAP_STENCIL, GL_FALSE);
++    if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
+     if (upload)
+     {
+         gl_info->gl_ops.gl.p_glDisable(GL_SCISSOR_TEST);
+@@ -4177,19 +4183,22 @@
+         gl_info->gl_ops.gl.p_glStencilMask(stencil_mask);
+         gl_info->gl_ops.gl.p_glViewport(0, 0, width, height);
+         gl_info->gl_ops.gl.p_glPixelZoom(1.0f, 1.0f);
++        if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
+         gl_info->gl_ops.gl.p_glMatrixMode(GL_PROJECTION);
+         gl_info->gl_ops.gl.p_glPushMatrix();
++        if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
++        projection = TRUE;
+         gl_info->gl_ops.gl.p_glLoadIdentity();
+         gl_info->gl_ops.gl.p_glMatrixMode(GL_MODELVIEW);
+         gl_info->gl_ops.gl.p_glPushMatrix();
++        if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
++        modelview = TRUE;
+         gl_info->gl_ops.gl.p_glLoadIdentity();
+         gl_info->gl_ops.gl.p_glRasterPos3f(-1.0f, -1.0f, 0.0f);
++        if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
+         gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, depth);
+         if (stencil_mask)
+             gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);
+-        gl_info->gl_ops.gl.p_glPopMatrix();
+-        gl_info->gl_ops.gl.p_glMatrixMode(GL_PROJECTION);
+-        gl_info->gl_ops.gl.p_glPopMatrix();
+         /* Completion is part of upload success; queued transfer errors must not
+          * validate the destination before the native driver executes them. */
+         gl_info->gl_ops.gl.p_glFinish();
+@@ -4200,9 +4209,24 @@
+         if (stencil_mask)
+             gl_info->gl_ops.gl.p_glReadPixels(0, 0, width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);
+     }
+-    gl_info->gl_ops.gl.p_glPopClientAttrib();
+-    gl_info->gl_ops.gl.p_glPopAttrib();
+     error = gl_info->gl_ops.gl.p_glGetError();
++cleanup:
++    /* Only pop frames that were successfully pushed. A full application stack
++     * is a recoverable transfer failure, not permission to pop its state. */
++    if (modelview)
++    {
++        gl_info->gl_ops.gl.p_glMatrixMode(GL_MODELVIEW);
++        gl_info->gl_ops.gl.p_glPopMatrix();
++    }
++    if (projection)
++    {
++        gl_info->gl_ops.gl.p_glMatrixMode(GL_PROJECTION);
++        gl_info->gl_ops.gl.p_glPopMatrix();
++    }
++    if (client) gl_info->gl_ops.gl.p_glPopClientAttrib();
++    if (attrib) gl_info->gl_ops.gl.p_glPopAttrib();
++    cleanup_error = gl_info->gl_ops.gl.p_glGetError();
++    if (error == GL_NO_ERROR) error = cleanup_error;
+     if (error == GL_NO_ERROR)
+     {
+         if (!upload) surface_depth_convert(surface, memory.addr, depth, stencil, FALSE, flip, depth_mask, stencil_mask);

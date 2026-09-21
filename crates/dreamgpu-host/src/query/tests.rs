@@ -634,3 +634,73 @@ fn float_color_readback_retains_more_than_eight_bits_and_bounds_words() {
         );
     }
 }
+
+#[test]
+fn subpixel_precision_queries_use_native_values_and_exact_typed_bounds() {
+    unsafe extern "C" fn integer(name: u32, out: *mut i32) {
+        assert_eq!(name, GL_SUBPIXEL_BITS);
+        unsafe {
+            *out = 8;
+        }
+    }
+    unsafe extern "C" fn float(name: u32, out: *mut f32) {
+        assert_eq!(name, GL_SUBPIXEL_BITS);
+        unsafe {
+            *out = 8.;
+        }
+    }
+    unsafe extern "C" fn double(name: u32, out: *mut f64) {
+        assert_eq!(name, GL_SUBPIXEL_BITS);
+        unsafe {
+            *out = 8.;
+        }
+    }
+    unsafe extern "C" fn boolean(name: u32, out: *mut u8) {
+        assert_eq!(name, GL_SUBPIXEL_BITS);
+        unsafe {
+            *out = 1;
+        }
+    }
+    let mut a = api();
+    a.dg_glGetIntegerv = Some(integer);
+    a.dg_glGetFloatv = Some(float);
+    a.dg_glGetDoublev = Some(double);
+    a.dg_glGetBooleanv = Some(boolean);
+    NATIVE.with(|n| n.borrow_mut().errors.clear());
+    let mut errors = 0;
+    for (function, kind, expected) in [
+        (
+            FEnum_glGetIntegerv,
+            DG_GL_RESULT_INT,
+            8i32.to_le_bytes().to_vec(),
+        ),
+        (
+            FEnum_glGetFloatv,
+            DG_GL_RESULT_FLOAT,
+            8f32.to_le_bytes().to_vec(),
+        ),
+        (
+            FEnum_glGetDoublev,
+            DG_GL_RESULT_DOUBLE,
+            8f64.to_le_bytes().to_vec(),
+        ),
+        (FEnum_glGetBooleanv, DG_GL_RESULT_BOOL, vec![1]),
+    ] {
+        let mut out = [0xa5; 16];
+        assert_eq!(
+            run(
+                &a,
+                &state(),
+                &mut errors,
+                function,
+                [GL_SUBPIXEL_BITS, 0, 0],
+                &mut out[1..1 + expected.len()]
+            ),
+            (0, expected.len() as u32, kind)
+        );
+        assert_eq!(&out[1..1 + expected.len()], expected.as_slice());
+        assert_eq!(out[0], 0xa5);
+        assert!(out[1 + expected.len()..].iter().all(|b| *b == 0xa5));
+    }
+    assert_eq!(errors, 0);
+}

@@ -53,6 +53,8 @@ pub struct ContextState {
     pub capture: crate::selection::State,
     pub lists: *mut crate::lists::State,
     pub list_mode: u32,
+    pub proxy_rejected: [u32; 2],
+    pub border_sampler: *mut crate::texture::border::State,
 }
 impl ContextState {
     const EMPTY: Self = Self {
@@ -70,6 +72,8 @@ impl ContextState {
         capture: crate::selection::State::EMPTY,
         lists: null_mut(),
         list_mode: 0,
+        proxy_rejected: [0; 2],
+        border_sampler: null_mut(),
     };
 }
 
@@ -167,6 +171,7 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     unsafe {
         state.write(ContextState::EMPTY);
     }
+    unsafe { crate::texture::border::release(&*memory, old.border_sampler) };
     unsafe { crate::pixel_image::release(&*memory, &mut old.image) };
     unsafe { crate::selection::release(&*memory, &mut old.capture) };
     unsafe { crate::lists::release(&*memory, old.lists) };
@@ -491,8 +496,10 @@ unsafe fn scalar(
             unsafe {
                 dreamgpu_texture_wait(api, (*state).bound_texture, serial);
                 dreamgpu_texture_wait(api, (*state).bound_texture_1d, serial);
+                crate::texture::border::prepare(&*memory, state)?;
             }
         }
+        FEnum_glEnd => unsafe { crate::texture::border::finish(&*memory, state) },
         _ => return Err(DG_GL_ERROR_UNSUPPORTED),
     }
     Ok(())

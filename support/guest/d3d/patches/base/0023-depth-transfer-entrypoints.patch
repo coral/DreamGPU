@@ -1,0 +1,49 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4110,6 +4110,28 @@
+     }
+ }
+ 
++/* Core pointers are loaded from the actual private provider's exports, not
++ * from its ICD dispatch table. A partially upgraded provider must reject this
++ * operation before touching GL or CPU/GPU authority instead of calling NULL. */
++static BOOL surface_depth_transfer_available(const struct wined3d_gl_info *gl_info, BOOL upload)
++{
++    if (!gl_info || !gl_info->gl_ops.gl.p_glGetError
++            || !gl_info->gl_ops.gl.p_glPushAttrib || !gl_info->gl_ops.gl.p_glPopAttrib
++            || !gl_info->gl_ops.gl.p_glPushClientAttrib || !gl_info->gl_ops.gl.p_glPopClientAttrib
++            || !gl_info->gl_ops.gl.p_glPixelStorei || !gl_info->gl_ops.gl.p_glPixelTransferf
++            || !gl_info->gl_ops.gl.p_glPixelTransferi)
++        return FALSE;
++    if (!upload) return !!gl_info->gl_ops.gl.p_glReadPixels;
++    return gl_info->gl_ops.gl.p_glDisable && gl_info->gl_ops.gl.p_glEnable
++            && gl_info->gl_ops.gl.p_glDepthFunc && gl_info->gl_ops.gl.p_glDepthMask
++            && gl_info->gl_ops.gl.p_glColorMask && gl_info->gl_ops.gl.p_glStencilMask
++            && gl_info->gl_ops.gl.p_glViewport && gl_info->gl_ops.gl.p_glPixelZoom
++            && gl_info->gl_ops.gl.p_glMatrixMode && gl_info->gl_ops.gl.p_glPushMatrix
++            && gl_info->gl_ops.gl.p_glLoadIdentity && gl_info->gl_ops.gl.p_glRasterPos3f
++            && gl_info->gl_ops.gl.p_glDrawPixels && gl_info->gl_ops.gl.p_glPopMatrix
++            && gl_info->gl_ops.gl.p_glFinish;
++}
++
+ /* Transfer the active backbuffer's depth without exposing partially read CPU
+  * memory. A failed upload leaves CPU storage authoritative so a later draw can
+  * retry. Unavailable bindings and unsupported layouts are errors, never copies.
+@@ -4136,6 +4158,9 @@
+         return WINED3DERR_INVALIDCALL;
+     if (upload ? !(surface->locations & surface_simple_locations)
+             : !(surface->locations & WINED3D_LOCATION_DRAWABLE))
++        return WINED3DERR_INVALIDCALL;
++    gl_info = context->gl_info;
++    if (!surface_depth_transfer_available(gl_info, upload))
+         return WINED3DERR_INVALIDCALL;
+     surface_get_drawable_size(context->current_rt, context, &drawable_width, &drawable_height);
+     if (!width || !height || width > drawable_width || height > drawable_height
+@@ -4150,7 +4175,6 @@
+     stencil = (BYTE *)(depth + count);
+     flip = !context->render_offscreen;
+     if (upload) surface_depth_convert(surface, memory.addr, depth, stencil, TRUE, flip, depth_mask, stencil_mask);
+-    gl_info = context->gl_info;
+     /* Drain prior errors before measuring this transaction, with a bound for a
+      * dead transport that continually reports an error. */
+     for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}

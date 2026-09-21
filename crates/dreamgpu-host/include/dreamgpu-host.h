@@ -20,7 +20,7 @@ typedef struct DreamGpuTexture {
     uint32_t guest_name, refs, deleted, undefined_levels;
     void *last_write;
     uint64_t writer_serial, waiter_serial;
-    uint32_t widths[12], heights[12];
+    uint32_t widths[12], heights[12], borders[12];
     uint64_t levels[12];
 } DreamGpuTexture;
 typedef struct DreamGpuTextureEntry {
@@ -66,6 +66,8 @@ typedef struct DreamGpuContextState {
     DreamGpuCapture capture;
     DreamGpuListState *lists;
     uint32_t list_mode;
+    uint32_t proxy_rejected[2];
+    void *border_sampler;
 } DreamGpuContextState;
 uint32_t dreamgpu_context_state_init(const DreamGpuTextureMemory *memory,
                                      DreamGpuContextState *state, DreamGpuTextureNamespace *shared);

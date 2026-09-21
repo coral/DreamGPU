@@ -308,3 +308,27 @@ fn unfinished_image_discards_new_definition_without_execution() {
     f.start(2, GL_COMPILE);
     f.command(FEnum_glColor3f, &[0, 0, 0], &[]);
 }
+
+#[test]
+fn proxy_texture_definitions_execute_immediately_and_are_not_replayed() {
+    let mut f = Fixture::new();
+    f.start(1, GL_COMPILE);
+    f.command(
+        FEnum_glTexImage2D,
+        &[
+            GL_PROXY_TEXTURE_2D,
+            0,
+            GL_RGBA8,
+            4,
+            4,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+        ],
+        &[],
+    );
+    assert_eq!(f.h.calls.len(), 1);
+    f.end();
+    f.call(1);
+    assert_eq!(f.h.calls.len(), 1);
+}

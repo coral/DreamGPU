@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include "internal.h"
 #include <assert.h>
+#include <initializer_list>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -12,26 +13,33 @@ typedef struct {
 static TILE Tiles[1024];
 static ULONG Count, Maximum, FailAfter;
 static GLenum Error;
-static BOOL Ready;
+static BOOL Ready, ImageSupport, BorderSupport;
 static JGL_UNPACK Unpack;
 static JGL_UNPACK Pack;
 static GLint NativeWidth, NativeBorder;
 static ULONG Queries, QueryBytes;
 static BOOL QueryFail, Compiling;
 
+BOOL JglTextureImagesAvailable(void) {
+    return ImageSupport;
+}
+BOOL JglTextureBordersAvailable(void) {
+    return BorderSupport;
+}
 BOOL JglCompiling(void) {
     return Compiling;
 }
 BOOL JglQuery(ULONG function, const ULONG *args, ULONG kind, void *out, ULONG capacity,
               ULONG *bytes) {
-    assert(function == FEnum_glGetTexLevelParameteriv && args[0] == GL_TEXTURE_1D &&
-           kind == DG_GL_RESULT_INT && capacity == 4);
+    assert(function == FEnum_glGetTexLevelParameteriv &&
+           (args[0] == GL_TEXTURE_1D || args[0] == GL_TEXTURE_2D) && kind == DG_GL_RESULT_INT &&
+           capacity == 4);
     ++Queries;
     if (QueryFail) {
         JglSetError(GL_INVALID_OPERATION);
         return FALSE;
     }
-    GLint value = args[2] == 0x1000 ? NativeWidth : NativeBorder;
+    GLint value = (args[2] == 0x1000 || args[2] == 0x1001) ? NativeWidth : NativeBorder;
     memcpy(out, &value, 4);
     *bytes = QueryBytes;
     return TRUE;
@@ -80,7 +88,7 @@ static void Reset(ULONG maximum) {
     Maximum = maximum;
     FailAfter = (ULONG)-1;
     Error = 0;
-    Ready = TRUE;
+    Ready = ImageSupport = BorderSupport = TRUE;
     NativeWidth = DG_GL_MAX_TEXTURE_DIMENSION;
     NativeBorder = 0;
     Queries = 0;
@@ -244,6 +252,163 @@ static void PackedTextures(void) {
     assert(!Error && Count == 1 && !Tiles[0].Bytes && Tiles[0].Args[7] == 0x8363);
 }
 
+static void NegotiatedTextures(void) {
+    Reset(64);
+    BorderSupport = FALSE;
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, 4, 1, GL_RGBA, GL_UNSIGNED_BYTE, (const void *)1);
+    AssertError(GL_INVALID_OPERATION);
+    Reset(64);
+    BorderSupport = FALSE;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 4, 1, GL_RGBA, GL_UNSIGNED_BYTE, (const void *)1);
+    AssertError(GL_INVALID_OPERATION);
+    Reset(64);
+    ImageSupport = FALSE;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, 0x1406, (const void *)1);
+    AssertError(GL_INVALID_OPERATION);
+    Reset(64);
+    ImageSupport = FALSE;
+    glTexImage2D(0x8064, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, (const void *)1);
+    AssertError(GL_INVALID_OPERATION);
+    Reset(64);
+    ImageSupport = FALSE;
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    assert(!Error && Count == 1); // ordinary legacy definitions retain compatibility
+}
+
+static void BorderedTextures(void) {
+    unsigned char pixels[144], actual[144] = {};
+    for (ULONG i = 0; i < sizeof(pixels); ++i)
+        pixels[i] = (unsigned char)(i + 13);
+    Reset(16);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 6, 6, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!Error && Count == 13 && Tiles[0].Args[5] == 1 && !Tiles[0].Bytes);
+    for (ULONG i = 1; i < Count; ++i) {
+        const TILE *t = &Tiles[i];
+        assert(t->Args[5] == 1);
+        memcpy(actual + (((GLint)t->Args[3] + 1) * 6 + (GLint)t->Args[2] + 1) * 4, t->Pixels,
+               t->Bytes);
+    }
+    assert(!memcmp(actual, pixels, sizeof(pixels)));
+    Reset(16);
+    NativeWidth = 6;
+    NativeBorder = 1;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, -1, -1, 6, 6, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+    assert(!Error && Count == 12 && Queries == 3);
+    Reset(16);
+    NativeWidth = 6;
+    NativeBorder = 1;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 4, -1, 2, 6, GL_RGBA, GL_UNSIGNED_BYTE, (const void *)1);
+    AssertError(GL_INVALID_VALUE);
+    Reset(0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 2050, 2050, 1, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+    assert(!Error && Count == 1 && !Tiles[0].Bytes && Tiles[0].Args[3] == 2050 &&
+           Tiles[0].Args[4] == 2050);
+}
+
+static void ScalarTextures(void) {
+    const struct {
+        GLenum Type;
+        ULONG Unit;
+    } types[] = {{0x1400, 1}, {0x1401, 1}, {0x1402, 2}, {0x1403, 2},
+                 {0x1404, 4}, {0x1405, 4}, {0x1406, 4}};
+    const struct {
+        GLenum Format;
+        ULONG Channels;
+    } formats[] = {{0x1900, 1},
+                   {0x1903, 1},
+                   {0x1904, 1},
+                   {0x1905, 1},
+                   {GL_ALPHA, 1},
+                   {GL_LUMINANCE, 1},
+                   {GL_LUMINANCE_ALPHA, 2},
+                   {GL_RGB, 3},
+                   {GL_RGBA, 4},
+                   {0x80e0, 3},
+                   {0x80e1, 4}};
+    for (const auto &type : types)
+        for (const auto &format : formats)
+            for (ULONG swap = 0; swap < 2; ++swap) {
+                unsigned char source[1024], expected[256], actual[256] = {};
+                ULONG bpp = type.Unit * format.Channels, stride = (7 * bpp + 7) & ~7u;
+                for (ULONG i = 0; i < sizeof(source); ++i)
+                    source[i] = (unsigned char)(i * 13 + 17);
+                for (ULONG y = 0; y < 2; ++y)
+                    for (ULONG x = 0; x < 5; ++x)
+                        for (ULONG c = 0; c < format.Channels; ++c)
+                            for (ULONG j = 0; j < type.Unit; ++j)
+                                expected[(y * 5 + x) * bpp + c * type.Unit + j] =
+                                    source[1 + (y + 1) * stride + (x + 1) * bpp + c * type.Unit +
+                                           (swap ? type.Unit - 1 - j : j)];
+                Reset(32);
+                Unpack = (JGL_UNPACK){8, 7, 1, 1, (GLint)swap, 0};
+                glTexImage2D(GL_TEXTURE_2D, 0, 0x805b /* RGBA16 */, 5, 2, 0, format.Format,
+                             type.Type, source + 1);
+                assert(!Error && Count > 1 && !Tiles[0].Bytes);
+                for (ULONG i = 1; i < Count; ++i) {
+                    TILE *tile = &Tiles[i];
+                    assert(tile->Args[6] == format.Format && tile->Args[7] == type.Type);
+                    memcpy(actual + (tile->Args[3] * 5 + tile->Args[2]) * bpp, tile->Pixels,
+                           tile->Bytes);
+                }
+                assert(!memcmp(actual, expected, 10 * bpp));
+                memset(source, 0, sizeof(source));
+                assert(!memcmp(Tiles[1].Pixels, expected, Tiles[1].Bytes));
+            }
+    for (ULONG lsb = 0; lsb < 2; ++lsb) {
+        unsigned char bits[16] = {0, 0, 0, 0, 0x96, 0x69, 0, 0, 0x5a, 0xa5};
+        unsigned char actual[18] = {};
+        Reset(4);
+        Unpack = (JGL_UNPACK){4, 13, 1, 3, 1, (GLint)lsb};
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 9, 2, 0, 0x1900, 0x1a00, bits);
+        assert(!Error && Count == 7);
+        for (ULONG i = 1; i < Count; ++i) {
+            TILE *tile = &Tiles[i];
+            assert(tile->Args[6] == 0x1900 && tile->Args[7] == GL_UNSIGNED_BYTE);
+            memcpy(actual + tile->Args[3] * 9 + tile->Args[2], tile->Pixels, tile->Bytes);
+        }
+        for (ULONG y = 0; y < 2; ++y)
+            for (ULONG x = 0; x < 9; ++x) {
+                ULONG bit = x + 3;
+                assert(actual[y * 9 + x] ==
+                       ((bits[(y + 1) * 4 + bit / 8] >> (lsb ? bit % 8 : 7 - bit % 8)) & 1));
+            }
+        Reset(64);
+        Unpack = (JGL_UNPACK){8, 1000, INT32_MAX, 3, 0, (GLint)lsb};
+        glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, 9, 0, 0x1900, 0x1a00, bits + 4);
+        assert(!Error && Count == 2 && !memcmp(Tiles[1].Pixels, actual, 9));
+    }
+    for (GLenum target : {0x8063u, 0x8064u}) {
+        Reset(0);
+        Unpack = (JGL_UNPACK){8, INT32_MAX, INT32_MAX, INT32_MAX, 1, 1};
+        if (target == 0x8063)
+            glTexImage1D(target, 0, 0x805b, INT32_MAX, 0, GL_RGBA, 0x1406, (const void *)1);
+        else
+            glTexImage2D(target, 0, 0x805b, INT32_MAX, INT32_MAX, 0, GL_RGBA, 0x1406,
+                         (const void *)1);
+        assert(!Error && Count == 1 && !Tiles[0].Bytes && Tiles[0].Args[0] == target);
+    }
+    Reset(0);
+    glTexImage1D(GL_TEXTURE_1D, 0, 0x8049, 0, 0, GL_RGBA, 0x1406, (const void *)1);
+    assert(!Error && Count == 1 && !Tiles[0].Bytes && Tiles[0].Args[3] == 0);
+    Reset(0);
+    glTexImage2D(GL_TEXTURE_2D, 0, 0x8049, 2, 0, 0, GL_RGBA, 0x1406, (const void *)1);
+    assert(!Error && Count == 1 && !Tiles[0].Bytes && Tiles[0].Args[4] == 0);
+    Reset(8);
+    NativeWidth = 4;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 4, 2, GL_RGBA, 0x1406, (const void *)1);
+    AssertError(GL_OUT_OF_MEMORY); // one scalar pixel cannot fit, no caller read
+    Reset(16);
+    NativeWidth = 4;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 1, 0, 4, 2, GL_RGBA, 0x1406, (const void *)1);
+    AssertError(GL_INVALID_VALUE); // invalid split rectangle cannot partially write
+    assert(Queries == 3);
+    Reset(16);
+    Compiling = TRUE;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 2, GL_RGBA, 0x1406, (const void *)1);
+    AssertError(GL_OUT_OF_MEMORY);
+    assert(!Queries);
+}
+
 int main(void) {
     unsigned char pixels[1024], framebuffer[128];
     ULONG i, x, y;
@@ -383,8 +548,8 @@ int main(void) {
     Image(2048, 2048, GL_RGB, NULL); /* NULL allocation ignores source unpack arithmetic. */
     assert(!Error && Count == 1 && !Tiles[0].Bytes);
     Reset(64);
-    Image(0, 1, GL_RGBA, NULL);
-    AssertError(GL_INVALID_VALUE);
+    Image(0, 1, GL_RGBA, (const void *)1);
+    assert(!Error && Count == 1 && Tiles[0].Args[3] == 0 && !Tiles[0].Bytes);
     Reset(64);
     Image(2049, 1, GL_RGBA, NULL);
     AssertError(GL_INVALID_VALUE);
@@ -401,7 +566,7 @@ int main(void) {
     glTexImage2D(GL_TEXTURE_2D, 1, GL_RGBA, 2048, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
     AssertError(GL_INVALID_VALUE);
     Reset(64);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, 0x1403, pixels);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, 0x140a, pixels);
     AssertError(GL_INVALID_ENUM);
     Reset(64);
     glTexImage2D(GL_TEXTURE_2D, 0, 0x1234, 1, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
@@ -512,6 +677,9 @@ int main(void) {
         assert(Tiles[0].Pixels[i] == 0);
     Reset(64);
     PackedTextures();
+    ScalarTextures();
+    BorderedTextures();
+    NegotiatedTextures();
     Reset(64);
     puts("Packed RGB332/565, RGBA4444/5551, BGRA4444REV/1555REV pixel/padding oracles passed");
     puts("Texture unpack/tiling tests passed, including1D skip-pixels-only semantics and bounded "

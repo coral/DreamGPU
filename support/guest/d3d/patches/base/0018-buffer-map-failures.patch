@@ -1,0 +1,98 @@
+--- a/wined3d/buffer.c
++++ b/wined3d/buffer.c
+@@ -1127,6 +1127,15 @@
+ 
+     TRACE("buffer %p, offset %u, size %u, data %p, flags %#x\n", buffer, offset, size, data, flags);
+ 
++    if (!data || offset > buffer->resource.size || size > buffer->resource.size - offset
++            || buffer->resource.map_count == ~(UINT)0)
++        return WINED3DERR_INVALIDCALL;
++
++    /* A zero size covers the remaining storage, including the conventional
++     * offset=0,size=0 whole-buffer lock. Avoid zero-length dirty ranges. */
++    if (!size)
++        size = buffer->resource.size - offset;
++
+     flags = wined3d_resource_sanitize_map_flags(&buffer->resource, flags);
+     /* Filter redundant WINED3D_MAP_DISCARD maps. The 3DMark2001 multitexture
+      * fill rate test seems to depend on this. When we map a buffer with
+@@ -1140,15 +1149,6 @@
+ 
+     if (buffer->buffer_object)
+     {
+-        /* DISCARD invalidates the entire buffer, regardless of the specified
+-         * offset and size. Some applications also depend on the entire buffer
+-         * being uploaded in that case. Two such applications are Port Royale
+-         * and Darkstar One. */
+-        if (flags & WINED3D_MAP_DISCARD)
+-            buffer_invalidate_bo_range(buffer, 0, 0);
+-        else if (!(flags & WINED3D_MAP_READONLY))
+-            buffer_invalidate_bo_range(buffer, offset, size);
+-
+         if (!(buffer->flags & WINED3D_BUFFER_DOUBLEBUFFER))
+         {
+             if (count == 1)
+@@ -1158,6 +1158,13 @@
+                 const struct wined3d_gl_info *gl_info;
+ 
+                 context = context_acquire(device, NULL);
++                if (!context || !context->valid || context_get_current() != context)
++                {
++                    if (context)
++                        context_release(context);
++                    --buffer->resource.map_count;
++                    return WINED3DERR_INVALIDCALL;
++                }
+                 gl_info = context->gl_info;
+ 
+                 if (buffer->buffer_type_hint == GL_ELEMENT_ARRAY_BUFFER_ARB)
+@@ -1178,6 +1185,13 @@
+                     buffer->map_ptr = GL_EXTCALL(glMapBuffer(buffer->buffer_type_hint,
+                             GL_READ_WRITE));
+                     checkGLcall("glMapBuffer");
++                }
++
++                if (!buffer->map_ptr)
++                {
++                    context_release(context);
++                    --buffer->resource.map_count;
++                    return E_OUTOFMEMORY;
+                 }
+ 
+                 if (((DWORD_PTR)buffer->map_ptr) & (RESOURCE_ALIGNMENT - 1))
+@@ -1212,13 +1226,33 @@
+             }
+         }
+ 
++    }
++
++    base = buffer->map_ptr ? buffer->map_ptr : buffer->resource.heap_memory;
++    if (!base)
++    {
++        --buffer->resource.map_count;
++        return E_OUTOFMEMORY;
++    }
++
++    /* Mapping may fail even with an existing GPU allocation. Publish dirty
++     * ranges and synchronization intent only after obtaining valid storage. */
++    if (buffer->buffer_object)
++    {
++        /* DISCARD invalidates the entire buffer, regardless of the specified
++         * offset and size. Some applications also depend on the entire buffer
++         * being uploaded in that case. Two such applications are Port Royale
++         * and Darkstar One. */
++        if (flags & WINED3D_MAP_DISCARD)
++            buffer_invalidate_bo_range(buffer, 0, 0);
++        else if (!(flags & WINED3D_MAP_READONLY))
++            buffer_invalidate_bo_range(buffer, offset, size);
++
+         if (flags & WINED3D_MAP_DISCARD)
+             buffer->flags |= WINED3D_BUFFER_DISCARD;
+         else if (!(flags & WINED3D_MAP_NOOVERWRITE))
+             buffer->flags |= WINED3D_BUFFER_SYNC;
+     }
+-
+-    base = buffer->map_ptr ? buffer->map_ptr : buffer->resource.heap_memory;
+     *data = base + offset;
+ 
+     TRACE("Returning memory at %p (base %p, offset %u).\n", *data, base, offset);

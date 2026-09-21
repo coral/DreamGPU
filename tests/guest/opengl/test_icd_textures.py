@@ -28,6 +28,7 @@ struct JGL_ARRAY_STATE{BYTE Scratch[65536];};static JGL_ARRAY_STATE arrays;
 static ULONG error,capacity=65536,calls,queries,fail,malformed,fn,scalars[8];static bool ready=true,all=true,valid=true; static GLint extent=10,border=1;
 static std::vector<ULONG> last;static std::vector<BYTE> packed;
 static bool JglCompiling(){return false;}
+static bool JglTextureBordersAvailable(){return true;}
 static bool JglReady(){if(!ready)error=GL_INVALID_OPERATION;return ready;}
 static void JglSetError(ULONG e){error=e;}
 static GLboolean glIsTexture(GLuint n){return n>0&&n<100;}

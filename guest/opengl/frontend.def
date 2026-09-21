@@ -99,6 +99,13 @@ EXPORTS
     glGetTexImage=glGetTexImage@20
     glTexImage1D=glTexImage1D@32
     glTexSubImage1D=glTexSubImage1D@28
+    glPushClientAttrib=glPushClientAttrib@4
+    glPopClientAttrib=glPopClientAttrib@0
+    glPixelTransferf=glPixelTransferf@8
+    glPixelTransferi=glPixelTransferi@8
+    glPixelZoom=glPixelZoom@8
+    glRasterPos3f=glRasterPos3f@12
+    glDrawPixels=glDrawPixels@20
     glSecondaryColorPointerEXT=glSecondaryColorPointerEXT@16
     glSecondaryColor3bEXT=glSecondaryColor3bEXT@12
     glSecondaryColor3bvEXT=glSecondaryColor3bvEXT@4

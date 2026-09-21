@@ -506,8 +506,8 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     }
     if (!width || !height)
         return;
-    if (width < 0 || height < 0 || width > DG_GL_MAX_TEXTURE_DIMENSION ||
-        height > DG_GL_MAX_TEXTURE_DIMENSION)
+    if (width < 0 || height < 0 || width > DG_GL_MAX_TEXTURE_DIMENSION + 2 ||
+        height > DG_GL_MAX_TEXTURE_DIMENSION + 2)
         goto invalid;
     pack = JglPack();
     if (!Multiply(pack->RowLength ? (ULONG_PTR)pack->RowLength : (ULONG_PTR)width, pixel_bytes,

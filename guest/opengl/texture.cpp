@@ -10,6 +10,7 @@ typedef struct {
     const unsigned char *First;
     ULONG_PTR Stride;
     ULONG RowBytes;
+    ULONG BitOffset;
 } JGL_PIXEL_LAYOUT;
 
 static BOOL Add(ULONG_PTR a, ULONG_PTR b, ULONG_PTR *result) {
@@ -28,6 +29,10 @@ static BOOL Multiply(ULONG_PTR a, ULONG_PTR b, ULONG_PTR *result) {
 
 static ULONG Components(GLenum format) {
     switch (format) {
+        case 0x1900: /* COLOR_INDEX */
+        case 0x1903: /* RED */
+        case 0x1904: /* GREEN */
+        case 0x1905: /* BLUE */
         case GL_ALPHA:
         case GL_LUMINANCE:
             return 1;
@@ -44,13 +49,43 @@ static ULONG Components(GLenum format) {
     }
 }
 
+/* Preserve scalar components until native pixel transfer: normalizing to
+ * RGBA8 here loses precision and changes index maps, scale and bias. */
+static ULONG ScalarBytes(GLenum type) {
+    switch (type) {
+        case 0x1400: /* BYTE */
+        case GL_UNSIGNED_BYTE:
+            return 1;
+        case 0x1402: /* SHORT */
+        case 0x1403: /* UNSIGNED_SHORT */
+            return 2;
+        case 0x1404: /* INT */
+        case 0x1405: /* UNSIGNED_INT */
+        case 0x1406: /* FLOAT */
+            return 4;
+        default:
+            return 0;
+    }
+}
+
 /* Only these packed inputs are exposed; no packed-pixel extension claim. */
-static ULONG PixelBytes(GLenum format, GLenum type) {
-    if (type == GL_UNSIGNED_BYTE) {
+static ULONG PixelBytes(GLenum format, GLenum type, BOOL immediate = FALSE) {
+    void (*error)(GLenum) = immediate ? JglSetError : JglCommandError;
+    if (((ScalarBytes(type) && type != GL_UNSIGNED_BYTE) || type == 0x1a00 || format == 0x1900 ||
+         (format >= 0x1903 && format <= 0x1905)) &&
+        !JglTextureImagesAvailable()) {
+        error(GL_INVALID_OPERATION);
+        return 0;
+    }
+    if (ScalarBytes(type) || type == 0x1a00 /* BITMAP */) {
         ULONG bytes = Components(format);
+        if (type == 0x1a00 && format != 0x1900) {
+            error(bytes ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
+            return 0;
+        }
         if (!bytes)
-            JglCommandError(GL_INVALID_ENUM);
-        return bytes;
+            error(GL_INVALID_ENUM);
+        return bytes * (type == 0x1a00 ? 1 : ScalarBytes(type));
     }
     switch (type) {
         case 0x8367: /* UNSIGNED_INT_8_8_8_8_REV with byte swapping */
@@ -73,10 +108,10 @@ static ULONG PixelBytes(GLenum format, GLenum type) {
                 return 2;
             break;
         default:
-            JglCommandError(GL_INVALID_ENUM);
+            error(GL_INVALID_ENUM);
             return 0;
     }
-    JglCommandError(Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
+    error(Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
     return 0;
 }
 
@@ -85,11 +120,19 @@ static BOOL Packed16(GLenum type) {
 }
 
 static BOOL DirectPixels(GLenum type) {
-    return type == GL_UNSIGNED_BYTE || (Packed16(type) && !JglUnpack()->SwapBytes);
+    return ScalarBytes(type) == 1 ||
+           ((ScalarBytes(type) || Packed16(type)) && !JglUnpack()->SwapBytes);
 }
 
 static ULONG WirePixelBytes(GLenum type, ULONG components) {
-    return type == GL_UNSIGNED_BYTE || Packed16(type) ? components : 4;
+    return ScalarBytes(type) || Packed16(type) || type == 0x1a00 ? components : 4;
+}
+
+static GLenum WireFormat(GLenum format, GLenum type) {
+    return ScalarBytes(type) || Packed16(type) || type == 0x1a00 ? format : GL_RGBA;
+}
+static GLenum WireType(GLenum type) {
+    return ScalarBytes(type) || Packed16(type) ? type : GL_UNSIGNED_BYTE;
 }
 
 static unsigned char Expand(ULONG value, ULONG maximum) {
@@ -171,45 +214,32 @@ static BOOL NormalizeType(GLenum format, GLenum *type) {
     return TRUE;
 }
 
+static BOOL LegacyInternalFormat2D(GLint format) {
+    return (format >= 1 && format <= 4) || format == GL_ALPHA || format == GL_LUMINANCE ||
+           format == GL_LUMINANCE_ALPHA || format == GL_RGB || format == GL_RGBA ||
+           format == 0x2a10 || format == 0x8043 || format == 0x804f || format == 0x8050 ||
+           format == 0x8056 || format == 0x8057 || format == 0x803c || format == 0x8040 ||
+           format == 0x8045 || format == 0x8051 || format == 0x8058;
+}
+
 static BOOL InternalFormat(GLint format) {
-    switch (format) {
-        case 1:
-        case 2:
-        case 3:
-        case 4:
-        case GL_ALPHA:
-        case GL_LUMINANCE:
-        case GL_LUMINANCE_ALPHA:
-        case GL_RGB:
-        case GL_RGBA:
-        case 0x2a10: /* R3_G3_B2 */
-        case 0x8043: /* LUMINANCE4_ALPHA4 */
-        case 0x804f: /* RGB4 */
-        case 0x8050: /* RGB5 */
-        case 0x8056: /* RGBA4 */
-        case 0x8057: /* RGB5_A1 */
-        case 0x803c: /* ALPHA8 */
-        case 0x8040: /* LUMINANCE8 */
-        case 0x8045: /* LUMINANCE8_ALPHA8 */
-        case 0x8051: /* RGB8 */
-        case 0x8058: /* RGBA8 */
-            return TRUE;
-        default:
-            return FALSE;
-    }
+    return (format >= 1 && format <= 4) || format == GL_ALPHA || format == GL_LUMINANCE ||
+           format == GL_LUMINANCE_ALPHA || format == 0x8049 /* INTENSITY */ || format == GL_RGB ||
+           format == GL_RGBA || format == 0x2a10 || (format >= 0x803b && format <= 0x8048) ||
+           (format >= 0x804a && format <= 0x804d) || (format >= 0x804f && format <= 0x805b);
 }
 
 static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, GLenum format,
-                     GLenum type, ULONG *components) {
+                     GLenum type, ULONG *components, GLint border = 0) {
     if (target != GL_TEXTURE_2D) {
         JglCommandError(GL_INVALID_ENUM);
         return FALSE;
     }
     if (!(*components = PixelBytes(format, type)))
         return FALSE;
-    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 ||
-        (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) ||
-        (ULONG)height > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level)) {
+    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
+        border > 1 || (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * border ||
+        (ULONG)height > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * border) {
         JglCommandError(GL_INVALID_VALUE);
         return FALSE;
     }
@@ -222,6 +252,7 @@ static BOOL Layout(GLsizei width, GLsizei height, ULONG components, const void *
     ULONG_PTR stride, first, skip, span, end;
     ULONG_PTR row_length = unpack->RowLength ? (ULONG_PTR)unpack->RowLength : (ULONG_PTR)width;
 
+    layout->BitOffset = 0;
     layout->RowBytes = width * components;
     if (!Multiply(row_length, components, &stride) || !Add(stride, unpack->Alignment - 1, &stride))
         goto overflow;
@@ -239,15 +270,41 @@ overflow:
     return FALSE;
 }
 
+static BOOL LayoutBitmap(GLsizei width, GLsizei height, BOOL one, const void *pixels,
+                         JGL_PIXEL_LAYOUT *layout) {
+    JGL_UNPACK *unpack = JglUnpack();
+    ULONG_PTR stride = 0, first, span, end;
+    ULONG_PTR row = unpack->RowLength && !one ? (ULONG_PTR)unpack->RowLength : (ULONG_PTR)width;
+    if (!Add(row, 7, &stride) || !Add(stride / 8, unpack->Alignment - 1, &stride))
+        goto overflow;
+    stride &= ~((ULONG_PTR)unpack->Alignment - 1);
+    layout->BitOffset = unpack->SkipPixels & 7;
+    layout->RowBytes = width; /* Expanded immutable indices use one byte each. */
+    if (!Multiply(one ? 0 : unpack->SkipRows, stride, &first) ||
+        !Add(first, (ULONG_PTR)unpack->SkipPixels / 8, &first) ||
+        !Multiply((ULONG_PTR)height - 1, stride, &span) ||
+        !Add(span, ((ULONG_PTR)width + layout->BitOffset + 7) / 8, &span) ||
+        !Add(first, span, &end) || !Add((ULONG_PTR)pixels, end, &end))
+        goto overflow;
+    layout->First = (const unsigned char *)pixels + first;
+    layout->Stride = stride;
+    return TRUE;
+overflow:
+    JglCommandError(GL_INVALID_VALUE);
+    return FALSE;
+}
+
 static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                          GLsizei height, GLenum format, GLenum type, ULONG components,
                          const JGL_PIXEL_LAYOUT *layout, ULONG capacity) {
-    /* Only swapped words and legacy packed8/32 inputs need this scratch.
-     * Ordinary packed16 rows go directly to immutable transport storage. */
+    /* Swap complete scalar components, or unpack bitmap/legacy packed inputs.
+     * Ordinary component and packed16 rows retain their direct transport path. */
     unsigned char converted[(DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4];
     ULONG y = 0, x, row, rows, columns, args[8];
     BOOL words = Packed16(type);
-    ULONG pixelBytes = words ? 2 : 4;
+    ULONG unit = ScalarBytes(type);
+    BOOL bitmap = type == 0x1a00;
+    ULONG pixelBytes = WirePixelBytes(type, components);
     if (capacity > sizeof(converted))
         capacity = sizeof(converted);
     while (y < (ULONG)height) {
@@ -264,8 +321,18 @@ static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffse
             for (row = 0; row < rows; ++row) {
                 unsigned char *out = converted + row * columns * pixelBytes;
                 const unsigned char *in =
-                    layout->First + (y + row) * layout->Stride + x * components;
-                if (words) {
+                    layout->First + (y + row) * layout->Stride + (bitmap ? 0 : x * components);
+                if (bitmap) {
+                    for (ULONG i = 0; i < columns; ++i) {
+                        ULONG bit = layout->BitOffset + x + i;
+                        out[i] =
+                            (in[bit / 8] >> (JglUnpack()->LsbFirst ? bit % 8 : 7 - bit % 8)) & 1;
+                    }
+                } else if (unit) {
+                    for (ULONG i = 0; i < columns * components; i += unit)
+                        for (ULONG j = 0; j < unit; ++j)
+                            out[i + j] = in[i + unit - 1 - j];
+                } else if (words) {
                     for (ULONG i = 0; i < columns; ++i) {
                         out[i * 2] = in[i * 2 + 1];
                         out[i * 2 + 1] = in[i * 2];
@@ -280,8 +347,8 @@ static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffse
             args[3] = yoffset + y;
             args[4] = columns;
             args[5] = rows;
-            args[6] = words ? format : GL_RGBA;
-            args[7] = words ? type : GL_UNSIGNED_BYTE;
+            args[6] = WireFormat(format, type);
+            args[7] = WireType(type);
             if (!JglData(target == GL_TEXTURE_1D ? FEnum_glTexSubImage1D : FEnum_glTexSubImage2D,
                          args, 8, converted, columns * rows * pixelBytes))
                 return FALSE;
@@ -386,30 +453,64 @@ invalid:
     JglSetError(GL_INVALID_VALUE);
 }
 
+/* Proxies query native allocation feasibility, never allocate or read pixels.
+ * They execute immediately even while compiling a display list. */
+static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsizei width,
+                       GLsizei height, GLint border, GLenum format, GLenum type) {
+    if (!JglReady() || !PixelBytes(format, type, TRUE))
+        return;
+    if (!JglTextureImagesAvailable()) {
+        JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
+        border > 1 || !InternalFormat(internal_format)) {
+        JglSetError(GL_INVALID_VALUE);
+        return;
+    }
+    ULONG args[] = {target,        (ULONG)level,  (ULONG)internal_format,   (ULONG)width,
+                    (ULONG)height, (ULONG)border, WireFormat(format, type), WireType(type)};
+    JglData(target == 0x8063 ? FEnum_glTexImage1D : FEnum_glTexImage2D, args, 8, NULL, 0);
+}
+
 void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GLsizei width,
                            GLsizei height, GLint border, GLenum format, GLenum type,
                            const void *pixels) {
+    if (target == 0x8064 /* PROXY_TEXTURE_2D */) {
+        ProxyImage(target, level, internal_format, width, height, border, format, type);
+        return;
+    }
     ULONG components, capacity, args[8];
     JGL_PIXEL_LAYOUT layout;
 
     if (!JglCommandReady() || !NormalizeType(format, &type) ||
-        !Validate(target, level, width, height, format, type, &components))
+        !Validate(target, level, width, height, format, type, &components, border))
         return;
-    if (border || !width || !height || !InternalFormat(internal_format)) {
+    if (width < 2 * border || height < 2 * border || !InternalFormat(internal_format)) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
+    if ((border && !JglTextureBordersAvailable()) ||
+        ((!width || !height || !LegacyInternalFormat2D(internal_format)) &&
+         !JglTextureImagesAvailable())) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (!width || !height)
+        pixels = NULL; /* Empty definitions replace storage without reading caller memory. */
     capacity = pixels ? Capacity(WirePixelBytes(type, components)) : 0;
-    if (pixels && (!capacity || !Layout(width, height, components, pixels, &layout)))
+    if (pixels &&
+        (!capacity || !(type == 0x1a00 ? LayoutBitmap(width, height, FALSE, pixels, &layout)
+                                       : Layout(width, height, components, pixels, &layout))))
         return;
     args[0] = target;
     args[1] = level;
     args[2] = internal_format;
     args[3] = width;
     args[4] = height;
-    args[5] = 0;
-    args[6] = type == GL_UNSIGNED_BYTE || Packed16(type) ? format : GL_RGBA;
-    args[7] = Packed16(type) ? type : GL_UNSIGNED_BYTE;
+    args[5] = border;
+    args[6] = WireFormat(format, type);
+    args[7] = WireType(type);
     if (DirectPixels(type) && pixels && layout.RowBytes &&
         (height == 1 || layout.Stride == layout.RowBytes) &&
         (ULONG)height <= capacity / layout.RowBytes) {
@@ -419,7 +520,8 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
     if (!JglData(FEnum_glTexImage2D, args, 8, NULL, 0))
         return;
     if (pixels)
-        Upload(target, level, 0, 0, width, height, format, type, components, &layout, capacity);
+        Upload(target, level, -border, -border, width, height, format, type, components, &layout,
+               capacity);
 }
 
 void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
@@ -429,11 +531,11 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
     JGL_PIXEL_LAYOUT layout;
 
     if (!JglCommandReady() || !NormalizeType(format, &type) ||
-        !Validate(target, level, width, height, format, type, &components))
+        !Validate(target, level, width, height, format, type, &components, 1))
         return;
     limit = DG_GL_MAX_TEXTURE_DIMENSION >> level;
-    if (xoffset < 0 || yoffset < 0 || (ULONG)xoffset > limit || (ULONG)yoffset > limit ||
-        (ULONG)width > limit - xoffset || (ULONG)height > limit - yoffset) {
+    if (xoffset < -1 || yoffset < -1 || xoffset > (GLint)limit + 1 || yoffset > (GLint)limit + 1 ||
+        width > (GLint)limit + 1 - xoffset || height > (GLint)limit + 1 - yoffset) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
@@ -444,8 +546,57 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
         return;
     }
     capacity = Capacity(WirePixelBytes(type, components));
-    if (!capacity || !Layout(width, height, components, pixels, &layout))
+    if (!capacity)
         return;
+    if (!(type == 0x1a00 ? LayoutBitmap(width, height, FALSE, pixels, &layout)
+                         : Layout(width, height, components, pixels, &layout)))
+        return;
+    // Splitting must not turn an invalid rectangle into a valid partial write.
+    // The image extent is execution-dependent while compiling a display list.
+    ULONG tile_capacity = capacity;
+    if (!DirectPixels(type) && tile_capacity > (DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4)
+        tile_capacity = (DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4;
+    BOOL split = (DirectPixels(type) && height > 1 && layout.Stride != layout.RowBytes) ||
+                 (ULONG)width > tile_capacity / WirePixelBytes(type, components) ||
+                 (ULONG)height > tile_capacity / WirePixelBytes(type, components) / (ULONG)width;
+    if (split && JglCompiling()) {
+        JglCommandError(GL_OUT_OF_MEMORY);
+        return;
+    }
+    if (!JglCompiling() && (split || xoffset < 0 || yoffset < 0 || width > (GLint)limit - xoffset ||
+                            height > (GLint)limit - yoffset)) {
+        GLint extent[2] = {0, 0}, border = 0;
+        ULONG query[] = {target, (ULONG)level, 0x1000 /* TEXTURE_WIDTH */}, bytes = 0;
+        for (ULONG axis = 0; axis < 2; ++axis) {
+            query[2] = 0x1000 + axis; /* TEXTURE_WIDTH/HEIGHT */
+            if (!JglQuery(FEnum_glGetTexLevelParameteriv, query, DG_GL_RESULT_INT, &extent[axis],
+                          sizeof(GLint), &bytes))
+                return;
+            if (bytes != sizeof(GLint) || extent[axis] < 0 || (ULONG)extent[axis] > limit + 2) {
+                JglCommandError(GL_INVALID_OPERATION);
+                return;
+            }
+        }
+        if (!extent[0] || !extent[1]) {
+            JglCommandError(GL_INVALID_OPERATION);
+            return;
+        }
+        query[2] = 0x1005; /* TEXTURE_BORDER */
+        if (!JglQuery(FEnum_glGetTexLevelParameteriv, query, DG_GL_RESULT_INT, &border,
+                      sizeof(border), &bytes))
+            return;
+        if (bytes != sizeof(border) || border < 0 || border > 1 || extent[0] < 2 * border ||
+            extent[1] < 2 * border) {
+            JglCommandError(GL_INVALID_OPERATION);
+            return;
+        }
+        if (xoffset < -border || yoffset < -border || xoffset > extent[0] - border ||
+            yoffset > extent[1] - border || width > extent[0] - border - xoffset ||
+            height > extent[1] - border - yoffset) {
+            JglCommandError(GL_INVALID_VALUE);
+            return;
+        }
+    }
     Upload(target, level, xoffset, yoffset, width, height, format, type, components, &layout,
            capacity);
 }
@@ -459,6 +610,7 @@ static BOOL Layout1D(GLsizei width, ULONG components, const void *pixels,
         return FALSE;
     }
     layout->First = (const unsigned char *)first;
+    layout->BitOffset = 0;
     layout->Stride = layout->RowBytes = width * components;
     return TRUE;
 }
@@ -474,14 +626,12 @@ static BOOL Validate1D(GLint level, GLsizei width, GLint border, GLenum format, 
     }
     return TRUE;
 }
-static BOOL InternalFormat1D(GLint format) {
-    return (format >= 1 && format <= 4) || format == GL_ALPHA || format == GL_LUMINANCE ||
-           format == GL_LUMINANCE_ALPHA || format == 0x8049 /* INTENSITY */ || format == GL_RGB ||
-           format == GL_RGBA || format == 0x2a10 || (format >= 0x803b && format <= 0x8048) ||
-           (format >= 0x804a && format <= 0x804d) || (format >= 0x804f && format <= 0x805b);
-}
 void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internal_format, GLsizei width,
                            GLint border, GLenum format, GLenum type, const void *pixels) {
+    if (target == 0x8063 /* PROXY_TEXTURE_1D */) {
+        ProxyImage(target, level, internal_format, width, 1, border, format, type);
+        return;
+    }
     ULONG components, capacity, args[8];
     JGL_PIXEL_LAYOUT layout;
     if (!JglCommandReady())
@@ -493,12 +643,19 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internal_format, GL
     if (!NormalizeType(format, &type) ||
         !Validate1D(level, width, border, format, type, &components))
         return;
-    if (!width || !InternalFormat1D(internal_format)) {
+    if (!InternalFormat(internal_format)) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
+    if ((border && !JglTextureBordersAvailable()) || (!width && !JglTextureImagesAvailable())) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (!width)
+        pixels = NULL;
     capacity = pixels ? Capacity(WirePixelBytes(type, components)) : 0;
-    if (pixels && (!capacity || !Layout1D(width, components, pixels, &layout)))
+    if (pixels && (!capacity || !(type == 0x1a00 ? LayoutBitmap(width, 1, TRUE, pixels, &layout)
+                                                 : Layout1D(width, components, pixels, &layout))))
         return;
     args[0] = target;
     args[1] = level;
@@ -506,8 +663,8 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internal_format, GL
     args[3] = width;
     args[4] = 1;
     args[5] = border;
-    args[6] = type == GL_UNSIGNED_BYTE || Packed16(type) ? format : GL_RGBA;
-    args[7] = Packed16(type) ? type : GL_UNSIGNED_BYTE;
+    args[6] = WireFormat(format, type);
+    args[7] = WireType(type);
     if (DirectPixels(type) && pixels && layout.RowBytes <= capacity) {
         JglData(FEnum_glTexImage1D, args, 8, layout.First, layout.RowBytes);
         return;
@@ -541,6 +698,8 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei
         return;
     // One ordinary packet is validated atomically by the host. Preflight a
     // split rectangle before its first packet, and border-specific offsets.
+    if (!DirectPixels(type) && capacity > (DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4)
+        capacity = (DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4;
     const ULONG wire_components = WirePixelBytes(type, components);
     const BOOL compiling = JglCompiling();
     // A compiled rectangle must stay one native operation: its actual level
@@ -583,7 +742,8 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
-    if (!Layout1D(width, components, pixels, &layout))
+    if (!(type == 0x1a00 ? LayoutBitmap(width, 1, TRUE, pixels, &layout)
+                         : Layout1D(width, components, pixels, &layout)))
         return;
     Upload(target, level, xoffset, 0, width, 1, format, type, components, &layout, capacity);
 }

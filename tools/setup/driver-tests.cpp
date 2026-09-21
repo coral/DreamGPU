@@ -51,6 +51,9 @@ static void setup_case(Os os, bool own) {
     driver_fake::ambiguous = false;
     driver_fake::binds = driver_fake::launches = driver_fake::resumes = driver_fake::destroys = 0;
     driver_fake::execute = {};
+    driver_fake::node_changed = {};
+    driver_fake::short_paths.clear();
+    driver_fake::detail_inf_override.clear();
     file("C:\\dreamgpu.exe", "installer");
     fake_win32::files[fake_win32::canon(root)].directory = true;
     Node original{};
@@ -386,7 +389,105 @@ static void managed_legacy_driver_startup() {
     assert(!fake_win32::keys["software\\microsoft\\windows\\currentversion\\run"].count(
         "dreamgpu.driver"));
 }
+static void installed_inf_compatibility() {
+    // Exercise real node(), compatible-list selection, capture and observation.
+    for (auto os : {Os::win98, Os::nt5})
+        for (unsigned scenario = 0; scenario < 7; ++scenario) {
+            setup_case(os, false);
+            auto original = driver_fake::current;
+            const char *base = "C:\\WINDOWS\\INF\\JUKEJR~1.INF";
+            const char *other = "C:\\WINDOWS\\INF\\OTHER\\JUKEJR~1.INF";
+            // 0 root only, 1 OTHER only, 2 identical copies, 3 conflicting
+            // copies, 4 neither, 5 directory, 6 reparse-point candidate.
+            bool root_present = scenario == 0 || scenario == 2 || scenario == 3;
+            bool other_present = scenario != 0 && scenario != 4;
+            strcpy(original.inf, root_present ? base : other);
+            if (root_present)
+                file(base, "original OEM inf");
+            if (other_present)
+                file(other, scenario == 3 ? "different OEM inf" : "original OEM inf");
+            if (scenario == 5)
+                fake_win32::files[fake_win32::canon(other)].directory = true;
+            if (scenario == 6)
+                fake_win32::files[fake_win32::canon(other)].attributes = FILE_ATTRIBUTE_REPARSE_POINT;
+            driver_fake::set_node(original);
+            driver_fake::compatible[0] = original;
+            Win32Store store;
+            Journal j;
+            assert(store.init(os, root));
+            bool expected = os == Os::win98 ? scenario < 3 : root_present;
+            assert(store.capture(j, payloads) == expected);
+            assert(driver_fake::binds == 0 && driver_fake::launches == 0);
+            if (expected) {
+                assert(!strcmp(j.original.inf, original.inf));
+                assert(store.observe(j) == Actual::original);
+            }
+        }
+    for (const char *name : {"../old.inf", "..\\old.inf", "C:\\old.inf", "other/old.inf",
+                             "other\\old.inf", ".", "..", "old.inf.", "old.inf ", ""}) {
+        setup_case(Os::win98, false);
+        driver_fake::reg("InfPath", name);
+        Win32Store store;
+        Journal j;
+        assert(store.init(Os::win98, root) && !store.capture(j, payloads));
+        assert(driver_fake::binds == 0 && driver_fake::launches == 0);
+    }
+    // Windows may return bounded string bytes without the terminal NUL.
+    // Malformed identities must still fail before any driver mutation.
+    for (unsigned scenario = 0; scenario < 7; ++scenario) {
+        setup_case(Os::win98, false);
+        for (const char *key : {"infpath", "infsection", "providername", "driverdesc"})
+            fake_win32::keys["driver"][key].bytes.pop_back();
+        fake_win32::keys["default"]["drv"].bytes.pop_back();
+        auto &value = fake_win32::keys["driver"]["providername"];
+        if (scenario == 1)
+            value.bytes = {'a', 0, 'b'};
+        if (scenario == 2)
+            value.bytes = {0};
+        if (scenario == 3)
+            value.bytes = {};
+        if (scenario == 4)
+            value.type = REG_DWORD;
+        if (scenario == 5)
+            value.bytes.assign(256, 'a');
+        if (scenario == 6)
+            value.bytes = {'a', 0, 0};
+        Win32Store store;
+        Journal j;
+        assert(store.init(Os::win98, root));
+        assert(store.capture(j, payloads) == (scenario == 0));
+        assert(driver_fake::binds == 0 && driver_fake::launches == 0);
+        if (scenario == 0)
+            assert(store.observe(j) == Actual::original);
+    }
+    // A maximum-length identity fits with or without its stored terminator.
+    for (bool terminated : {false, true}) {
+        setup_case(Os::win98, false);
+        auto original = driver_fake::current;
+        memset(original.provider, 'a', sizeof(original.provider) - 1);
+        original.provider[sizeof(original.provider) - 1] = 0;
+        driver_fake::set_node(original);
+        driver_fake::compatible[0] = original;
+        if (!terminated)
+            fake_win32::keys["driver"]["providername"].bytes.pop_back();
+        Win32Store store;
+        Journal j;
+        assert(store.init(Os::win98, root) && store.capture(j, payloads));
+        assert(!strcmp(j.original.provider, original.provider));
+    }
+    // A mismatched legacy display/miniport pair is never adopted.
+    setup_case(Os::win98, false);
+    constexpr char legacy[] = "qemumini.drv";
+    fake_win32::keys["default"]["drv"] = {REG_SZ, {legacy, legacy + sizeof(legacy)}};
+    Win32Store store;
+    Journal j;
+    assert(store.init(Os::win98, root) && !store.capture(j, payloads));
+    assert(driver_fake::binds == 0 && driver_fake::launches == 0);
+}
+#include "driver-legacy-tests.inc"
 int main() {
+    legacy_win98_tests();
+    installed_inf_compatibility();
     managed_legacy_driver_startup();
     child_process_ownership();
     identical_driver_rollback(Os::nt5);

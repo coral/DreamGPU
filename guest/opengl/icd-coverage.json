@@ -5,7 +5,23 @@
   "aliases": 190,
   "unimplemented": [],
   "production_registration_ready": true,
-  "partial": [],
+  "partial": [
+    {
+      "slot": 182,
+      "name": "glTexImage1D",
+      "contract": "gl.texture.1d"
+    },
+    {
+      "slot": 183,
+      "name": "glTexImage2D",
+      "contract": "gl.texture.2d"
+    },
+    {
+      "slot": 333,
+      "name": "glTexSubImage2D",
+      "contract": "gl.subimage"
+    }
+  ],
   "resolved_native_limitations": [
     {
       "slot": 248,
@@ -32,5 +48,8 @@
       "resolution": "The default pinned private Mesa provider implements the corrected native behavior; focused actual GPU oracles pass. See support/native/mesa/README.md and source.json."
     }
   ],
-  "provider_scope": "Implemented DreamGPU GL1.1 fixed-function contract, not formal GL certification or general Mesa programmable-border conformance. Native programmable shaders with bordered images are rejected. Bounded resource admission remains explicit."
+  "provider_scope": "All 336 ICD slots are connected. Mandatory GL1.1 texture semantics remain partial; dispatch coverage and native transport tests are not full API conformance. See the semantic inventory for known gaps and unverified contracts.",
+  "dispatch_complete": true,
+  "semantic_complete": false,
+  "semantic_inventory": "tests/graphics/contracts.json"
 }

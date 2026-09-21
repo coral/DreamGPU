@@ -110,8 +110,19 @@ static bool Value(HKEY key, const char *name, const char *expected) {
     DWORD type = 0, bytes = sizeof(text);
     LONG error =
         RegQueryValueExA(key, name, nullptr, &type, reinterpret_cast<BYTE *>(text), &bytes);
-    if (error || type != REG_SZ || !bytes || bytes > sizeof(text) || text[bytes - 1] ||
-        lstrcmpiA(text, expected)) {
+    bool valid = !error && type == REG_SZ && bytes && bytes <= sizeof(text);
+    if (valid) {
+        // RegQueryValueEx may return REG_SZ without its terminal NUL. Accept
+        // only one bounded string, never an embedded-NUL prefix or truncation.
+        if (!text[bytes - 1])
+            --bytes;
+        valid = bytes && bytes < sizeof(text);
+        for (DWORD n = 0; valid && n < bytes; ++n)
+            valid = text[n] != 0;
+        if (valid)
+            text[bytes] = 0;
+    }
+    if (!valid || lstrcmpiA(text, expected)) {
         SetLastError(error ? error : ERROR_INVALID_DATA);
         return Fail(name);
     }

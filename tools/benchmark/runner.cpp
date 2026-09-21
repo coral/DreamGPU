@@ -230,6 +230,8 @@ static BOOL SameTime(FILETIME a, FILETIME b) {
 }
 /* Returns1 only for a stable, fresh, complete result. Large logs yield only
  * their final64KiB. A quiet loading log never counts as a completed benchmark. */
+#include "capability-result.h"
+
 static BOOL PollLog(const char *path, LOG_STATE *state, BOOL exited) {
     WIN32_FILE_ATTRIBUTE_DATA attr;
     HANDLE file;
@@ -542,6 +544,11 @@ static const PROBE_SPEC Probes[] = {
     {"sysd3d7", "C:\\DGSYS7.EXE", "C:\\DGSYS7.LOG", "", 30000},
     {"sysd3d8", "C:\\DGSYS8.EXE", "C:\\DGSYS8.LOG", "", 30000},
     {"sysd3d9", "C:\\DGSYS9.EXE", "C:\\DGSYS9.LOG", "", 30000},
+    {"capd3d6", "C:\\DGCAP6.EXE", "C:\\DGCAP6.LOG", "", 90000},
+    {"capd3d8", "C:\\DGCAP8.EXE", "C:\\DGCP8.JSON", "", 90000},
+    {"capd3d9", "C:\\DGCAP9.EXE", "C:\\DGCP9.JSON", "", 90000},
+    {"capgl", "C:\\DGCAPGL.EXE", "C:\\DGCPGL.JSON", "", 90000},
+    {"bordergl", "C:\\DGBORDER.EXE", "C:\\DGBORDER.LOG", "", 30000},
     {"sysgl", "C:\\DGSYSGL.EXE", "C:\\DGSYSGL.LOG", "", 30000},
     {"sysglide", "C:\\DGSYSGR.EXE", "C:\\DGSYSGR.LOG", "", 30000},
     {"setupcheck", "C:\\DGSETTST.EXE", "C:\\DGSETTST.LOG", "", 120000},
@@ -659,6 +666,55 @@ static BOOL ProgramCompatible(const char *path) {
     return read && DgCompatiblePe(header, count, version & 255, (version >> 8) & 255);
 }
 
+static const char *FinishProbe(PROCESS_INFORMATION *process, const char *log, LOG_STATE *state,
+                               BOOL capability, const char *error) {
+    // Capture before cleanup can dismiss a modal or replace the real exit code.
+    // PollLog replaces Output, so keep this evidence separate until it finishes.
+    BYTE failure[1024 + 4096 + 2];
+    DWORD failure_bytes = 0, i;
+    if (error && !capability) {
+        OutputBytes = 0;
+        CaptureFailureProcess(process);
+        CaptureOwnedModal(process->dwProcessId);
+        failure_bytes = OutputBytes < sizeof(failure) ? OutputBytes : sizeof(failure);
+        for (i = 0; i < failure_bytes; ++i)
+            failure[i] = Output[i];
+    }
+    if (!StopOwned(process)) {
+        error = "cleanup-failed";
+        if (!failure_bytes && !capability) {
+            OutputBytes = 0;
+            CaptureFailureProcess(process);
+            CaptureOwnedModal(process->dwProcessId);
+            failure_bytes = OutputBytes < sizeof(failure) ? OutputBytes : sizeof(failure);
+            for (i = 0; i < failure_bytes; ++i)
+                failure[i] = Output[i];
+        }
+    }
+    CloseHandle(process->hProcess);
+    OutputBytes = 0;
+    if (capability) {
+        // A capability response is one complete JSON document, including when
+        // the probe exits unsuccessfully. Never append text diagnostics to it.
+        const char *capture_error = ReadCapabilityResult(log);
+        if (!error)
+            error = capture_error;
+    } else {
+        PollLog(log, state, TRUE);
+        if (!error && !OutputBytes)
+            error = "missing-probe-log";
+        if (OutputBytes > OUTPUT_MAX - failure_bytes) {
+            DWORD remove = OutputBytes - (OUTPUT_MAX - failure_bytes);
+            OutputBytes -= remove;
+            for (i = 0; i < OutputBytes; ++i)
+                Output[i] = Output[remove + i];
+        }
+        for (i = 0; i < failure_bytes; ++i)
+            Output[OutputBytes++] = failure[i];
+    }
+    return error;
+}
+
 static const char *Probe(const char *id, const PROBE_SPEC *spec) {
     const char *path = spec->path, *log = spec->log;
     OutputBytes = 0;
@@ -720,13 +776,15 @@ static const char *Probe(const char *id, const PROBE_SPEC *spec) {
          Equal(spec->name, "hlevidence") || Equal(spec->name, "sysrollback") ||
          Equal(spec->name, "sysremove") || Equal(spec->name, "drvbind") ||
          Equal(spec->name, "drvcheck") || Equal(spec->name, "drvrestore") ||
-         Equal(spec->name, "sysgl") || Equal(spec->name, "sysglide") ||
+         Equal(spec->name, "sysgl") || Equal(spec->name, "bordergl") || Equal(spec->name, "sysglide") ||
          Equal(spec->name, "setupcheck") || Equal(spec->name, "ntloader") ||
          Equal(spec->name, "ntruntime") || Equal(spec->name, "ntrename") ||
          Equal(spec->name, "ntrestore") || Equal(spec->name, "sysddraw") ||
          Equal(spec->name, "sysddrawnative") || Equal(spec->name, "sysd3d6") ||
          Equal(spec->name, "sysd3d7") || Equal(spec->name, "sysd3d8") ||
-         Equal(spec->name, "sysd3d9"))
+         Equal(spec->name, "sysd3d9") || Equal(spec->name, "capd3d6") ||
+         Equal(spec->name, "capd3d8") || Equal(spec->name, "capd3d9") ||
+         Equal(spec->name, "capgl"))
             ? "C:\\"
             : Game;
     if (!CreateProcessA(path, command, NULL, NULL, FALSE, foreground ? CREATE_SUSPENDED : 0, NULL,
@@ -799,20 +857,13 @@ static const char *Probe(const char *id, const PROBE_SPEC *spec) {
         if (minimized)
             CloseHandle(minimized);
     }
-    if (error) {
-        CaptureFailureProcess(&process);
-        CaptureOwnedModal(process.dwProcessId);
-    }
-    if (!StopOwned(&process))
-        error = "cleanup-failed";
-    CloseHandle(process.hProcess);
     /* PollLog preserves a bounded diagnostic tail even without a timedemo
      * line. Probe completion is the owned process's exit status, never a
      * quiet log or a guessed delay. */
-    PollLog(log, &state, TRUE);
-    if (!error && !OutputBytes)
-        error = "missing-probe-log";
-    return error;
+    return FinishProbe(&process, log, &state,
+                       Equal(spec->name, "capd3d8") || Equal(spec->name, "capd3d9") ||
+                           Equal(spec->name, "capgl"),
+                       error);
 }
 
 #include "install-command.h"

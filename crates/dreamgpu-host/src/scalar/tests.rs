@@ -99,7 +99,7 @@ fn generated_gl_abi_preserves_bits_and_enforces_begin() {
     take();
     run(&api, &mut state, FEnum_glEnd, &[]).unwrap();
     assert_eq!(state, 0);
-    assert_eq!(take(), [101]);
+    assert_eq!(take(), [101, 200, FEnum_glEnd as u64]);
     assert_eq!(run(&api, &mut state, FEnum_glEnd, &[]), Err(4));
     assert_eq!(run(&api, &mut state, FEnum_glBegin, &[10]), Err(4));
     assert_eq!(run(&api, &mut state, FEnum_glColor4f, &[0, 0, 0]), Err(1));
@@ -248,6 +248,17 @@ fn evaluator_mesh_observes_begin_texture_admission_before_native_draw() {
         run(&api, &mut state, FEnum_glEvalMesh1, &[GL_LINE, 0, 3]),
         Ok(())
     );
-    assert_eq!(take(), [200, FEnum_glBegin as u64, GL_LINE as u64, 0, 3]);
+    assert_eq!(
+        take(),
+        [
+            200,
+            FEnum_glBegin as u64,
+            GL_LINE as u64,
+            0,
+            3,
+            200,
+            FEnum_glEnd as u64
+        ]
+    );
     assert_eq!(state, 0);
 }

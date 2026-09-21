@@ -62,7 +62,8 @@ class Win32Store final {
 
     const char *stage_ = "init";
     static const char *run_key(const Journal &j) {
-        return (j.os == Os::win98 && j.version == 3) || (j.os == Os::nt5 && j.version == 4)
+        return (j.os == Os::win98 && (j.version == 3 || j.version == 5)) ||
+                       (j.os == Os::nt5 && j.version == 4)
                    ? "Software\\Microsoft\\Windows\\CurrentVersion\\Run"
                    : "Software\\Microsoft\\Windows\\CurrentVersion\\RunOnce";
     }
@@ -83,11 +84,26 @@ class Win32Store final {
         return append(out, root_, suffix);
     }
     static bool string(HKEY key, const char *name, char *out, DWORD capacity) {
+        if (capacity < 2)
+            return false;
+        // RegQueryValueEx does not guarantee that REG_SZ includes a terminator.
+        // Append a terminator only when room remains; a fully sized value is
+        // valid when its last byte is already NUL. Reject embedded terminators
+        // rather than accepting a different identity from the stored bytes.
         DWORD bytes = capacity, type = 0;
-        return RegQueryValueExA(key, name, nullptr, &type, reinterpret_cast<BYTE *>(out), &bytes) ==
-                   ERROR_SUCCESS &&
-               type == REG_SZ && bytes > 1 && bytes <= capacity && !out[bytes - 1] &&
-               DWORD(lstrlenA(out)) + 1 == bytes;
+        if (RegQueryValueExA(key, name, nullptr, &type, reinterpret_cast<BYTE *>(out), &bytes) !=
+                ERROR_SUCCESS ||
+            type != REG_SZ || !bytes || bytes > capacity)
+            return false;
+        if (!out[bytes - 1])
+            --bytes;
+        if (!bytes || bytes >= capacity)
+            return false;
+        for (DWORD n = 0; n < bytes; ++n)
+            if (!out[n])
+                return false;
+        out[bytes] = 0;
+        return true;
     }
     static bool image(const char *p, File &out) {
         out.exists = 0;
@@ -203,12 +219,18 @@ class Win32Store final {
         return hash_match(to, sha) ? flush(to, GetFileAttributesA(from)) : copy(from, to, sha);
     }
     static bool component(const char *s) {
-        if (!bounded(s, 256) || !safe_path(s))
+        if (!bounded(s, 256))
             return false;
-        for (; *s; ++s)
-            if (*s == '/')
+        // Installed OEM INF names on Win98 can be DOS short names. Keep the
+        // package path policy unchanged; only this single basename admits '~'.
+        char checked[256]{};
+        unsigned n = 0;
+        for (; s[n]; ++n) {
+            if (s[n] == '/')
                 return false;
-        return true;
+            checked[n] = s[n] == '~' ? '_' : s[n];
+        }
+        return safe_path(checked);
     }
     bool missing_property(DWORD property) {
         BYTE bytes[512];
@@ -254,7 +276,31 @@ class Win32Store final {
         lstrcatA(out.inf, name);
         File file;
         stage_ = "original installed INF hash";
-        if (!image(out.inf, file) || !file.exists)
+        if (!image(out.inf, file))
+            return false;
+        if (os_ == Os::win98) {
+            char other[MAX_PATH];
+            File alternate;
+            if (!append(other, windows_, "\\INF\\OTHER\\") || !append(other, other, name))
+                return false;
+            // OTHER is optional, but unreadable or unsafe existing candidates
+            // must not be mistaken for absence. Never guess between identities.
+            DWORD attributes = GetFileAttributesA(other);
+            if (attributes == INVALID_FILE_ATTRIBUTES) {
+                DWORD error = GetLastError();
+                if (error != ERROR_FILE_NOT_FOUND && error != ERROR_PATH_NOT_FOUND)
+                    return false;
+            } else if (!image(other, alternate) || !alternate.exists)
+                return false;
+            if (file.exists && alternate.exists &&
+                (file.size != alternate.size || lstrcmpA(file.sha, alternate.sha)))
+                return false;
+            if (!file.exists && alternate.exists) {
+                lstrcpyA(out.inf, other);
+                file = alternate;
+            }
+        }
+        if (!file.exists)
             return false;
         lstrcpyA(out.inf_sha, file.sha);
         return true;
@@ -264,10 +310,9 @@ class Win32Store final {
                !lstrcmpA(a.provider, b.provider) && !lstrcmpA(a.description, b.description) &&
                !lstrcmpA(a.inf_sha, b.inf_sha);
     }
-    bool current_kind(bool &owned) {
-        // These are the two reconstructable classes supported by this first
-        // lifecycle: existing DreamGPU, and the OS's VGA fallback. Any other
-        // display package fails before the capture directory is created.
+    bool current_kind(Binding &kind) {
+        // Admit only reconstructable pairs: DreamGPU, OS VGA, and the Win98
+        // legacy pair whose distinct binaries remain untouched during migration.
         Key key, defaults;
         key.h = SetupDiOpenDevRegKey(devices_, &device_, DICS_FLAG_GLOBAL, 0, DIREG_DRV, KEY_READ);
         if (key.h == INVALID_HANDLE_VALUE)
@@ -277,11 +322,14 @@ class Win32Store final {
             if (RegOpenKeyExA(key.h, "DEFAULT", 0, KEY_READ, &defaults.h) ||
                 !string(defaults.h, "drv", name, sizeof(name)))
                 return false;
-            owned = !lstrcmpiA(name, "dgpumini.drv");
-            if (!owned)
+            kind = !lstrcmpiA(name, "dgpumini.drv") ? Binding::dreamgpu
+                   : !lstrcmpiA(name, "qemumini.drv") ? Binding::legacy_win98
+                                                      : Binding::stock;
+            if (kind == Binding::stock)
                 return !lstrcmpiA(name, "vga.drv");
             return string(defaults.h, "minivdd", name, sizeof(name)) &&
-                   !lstrcmpiA(name, "dgpumini.vxd");
+                   !lstrcmpiA(name, kind == Binding::legacy_win98 ? "qemumini.vxd"
+                                                                 : "dgpumini.vxd");
         }
         DWORD type = 0, bytes = 0;
         if (!SetupDiGetDeviceRegistryPropertyA(devices_, &device_, SPDRP_SERVICE, &type,
@@ -289,8 +337,8 @@ class Win32Store final {
                                                &bytes) ||
             type != REG_SZ || !bytes || bytes > sizeof(name) || name[bytes - 1])
             return false;
-        owned = !lstrcmpiA(name, "dgpumini");
-        return owned || !lstrcmpiA(name, "Vga") || !lstrcmpiA(name, "VgaSave");
+        kind = !lstrcmpiA(name, "dgpumini") ? Binding::dreamgpu : Binding::stock;
+        return kind == Binding::dreamgpu || !lstrcmpiA(name, "Vga") || !lstrcmpiA(name, "VgaSave");
     }
     enum class ChildState { gone, running, error };
     int child_kind(const char *exe) const {
@@ -513,20 +561,22 @@ class Win32Store final {
         j = {};
         j.os = os_;
         j.version = os_ == Os::win98 ? 3 : 4;
-        bool owned = false;
         stage_ = "capture original binding";
         if (!node(j.original))
             return false;
         stage_ = "supported original driver pair";
         const bool unbound = os_ == Os::nt5 && !j.original.inf[0];
-        if (!unbound && !current_kind(owned))
+        if (!unbound && !current_kind(j.original_binding))
             return false;
+        if (unbound)
+            j.original_binding = Binding::unbound;
+        const bool owned = j.original_binding == Binding::dreamgpu;
+        const bool legacy = j.original_binding == Binding::legacy_win98;
+        if (legacy)
+            j.version = 5;
         stage_ = "capture previous startup value";
         if (!read_resume(j))
             return false;
-        j.original_binding = unbound ? Binding::unbound
-                             : owned ? Binding::dreamgpu
-                                     : Binding::stock;
         j.desired = j.original;
         lstrcpyA(j.desired.provider, "DreamGPU");
         lstrcpyA(j.desired.description, "DreamGPU");
@@ -590,7 +640,18 @@ class Win32Store final {
             if (!found)
                 return false;
         }
-        if (!owned) {
+        if (legacy) {
+            stage_ = "capture preserved legacy Win98 driver pair";
+            const char *names[] = {"qemumini.drv", "qemumini.vxd"};
+            for (const char *name : names) {
+                File &f = j.files[j.count++];
+                char suffix[64] = "\\";
+                lstrcatA(suffix, name);
+                if (!append(f.path, system_, suffix) || !image(f.path, f) || !f.exists)
+                    return false;
+                wsprintfA(f.backup, "\\driver-backup\\%s", name);
+            }
+        } else if (!owned) {
             stage_ = "capture stock VGA files";
             const char *vga[2] = {os_ == Os::win98 ? "\\vga.drv" : "\\vga.dll",
                                   "\\drivers\\vga.sys"};
@@ -657,7 +718,7 @@ class Win32Store final {
             return false;
         for (unsigned k = 0; k < j.count; ++k) {
             const auto &f = j.files[k];
-            if (f.replaced && f.exists &&
+            if ((f.replaced || j.original_binding == Binding::legacy_win98) && f.exists &&
                 (!path(backup, f.backup) || !ensure_copy(f.path, backup, f.sha)))
                 return false;
         }
@@ -853,6 +914,13 @@ class Win32Store final {
                                j.phase == Phase::restored;
         bool before_node = same_node(current, j.original),
              after_node = same_node(current, j.desired);
+        if (j.original_binding == Binding::legacy_win98) {
+            Binding kind;
+            if (!current_kind(kind) ||
+                (before_node && kind != Binding::legacy_win98) ||
+                (after_node && kind != Binding::dreamgpu))
+                return Actual::other;
+        }
         bool before = before_node, after = after_node, recognized = true;
         for (unsigned n = 0; n < j.count; ++n)
             if (j.files[n].replaced) {
@@ -970,12 +1038,19 @@ class Win32Store final {
         if (j.original_binding != Binding::unbound &&
             !hash_match(j.original.inf, j.original.inf_sha))
             return false;
+        if (j.original_binding == Binding::legacy_win98) {
+            char inf[MAX_PATH];
+            if (!path(inf, "\\driver-backup\\original.inf") ||
+                !hash_match(inf, j.original.inf_sha))
+                return false;
+        }
         for (unsigned n = 0; n < j.count; ++n) {
             const auto &f = j.files[n];
             char backup[MAX_PATH];
             if (!f.replaced && !match(f.path, f))
                 return false;
-            if (f.replaced && f.exists && (!path(backup, f.backup) || !match(backup, f)))
+            if ((f.replaced || j.original_binding == Binding::legacy_win98) && f.exists &&
+                (!path(backup, f.backup) || !match(backup, f)))
                 return false;
         }
         return true;
@@ -1114,6 +1189,11 @@ class Win32Store final {
         Node current;
         if (!node(current) || !same_node(current, original ? j.original : j.desired))
             return false;
+        if (j.original_binding == Binding::legacy_win98) {
+            Binding kind;
+            if (!current_kind(kind) || kind != (original ? Binding::legacy_win98 : Binding::dreamgpu))
+                return false;
+        }
         for (unsigned n = 0; n < j.count; ++n) {
             const auto &f = j.files[n];
             File actual;

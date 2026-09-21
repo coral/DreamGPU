@@ -244,6 +244,26 @@ typedef struct DreamGpuGlApi {
                  : DG_API_RenderbufferStorage) dg_glRenderbufferStorage;
     __typeof__(1 ? DG_API_FramebufferRenderbuffer
                  : DG_API_FramebufferRenderbuffer) dg_glFramebufferRenderbuffer;
+    __typeof__(1 ? glActiveTexture : glActiveTexture) dg_glActiveTexture;
+    __typeof__(1 ? glCreateShader : glCreateShader) dg_glCreateShader;
+    __typeof__(1 ? glShaderSource : glShaderSource) dg_glShaderSource;
+    __typeof__(1 ? glCompileShader : glCompileShader) dg_glCompileShader;
+    __typeof__(1 ? glGetShaderiv : glGetShaderiv) dg_glGetShaderiv;
+    __typeof__(1 ? glGetShaderInfoLog : glGetShaderInfoLog) dg_glGetShaderInfoLog;
+    __typeof__(1 ? glDeleteShader : glDeleteShader) dg_glDeleteShader;
+    __typeof__(1 ? glCreateProgram : glCreateProgram) dg_glCreateProgram;
+    __typeof__(1 ? glAttachShader : glAttachShader) dg_glAttachShader;
+    __typeof__(1 ? glLinkProgram : glLinkProgram) dg_glLinkProgram;
+    __typeof__(1 ? glGetProgramiv : glGetProgramiv) dg_glGetProgramiv;
+    __typeof__(1 ? glGetProgramInfoLog : glGetProgramInfoLog) dg_glGetProgramInfoLog;
+    __typeof__(1 ? glDeleteProgram : glDeleteProgram) dg_glDeleteProgram;
+    __typeof__(1 ? glUseProgram : glUseProgram) dg_glUseProgram;
+    __typeof__(1 ? glGetUniformLocation : glGetUniformLocation) dg_glGetUniformLocation;
+    __typeof__(1 ? glUniform1i : glUniform1i) dg_glUniform1i;
+    __typeof__(1 ? glUniform1iv : glUniform1iv) dg_glUniform1iv;
+    __typeof__(1 ? glUniform1f : glUniform1f) dg_glUniform1f;
+    __typeof__(1 ? glUniform2f : glUniform2f) dg_glUniform2f;
+    __typeof__(1 ? glUniform4fv : glUniform4fv) dg_glUniform4fv;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -336,5 +356,25 @@ typedef struct DreamGpuGlApi {
     .dg_glDeleteRenderbuffers = DG_API_DeleteRenderbuffers,                                        \
     .dg_glBindRenderbuffer = DG_API_BindRenderbuffer,                                              \
     .dg_glRenderbufferStorage = DG_API_RenderbufferStorage,                                        \
-    .dg_glFramebufferRenderbuffer = DG_API_FramebufferRenderbuffer
+    .dg_glFramebufferRenderbuffer = DG_API_FramebufferRenderbuffer,                                 \
+    .dg_glActiveTexture = glActiveTexture,                                                          \
+    .dg_glCreateShader = glCreateShader,                                                            \
+    .dg_glShaderSource = glShaderSource,                                                            \
+    .dg_glCompileShader = glCompileShader,                                                          \
+    .dg_glGetShaderiv = glGetShaderiv,                                                              \
+    .dg_glGetShaderInfoLog = glGetShaderInfoLog,                                                    \
+    .dg_glDeleteShader = glDeleteShader,                                                            \
+    .dg_glCreateProgram = glCreateProgram,                                                          \
+    .dg_glAttachShader = glAttachShader,                                                            \
+    .dg_glLinkProgram = glLinkProgram,                                                              \
+    .dg_glGetProgramiv = glGetProgramiv,                                                            \
+    .dg_glGetProgramInfoLog = glGetProgramInfoLog,                                                  \
+    .dg_glDeleteProgram = glDeleteProgram,                                                          \
+    .dg_glUseProgram = glUseProgram,                                                                \
+    .dg_glGetUniformLocation = glGetUniformLocation,                                                \
+    .dg_glUniform1i = glUniform1i,                                                                  \
+    .dg_glUniform1iv = glUniform1iv,                                                                \
+    .dg_glUniform1f = glUniform1f,                                                                  \
+    .dg_glUniform2f = glUniform2f,                                                                  \
+    .dg_glUniform4fv = glUniform4fv
 #endif

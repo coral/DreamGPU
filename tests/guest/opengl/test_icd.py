@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import re
 import shutil
+import sys
 import subprocess
 import tempfile
 
@@ -25,7 +26,13 @@ assert coverage["existing"] == sum(n.startswith("gl") for n in implementations)
 assert coverage["aliases"] == sum(n.startswith("Alias") for n in implementations)
 assert coverage["production_registration_ready"]
 assert not coverage["unimplemented"]
-assert not coverage["partial"]
+assert coverage["dispatch_complete"]
+inventory = json.loads((ROOT / coverage["semantic_inventory"]).read_text())
+contracts = {item["id"]: item for item in inventory["contracts"]}
+for item in coverage["partial"]:
+    assert "gl" + slots[item["slot"]][2] == item["name"]
+    assert contracts[item["contract"]]["implementation"] == "partial"
+assert not coverage["semantic_complete"] or (inventory["catalog_complete"] and not coverage["partial"])
 assert [(item["slot"], item["name"]) for item in coverage["resolved_native_limitations"]] == [
     (248, "glPixelTransferi"), (257, "glDrawPixels"),
     (323, "glCopyTexImage1D"), (325, "glCopyTexSubImage1D")]
@@ -43,10 +50,27 @@ assert [(normalize(r), n, normalize(a)) for _, r, n, a in slots] == [
 public = set(re.findall(r"^\s+(\w+)=", (SOURCE / "frontend.def").read_text(), re.M))
 icd = set(re.findall(r"^\s+(\w+)=", (SOURCE / "icd.def").read_text(), re.M))
 assert public <= icd
+provider_exports = {"glPushClientAttrib": 4, "glPopClientAttrib": 0,
+                    "glPixelTransferf": 8, "glPixelTransferi": 8, "glPixelZoom": 8,
+                    "glRasterPos3f": 12, "glDrawPixels": 20}
+for filename in ("frontend.def", "icd.def"):
+    exported = dict(re.findall(r"^\s+(\w+)=(\w+@\d+)$", (SOURCE / filename).read_text(), re.M))
+    for name, size in provider_exports.items():
+        assert exported[name] == f"{name}@{size}"
+# The reviewed generator must preserve the private-provider export contract.
+with tempfile.TemporaryDirectory(prefix="dreamgpu-gl-exports-") as directory:
+    generated_root = Path(directory)
+    generator = generated_root / "support/guest/opengl/generate.py"
+    generator.parent.mkdir(parents=True)
+    (generated_root / "guest/opengl").mkdir(parents=True)
+    shutil.copyfile(ROOT / "support/guest/opengl/generate.py", generator)
+    subprocess.run([sys.executable, str(generator)], check=True)
+    for filename in ("frontend.def", "scalar.inc"):
+        assert (generated_root / "guest/opengl" / filename).read_bytes() == (SOURCE / filename).read_bytes()
 
 with tempfile.TemporaryDirectory(prefix="dreamgpu-icd-") as temporary:
     root = Path(temporary)
-    for name in ("icd.cpp", "icd-trace.h", "icd-numeric.inc", "icd-state.inc", "icd-raster.inc", "icd-client.inc", "icd-pixels.inc", "icd-images.inc", "icd-textures.inc", "icd-fixed.inc", "icd-evaluator.inc", "icd-selection.inc", "icd-lists.inc", "icd-functions.inc", "icd-slots.inc", "icd-table.inc"):
+    for name in ("provider.cpp", "icd.cpp", "icd-trace.h", "icd-numeric.inc", "icd-state.inc", "icd-raster.inc", "icd-client.inc", "icd-pixels.inc", "icd-images.inc", "icd-textures.inc", "icd-fixed.inc", "icd-evaluator.inc", "icd-selection.inc", "icd-lists.inc", "icd-functions.inc", "icd-slots.inc", "icd-table.inc"):
         shutil.copyfile(SOURCE / name, root / name)
     declarations = []
     definitions = []
@@ -56,7 +80,9 @@ with tempfile.TemporaryDirectory(prefix="dreamgpu-icd-") as temporary:
              "GLbitfield": "unsigned", "GLfloat": "float", "GLclampf": "float",
              "GLdouble": "double", "GLclampd": "double"}
     for i, result, name, args in slots:
-        declarations.append(f'{result} gl{name}({args});')
+        declarations.append(f'extern "C" {result} gl{name}({args});')
+        if "gl" + name in provider_exports:
+            continue
         if "gl" + name not in public and name not in ("IndexPointer", "EdgeFlagPointer"):
             continue
         if name in ("Vertex3f", "TexCoord2f", "Rotatef"):
@@ -111,7 +137,7 @@ inline DWORD SetFilePointer(HANDLE,LONG,void*,DWORD) { return 0; }
 inline BOOL WriteFile(HANDLE,const void*,DWORD,DWORD*,void*) { return FALSE; }
 inline BOOL CloseHandle(HANDLE) { return TRUE; }
 extern "C" {
-BOOL JglReady();
+BOOL JglReady(); BOOL JglTextureBordersAvailable();
 BOOL JglListMode(ULONG); BOOL JglCompiling(); void JglCallList(ULONG); BOOL JglCallLists(ULONG,const ULONG*);
 void JglScalarVector(unsigned, unsigned, const void*);
 int GetPixelFormat(HDC);
@@ -147,6 +173,7 @@ BOOL JglQuery(ULONG,const ULONG*,ULONG,void*,ULONG,ULONG*);
 #include "icd.cpp"
 #include <cassert>
 int LastCall=-1, ErrorValue=0, LastError=0; float Numbers[4];
+static ULONG ImageArgs[8], ImageBytes=0; static BYTE ImagePayload[64];
 static ULONG ListReply=0,ListCount=0,ListBytes=0;static bool ListShort=false;
 static ULONG CaptureMode=GL_RENDER,CaptureReply[3]={},CaptureQueries=0,CaptureShortAt=~0u;static bool CaptureShortHeader=false;
 static unsigned ScalarFn,ScalarWords;static BYTE ScalarArgs[40],Pattern[128],MapPayload[2080];static unsigned ReplyBytes=128,MapFunction,MapBytes,MapArgs[3];static bool MapShort=false;static bool FixedReady=true;
@@ -165,6 +192,7 @@ JGL_UNPACK* JglUnpack(){static JGL_UNPACK state{};return &state;}
 void JglArrayElement(GLint){} void JglInterleavedArrays(GLenum,GLsizei,const void*){}
 ULONG JglNextImageId(){return 1;} ULONG JglMaxDataBytes(ULONG){return ListBytes?ListBytes:65536;}
 BOOL JglData(ULONG fn,const ULONG*a,ULONG words,const void*p,ULONG bytes){
+ if(fn==FEnum_glDrawPixels){assert(words==8&&bytes<=sizeof(ImagePayload));memcpy(ImageArgs,a,32);ImageBytes=bytes;memcpy(ImagePayload,p,bytes);return TRUE;}
  if(fn==FEnum_glMap1d||fn==FEnum_glMap1f||fn==FEnum_glMap2d||fn==FEnum_glMap2f){assert(words==2||words==3);assert(bytes<=sizeof(MapPayload));MapFunction=fn;MapBytes=bytes;memcpy(MapArgs,a,words*4);memcpy(MapPayload,p,bytes);return TRUE;}
  assert(fn==FEnum_glPolygonStipple&&words==0&&bytes==128);memcpy(Pattern,p,128);return TRUE;}
 BOOL JglQuery(ULONG fn,const ULONG*a,ULONG type,void*p,ULONG cap,ULONG*bytes){
@@ -181,6 +209,7 @@ BOOL JglQuery(ULONG fn,const ULONG*a,ULONG type,void*p,ULONG cap,ULONG*bytes){
 BOOL JglReady(){return FixedReady;}
 BOOL JglListMode(ULONG mode){JglArrays()->ListMode=mode;return TRUE;}
 BOOL JglCompiling(){return JglArrays()->ListMode!=0;}
+BOOL JglTextureBordersAvailable(){return TRUE;}
 void JglCallList(ULONG name){ScalarFn=FEnum_glCallList;ScalarWords=1;memcpy(ScalarArgs,&name,4);}
 BOOL JglCallLists(ULONG count,const ULONG*data){MapFunction=FEnum_glCallLists;MapBytes=count*4;assert(MapBytes<=sizeof(MapPayload));memcpy(MapPayload,data,MapBytes);return TRUE;}
 
@@ -255,6 +284,28 @@ int main() {
     ListBytes=4;ErrorValue=0;const auto previousListBytes=MapBytes;t->Functions.CallLists(2,GL_INT,(GLvoid*)1);assert(ErrorValue==GL_OUT_OF_MEMORY&&MapBytes==previousListBytes);ListBytes=0;
     ErrorValue=0;t->Functions.CallLists(0,GL_UNSIGNED_INT,nullptr);assert(!ErrorValue&&MapBytes==previousListBytes);
 
+    // Real linked dgpugl exports must reach the same bodies and context state
+    // as the system ICD, including push through one route/pop through the other.
+    *JglPack()={8,7,3,2,1,1}; *JglUnpack()={4,0,0,0,0,0};
+    glPushClientAttrib(1); JglPack()->Alignment=1; JglUnpack()->RowLength=8;
+    t->Functions.PopClientAttrib(); assert(JglPack()->Alignment==8&&JglUnpack()->RowLength==0);
+    t->Functions.PushClientAttrib(1); JglPack()->RowLength=0;
+    glPopClientAttrib(); assert(JglPack()->RowLength==7&&JglArrays()->ClientDepth==0);
+    glPixelTransferf(GL_DEPTH_SCALE,1.0f); assert(ScalarFn==FEnum_glPixelTransferf&&ScalarWords==2);
+    ULONG transfer[2];memcpy(transfer,ScalarArgs,8);assert(transfer[0]==GL_DEPTH_SCALE&&transfer[1]==0x3f800000);
+    glPixelTransferi(GL_INDEX_SHIFT,-3);memcpy(transfer,ScalarArgs,8);
+    assert(ScalarFn==FEnum_glPixelTransferi&&transfer[0]==GL_INDEX_SHIFT&&transfer[1]==0xfffffffdu);
+    glPixelZoom(1.0f,-1.0f);memcpy(transfer,ScalarArgs,8);
+    assert(ScalarFn==FEnum_glPixelZoom&&transfer[0]==0x3f800000&&transfer[1]==0xbf800000);
+    glRasterPos3f(-1.0f,-1.0f,0.0f);GLdouble raster[4];memcpy(raster,ScalarArgs,32);
+    assert(ScalarFn==FEnum_glRasterPos4d&&ScalarWords==8&&raster[0]==-1&&raster[1]==-1&&raster[2]==0&&raster[3]==1);
+    const GLuint depth[]={0x12345678,0xabcdef01,0x98765432,0xfedcba09};
+    glDrawPixels(2,2,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,depth);
+    assert(ImageBytes==sizeof(depth)&&ImageArgs[0]==2&&ImageArgs[1]==2&&ImageArgs[2]==GL_DEPTH_COMPONENT&&ImageArgs[3]==GL_UNSIGNED_INT);
+    assert(!memcmp(ImagePayload,depth,sizeof(depth))&&ImageArgs[4]==sizeof(depth)&&ImageArgs[5]==0&&ImageArgs[6]==3);
+    ErrorValue=0;glPixelTransferi(0xdead,1);assert(ErrorValue==GL_INVALID_ENUM);
+    FixedReady=false;const auto beforeImage=ImageBytes;glDrawPixels(2,2,GL_DEPTH_COMPONENT,GL_UNSIGNED_INT,(void*)1);
+    assert(ImageBytes==beforeImage);FixedReady=true;
     assert(DgIcdUnsupportedSlot()==-1);
 
     assert(!DrvSwapLayerBuffers(dc,2));assert(Swaps==0);
@@ -271,7 +322,7 @@ int main() {
     (root / "test.cpp").write_text(test)
     command = [os.environ.get("CXX", "c++"), "-std=c++23", "-O1", "-Wall", "-Wextra", "-Werror",
                "-fno-exceptions", "-fno-rtti", "-fsanitize=address,undefined", "-g",
-               "-I" + str(ROOT / "guest/include"), str(root / "test.cpp"), "-o", str(root / "test")]
+               "-I" + str(ROOT / "guest/include"), str(root / "test.cpp"), str(root / "provider.cpp"), "-o", str(root / "test")]
     subprocess.run(command, check=True)
     subprocess.run([str(root / "test")], check=True)
 print(f"PASS ICD336 typed slots; {coverage['aliases']} real aliases; {len(coverage['unimplemented'])} explicit gaps; {len(coverage.get('partial', []))} partial slot")

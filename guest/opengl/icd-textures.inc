@@ -148,6 +148,10 @@ static void APIENTRY AliasCopyTexImage1D(GLenum target, GLint level, GLenum inte
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
+    if (border && !JglTextureBordersAvailable()) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
     ULONG args[] = {target,   (ULONG)level, internal_format, (ULONG)x,
                     (ULONG)y, (ULONG)width, (ULONG)border};
     JglScalarVector(FEnum_glCopyTexImage1D, 7, args);

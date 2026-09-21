@@ -1,0 +1,241 @@
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -995,6 +995,7 @@
+ 
+         ctx->valid = 1;
+     }
++    ctx->valid = 1;
+     ctx->needs_set = 0;
+     return TRUE;
+ }
+@@ -1208,7 +1209,13 @@
+ {
+     struct wined3d_context *old = context_get_current();
+ 
++#if defined(USE_WIN32_OPENGL) || defined(WIN32_NATIVE)
++    if (ctx && ctx->destroyed)
++        return FALSE;
++    if (old == ctx && (!ctx || (ctx->valid && wglGetCurrentContext() == ctx->glCtx)))
++#else
+     if (old == ctx)
++#endif
+     {
+         TRACE("Already using D3D context %p.\n", ctx);
+         return TRUE;
+@@ -1231,7 +1238,13 @@
+ 
+     if (ctx)
+     {
++#if defined(USE_WIN32_OPENGL) || defined(WIN32_NATIVE)
++        /* A temporary window/binding failure does not destroy the GL context.
++         * Retry its actual binding; never resurrect a destroyed context. */
++        if (ctx->destroyed)
++#else
+         if (!ctx->valid)
++#endif
+         {
+             ERR("Trying to make invalid context %p current\n", ctx);
+             return FALSE;
+@@ -3562,11 +3575,14 @@
+ #if defined(USE_WIN32_OPENGL) || defined(WIN32_NATIVE)
+     /* Target changes can read the old drawable. Activate the migrated context
+      * first, so those copies use its retained color/depth buffer. */
+-    if (!context->valid)
++    if (context->destroyed)
++    {
++        context->valid = 0;
+         return context;
++    }
+     if (context == current_context)
+     {
+-        if ((context->needs_set || context->glCtx != wglGetCurrentContext())
++        if ((!context->valid || context->needs_set || context->glCtx != wglGetCurrentContext())
+                 && !context_set_gl_context(context))
+         {
+             context->valid = 0;
+@@ -3578,6 +3594,7 @@
+         context->valid = 0;
+         return context;
+     }
++    context->current = 1;
+     context->tid = GetCurrentThreadId();
+     context_setup_target(context, target);
+ #else
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -3090,7 +3090,7 @@
+     return WINED3D_OK;
+ }
+ 
+-static void read_from_framebuffer(struct wined3d_surface *surface,
++static HRESULT read_from_framebuffer(struct wined3d_surface *surface,
+         struct wined3d_context *old_ctx, DWORD dst_location)
+ {
+     struct wined3d_device *device = surface->resource.device;
+@@ -3102,6 +3102,10 @@
+     int i;
+     BOOL srcIsUpsideDown;
+     struct wined3d_bo_address data;
++    HRESULT hr = WINED3D_OK;
++
++    if (!context || !context->valid || context_get_current() != context)
++        return WINED3DERR_INVALIDCALL;
+ 
+     surface_get_memory(surface, &data, dst_location);
+ 
+@@ -3109,6 +3113,13 @@
+     {
+         restore_rt = old_ctx->current_rt;
+         context = context_acquire(device, surface);
++    }
++
++    if (!context || !context->valid || context_get_current() != context)
++    {
++        if (context && restore_rt)
++            context_restore(context, restore_rt);
++        return WINED3DERR_INVALIDCALL;
+     }
+ 
+     context_apply_blit_state(context, device);
+@@ -3164,7 +3175,10 @@
+         UINT pitch = wined3d_surface_get_pitch(surface);
+ 
+         if (!(row = malloc( pitch)))
++        {
++            hr = E_OUTOFMEMORY;
+             goto error;
++        }
+ 
+         if (data.buffer_object)
+         {
+@@ -3199,6 +3213,7 @@
+ 
+     if (restore_rt)
+         context_restore(context, restore_rt);
++    return hr;
+ }
+ 
+ /* Read the framebuffer contents into a texture. Note that this function
+@@ -4215,7 +4230,7 @@
+     }
+ }
+ 
+-static void surface_copy_simple_location(struct wined3d_surface *surface, DWORD location)
++static HRESULT surface_copy_simple_location(struct wined3d_surface *surface, DWORD location)
+ {
+     struct wined3d_device *device = surface->resource.device;
+     struct wined3d_context *context;
+@@ -4229,48 +4244,64 @@
+     if (dst.buffer_object)
+     {
+         context = context_acquire(device, NULL);
++        if (!context || !context->valid || context_get_current() != context)
++        {
++            if (context)
++                context_release(context);
++            return WINED3DERR_INVALIDCALL;
++        }
+         gl_info = context->gl_info;
+         GL_EXTCALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, dst.buffer_object));
+         GL_EXTCALL(glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, size, src.addr));
+         GL_EXTCALL(glBindBuffer(GL_PIXEL_UNPACK_BUFFER, 0));
+         checkGLcall("Upload PBO");
+         context_release(context);
+-        return;
++        return WINED3D_OK;
+     }
+     if (src.buffer_object)
+     {
+         context = context_acquire(device, NULL);
++        if (!context || !context->valid || context_get_current() != context)
++        {
++            if (context)
++                context_release(context);
++            return WINED3DERR_INVALIDCALL;
++        }
+         gl_info = context->gl_info;
+         GL_EXTCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, src.buffer_object));
+         GL_EXTCALL(glGetBufferSubData(GL_PIXEL_PACK_BUFFER, 0, size, dst.addr));
+         GL_EXTCALL(glBindBuffer(GL_PIXEL_PACK_BUFFER, 0));
+         checkGLcall("Download PBO");
+         context_release(context);
+-        return;
+-    }
+-    
+-    if(dst.addr && src.addr)
+-    {
+-    	memcpy(dst.addr, src.addr, size);
+-    }
++        return WINED3D_OK;
++    }
++
++    if (!dst.addr || !src.addr)
++        return WINED3DERR_INVALIDCALL;
++    memcpy(dst.addr, src.addr, size);
++    return WINED3D_OK;
+ }
+ 
+ /* Context activation is done by the caller. */
+-static void surface_load_sysmem(struct wined3d_surface *surface,
++static HRESULT surface_load_sysmem(struct wined3d_surface *surface,
+         struct wined3d_context *context, DWORD dst_location)
+ {
+-	  if(!context) return;
+-	
+-    const struct wined3d_gl_info *gl_info = context->gl_info;
+-
++    const struct wined3d_gl_info *gl_info;
++    HRESULT hr;
++
++    /* CPU copies do not need a GL context, including DirectDraw-only GetDC. */
+     if (surface->locations & surface_simple_locations)
+-    {
+-        surface_copy_simple_location(surface, dst_location);
+-        return;
+-    }
++        return surface_copy_simple_location(surface, dst_location);
++
++    if (!context || !context->valid || context_get_current() != context)
++        return WINED3DERR_INVALIDCALL;
++    gl_info = context->gl_info;
+ 
+     if (surface->locations & (WINED3D_LOCATION_RB_MULTISAMPLE | WINED3D_LOCATION_RB_RESOLVED))
+-        surface_load_location(surface, context, WINED3D_LOCATION_TEXTURE_RGB);
++    {
++        if (FAILED(hr = surface_load_location(surface, context, WINED3D_LOCATION_TEXTURE_RGB)))
++            return hr;
++    }
+ 
+     /* Download the surface to system memory. */
+     if (surface->locations & (WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_TEXTURE_SRGB))
+@@ -4279,17 +4310,15 @@
+                 !(surface->locations & WINED3D_LOCATION_TEXTURE_RGB));
+         surface_download_data(surface, gl_info, dst_location);
+ 
+-        return;
++        return WINED3D_OK;
+     }
+ 
+     if (surface->locations & WINED3D_LOCATION_DRAWABLE)
+-    {
+-        read_from_framebuffer(surface, context, dst_location);
+-        return;
+-    }
++        return read_from_framebuffer(surface, context, dst_location);
+ 
+     FIXME("Can't load surface %p with location flags %s into sysmem.\n",
+             surface, wined3d_debug_location(surface->locations));
++    return WINED3DERR_INVALIDCALL;
+ }
+ 
+ /* Context activation is done by the caller. */
+@@ -4562,7 +4591,8 @@
+         case WINED3D_LOCATION_USER_MEMORY:
+         case WINED3D_LOCATION_SYSMEM:
+         case WINED3D_LOCATION_BUFFER:
+-            surface_load_sysmem(surface, context, location);
++            if (FAILED(hr = surface_load_sysmem(surface, context, location)))
++                return hr;
+             break;
+ 
+         case WINED3D_LOCATION_DRAWABLE:
