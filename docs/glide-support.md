@@ -180,8 +180,9 @@ all 97 entry points are logged.
 
 ### Remaining
 
-- Runtime acceptance of `DGSYSG3.EXE` and Glide 3 games (for example Diablo II
-  `-3dfx`) on the six guest/host combinations; none is recorded yet.
+- Runtime acceptance of `DGSYSG3.EXE` and Glide 3 games on the six guest/host
+  combinations. Recorded so far on Linux: `sysglide3` passes on Windows 98, 2000
+  and XP, and Diablo II `-3dfx` (menus) on Windows 2000.
 - The partial and stubbed rows above, multiple TMUs, and Glide 3.10/Napalm
   additions (extension entry points, 32-bit formats, 2048-texel textures).
 

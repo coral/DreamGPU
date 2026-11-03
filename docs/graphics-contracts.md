@@ -366,7 +366,11 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
   identically without any Glide provider and on an emulated Pentium III, so the
   fault is not DreamGPU's. Its cause is unknown.
 - **Diablo II 1.12** (Win2000): installs and plays in DirectDraw and Direct3D
-  modes (menus, hero select, town). Its `-3dfx` mode needs `glide3x.dll`.
+  modes (menus, hero select, town). `-3dfx` runs full screen at 800×600 through
+  `glide3x.dll`. Its menu exposed two chroma-key bugs in the Glide core: an RGBA
+  key converted the wrong way round (the logo was drawn on black, Glide patch
+  0005), and keying skipped for blended batches (the multiplied button labels
+  were black blocks, 0007). Both render correctly from the m23 package.
 - **Unreal Tournament GOTY** (Glide, Win98 SE): renders CityIntro through the
   system glide2x provider. A stale application-local `glide2x.dll` in the
   image's `UT99\System` (an old OpenGLide 0.09rc9 build) hung it in
