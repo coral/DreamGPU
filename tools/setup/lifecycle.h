@@ -159,6 +159,9 @@ template <class Store> class Engine {
             if (state == Actual::after) {
                 if (!store_.confirm(j_, n, false))
                     return Result::io_error;
+                // A resumed pass appends nothing for an acknowledged item.
+                if (i.phase == Phase::applied)
+                    continue;
                 i.phase = Phase::applied;
                 if (save() != Result::complete)
                     return Result::io_error;

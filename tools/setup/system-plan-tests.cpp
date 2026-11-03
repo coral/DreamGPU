@@ -368,6 +368,169 @@ static void older_package_upgrade() {
            "and foreign originals), installed, rolled back and uninstalled in %u cases\n",
            cases);
 }
+// lifecycle.bin is bounded (16 MiB). A history like the Win2000 g14 fixture:
+// install, an upgrade whose activation keeps failing over many resumed passes
+// and is rolled back, then two upgrades. The log fills up and is compacted
+// to the last append of each generation instead of failing the upgrade.
+static constexpr size_t journal_step = sizeof(Journal) + 64, journal_bound = 16 * 1024 * 1024;
+static const std::vector<BYTE> &journal_log() {
+    return fake_win32::files.at(fake_win32::canon("C:\\WINDOWS\\DreamGPU\\lifecycle.bin")).bytes;
+}
+static void new_payload(unsigned n) {
+    auto &bytes = fake_win32::resources[payloads[0].id];
+    bytes.push_back(BYTE(0x30 + n));
+    payloads[0].size = unsigned(bytes.size());
+    native_alias::hash(bytes, payloads[0].sha);
+}
+static Journal activate(Win32Store &store, Journal &j) {
+    Engine engine(store, j);
+    assert(engine.continue_apply(true) == Result::pending_reboot);
+    j.state = State::activated; // API verification is outside this adapter test.
+    assert(store.persist(j));
+    return j;
+}
+static void bounded_history() {
+    initial();
+    Win32Store store;
+    Journal first, failed, third, fourth, loaded;
+    assert(prepare(store, first));
+    activate(store, first);
+    new_payload(1);
+    assert(next_system_generation(Os::nt5, payloads, store, first, failed) == Result::complete);
+    Engine upgrade(store, failed);
+    unsigned passes = 0;
+    size_t before = journal_log().size();
+    do {
+        assert(upgrade.continue_apply(true) == Result::pending_reboot);
+        ++passes;
+        // After the first pass a resumed pass appends only its two state changes.
+        if (passes > 1)
+            assert(journal_log().size() == before + 2 * journal_step);
+        before = journal_log().size();
+    } while (journal_log().size() + 50 * journal_step < journal_bound);
+    assert(upgrade.rollback() == Result::complete && failed.state == State::failed);
+    const Journal failed_final = failed;
+    new_payload(2);
+    assert(next_system_generation(Os::nt5, payloads, store, failed, third) == Result::complete);
+    activate(store, third);
+    const Journal third_final = third;
+    // Like m24 on g14: the last upgrade cannot fit in the remaining log.
+    const size_t room = journal_bound - journal_log().size();
+    assert(room < 16 * journal_step);
+    new_payload(3);
+    assert(next_system_generation(Os::nt5, payloads, store, third, fourth) == Result::complete);
+    activate(store, fourth);
+    // One append per earlier generation, then the fourth generation's appends.
+    assert(journal_log().size() < 32 * journal_step);
+    assert(store.load(loaded) && !memcmp(&loaded, &fourth, sizeof(loaded)));
+    assert(store.load_generation(2, loaded) && !memcmp(&loaded, &failed_final, sizeof(loaded)));
+    assert(store.load_generation(3, loaded) && !memcmp(&loaded, &third_final, sizeof(loaded)));
+    assert(store.load_generation(1, loaded) && loaded.state == State::activated);
+    for (const char *name : {"lifecycle.new", "lifecycle.old"})
+        assert(!fake_win32::files.count(
+            fake_win32::canon((std::string("C:\\WINDOWS\\DreamGPU\\") + name).c_str())));
+    Journal removal;
+    assert(make_uninstall_plan(store, fourth, removal) == Result::complete);
+    assert(store.prepare_generation(removal, nullptr, true) && store.publish_preparation(removal));
+    Engine remove(store, removal);
+    assert(remove.continue_apply(false) == Result::complete);
+    original_files();
+    printf("PASS bounded installation journal: install, %u failed activation passes and "
+           "rollback, two upgrades and removal; the full log compacted to one append per "
+           "generation\n",
+           passes);
+}
+// Every failure during compaction, and every interrupted swap, leaves a log
+// that the next mutable load turns back into the old log or its compaction.
+static void compaction_recovery() {
+    using namespace fake_win32;
+    initial();
+    Journal j;
+    {
+        Win32Store store;
+        assert(prepare(store, j));
+        // Fill to the bound: the last append that fits without compaction.
+        while (journal_log().size() <= journal_bound - journal_step)
+            assert(store.persist(j));
+    }
+    const auto full = files;
+    const std::string bin = canon("C:\\WINDOWS\\DreamGPU\\lifecycle.bin"),
+                      next = canon("C:\\WINDOWS\\DreamGPU\\lifecycle.new"),
+                      old = canon("C:\\WINDOWS\\DreamGPU\\lifecycle.old");
+    const size_t full_size = full.at(bin).bytes.size();
+    const std::vector<BYTE> last(full.at(bin).bytes.end() - journal_step, full.at(bin).bytes.end());
+    // The next mutable load recovers to the old log or its compaction (one
+    // append), ending with the same journal; the next append then succeeds.
+    auto settled = [&]() {
+        Win32Store fresh;
+        Journal loaded;
+        assert(fresh.init("C:\\WINDOWS\\DreamGPU") && fresh.load(loaded));
+        assert(!memcmp(&loaded, &j, sizeof(j)) && !files.count(next) && !files.count(old));
+        const auto &log = files.at(bin).bytes;
+        const size_t size = log.size();
+        // An append whose acknowledgement failed may already be complete.
+        assert(size == full_size || size == journal_step || size == 2 * journal_step);
+        assert(std::equal(log.end() - journal_step, log.end(), last.begin()));
+        assert(fresh.persist(loaded) && fresh.load(loaded));
+        assert(files.at(bin).bytes.size() ==
+               (size == full_size ? 2 * journal_step : size + journal_step));
+        return size;
+    };
+    unsigned points = 0;
+    for (unsigned failure = 1;; ++failure) {
+        files = full;
+        mutation = fail = 0;
+        Win32Store store;
+        Journal loaded;
+        assert(store.init("C:\\WINDOWS\\DreamGPU") && store.load(loaded));
+        fail = mutation + failure;
+        const bool done = store.persist(loaded);
+        fail = 0;
+        if (done) {
+            points = failure - 1;
+            assert(files.at(bin).bytes.size() == 2 * journal_step);
+            break;
+        }
+        settled();
+    }
+    // Interrupted swaps found by the next run, including a damaged compaction
+    // (the old log is kept) and a lifecycle.bin that is not old's compaction.
+    for (unsigned stage = 0; stage < 5; ++stage) {
+        files = full;
+        if (stage == 0) { // lifecycle.new written, nothing moved yet
+            files[next].bytes = last;
+        } else if (stage <= 2) { // lifecycle.bin moved aside
+            files[old] = files.at(bin);
+            files.erase(bin);
+            files[next].bytes = last;
+            if (stage == 2)
+                files[next].bytes[100] ^= 1;
+        } else { // swapped, lifecycle.old not yet deleted
+            files[old] = files.at(bin);
+            files[bin].bytes = last;
+            if (stage == 4) { // lifecycle.bin is not lifecycle.old's compaction
+                files[bin].bytes.insert(files[bin].bytes.end(), last.begin(), last.end());
+                Win32Store fresh;
+                Journal loaded;
+                assert(fresh.init("C:\\WINDOWS\\DreamGPU") && !fresh.load(loaded));
+                assert(files.count(old) && files.at(bin).bytes.size() == 2 * journal_step);
+                continue;
+            }
+        }
+        {
+            // A read-only load never repairs; it fails only while bin is absent.
+            Win32Store reader;
+            Journal loaded;
+            assert(reader.init("C:\\WINDOWS\\DreamGPU"));
+            assert(reader.load(loaded, 0, true) == (stage != 1 && stage != 2));
+        }
+        const bool kept_old = stage == 0 || stage == 2;
+        assert(settled() == (kept_old ? full_size : journal_step));
+    }
+    printf("PASS journal compaction recovery: %u failure points and 5 interrupted swaps end in "
+           "the old log or its exact compaction\n",
+           points);
+}
 static unsigned preparation_recovery(unsigned mode) {
     auto run = [mode](unsigned failure, bool recover) {
         initial();
@@ -584,6 +747,8 @@ int main() {
     reinstall(false);
     reinstall(true);
     older_package_upgrade();
+    bounded_history();
+    compaction_recovery();
     unsigned preparation, application, restoration;
     {
         initial();

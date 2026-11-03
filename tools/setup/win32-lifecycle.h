@@ -165,6 +165,203 @@ class Win32Store {
                 SetFileAttributesA(target, FILE_ATTRIBUTE_NORMAL)) &&
                DeleteFileA(target);
     }
+    // lifecycle.bin is an append-only log of complete journals, each followed by
+    // the SHA256 of its bytes. Legacy schema 1 appends hold 16 items.
+    static constexpr DWORD journal_limit = 16 * 1024 * 1024, log_step = sizeof(Journal) + 64;
+    static constexpr DWORD legacy_step = 24 + legacy_items * sizeof(Item) + 64;
+    // Visits each complete, authentic, valid append in order; stops at an
+    // incomplete final append (good is where it starts).
+    template <class Visit> bool read_log(HANDLE h, DWORD size, DWORD &good, Visit visit) {
+        static Journal candidate;
+        good = 0;
+        while (size - good >= 8) {
+            candidate = {};
+            DWORD got;
+            char expected[65] = {}, actual[65];
+            if (!ReadFile(h, &candidate, 8, &got, nullptr) || got != 8 ||
+                candidate.magic != 0x314a4744 || (candidate.version != 1 && candidate.version != 2))
+                return false;
+            const bool legacy = candidate.version == 1;
+            const DWORD bytes = legacy ? legacy_step - 64 : sizeof(Journal);
+            if (size - good < bytes + 64)
+                break; // incomplete last append only
+            if (!ReadFile(h, reinterpret_cast<BYTE *>(&candidate) + 8, bytes - 8, &got, nullptr) ||
+                got != bytes - 8 || !ReadFile(h, expected, 64, &got, nullptr) || got != 64)
+                return false;
+            Sha256 hash;
+            hash.update(reinterpret_cast<const BYTE *>(&candidate), bytes);
+            hash.finish(actual);
+            if (lstrcmpA(actual, expected))
+                return false;
+            if (legacy) {
+                if (candidate.count > legacy_items)
+                    return false;
+                for (unsigned i = 0; i < candidate.count; ++i)
+                    if (candidate.items[i].original_index >= legacy_items)
+                        return false;
+                candidate.version = 2; // preserve original generations/backup slots
+            }
+            if (!valid(candidate))
+                return false;
+            for (unsigned i = 0; i < candidate.count; i++)
+                if (!allowed(candidate.items[i]))
+                    return false;
+            if (!visit(candidate, good, bytes + 64))
+                return false;
+            good += bytes + 64;
+        }
+        return true;
+    }
+    // Compaction keeps the last append of every generation, byte for byte and
+    // in their order: exactly what load() and load_generation() can return.
+    struct LogEntry {
+        DWORD offset, bytes;
+        uint32_t generation;
+    };
+    static constexpr unsigned max_log_entries = journal_limit / legacy_step + 1;
+    // Indexes a complete log (no incomplete tail) and selects the last append of
+    // each generation.
+    bool index_log(const char *file, LogEntry *kept, unsigned &count, DWORD &size) {
+        static LogEntry all[max_log_entries];
+        File f(
+            CreateFileA(file, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr));
+        if (f.h == INVALID_HANDLE_VALUE)
+            return false;
+        DWORD high = 0, good = 0;
+        size = GetFileSize(f.h, &high);
+        unsigned n = 0;
+        if (size == INVALID_FILE_SIZE || high || size > journal_limit ||
+            !read_log(f.h, size, good,
+                      [&](const Journal &j, DWORD offset, DWORD bytes) {
+                          if (n == max_log_entries)
+                              return false;
+                          all[n++] = {offset, bytes, j.generation};
+                          return true;
+                      }) ||
+            good != size || !n)
+            return false;
+        count = 0;
+        for (unsigned k = 0; k < n; ++k) {
+            bool superseded = false;
+            for (unsigned later = k + 1; later < n && !superseded; ++later)
+                superseded = all[later].generation == all[k].generation;
+            if (!superseded)
+                kept[count++] = all[k];
+        }
+        return true;
+    }
+    // Reads one append's exact bytes (journal and stored hash).
+    static bool read_append(HANDLE h, const LogEntry &e, BYTE *out) {
+        DWORD got = 0;
+        return SetFilePointer(h, e.offset, nullptr, FILE_BEGIN) != INVALID_SET_FILE_POINTER &&
+               ReadFile(h, out, e.bytes, &got, nullptr) && got == e.bytes;
+    }
+    // True when to is exactly the compaction of from.
+    bool compaction_of(const char *from, const char *to) {
+        static LogEntry expected[max_log_entries], actual[max_log_entries];
+        static BYTE a[log_step], b[log_step];
+        unsigned want = 0, have = 0;
+        DWORD from_size = 0, to_size = 0;
+        if (!index_log(from, expected, want, from_size) || !index_log(to, actual, have, to_size) ||
+            have != want)
+            return false;
+        // to must contain no superseded appends: its index is its compaction.
+        File source(
+            CreateFileA(from, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr));
+        File target(
+            CreateFileA(to, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr));
+        if (source.h == INVALID_HANDLE_VALUE || target.h == INVALID_HANDLE_VALUE)
+            return false;
+        DWORD offset = 0;
+        for (unsigned k = 0; k < want; ++k) {
+            if (actual[k].offset != offset || actual[k].bytes != expected[k].bytes ||
+                actual[k].generation != expected[k].generation ||
+                !read_append(source.h, expected[k], a) || !read_append(target.h, actual[k], b))
+                return false;
+            for (DWORD n = 0; n < expected[k].bytes; ++n)
+                if (a[n] != b[n])
+                    return false;
+            offset += actual[k].bytes;
+        }
+        return offset == to_size;
+    }
+    // Before an append would cross the bound, rewrite the log as its compaction.
+    // Windows 98 has no MoveFileEx: lifecycle.new is written, flushed and
+    // verified, then lifecycle.bin -> lifecycle.old, lifecycle.new ->
+    // lifecycle.bin, and lifecycle.old is deleted. recover_compaction()
+    // completes or undoes an interrupted swap before the next mutable load.
+    bool compact() {
+        char bin[MAX_PATH], next[MAX_PATH], old[MAX_PATH];
+        static LogEntry kept[max_log_entries];
+        static BYTE bytes[log_step];
+        unsigned count = 0;
+        DWORD size = 0;
+        if (!path(bin, "\\lifecycle.bin") || !path(next, "\\lifecycle.new") ||
+            !path(old, "\\lifecycle.old") || !absent(old) || !index_log(bin, kept, count, size) ||
+            size != journal_bytes_)
+            return false;
+        progress("Compacting installation journal");
+        if (!absent(next) && !DeleteFileA(next))
+            return false;
+        {
+            File source(CreateFileA(bin, GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0,
+                                    nullptr));
+            File target(CreateFileA(next, GENERIC_WRITE, 0, nullptr, CREATE_NEW,
+                                    FILE_ATTRIBUTE_NORMAL, nullptr));
+            if (source.h == INVALID_HANDLE_VALUE || target.h == INVALID_HANDLE_VALUE)
+                return false;
+            for (unsigned k = 0; k < count; ++k) {
+                DWORD wrote = 0;
+                if (!read_append(source.h, kept[k], bytes) ||
+                    !WriteFile(target.h, bytes, kept[k].bytes, &wrote, nullptr) ||
+                    wrote != kept[k].bytes)
+                    return false;
+            }
+            if (!FlushFileBuffers(target.h))
+                return false;
+        }
+        DWORD compacted = 0;
+        for (unsigned k = 0; k < count; ++k)
+            compacted += kept[k].bytes;
+        if (!compaction_of(bin, next) || !MoveFileA(bin, old))
+            return false;
+        // From here the log is lifecycle.old plus its verified compaction.
+        journal_bytes_ = INVALID_FILE_SIZE;
+        if (!MoveFileA(next, bin) || !DeleteFileA(old))
+            return false;
+        journal_bytes_ = compacted;
+        return true;
+    }
+    // 1 regular file, 0 absent, -1 anything else or an error.
+    static int presence(const char *p) {
+        DWORD attrs = GetFileAttributesA(p);
+        if (attrs == INVALID_FILE_ATTRIBUTES)
+            return GetLastError() == ERROR_FILE_NOT_FOUND ? 0 : -1;
+        return attrs & (FILE_ATTRIBUTE_DIRECTORY | FILE_ATTRIBUTE_REPARSE_POINT) ? -1 : 1;
+    }
+    bool recover_compaction() {
+        char bin[MAX_PATH], next[MAX_PATH], old[MAX_PATH];
+        if (!path(bin, "\\lifecycle.bin") || !path(next, "\\lifecycle.new") ||
+            !path(old, "\\lifecycle.old"))
+            return false;
+        const int has_bin = presence(bin), has_next = presence(next), has_old = presence(old);
+        if (has_bin < 0 || has_next < 0 || has_old < 0)
+            return false;
+        if (has_old) {
+            if (has_bin) {
+                // The swap finished: lifecycle.bin must be the old log's compaction.
+                if (has_next || !compaction_of(old, bin))
+                    return false;
+            } else if (has_next && compaction_of(old, next)) {
+                if (!MoveFileA(next, bin))
+                    return false;
+            } else if ((has_next && !DeleteFileA(next)) || !MoveFileA(old, bin))
+                return false; // the compaction is not authentic: keep the old log
+            return absent(old) || DeleteFileA(old);
+        }
+        // Without lifecycle.old a lifecycle.new was never part of the log.
+        return !has_next || DeleteFileA(next);
+    }
     bool backup_before(const Journal &j, unsigned n) {
         const auto &i = j.items[n];
         if (i.kind != Kind::file || !i.before.exists)
@@ -388,6 +585,10 @@ class Win32Store {
         char filename[MAX_PATH];
         if (!path(filename, "\\lifecycle.bin"))
             return false;
+        // A validated log that cannot take another append is compacted first.
+        if (journal_bytes_ != INVALID_FILE_SIZE && journal_bytes_ > journal_limit - log_step &&
+            !compact())
+            return failure("Could not compact the installation journal", filename, GetLastError());
         File f(CreateFileA(filename, GENERIC_READ | GENERIC_WRITE, 0, nullptr, OPEN_ALWAYS,
                            FILE_ATTRIBUTE_NORMAL, nullptr));
         if (f.h == INVALID_HANDLE_VALUE)
@@ -395,10 +596,11 @@ class Win32Store {
         // Each append is a complete fixed schema + hash. No in-place metadata
         // overwrite. A partial tail is trimmed only after a validated load.
         DWORD size = GetFileSize(f.h, nullptr);
-        constexpr DWORD record = sizeof(Journal) + 64;
-        if (size == INVALID_FILE_SIZE || size > 16 * 1024 * 1024 - record ||
-            (size && size != journal_bytes_))
+        constexpr DWORD record = log_step;
+        if (size == INVALID_FILE_SIZE || (size && size != journal_bytes_))
             return false;
+        if (size > journal_limit - record)
+            return failure("Installation journal is full", filename);
         if (SetFilePointer(f.h, 0, nullptr, FILE_END) == INVALID_SET_FILE_POINTER)
             return false;
         char hash[65];
@@ -415,56 +617,24 @@ class Win32Store {
     }
     bool load(Journal &out, uint32_t generation = 0, bool read_only = false) {
         char filename[MAX_PATH];
-        if (!path(filename, "\\lifecycle.bin"))
+        if (!path(filename, "\\lifecycle.bin") || (!read_only && !recover_compaction()))
             return false;
         File f(CreateFileA(filename, read_only ? GENERIC_READ : GENERIC_READ | GENERIC_WRITE,
                            read_only ? FILE_SHARE_READ : 0, nullptr, OPEN_EXISTING, 0, nullptr));
         if (f.h == INVALID_HANDLE_VALUE)
             return false;
         DWORD size = GetFileSize(f.h, nullptr), good = 0;
-        if (size == INVALID_FILE_SIZE || size > 16 * 1024 * 1024)
+        if (size == INVALID_FILE_SIZE || size > journal_limit)
             return false;
-        static Journal candidate;
         bool found = false;
-        while (size - good >= 8) {
-            candidate = {};
-            DWORD got;
-            char expected[65] = {}, actual[65];
-            if (!ReadFile(f.h, &candidate, 8, &got, nullptr) || got != 8 ||
-                candidate.magic != 0x314a4744 || (candidate.version != 1 && candidate.version != 2))
-                return false;
-            const bool legacy = candidate.version == 1;
-            const DWORD bytes = legacy ? 24 + legacy_items * sizeof(Item) : sizeof(Journal);
-            if (size - good < bytes + 64)
-                break; // incomplete last append only
-            if (!ReadFile(f.h, reinterpret_cast<BYTE *>(&candidate) + 8, bytes - 8, &got,
-                          nullptr) ||
-                got != bytes - 8 || !ReadFile(f.h, expected, 64, &got, nullptr) || got != 64)
-                return false;
-            Sha256 h;
-            h.update(reinterpret_cast<const BYTE *>(&candidate), bytes);
-            h.finish(actual);
-            if (lstrcmpA(actual, expected))
-                return false;
-            if (legacy) {
-                if (candidate.count > legacy_items)
-                    return false;
-                for (unsigned i = 0; i < candidate.count; ++i)
-                    if (candidate.items[i].original_index >= legacy_items)
-                        return false;
-                candidate.version = 2; // preserve original generations/backup slots
-            }
-            if (!valid(candidate))
-                return false;
-            for (unsigned i = 0; i < candidate.count; i++)
-                if (!allowed(candidate.items[i]))
-                    return false;
-            if (!generation || candidate.generation == generation) {
-                out = candidate;
-                found = true;
-            }
-            good += bytes + 64;
-        }
+        if (!read_log(f.h, size, good, [&](const Journal &candidate, DWORD, DWORD) {
+                if (!generation || candidate.generation == generation) {
+                    out = candidate;
+                    found = true;
+                }
+                return true;
+            }))
+            return false;
         if (!good || !found)
             return false;
         if (good != size && !read_only) {
