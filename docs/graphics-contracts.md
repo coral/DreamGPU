@@ -211,8 +211,9 @@ and disposable-VM acceptance cycle:
   reach, and inline indices or an element buffer and offset. A distinct
   function keeps every older record's admission; the NT and Win9x kernels
   check its layout. The host keeps its own copy beside each native buffer and
-  bounds every read against current sizes, scanning element-buffer indices
-  there; a missing buffer, a read beyond one or an index outside the client
+  bounds every read against current sizes: element-buffer indices by the
+  buffer's tracked maximum values when those fit (static index buffers), else
+  by scanning them in that copy; a missing buffer, a read beyond one or an index outside the client
   vertices is GL_INVALID_OPERATION, never a batch fault, as is a buffer draw
   while compiling. Lists dereference buffers at compile time into client
   draws, as the extension requires, and so do draws the record cannot express
@@ -295,6 +296,14 @@ Glide 3: `PROBE <id> sysglide3` runs the installed `C:\DGSYSG3.EXE` from `C:\` a
 (Diablo II `-3dfx`) on each combination.
 
 Use disposable clones. Do not install the milestone into the user's VM.
+Upgrade and recovery on Win2000 (m23 package): an m16 installation upgrades
+in place to a terminal receipt (`intent` upgrade, exit 0). A failed upgrade
+whose activation probe failed (exit 26, an m19 package) recovers with that
+installer's `/rollback` (exit 11, then 12 "restored" after one restart), after
+which the m23 installer upgrades cleanly and `sysgl`, `sysd3d9` and `sysglide3`
+pass. A newer installer cannot continue another installer's unfinished
+operation (exit 29), and owned system files changed by hand also give exit 29.
+
 The fixed serial runner accepts `capd3d6`, `capd3d8`, `capd3d9` and `capgl`;
 [capability.md](../tools/d3d/capability.md) documents staging and collected JSON.
 Capability JSON is bounded and retained verbatim. A capture records claims;
