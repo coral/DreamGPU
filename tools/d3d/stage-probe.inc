@@ -14,8 +14,8 @@ typedef D3DCAPS8 StageCaps;
 #define STAGE_SET_TEXTURE(device, stage, texture)                                                  \
     DEVICE(SetTexture, device, stage, (IDirect3DBaseTexture8 *)(texture))
 #define STAGE_POINT_FILTER(device, stage)                                                          \
-    (DEVICE(SetTextureStageState, device, stage, D3DTSS_MINFILTER, D3DTEXF_POINT) |               \
-     DEVICE(SetTextureStageState, device, stage, D3DTSS_MAGFILTER, D3DTEXF_POINT) |               \
+    (DEVICE(SetTextureStageState, device, stage, D3DTSS_MINFILTER, D3DTEXF_POINT) |                \
+     DEVICE(SetTextureStageState, device, stage, D3DTSS_MAGFILTER, D3DTEXF_POINT) |                \
      DEVICE(SetTextureStageState, device, stage, D3DTSS_MIPFILTER, D3DTEXF_NONE))
 #define STAGE_FVF(device, fvf) DEVICE(SetVertexShader, device, fvf)
 #else
@@ -27,8 +27,8 @@ typedef D3DCAPS9 StageCaps;
 #define STAGE_SET_TEXTURE(device, stage, texture)                                                  \
     DEVICE(SetTexture, device, stage, (IDirect3DBaseTexture9 *)(texture))
 #define STAGE_POINT_FILTER(device, stage)                                                          \
-    (DEVICE(SetSamplerState, device, stage, D3DSAMP_MINFILTER, D3DTEXF_POINT) |                   \
-     DEVICE(SetSamplerState, device, stage, D3DSAMP_MAGFILTER, D3DTEXF_POINT) |                   \
+    (DEVICE(SetSamplerState, device, stage, D3DSAMP_MINFILTER, D3DTEXF_POINT) |                    \
+     DEVICE(SetSamplerState, device, stage, D3DSAMP_MAGFILTER, D3DTEXF_POINT) |                    \
      DEVICE(SetSamplerState, device, stage, D3DSAMP_MIPFILTER, D3DTEXF_NONE))
 #define STAGE_FVF(device, fvf) DEVICE(SetFVF, device, fvf)
 #endif
@@ -226,8 +226,7 @@ static void Run(Device *dev, Surface *target) {
                     "FAIL stage 2 arg2"))
                 goto done;
             if (!Draw(dev, target, "stage chain ADD then TFACTOR MODULATE",
-                      Apply(D3DTOP_MODULATE, factor,
-                            Apply(D3DTOP_ADD, Unpack(texels[1]), stage0))))
+                      Apply(D3DTOP_MODULATE, factor, Apply(D3DTOP_ADD, Unpack(texels[1]), stage0))))
                 goto done;
             ++passed;
         }
