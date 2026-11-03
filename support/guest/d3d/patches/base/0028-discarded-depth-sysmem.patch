@@ -1,0 +1,38 @@
+diff --git a/wined3d/surface.c b/wined3d/surface.c
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4807,6 +4807,24 @@
+ }
+ 
+ /* Context activation is done by the caller. Context may be NULL in ddraw-only mode. */
++/* A discarded depth/stencil surface holds no contents to transfer. Define its
++ * CPU copy directly: offscreen depth surfaces have no GL storage without depth
++ * textures, and only the device-owned drawable has a native transfer path.
++ * D3D leaves discarded contents undefined; zero keeps them deterministic. */
++static HRESULT dg_surface_define_discarded_depth(struct wined3d_surface *surface, DWORD location)
++{
++    struct wined3d_bo_address memory;
++
++    if (location == WINED3D_LOCATION_SYSMEM)
++        surface_prepare_system_memory(surface);
++    surface_get_memory(surface, &memory, location);
++    if (!memory.addr || memory.buffer_object)
++        return E_OUTOFMEMORY;
++    memset(memory.addr, 0, surface->resource.size);
++    surface_validate_location(surface, location);
++    return WINED3D_OK;
++}
++
+ HRESULT surface_load_location(struct wined3d_surface *surface, struct wined3d_context *context, DWORD location)
+ {
+     HRESULT hr;
+@@ -4832,6 +4850,9 @@
+             surface_validate_location(surface, location);
+             return WINED3D_OK;
+         }
++        if ((location & surface_simple_locations) && location != WINED3D_LOCATION_BUFFER
++                && !(surface->locations & ~WINED3D_LOCATION_DISCARDED))
++            return dg_surface_define_discarded_depth(surface, location);
+         if (location & surface_simple_locations)
+             return surface_transfer_depth(surface, context, location);
+         return surface_load_ds_location(surface, context, location);

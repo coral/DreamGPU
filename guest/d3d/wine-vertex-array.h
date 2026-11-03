@@ -99,6 +99,11 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     gl_info->gl_ops.gl.p_glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(vertices[0]),
                                         vertices[0].diffuse);
     if (used == 1 && units[0] == 0) {
+        /* Wine's own coordinate loaders leave the client unit on the last unit
+         * they touched; with real multitexture, select unit 0 explicitly or the
+         * pointer lands on another unit and unit 0 samples one constant texel. */
+        if (gl_info->supported[ARB_MULTITEXTURE])
+            GL_EXTCALL(glClientActiveTextureARB)(GL_TEXTURE0_ARB);
         gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, sizeof(vertices[0]),
                                                vertices[0].texture[0]);
         gl_info->gl_ops.gl.p_glEnableClientState(GL_TEXTURE_COORD_ARRAY);

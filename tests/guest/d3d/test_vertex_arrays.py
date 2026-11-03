@@ -123,10 +123,16 @@ int main(){
  uint32_t wide[]={3,0};dev.state.base_vertex_index=0;
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,2,99,wide,4,0));assert(seen[0].position[0]==-2.5f);
  gl.supported[ARB_MULTITEXTURE]=true;si.use_map |= 1u<<(WINED3D_FFP_TEXCOORD0+1);
+ // Wine's loaders leave another client unit selected; unit 0 must still get
+ // the coordinate array (regression: flat single-texel textures).
+ client=5;
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
+ assert(client==0&&client_calls==1);for(unsigned i=0;i<4;++i)assert(!memcmp(seen[i].texture[0],data[i].uv,8));
+ assert(tex_enabled==0&&!tex_pointers[0]&&!tex_pointers[5]);client_calls=0;
  // More units and stages stay on the single-unit path while only stage 0 is bound.
  gl.limits.textures=2;di.limits.ffp_blend_stages=2;
- assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==1&&client==0);
+ client_calls=0;
  // Base plus lightmap: stage 1 reads coordinate set 1 on unit 1.
  float lightmap[4][2]={{.1f,.2f},{.3f,.4f},{.5f,.6f},{.7f,.8f}};
  si.elements[WINED3D_FFP_TEXCOORD0+1]={&tf,{lightmap,0},8};
@@ -137,10 +143,12 @@ int main(){
  assert(!memcmp(last_multi[0],data[3].uv,8)&&!memcmp(last_multi[1],lightmap[3],8));
  client_calls=0;
  // Texture generation and unmapped stages are skipped exactly like drawStridedSlow.
+ // With real multitexture the single unit-0 stage selects client unit 0 once.
  dev.state.texture_states[1][0]=0x10000;
- assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
- dev.state.texture_states[1][0]=1;ctx.tex_unit_map[1]=WINED3D_UNMAPPED_STAGE;
- assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==1);
+ client_calls=0;dev.state.texture_states[1][0]=1;ctx.tex_unit_map[1]=WINED3D_UNMAPPED_STAGE;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==1);
+ client_calls=0;
  ctx.tex_unit_map[1]=1;
  // Without real multitexture Wine ignores stages past zero; so does this path.
  gl.supported[ARB_MULTITEXTURE]=false;

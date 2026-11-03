@@ -111,6 +111,10 @@
     {
       "file": "0027-ffp-textureless-stages.patch",
       "sha256": "5e958d46cbf152fc73d2d7a30b7305cfbf76d45e5db07f5196da1e2126909e3a"
+    },
+    {
+      "file": "0028-discarded-depth-sysmem.patch",
+      "sha256": "c2456f7d98ddfa96118f4fb119403d6871048eb9771b1d8ac2f7f77527737eee"
     }
   ],
   "files": {
@@ -132,7 +136,7 @@
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "484e49b8b7c4d6591f03ad7896c21fde4331863a6a7e477220078ad467d746df"
+      "after_sha256": "8292542178bc0422b72d788838156749a1c30471a61ea860ff2dad7051c102f2"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",

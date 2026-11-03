@@ -285,3 +285,15 @@ fails without the patch. The installed D3D8/9 stage probe draws every claimed
 two-stage op and a three-stage `ADD` then `TFACTOR MODULATE` chain; that chain
 also needs the frontend's GL1.2 packed uploads, since Wine creates the dummy
 textures as RGBA `UNSIGNED_INT_8_8_8_8`.
+
+`0028-discarded-depth-sysmem.patch` defines the CPU copy of a discarded depth
+surface instead of requesting a native transfer. Offscreen depth surfaces have no
+GL storage without depth textures, and only the device-owned drawable has a
+transfer path, so mapping an application's spare Z-buffer failed and every
+depth-to-depth DirectDraw Blt returned `D3DERR_INVALIDCALL`. Links 2003 copies
+its course depth into such a buffer at startup and exited on that error.
+Discarded contents are undefined in D3D; the copy is zeroed for determinism.
+Real contents, buffer bindings, GL-side locations and non-owned drawables keep
+their previous paths. `test_discarded_depth.py` executes the prepared function
+under ASan/UBSan and fails without the patch. The diagnostic stack is rebased
+onto it with its call-site line numbers renumbered.

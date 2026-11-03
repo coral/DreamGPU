@@ -113,6 +113,8 @@ static void surface_multisample_resolve(struct wined3d_surface *s,struct wined3d
 static HRESULT surface_load_texture(struct wined3d_surface *s,struct wined3d_context *c,BOOL srgb)
 { (void)s;(void)c;(void)srgb;return WINED3DERR_INVALIDCALL; }
 static void surface_validate_location(struct wined3d_surface *s,DWORD loc) { s->locations|=loc;++validations; }
+/* Patch 0028's discarded-depth helper prepares memory first; these surfaces have it. */
+static void surface_prepare_system_memory(struct wined3d_surface *s) { (void)s; }
 static void surface_evict_sysmem(struct wined3d_surface *s) { (void)s;++evictions; }
 static HRESULT surface_load_location(struct wined3d_surface *,struct wined3d_context *,DWORD);
 static void *test_malloc(size_t size) { return fail_alloc?NULL:malloc(size); }
@@ -206,7 +208,7 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-readback-recovery-') as direct
  for name in json.loads(MANIFEST.read_text())['files']:
   p=work/name;p.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/'vendor/wine9x'/name,p)
  patches.apply(work,MANIFEST);source=(work/'wined3d/surface.c').read_text()
- code=PREAMBLE+'\n'.join(function(source,p) for p in ['static HRESULT read_from_framebuffer(', 'static DWORD resource_access_from_location(', 'static HRESULT surface_copy_simple_location(', 'static HRESULT surface_load_sysmem(', 'HRESULT surface_load_location('])+TEST
+ code=PREAMBLE+'\n'.join(function(source,p) for p in ['static HRESULT read_from_framebuffer(', 'static DWORD resource_access_from_location(', 'static HRESULT surface_copy_simple_location(', 'static HRESULT surface_load_sysmem(', 'static HRESULT dg_surface_define_discarded_depth(', 'HRESULT surface_load_location('])+TEST
  p=work/'test.c';p.write_text(code)
  subprocess.run([os.environ.get('CC','cc'),'-std=c99','-Wall','-Wextra','-Werror','-Wno-unused-function','-Wno-sign-compare','-fsanitize=address,undefined','-fno-omit-frame-pointer',str(p),'-o',str(work/'test')],check=True)
  subprocess.run([str(work/'test')],check=True)
