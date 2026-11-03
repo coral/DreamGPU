@@ -212,6 +212,16 @@ With fog coordinates, a textured pretransformed quad fogs from red to blue
 exactly on Win2000 and XP through D3D8/9; the same probe reads red fading to
 black (the emulation) on the previous build.
 
+Windows 98 SE (Linux host, fresh clone of the user's Win98 image, legacy
+`qemumini` migration): installs to a terminal receipt; OpenGL, border, Glide,
+DirectDraw and D3D6–9 probes pass, including all thirteen D3D8/9 stage cases,
+DXT1/3/5 and textured vertex fog. Two Win9x `CreateThread` calls passed a NULL
+thread-id destination, which Windows 95/98/Me reject: the D3D6 probe's worker
+and the interactive installer's worker (the interactive installer exited with
+code 32 on Win98). Exclusive fullscreen DirectDraw primaries fail at 16 bpp on
+Win98 because GL window presentation there is implemented only for 32-bpp
+desktops; `capd3d6` fails at that step. 32-bpp modes work.
+
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,
 batched GDI writes followed by ReleaseDC, and partial/keyed primary blits over

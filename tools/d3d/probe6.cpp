@@ -540,7 +540,9 @@ static BOOL StartWorkerDraw(void) {
     worker.release = CreateEventA(NULL, TRUE, FALSE, NULL);
     if (!Check(worker.ready && worker.release, "FAIL worker events", GetLastError()))
         return FALSE;
-    worker.thread = CreateThread(NULL, 0, DrawOnWorker, &worker, 0, NULL);
+    /* Windows 98 rejects CreateThread without a thread-id destination. */
+    DWORD worker_id = 0;
+    worker.thread = CreateThread(NULL, 0, DrawOnWorker, &worker, 0, &worker_id);
     if (!Check(worker.thread != NULL, "FAIL create drawing worker", GetLastError()))
         return FALSE;
     WaitForWorker(worker.ready, "FAIL drawing worker wait");

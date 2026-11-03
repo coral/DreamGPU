@@ -332,7 +332,9 @@ unsigned execute(bool staging, int action, bool valid, bool silent) {
     if (!valid)
         return 23;
     Work work{staging, action};
-    HANDLE worker = CreateThread(nullptr, 0, install_worker, &work, 0, nullptr);
+    // Windows 95/98/Me reject CreateThread without a thread-id destination.
+    DWORD worker_id = 0;
+    HANDLE worker = CreateThread(nullptr, 0, install_worker, &work, 0, &worker_id);
     if (!worker)
         return 32;
     return setup::ui::wait(worker);
