@@ -4,18 +4,18 @@
           * Keep the public caps, but give owned 3D surfaces GPU backing and
           * CPU access so normal location tracking handles Lock/Blt readback.
           * Caller-owned memory retains its existing pool and validation. */
-+        /* DreamGPU: only where the format can be a render target. A 3D-capable
-+         * system-memory surface in a format that cannot (SimCity 3000's P8
-+         * 640x48 offscreen plain) stays an ordinary CPU surface, as DirectDraw's
-+         * HEL allows; creating a device on it then fails as usual. */
++        /* DreamGPU: never for palette-indexed or FOURCC formats, which cannot
++         * be render targets. SimCity 3000 creates its news ticker as a 640x48
++         * P8 OFFSCREENPLAIN | SYSTEMMEMORY | 3DDEVICE surface; it stays an
++         * ordinary CPU surface, as DirectDraw's HEL allows. (A render-target
++         * format check is too strict here: without FBOs it requires a matching
++         * WGL pixel format, which RGB565 system-memory targets lack.) */
          if ((desc->ddsCaps.dwCaps & (DDSCAPS_3DDEVICE | DDSCAPS_ZBUFFER))
 -                && !(desc->dwFlags & DDSD_LPSURFACE))
 +                && !(desc->dwFlags & DDSD_LPSURFACE)
 +                && ((desc->ddsCaps.dwCaps & DDSCAPS_ZBUFFER)
-+                || SUCCEEDED(wined3d_check_device_format(ddraw->wined3d, WINED3DADAPTER_DEFAULT,
-+                        WINED3D_DEVICE_TYPE_HAL, mode.format_id, WINED3DUSAGE_RENDERTARGET,
-+                        (desc->ddsCaps.dwCaps & DDSCAPS_TEXTURE) ? WINED3D_RTYPE_TEXTURE : WINED3D_RTYPE_SURFACE,
-+                        wined3d_desc.format))))
++                || !(desc->u4.ddpfPixelFormat.dwFlags & (DDPF_PALETTEINDEXED1 | DDPF_PALETTEINDEXED2
++                        | DDPF_PALETTEINDEXED4 | DDPF_PALETTEINDEXED8 | DDPF_FOURCC))))
          {
              wined3d_desc.pool = WINED3D_POOL_DEFAULT;
              wined3d_desc.usage |= WINED3DUSAGE_DYNAMIC;

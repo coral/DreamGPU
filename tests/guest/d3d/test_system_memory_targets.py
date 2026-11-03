@@ -46,18 +46,14 @@ typedef struct { int left, top, right, bottom; } RECT;
 #define WINED3DUSAGE_TEXTURE 2
 #define WINED3DUSAGE_RENDERTARGET 4
 #define WINED3DUSAGE_DEPTHSTENCIL 8
-struct descriptor { struct { DWORD dwCaps, dwCaps2; } ddsCaps; DWORD dwFlags; void *lpSurface; };
-struct resource_desc { unsigned pool, usage, format; };
-#define SUCCEEDED(x) ((x) >= 0)
-#define WINED3DADAPTER_DEFAULT 0
-#define WINED3D_DEVICE_TYPE_HAL 1
-#define WINED3D_RTYPE_SURFACE 1
-#define WINED3D_RTYPE_TEXTURE 3
-static struct { void *wined3d; } ddraw_object, *ddraw = &ddraw_object;
-static struct { unsigned format_id; } mode;
-static int rt_ok = 1; static unsigned rt_checks, rt_rtype;
-static HRESULT wined3d_check_device_format(void *w, unsigned a, unsigned t, unsigned af, DWORD usage, unsigned rtype, unsigned fmt)
-{ (void)w; (void)a; (void)t; (void)af; (void)fmt; assert(usage == WINED3DUSAGE_RENDERTARGET); ++rt_checks; rt_rtype = rtype; return rt_ok ? 0 : -1; }
+struct descriptor { struct { DWORD dwCaps, dwCaps2; } ddsCaps; DWORD dwFlags; void *lpSurface; struct { struct { DWORD dwFlags; } ddpfPixelFormat; } u4; };
+struct resource_desc { unsigned pool, usage; };
+#define DDPF_FOURCC 0x4
+#define DDPF_PALETTEINDEXED4 0x8
+#define DDPF_PALETTEINDEXED8 0x20
+#define DDPF_RGB 0x40
+#define DDPF_PALETTEINDEXED1 0x800
+#define DDPF_PALETTEINDEXED2 0x1000
 struct viewport { unsigned x,y,width,height; float min_z,max_z; };
 struct wined3d_state { struct viewport viewport; RECT scissor_rect; };
 struct resource { DWORD usage; };
@@ -96,16 +92,20 @@ int main(void) {
  out=policy(&d);assert(out.usage==(WINED3DUSAGE_DYNAMIC|WINED3DUSAGE_TEXTURE|WINED3DUSAGE_RENDERTARGET));
  d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_TEXTURE;
  out=policy(&d);assert(out.pool==WINED3D_POOL_SYSTEM_MEM&&!out.usage);
- // A format that cannot be a render target (SimCity 3000's P8 640x48 offscreen
- // plain) keeps an ordinary CPU surface; depth buffers never ask.
- rt_ok=0; rt_checks=0;
- d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_3DDEVICE|0x40;
- out=policy(&d);assert(out.pool==WINED3D_POOL_SYSTEM_MEM&&!out.usage&&rt_checks==1&&rt_rtype==WINED3D_RTYPE_SURFACE);
- d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_3DDEVICE|DDSCAPS_TEXTURE;
- out=policy(&d);assert(out.pool==WINED3D_POOL_SYSTEM_MEM&&!out.usage&&rt_rtype==WINED3D_RTYPE_TEXTURE);
- rt_checks=0;d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_ZBUFFER;
- out=policy(&d);assert(out.pool==WINED3D_POOL_DEFAULT&&out.usage==(WINED3DUSAGE_DYNAMIC|WINED3DUSAGE_DEPTHSTENCIL)&&!rt_checks);
- rt_ok=1;
+ // Palette-indexed and FOURCC surfaces (SimCity 3000's P8 640x48 offscreen
+ // plain) cannot be render targets and keep ordinary CPU storage; RGB ones,
+ // RGB565 included, keep GPU backing; depth buffers are unaffected.
+ static const DWORD cpu_only[] = {DDPF_PALETTEINDEXED1, DDPF_PALETTEINDEXED2, DDPF_PALETTEINDEXED4,
+                                  DDPF_PALETTEINDEXED8, DDPF_PALETTEINDEXED8 | DDPF_RGB, DDPF_FOURCC};
+ for (unsigned i = 0; i < sizeof(cpu_only) / sizeof(cpu_only[0]); ++i) {
+  d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_3DDEVICE|0x40;d.u4.ddpfPixelFormat.dwFlags=cpu_only[i];
+  out=policy(&d);assert(out.pool==WINED3D_POOL_SYSTEM_MEM&&!out.usage);
+  d.ddsCaps.dwCaps|=DDSCAPS_TEXTURE;out=policy(&d);assert(out.pool==WINED3D_POOL_SYSTEM_MEM&&!out.usage);
+ }
+ d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_3DDEVICE;d.u4.ddpfPixelFormat.dwFlags=DDPF_RGB;
+ out=policy(&d);assert(out.pool==WINED3D_POOL_DEFAULT&&out.usage==(WINED3DUSAGE_DYNAMIC|WINED3DUSAGE_RENDERTARGET));
+ d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_SYSTEMMEMORY|DDSCAPS_ZBUFFER;d.u4.ddpfPixelFormat.dwFlags=DDPF_PALETTEINDEXED8;
+ out=policy(&d);assert(out.pool==WINED3D_POOL_DEFAULT&&out.usage==(WINED3DUSAGE_DYNAMIC|WINED3DUSAGE_DEPTHSTENCIL));
  d=(struct descriptor){0};d.ddsCaps.dwCaps=DDSCAPS_VIDEOMEMORY|DDSCAPS_3DDEVICE;
  out=policy(&d);assert(out.pool==WINED3D_POOL_DEFAULT&&out.usage==(WINED3DUSAGE_DYNAMIC|WINED3DUSAGE_RENDERTARGET));
  assert(d.ddsCaps.dwCaps&DDSCAPS_LOCALVIDMEM);

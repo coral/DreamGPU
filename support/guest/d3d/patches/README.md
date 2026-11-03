@@ -345,12 +345,14 @@ emulated signed-format) texture in a fixed-function stage therefore produced a
 program that failed to parse, so `D3DTOP_BUMPENVMAP` drew nothing.
 `test_arbfp_adaptations.py` checks the declaration.
 
-`0032-ddraw-sysmem-3ddevice-p8.patch` limits 0010's GPU backing for owned
-system-memory 3D surfaces to formats that can be render targets. A 3D-capable
-system-memory surface in any other format stays an ordinary CPU surface, as
-DirectDraw's HEL allows. SimCity 3000 creates its news ticker as a 640x48 P8
-`OFFSCREENPLAIN | SYSTEMMEMORY | 3DDEVICE` surface. P8 cannot be a render
-target, so creation failed, and the game showed an error that stayed invisible
-behind its black exclusive-mode screen. It then exited on the next key.
-`test_system_memory_targets.py` covers the format check, including texture and
-depth cases.
+`0032-ddraw-sysmem-3ddevice-p8.patch` excludes palette-indexed and FOURCC
+formats from 0010's GPU backing for owned system-memory 3D surfaces. They cannot
+be render targets, so they stay ordinary CPU surfaces, as DirectDraw's HEL
+allows. SimCity 3000 creates its news ticker as a 640x48 P8
+`OFFSCREENPLAIN | SYSTEMMEMORY | 3DDEVICE` surface. Creation failed, and the game
+showed an error that stayed invisible behind its black exclusive-mode screen,
+then exited on the next key. A first version asked wined3d whether the format
+could be a render target. Without FBOs that check requires a matching WGL pixel
+format, so it also refused RGB565 system-memory targets (the installed D3D6
+probe's legacy RGB device failed). `test_system_memory_targets.py` covers
+palettized, FOURCC, RGB, texture and depth cases.
