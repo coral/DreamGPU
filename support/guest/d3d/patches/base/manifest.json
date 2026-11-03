@@ -127,6 +127,10 @@
     {
       "file": "0031-arbfp-sign-fixup-temp.patch",
       "sha256": "c5896ac98926724442a901ddd6290ceab7b879b91c253c068ff78211f68cf64c"
+    },
+    {
+      "file": "0032-ddraw-sysmem-3ddevice-p8.patch",
+      "sha256": "a052a245e33e6ec288393ea8df06fa2c235f2977ec33c7cc2bea86a3523f1186"
     }
   ],
   "files": {
@@ -136,7 +140,7 @@
     },
     "ddraw/surface.c": {
       "before_sha256": "2befc4bf776b67c5eb14918770e749e17d114359b970aecaa289745e67d84a1f",
-      "after_sha256": "2851b35a518f463505cb5344499a9f419ff1fdb13ecfd7bc8ee0bf49784cb75c"
+      "after_sha256": "f2563daaf0db0cc71db154b6ee27d06dd135c51ec3fe9941029ae9d1583de7ad"
     },
     "wined3d/directx.c": {
       "before_sha256": "3bb18ad8cf7805122c5d124cfc84707b7f495f4eec8dc36b928ee33ec2318a2e",

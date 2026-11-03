@@ -344,3 +344,13 @@ through `TA`, which only the shader-model generators declared. A V8U8 (or other
 emulated signed-format) texture in a fixed-function stage therefore produced a
 program that failed to parse, so `D3DTOP_BUMPENVMAP` drew nothing.
 `test_arbfp_adaptations.py` checks the declaration.
+
+`0032-ddraw-sysmem-3ddevice-p8.patch` limits 0010's GPU backing for owned
+system-memory 3D surfaces to formats that can be render targets. A 3D-capable
+system-memory surface in any other format stays an ordinary CPU surface, as
+DirectDraw's HEL allows. SimCity 3000 creates its news ticker as a 640x48 P8
+`OFFSCREENPLAIN | SYSTEMMEMORY | 3DDEVICE` surface. P8 cannot be a render
+target, so creation failed, and the game showed an error that stayed invisible
+behind its black exclusive-mode screen. It then exited on the next key.
+`test_system_memory_targets.py` covers the format check, including texture and
+depth cases.
