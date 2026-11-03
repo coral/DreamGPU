@@ -17,7 +17,7 @@ static bool SetupDialogMessage(const char *text, DWORD &code, int &button) {
         int button;
     };
     constexpr Message messages[] = {
-        {"DreamGPU is installed. OpenGL, Glide 2 and Direct3D are ready for applications "
+        {"DreamGPU is installed. OpenGL, Glide and Direct3D are ready for applications "
          "system-wide.",
          0, IDOK},
         {"DreamGPU needs to restart Windows to continue. Setup will resume "

@@ -405,7 +405,7 @@ void show_result(unsigned code, bool startup) {
     UINT icon = MB_ICONWARNING;
     switch (code) {
         case 0:
-            message = "DreamGPU is installed. OpenGL, Glide 2 and Direct3D are ready for "
+            message = "DreamGPU is installed. OpenGL, Glide and Direct3D are ready for "
                       "applications system-wide.";
             icon = MB_ICONINFORMATION;
             break;

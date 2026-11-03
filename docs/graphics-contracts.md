@@ -187,6 +187,48 @@ and disposable-VM acceptance cycle:
   unclaimed. Wine patch 0035 states the unpack alignment of volume uploads (see
   the patch README). The installed probe samples the four slices of a MANAGED
   A8R8G8B8 volume exactly; it has not yet run on a guest.
+- Vertex buffer objects (`DG_CAP_GL_VERTEX_BUFFER_OBJECT`) add
+  ARB_vertex_buffer_object for ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER, ARB
+  names only. Buffer names and objects share the texture namespace
+  (wglShareLists). Records name their buffer and the host holds no binding:
+  BufferData (name, size, usage; the exact contents or none for zero-defined
+  storage), BufferSubData (name, offset) and DeleteBuffers execute
+  immediately, never compiled into lists; contents beyond one packet travel
+  as bounded BufferSubData slabs. Bindings, per-array latches (conventional
+  arrays, units 1-7, fog coordinates, generic attributes, InterleavedArrays)
+  and mappings are frontend client state, saved by CLIENT_VERTEX_ARRAY_BIT.
+  The guest cannot address host memory, so the frontend keeps a copy of every
+  buffer: MapBuffer returns it (16-byte aligned), UnmapBuffer re-sends all of
+  it unless the map was READ_ONLY and returns TRUE, and GetBufferSubData, READ
+  maps, ArrayElement and display list compilation read it without waiting for
+  the host. Mapping twice, unmapping an unmapped buffer, BufferSubData or
+  GetBufferSubData on a mapped buffer and drawing from one are
+  GL_INVALID_OPERATION; BufferData on a mapped buffer replaces the store and
+  unmaps it (Mesa and GL 2.1). Draws reading buffers use a fourth array
+  record, the buffer draw (DATA function DrawRangeElements, ten words): the
+  attribute draw's 32 descriptors, a (buffer, offset, stride) reference per
+  buffer slot, client sections holding only the vertex range the indices
+  reach, and inline indices or an element buffer and offset. A distinct
+  function keeps every older record's admission; the NT and Win9x kernels
+  check its layout. The host keeps its own copy beside each native buffer and
+  bounds every read against current sizes, scanning element-buffer indices
+  there; a missing buffer, a read beyond one or an index outside the client
+  vertices is GL_INVALID_OPERATION, never a batch fault, as is a buffer draw
+  while compiling. Lists dereference buffers at compile time into client
+  draws, as the extension requires, and so do draws the record cannot express
+  (unaligned offsets, strides beyond 2048, oversized client sections).
+  Storage counts against the resource budget at its size, at most
+  DG_GL_MAX_BUFFER_BYTES (128 MiB) per buffer and DG_GL_MAX_BUFFERS (16384)
+  names per share group; big-endian hosts do not advertise it. From the Wine
+  source, WineD3D then creates buffer objects for non-dynamic D3D vertex and
+  index buffers outside SYSTEMMEM; dynamic buffers stay in system memory
+  (Wine wants ARB_map_buffer_range for them, which DreamGPU does not
+  advertise). Wine patches 0037-0040 adapt it (see the patch README): buffer
+  objects keep their system memory copy and upload dirty ranges, this tree's
+  broken fixed-function D3DCOLOR/XYZRHW conversion is repaired, immediate mode
+  reads memory instead of buffer offsets, and the zero attribute buffer covers
+  every vertex and dies with its contexts. No D3D cap changes. The installed
+  vertex buffer probe has not yet run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
@@ -383,7 +425,8 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
   The Fill Rate test renders correctly through D3D8. Every scene test (Game 1,
   Vertex Shader) crashes before issuing a shader or failing D3D call, inside
   3DMark's own `P_VertexShader` cleanup, presumably on the code path chosen by
-  its failed CPU detection.
+  its failed CPU detection. The same crash happens with D3D Software T&L and
+  again after upgrading the fixture from m16 to the m23 package.
 - **GTA Vice City** (Win2000): installs, then exits silently before loading
   D3D8. The executable is SecuROM-protected (`.cms_t`/`.cms_d` sections), and
   SecuROM's physical-disc checks fail on an emulated CD drive.

@@ -119,7 +119,7 @@ static void reset() {
     children = 1;
     legacy_ok = wrong_label = extra_button = false;
     foreign = reused = duplicate = hung = wrong_default = post_failure = wait_failure = false;
-    message = "DreamGPU is installed. OpenGL, Glide 2 and Direct3D are ready for applications "
+    message = "DreamGPU is installed. OpenGL, Glide and Direct3D are ready for applications "
               "system-wide.";
 }
 static bool run() {
