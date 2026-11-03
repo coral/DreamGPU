@@ -68,7 +68,7 @@ static ULONG ScalarBytes(GLenum type) {
     }
 }
 
-/* Only these packed inputs are exposed; no packed-pixel extension claim. */
+/* GL 1.2 packed inputs; anything outside 16-bit direct transport is expanded to RGBA8. */
 static ULONG PixelBytes(GLenum format, GLenum type, BOOL immediate = FALSE) {
     void (*error)(GLenum) = immediate ? JglSetError : JglCommandError;
     if (((ScalarBytes(type) && type != GL_UNSIGNED_BYTE) || type == 0x1a00 || format == 0x1900 ||
@@ -89,14 +89,19 @@ static ULONG PixelBytes(GLenum format, GLenum type, BOOL immediate = FALSE) {
     }
     switch (type) {
         case 0x8367: /* UNSIGNED_INT_8_8_8_8_REV with byte swapping */
+        case 0x8035: /* UNSIGNED_INT_8_8_8_8 */
+        case 0x8036: /* UNSIGNED_INT_10_10_10_2 */
+        case 0x8368: /* UNSIGNED_INT_2_10_10_10_REV */
             if (format == GL_RGBA || format == 0x80e1)
                 return 4;
             break;
         case 0x8032: /* UNSIGNED_BYTE_3_3_2 */
+        case 0x8362: /* UNSIGNED_BYTE_2_3_3_REV */
             if (format == GL_RGB)
                 return 1;
             break;
         case 0x8363: /* UNSIGNED_SHORT_5_6_5 */
+        case 0x8364: /* UNSIGNED_SHORT_5_6_5_REV */
             if (format == GL_RGB)
                 return 2;
             break;
@@ -141,7 +146,10 @@ static unsigned char Expand(ULONG value, ULONG maximum) {
 
 static void ConvertPacked(unsigned char *out, const unsigned char *in, ULONG count, GLenum format,
                           GLenum type) {
-    ULONG i, value, a, b, c, d, j, bytes = type == 0x8032 ? 1 : type == 0x8367 ? 4 : 2;
+    ULONG i, value, a, b, c, d, j;
+    ULONG bytes = type == 0x8032 || type == 0x8362                                       ? 1
+                  : type == 0x8367 || type == 0x8035 || type == 0x8036 || type == 0x8368 ? 4
+                                                                                         : 2;
     BOOL swap = JglUnpack()->SwapBytes;
     for (i = 0; i < count; ++i) {
         /* x86 guest words may be unaligned. Never read through a ushort pointer. */
@@ -155,10 +163,40 @@ static void ConvertPacked(unsigned char *out, const unsigned char *in, ULONG cou
                 c = (value >> 16) & 255;
                 d = value >> 24;
                 break;
+            case 0x8035:
+                a = value >> 24;
+                b = (value >> 16) & 255;
+                c = (value >> 8) & 255;
+                d = value & 255;
+                break;
+            case 0x8036:
+                a = Expand(value >> 22, 1023);
+                b = Expand((value >> 12) & 1023, 1023);
+                c = Expand((value >> 2) & 1023, 1023);
+                d = (value & 3) * 85;
+                break;
+            case 0x8368:
+                a = Expand(value & 1023, 1023);
+                b = Expand((value >> 10) & 1023, 1023);
+                c = Expand((value >> 20) & 1023, 1023);
+                d = (value >> 30) * 85;
+                break;
             case 0x8032:
                 a = Expand(value >> 5, 7);
                 b = Expand((value >> 2) & 7, 7);
                 c = Expand(value & 3, 3);
+                d = 255;
+                break;
+            case 0x8362:
+                a = Expand(value & 7, 7);
+                b = Expand((value >> 3) & 7, 7);
+                c = Expand(value >> 6, 3);
+                d = 255;
+                break;
+            case 0x8364:
+                a = Expand(value & 31, 31);
+                b = Expand((value >> 5) & 63, 63);
+                c = Expand(value >> 11, 31);
                 d = 255;
                 break;
             case 0x8363:

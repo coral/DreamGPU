@@ -1,0 +1,18 @@
+diff --git a/wined3d/state.c b/wined3d/state.c
+index fb2c1a1..5dcf3ef 100644
+--- a/wined3d/state.c
++++ b/wined3d/state.c
+@@ -3061,6 +3061,13 @@ static void tex_colorop(struct wined3d_context *context, const struct wined3d_st
+      * need to do it here if the sampler for this stage is dirty. */
+     if (!isStateDirty(context, STATE_SAMPLER(stage)) && tex_used)
+         texture_activate_dimensions(state->textures[stage], gl_info);
++    /* GL applies a texture environment only while the unit has an enabled
++     * target. An active stage reading no texture (TFACTOR, DIFFUSE, CURRENT)
++     * still needs its combiner, so enable the unit's 2D target; its sampler
++     * keeps the dummy texture bound when no application texture is set. */
++    else if (!tex_used && mapped_stage != WINED3D_UNMAPPED_STAGE
++            && mapped_stage < gl_info->limits.textures)
++        texture_activate_dimensions(NULL, gl_info);
+ 
+     set_tex_op(gl_info, state, FALSE, stage,
+             state->texture_states[stage][WINED3D_TSS_COLOR_OP],

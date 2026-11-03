@@ -107,6 +107,10 @@
     {
       "file": "0026-primary-surface-loss.patch",
       "sha256": "425c3c31efb83e6e3b87f53e9d6816d0f6b6b792b58b6ab8e3a94355e1c5f2c4"
+    },
+    {
+      "file": "0027-ffp-textureless-stages.patch",
+      "sha256": "5e958d46cbf152fc73d2d7a30b7305cfbf76d45e5db07f5196da1e2126909e3a"
     }
   ],
   "files": {
@@ -241,6 +245,10 @@
     "wined3d/arb_program_shader.c": {
       "before_sha256": "e817b87102cc16f41454f5925a79e7c4002cabff018cb9c28220f50977b3ae6a",
       "after_sha256": "58073b65f3729f3456c202e0e29279406def967bce620f61bc083c53f1160875"
+    },
+    "wined3d/state.c": {
+      "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",
+      "after_sha256": "dcae0ded1010a8d9b54d50519dcc70f076783739057651981264f163cc6eac71"
     }
   }
 }

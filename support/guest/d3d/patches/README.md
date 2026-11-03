@@ -272,3 +272,16 @@ those remain retained across ordinary display-mode changes. The API contract is
 `test_primary_loss.py` executes prepared callbacks, IsLost and Restore under
 ASan/UBSan; public entrypoint ordering is checked alongside the existing pixel
 coherence regressions. Actual game focus recovery remains an installed test.
+
+`0027-ffp-textureless-stages.patch` enables a texture target on an active
+fixed-function stage that reads no texture (TFACTOR, DIFFUSE, CURRENT only).
+GL applies a unit's texture environment only while that unit has an enabled
+target, so Wine silently skipped such stages' combiners once more than one unit
+was available. The unit keeps Wine's dummy texture bound when the application
+sets none, matching D3D's sampling of an unbound stage. Unmapped stages, stages
+beyond the GL unit limit, disabled stages and pixel-shader draws are unchanged.
+`test_ffp_stages.py` executes the prepared `tex_colorop` under ASan/UBSan and
+fails without the patch. The installed D3D8/9 stage probe draws every claimed
+two-stage op and a three-stage `ADD` then `TFACTOR MODULATE` chain; that chain
+also needs the frontend's GL1.2 packed uploads, since Wine creates the dummy
+textures as RGBA `UNSIGNED_INT_8_8_8_8`.

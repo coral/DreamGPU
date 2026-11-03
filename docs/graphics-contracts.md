@@ -48,6 +48,26 @@ and disposable-VM acceptance cycle:
   publication freshness. A screenshot request alone does not synchronize new
   guest rendering; CPU publication generations are included when available.
 
+- Fixed-function multitexture (`DG_CAP_GL_MULTITEXTURE`) exposes eight units
+  through ARB_multitexture with combine, crossbar and dot3 environments.
+  `ActiveTexture` moves binding ownership on the host; every unit's bindings,
+  enables, environments, coordinate generation and texture matrices follow the
+  active unit, and TEXTURE_BIT push/pop restores all units. Client arrays for
+  units 1–7 travel in `DrawArraysEXT`, a sixteen-slot compact layout under a
+  distinct function number so older kernels' seven-slot admission is unchanged.
+  Wine's fast vertex path packs up to two units; more fall back to its strided
+  path. The C mirror of the Rust context state is size-checked at QEMU startup.
+- Fixed-function state (`DG_CAP_GL_FIXED_STATE`) adds constant blend colour,
+  blend equations (subtract/reverse/min/max, separate RGB/alpha), separate blend
+  factors, two-sided stencil with wrapping operations, point parameters and
+  sprites, anisotropic filtering and LOD bias. With both capabilities Wine
+  reports 8 stages and 8 simultaneous textures, TextureOpCaps `0x0280bbff`,
+  StencilCaps `0x1ff` (TWOSIDED, INCR/DECR), MaxAnisotropy 16, BLENDOP,
+  SEPARATEALPHABLEND and BLENDFACTOR. Frontend uploads accept every GL1.2
+  packed pixel type, which Wine uses for its per-unit dummy textures.
+- Wine patch 0027 keeps texture-less fixed-function stages active (see the
+  patch README).
+
 Patch provenance stays checked in `support/guest/d3d/patches`; vendor trees are
 not edited. New texture-border behavior is negotiated between frontend and host.
 Use matching native and guest artifacts when testing the milestone.
@@ -139,6 +159,14 @@ on a stock QEMU Cirrus adapter with Microsoft's driver and DirectDraw. Those
 artifacts are therefore the game's own Windows 2000 behavior, not a DreamGPU
 defect; do not "fix" them with blanket invalidation. A completed shot is still
 unverified. Evidence: `target/golf-coherence-linux/verification.json`.
+
+Linux multitexture result (2026-11-03, patches 0001–0027, frontend with
+GL1.2 packed uploads, multitexture/fixed-state host): a fresh Win2000 clone
+installs to a terminal receipt, and `sysgl`, `bordergl`, `sysglide`, `sysddraw`,
+`sysd3d6`–`sysd3d9` and all four capability captures pass, including the D3D8/9
+multi-stage probe. The Half-Life `jrgperf` timedemo ran at 193.6 and 205.0 FPS
+(177.4 before multitexture). UT99 through D3D renders CityIntro with lightmaps
+in a window. macOS CGL, Win98 and XP remain unverified for these capabilities.
 
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,

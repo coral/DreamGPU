@@ -207,6 +207,26 @@
     "primary-loss": {
       "scope": "source",
       "path": "tests/guest/d3d/test_primary_loss.py"
+    },
+    "gl-multitexture": {
+      "scope": "source-i686",
+      "path": "tests/guest/opengl/test_multitexture.py"
+    },
+    "gl-fixed-state": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_fixed_state.py"
+    },
+    "d3d-ffp-stages": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_ffp_stages.py"
+    },
+    "d3d-vertex-arrays": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_vertex_arrays.py"
+    },
+    "guest-stages": {
+      "scope": "installed-api",
+      "path": "tools/d3d/stage-probe.inc"
     }
   },
   "contracts": [
@@ -905,7 +925,10 @@
       "advertised": "unverified",
       "implementation": "unverified",
       "tests": [
-        "native"
+        "native",
+        "gl-multitexture",
+        "gl-fixed-state",
+        "d3d-ffp-stages"
       ],
       "remaining": "Complete public operation chains, including execute buffers and pretransformed/untransformed vertices."
     },
@@ -1173,6 +1196,64 @@
         "buffer-map"
       ],
       "remaining": "Checked bounds, failed-map rollback and nested native access checks are implemented. Unsupported unaligned native maps reject without CPU download or BO deletion. Failed unmap, other unload/readback callers and the public installed buffer lifecycle remain unverified."
+    },
+    {
+      "id": "gl.multitexture",
+      "area": 11,
+      "api": "OpenGL 1.1 + ARB_multitexture",
+      "operation": "ActiveTexture/ClientActiveTexture/MultiTexCoord, per-unit bindings, enables, environments, texgen, matrices and client arrays",
+      "format": "all exposed texture formats",
+      "resource": "texture units 0-7",
+      "usage": "render",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-multitexture",
+        "gl-texture",
+        "native",
+        "d3d-vertex-arrays"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_MULTITEXTURE with DrawArraysEXT (16 compact slots). Native transport tests cover per-unit binding ownership, TEXTURE_BIT restore, combine/dot3 and per-unit array coordinates; Linux Win2000 installed probes and HL/UT D3D workloads passed. macOS CGL and Win98/XP installed verification remain open; the macOS private border sampler only applies on unit 0 with other units disabled."
+    },
+    {
+      "id": "gl.fixed-state",
+      "area": 12,
+      "api": "OpenGL 1.1 + EXT/ARB fixed-function extensions",
+      "operation": "BlendColor, BlendEquation(Separate), BlendFuncSeparate, StencilFunc/OpSeparate, PointParameter(fv), anisotropy, LOD bias, point sprites and their queries",
+      "format": "state",
+      "resource": "context",
+      "usage": "render",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-fixed-state",
+        "native"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_FIXED_STATE. Native pixel tests cover constant blend colour, subtract/min/max, separate alpha factors, two-sided stencil with INCR_WRAP, sampler parameters and COORD_REPLACE sprites. Display-list capture and macOS CGL verification remain open."
+    },
+    {
+      "id": "d3d.texture-stages",
+      "area": 11,
+      "api": "D3D8/D3D9 (Wine fixed-function pipeline)",
+      "operation": "multi-stage texture blending, TFACTOR/DIFFUSE/CURRENT-only stages, per-stage coordinates",
+      "format": "A8R8G8B8 plus dummy RGBA8 units",
+      "resource": "texture stage 0-7",
+      "usage": "render",
+      "pool": "managed",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "d3d-ffp-stages",
+        "d3d-vertex-arrays",
+        "gl-texture",
+        "guest-stages"
+      ],
+      "remaining": "Reports 8 stages/8 simultaneous textures, TextureOpCaps 0x0280bbff. Installed D3D8/9 probes check every claimed two-stage op and a three-stage TFACTOR chain. Patch 0027 enables a target for active texture-less stages; frontend accepts every GL1.2 packed type used for Wine dummy textures. ADDSMOOTH, PREMODULATE, MODULATE*_ADD*, MULTIPLYADD, BUMPENVMAP, cube and volume stages are not claimed."
     }
   ]
 }

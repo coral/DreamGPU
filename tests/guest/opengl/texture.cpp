@@ -221,6 +221,85 @@ static void PackedTextures(void) {
         AssertError(GL_INVALID_OPERATION);
     }
     {
+        // GL 1.2 packed inputs outside the 16-bit direct path expand to RGBA8.
+        // Wine creates its per-unit dummy textures with RGBA/8_8_8_8; a rejected
+        // upload leaves those units incomplete and their stages are skipped.
+        const struct {
+            GLenum Format, Type;
+            ULONG Bytes;
+            ULONG Word[4];
+            unsigned char RGBA[16];
+        } wide[] = {
+            {GL_RGB,
+             0x8362,
+             1,
+             {0x07, 0x38, 0xc0, 0x92},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 73, 73, 170, 255}},
+            {GL_RGB,
+             0x8364,
+             2,
+             {0x001f, 0x07e0, 0xf800, 0x8410},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 132, 130, 132, 255}},
+            {GL_RGBA,
+             0x8035,
+             4,
+             {0xff0000ff, 0x00ff00ff, 0x0000ffff, 0x11223344},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 17, 34, 51, 68}},
+            {0x80e1,
+             0x8035,
+             4,
+             {0x0000ffff, 0x00ff00ff, 0xff0000ff, 0x11223344},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 51, 34, 17, 68}},
+            {GL_RGBA,
+             0x8036,
+             4,
+             {0xffc00003, 0x003ff003, 0x00000fff, 0x80000001},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 0, 0, 85}},
+            {GL_RGBA,
+             0x8368,
+             4,
+             {0xc00003ff, 0xc00ffc00, 0xfff00000, 0x40000200},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 128, 0, 0, 85}},
+            {0x80e1,
+             0x8368,
+             4,
+             {0xfff00000, 0xc00ffc00, 0xc00003ff, 0x40000200},
+             {255, 0, 0, 255, 0, 255, 0, 255, 0, 0, 255, 255, 0, 0, 128, 85}},
+        };
+        for (f = 0; f < sizeof(wide) / sizeof(wide[0]); ++f) {
+            unsigned char source[16], swapped[16];
+            for (x = 0; x < 4; ++x)
+                for (i = 0; i < wide[f].Bytes; ++i) {
+                    source[x * wide[f].Bytes + i] = (unsigned char)(wide[f].Word[x] >> (8 * i));
+                    swapped[x * wide[f].Bytes + wide[f].Bytes - 1 - i] =
+                        (unsigned char)(wide[f].Word[x] >> (8 * i));
+                }
+            Reset(64);
+            Unpack = (JGL_UNPACK){1, 0, 0, 0, 0, 0};
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 1, 0, wide[f].Format, wide[f].Type, source);
+            assert(!Error && Count == 2 && Tiles[0].Args[6] == GL_RGBA &&
+                   Tiles[0].Args[7] == GL_UNSIGNED_BYTE);
+            assert(Tiles[1].Args[6] == GL_RGBA && Tiles[1].Args[7] == GL_UNSIGNED_BYTE &&
+                   Tiles[1].Bytes == 16 && !memcmp(Tiles[1].Pixels, wide[f].RGBA, 16));
+            if (wide[f].Bytes == 1)
+                continue;
+            Reset(64);
+            Unpack = (JGL_UNPACK){1, 0, 0, 0, 0, 0};
+            Unpack.SwapBytes = 1;
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 1, wide[f].Format, wide[f].Type, swapped);
+            assert(!Error && Count == 1 && !memcmp(Tiles[0].Pixels, wide[f].RGBA, 16));
+        }
+        Reset(64);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGB, 0x8035, NULL);
+        AssertError(GL_INVALID_OPERATION);
+        Reset(64);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, 0x8364, NULL);
+        AssertError(GL_INVALID_OPERATION);
+        Reset(64);
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 1, 1, 0, GL_RGBA, 0x8362, NULL);
+        AssertError(GL_INVALID_OPERATION);
+    }
+    {
         // The measured Glide bottleneck: one immutable packed128x128 packet,
         // instead of eight expanded RGBA packets through the conversion scratch.
         unsigned char source[128 * 128 * 2];
