@@ -138,7 +138,8 @@ int main(void)
  // CPU location that still contains its old sentinel bytes.
  for(unsigned mode=0;mode<3;++mode) {
   reset(&target,&context,WINED3D_LOCATION_DRAWABLE);
-  if(mode==1)context.valid=0;if(mode==2)tls=NULL;
+  if(mode==1)context.valid=0;
+  if(mode==2)tls=NULL;
   assert(surface_load_location(&target,mode?&context:NULL,WINED3D_LOCATION_SYSMEM)==WINED3DERR_INVALIDCALL);
   assert(target.locations==WINED3D_LOCATION_DRAWABLE&&!validations&&!gl_calls&&cpu_dst[0]==0xaa);
  }

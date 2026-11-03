@@ -172,6 +172,10 @@ def run(data, suite, output):
         binary = ROOT / 'target/qemu-build/qemu-system-x86_64'
         if suite == 'native' and binary.is_file():
             report['native_binary_sha256'] = digest(binary)
+        # Linux runs the tests through the private-provider launcher.
+        launcher = ROOT / 'target/qemu-build/bin/qemu-system-x86_64'
+        if suite == 'native' and launcher.is_file():
+            report['native_launcher_sha256'] = digest(launcher)
     finally:
         report['source_after'] = identity()
         report['source_unchanged'] = report['source_before'] == report['source_after']

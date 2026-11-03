@@ -60,11 +60,19 @@ impl Qemu {
         let display = display_socket
             .map(|path| format!("dreamgpu-shmem,socket={}", path.display()))
             .unwrap_or_else(|| "none".into());
+        // Linux packages QEMU with its private patched Mesa behind a launcher
+        // in bin/. The raw Ninja output would load the system OpenGL provider
+        // and silently test a different renderer. macOS has no launcher.
         let binary = std::env::var_os("DREAMGPU_QEMU_PATH")
             .map(PathBuf::from)
             .unwrap_or_else(|| {
-                PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-                    .join("target/qemu-build/qemu-system-x86_64")
+                let build = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/qemu-build");
+                let launcher = build.join("bin/qemu-system-x86_64");
+                if launcher.is_file() {
+                    launcher
+                } else {
+                    build.join("qemu-system-x86_64")
+                }
             });
         assert!(
             binary.is_file(),

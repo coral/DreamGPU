@@ -64,7 +64,8 @@ static DWORD GetModuleFileNameA(HMODULE module,char*out,DWORD cap){
  auto&s=module?loadedPath:exePath;assert(s.size()<cap);strcpy(out,s.c_str());return s.size();}
 static LONG RegOpenKeyEx(HKEY,const char*,DWORD,DWORD,HKEY*out){*out=(void*)1;return 0;}
 static LONG RegQueryValueExA(HKEY,const char*,void*,DWORD*type,BYTE*out,DWORD*bytes){
- if(missingSetting)return 2;assert(*bytes==MAX_PATH);*type=settingType;
+ if(missingSetting)return 2;
+ assert(*bytes==MAX_PATH);*type=settingType;
  if(setting.size()>*bytes){*bytes=setting.size();return 234;}
  memcpy(out,setting.data(),setting.size());*bytes=setting.size();return 0;}
 static LONG RegCloseKey(HKEY){++regCloses;return 0;}
@@ -99,7 +100,8 @@ static BOOL switcher_reinit(void);
 static BOOL switcher_init(){
  ++initializations;assert(!switcher_reinit()); // same-thread recursion uses immutable failure stubs
  {std::unique_lock lock(mutex);entered=true;condition.notify_all();if(holdInit)condition.wait(lock,[]{return releaseInit;});}
- if(failInit)return FALSE;published=true;return TRUE;
+ if(failInit)return FALSE;
+ published=true;return TRUE;
 }
 static BOOL SetEvent(HANDLE){std::lock_guard lock(mutex);signaled=true;condition.notify_all();return TRUE;}
 static DWORD WaitForSingleObject(HANDLE,DWORD timeout){assert(timeout==5000);std::unique_lock lock(mutex);waited=true;condition.notify_all();if(forceTimeout)return WAIT_TIMEOUT;condition.wait(lock,[]{return signaled;});return WAIT_OBJECT_0;}
