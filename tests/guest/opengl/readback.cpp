@@ -9,6 +9,9 @@ static GLint texture_width = 1024, texture_height = 1024;
 BOOL JglReady(void) {
     return TRUE;
 }
+BOOL JglTextureCubeMapAvailable(void) {
+    return FALSE;
+}
 void JglSetError(GLenum e) {
     error = e;
 }

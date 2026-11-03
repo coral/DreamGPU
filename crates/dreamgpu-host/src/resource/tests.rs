@@ -27,6 +27,8 @@ struct Native {
     fail_read: bool,
     copies: Vec<(i32, i32, i32, i32)>,
     fail_copy: bool,
+    /// Image targets of attachments, subimages and reads.
+    targets: Vec<u32>,
 }
 std::thread_local! {static N:RefCell<Native>=RefCell::new(Native::default());}
 unsafe extern "C" fn gen_textures(n: i32, out: *mut u32) {
@@ -106,7 +108,9 @@ unsafe extern "C" fn storage(_: u32, _: u32, _: i32, _: i32) {
         }
     })
 }
-unsafe extern "C" fn attach(_: u32, _: u32, _: u32, _: u32, _: i32) {}
+unsafe extern "C" fn attach(_: u32, _: u32, target: u32, _: u32, _: i32) {
+    N.with(|v| v.borrow_mut().targets.push(target));
+}
 unsafe extern "C" fn attach_rb(_: u32, _: u32, _: u32, _: u32) {}
 unsafe extern "C" fn check(_: u32) -> u32 {
     N.with(|v| {
@@ -193,7 +197,7 @@ unsafe extern "C" fn getb(_: u32, out: *mut u8) {
     N.with(|v| unsafe { core::ptr::copy_nonoverlapping(v.borrow().mask.as_ptr(), out, 4) })
 }
 unsafe extern "C" fn subimage(
-    _: u32,
+    target: u32,
     _: i32,
     _: i32,
     y: i32,
@@ -209,12 +213,17 @@ unsafe extern "C" fn subimage(
     assert!(unsafe { core::slice::from_raw_parts(p.cast::<u8>(), n) }
         .iter()
         .all(|x| *x == 0));
-    N.with(|v| v.borrow_mut().tiles.push((y as u32, h as u32)));
+    N.with(|v| {
+        let mut v = v.borrow_mut();
+        v.tiles.push((y as u32, h as u32));
+        v.targets.push(target);
+    });
 }
-unsafe extern "C" fn read_image(_: u32, _: i32, _: u32, _: u32, p: *mut core::ffi::c_void) {
+unsafe extern "C" fn read_image(target: u32, _: i32, _: u32, _: u32, p: *mut core::ffi::c_void) {
     N.with(|v| {
         let mut v = v.borrow_mut();
         v.reads += 1;
+        v.targets.push(target);
         assert_eq!(v.pack, [1, 0, 0, 0, 0]);
         if v.fail_read {
             v.errors.push_back(GL_INVALID_OPERATION);
@@ -362,7 +371,10 @@ fn zero_allocation_restores_native_state_and_bounds_fallback_tiles() {
             name: 7,
             ..Texture::default()
         };
-        assert_eq!(unsafe { dreamgpu_texture_zero(&m, &t, 0, 2048, 19) }, 0);
+        assert_eq!(
+            unsafe { dreamgpu_texture_zero(&m, &t, GL_TEXTURE_2D, 0, 2048, 19) },
+            0
+        );
         N.with(|v| {
             let v = v.borrow();
             assert_eq!((v.read_fb, v.draw_fb), (11, 12));
@@ -389,7 +401,7 @@ fn zero_allocation_restores_native_state_and_bounds_fallback_tiles() {
     N.with(|v| *v.borrow_mut() = Native::default());
     alloc.fail = true;
     assert_eq!(
-        unsafe { dreamgpu_texture_zero(&m, &t, 0, 2048, 19) },
+        unsafe { dreamgpu_texture_zero(&m, &t, GL_TEXTURE_2D, 0, 2048, 19) },
         GL_OUT_OF_MEMORY
     );
     N.with(|v| assert!(v.borrow().framebuffers.is_empty()));
@@ -819,13 +831,16 @@ fn one_dimensional_zero_covers_both_borders_with_bounded_temporary_storage() {
         ..Texture::default()
     };
     N.with(|v| *v.borrow_mut() = Native::default());
-    assert_eq!(unsafe { dreamgpu_texture_zero(&m, &t, 0, 2050, 1) }, 0);
+    assert_eq!(
+        unsafe { dreamgpu_texture_zero(&m, &t, GL_TEXTURE_1D, 0, 2050, 1) },
+        0
+    );
     assert_eq!(N.with(|v| v.borrow().tiles.clone()), [(u32::MAX, 2050)]);
     assert!(alloc.live.is_empty());
     assert_eq!(alloc.max, 8200);
     alloc.fail = true;
     assert_eq!(
-        unsafe { dreamgpu_texture_zero(&m, &t, 0, 2050, 1) },
+        unsafe { dreamgpu_texture_zero(&m, &t, GL_TEXTURE_1D, 0, 2050, 1) },
         GL_OUT_OF_MEMORY
     );
     assert_eq!(N.with(|v| v.borrow().tiles.len()), 1);
@@ -952,4 +967,86 @@ fn float_texture_read_rejects_four_gib_cache_before_allocation() {
     assert!(alloc.live.is_empty());
     assert!(cache.pixels.is_null());
     N.with(|v| assert_eq!(v.borrow().reads, 0));
+}
+
+#[test]
+fn cube_faces_zero_fill_and_read_through_their_own_targets_and_cache_identity() {
+    let a = api();
+    let mut alloc = Allocator::default();
+    let m = memory(&a, &mut alloc);
+    let mut faces = [crate::texture::Face::EMPTY; crate::texture::FACES];
+    faces[1].widths[0] = 4;
+    faces[1].heights[0] = 2;
+    faces[4].widths[0] = 4;
+    faces[4].heights[0] = 2;
+    let mut t = Texture {
+        name: 7,
+        target: GL_TEXTURE_CUBE_MAP,
+        faces: &mut faces,
+        ..Texture::default()
+    };
+    let negative_x = GL_TEXTURE_CUBE_MAP_NEGATIVE_X;
+    let positive_z = GL_TEXTURE_CUBE_MAP_POSITIVE_Z;
+    // Both zero-fill paths name the face: the cleared attachment and the bands.
+    for complete in [true, false] {
+        N.with(|v| {
+            *v.borrow_mut() = Native {
+                complete,
+                ..Native::default()
+            }
+        });
+        assert_eq!(
+            unsafe { dreamgpu_texture_zero(&m, &t, positive_z, 0, 4, 4) },
+            0
+        );
+        N.with(|v| {
+            let v = v.borrow();
+            assert!(!v.targets.is_empty() && v.targets.iter().all(|&x| x == positive_z));
+            assert_eq!(v.clear_count, u32::from(complete));
+        });
+    }
+    // A 2D zero fill of a cube map (or the reverse) is refused.
+    let flat = Texture::default();
+    assert_eq!(
+        unsafe { dreamgpu_texture_zero(&m, &t, GL_TEXTURE_2D, 0, 4, 4) },
+        GL_INVALID_OPERATION
+    );
+    assert_eq!(
+        unsafe { dreamgpu_texture_zero(&m, &flat, positive_z, 0, 4, 4) },
+        GL_INVALID_OPERATION
+    );
+    // Reads use the face's own level; another face of the same texture,
+    // level and version is a different snapshot, not a cached continuation.
+    N.with(|v| *v.borrow_mut() = Native::default());
+    let mut cache = ReadCache::EMPTY;
+    let mut errors = 0;
+    let mut out = [0u8; 16];
+    let mut read = |t: &mut Texture, target: u32, first: u32| unsafe {
+        dreamgpu_texture_read(
+            &m,
+            &mut cache,
+            t,
+            &mut errors,
+            1,
+            target,
+            0,
+            first,
+            16,
+            out.as_mut_ptr(),
+        )
+    };
+    assert_eq!(read(&mut t, negative_x, 0), 0);
+    assert_eq!(read(&mut t, positive_z, 4), 0);
+    N.with(|v| assert_eq!(v.borrow().targets, [negative_x, positive_z]));
+    // An undefined face level, the 2D target and an empty face are refused.
+    assert_eq!(read(&mut t, GL_TEXTURE_2D, 0), DG_GL_ERROR_TEXTURE);
+    assert_eq!(
+        read(&mut t, GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0),
+        DG_GL_ERROR_TEXTURE
+    );
+    unsafe { (*t.faces)[1].undefined_levels = 1 };
+    assert_eq!(read(&mut t, negative_x, 0), DG_GL_ERROR_TEXTURE);
+    N.with(|v| assert_eq!(v.borrow().reads, 2));
+    unsafe { dreamgpu_read_cache_release(&m, &mut cache) };
+    assert!(alloc.live.is_empty());
 }

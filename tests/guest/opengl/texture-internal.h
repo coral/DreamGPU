@@ -56,6 +56,17 @@ BOOL JglCompiling(void);
 BOOL JglTextureImagesAvailable(void);
 BOOL JglTextureBordersAvailable(void);
 BOOL JglCompressedTexturesAvailable(void);
+BOOL JglTextureCubeMapAvailable(void);
+/* Cube map target helpers, as in guest/opengl/internal.h. */
+#define JGL_TEXTURE_CUBE_MAP 0x8513
+#define JGL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
+#define JGL_PROXY_TEXTURE_CUBE_MAP 0x851b
+static inline BOOL JglCubeFace(GLenum target) {
+    return target - JGL_TEXTURE_CUBE_MAP_POSITIVE_X < 6 && JglTextureCubeMapAvailable();
+}
+static inline BOOL JglImage2DTarget(GLenum target) {
+    return target == 0x0de1 /* TEXTURE_2D */ || JglCubeFace(target);
+}
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);

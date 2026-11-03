@@ -479,7 +479,8 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     ULONG wire_bytes = wide ? 16 : 4, kind = wide ? DG_GL_RESULT_FLOAT : DG_GL_RESULT_INT;
     if (!JglReady())
         return;
-    if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
+    /* TEXTURE_2D or, once negotiated, one cube map face. */
+    if (target != GL_TEXTURE_1D && !JglImage2DTarget(target)) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }
@@ -498,7 +499,7 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &width, sizeof(width),
                   &bytes))
         return;
-    if (target == GL_TEXTURE_2D) {
+    if (target != GL_TEXTURE_1D) {
         args[2] = GL_TEXTURE_HEIGHT;
         if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &height,
                       sizeof(height), &bytes))

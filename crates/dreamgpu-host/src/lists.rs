@@ -406,7 +406,10 @@ unsafe fn capture(
         f,
         FEnum_glTexImage1D | FEnum_glTexImage2D | FEnum_glCompressedTexImage2D
     ) && args.len() >= 4
-        && matches!(word(args, 0), GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D);
+        && matches!(
+            word(args, 0),
+            GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP
+        );
     if s.is_null() || unsafe { (*s).mode } == 0 || immediate(f) || proxy {
         return true;
     }

@@ -4,7 +4,7 @@
 use crate::{
     gl_api::*,
     gl_validation as validation, query, resource,
-    state::ContextState,
+    state::{bound, ContextState},
     texture::{
         dreamgpu_texture_upload, dreamgpu_texture_wait, dreamgpu_texture_written,
         names::{dreamgpu_texture_delete, Memory},
@@ -12,17 +12,25 @@ use crate::{
     },
 };
 use core::{ffi::c_void, ptr::addr_of_mut};
-unsafe fn bound(state: *mut ContextState, target: u32) -> *mut Texture {
+unsafe extern "C" fn zero(
+    opaque: *mut c_void,
+    t: *mut Texture,
+    target: u32,
+    level: u32,
+    w: u32,
+    h: u32,
+) -> u32 {
+    unsafe { resource::dreamgpu_texture_zero(opaque.cast::<Memory>(), t, target, level, w, h) }
+}
+/// Rejected-level mask of a proxy target: 1D, 2D or cube map.
+unsafe fn proxy_mask(state: *mut ContextState, target: u32) -> *mut u32 {
     unsafe {
-        if target == GL_TEXTURE_1D {
-            (*state).bound_texture_1d
-        } else {
-            (*state).bound_texture
+        match target {
+            GL_PROXY_TEXTURE_1D => addr_of_mut!((*state).proxy_rejected[0]),
+            GL_PROXY_TEXTURE_CUBE_MAP => addr_of_mut!((*state).proxy_rejected_cube),
+            _ => addr_of_mut!((*state).proxy_rejected[1]),
         }
     }
-}
-unsafe extern "C" fn zero(opaque: *mut c_void, t: *mut Texture, level: u32, w: u32, h: u32) -> u32 {
-    unsafe { resource::dreamgpu_texture_zero(opaque.cast::<Memory>(), t, level, w, h) }
 }
 unsafe fn stage_arrays<'a>(
     m: &'a Memory,
@@ -276,6 +284,7 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 a[0],
                 (*state).default_texture,
                 (*state).default_texture_1d,
+                (*state).default_texture_cube,
                 bindings.as_ptr(),
                 bindings.len() as u32,
             )
@@ -296,11 +305,11 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 return e;
             }
         }
-        if a[0] == GL_PROXY_TEXTURE_2D {
+        if matches!(a[0], GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP) {
             // Shape and limits were validated; native GL judges the format.
             let error = unsafe { crate::texture::compressed_proxy(api, &a) };
             unsafe {
-                let mask = &mut (*state).proxy_rejected[1];
+                let mask = proxy_mask(state, a[0]);
                 if error == 0 {
                     *mask &= !(1 << a[1]);
                 }
@@ -326,7 +335,10 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         return e.map_or_else(|e| e, |()| 0);
     }
     if matches!(function, FEnum_glTexImage1D | FEnum_glTexImage2D)
-        && matches!(a[0], GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D)
+        && matches!(
+            a[0],
+            GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP
+        )
     {
         unsafe {
             if let Err(e) = query::remember(api, errors) {
@@ -339,7 +351,7 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 || (!one && a[4] > limit)
                 || a[3] < 2 * a[5]
                 || (!one && a[4] < 2 * a[5]);
-            let mask = &mut (*state).proxy_rejected[usize::from(!one)];
+            let mask = &mut *proxy_mask(state, a[0]);
             if rejected {
                 // Native limits can exceed the guest contract. Reject without
                 // native allocation or a driver-dependent fake image request.

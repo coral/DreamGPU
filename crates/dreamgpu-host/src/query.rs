@@ -125,10 +125,16 @@ unsafe fn execute(
     if matches!(
         function,
         FEnum_glGetTexLevelParameteriv | FEnum_glGetTexLevelParameterfv
-    ) && matches!(a, GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D)
-        && !state.context.is_null()
-        && unsafe { (*state.context).proxy_rejected[usize::from(a == GL_PROXY_TEXTURE_2D)] }
-            & (1 << b)
+    ) && matches!(
+        a,
+        GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP
+    ) && !state.context.is_null()
+        && unsafe {
+            match a {
+                GL_PROXY_TEXTURE_CUBE_MAP => (*state.context).proxy_rejected_cube,
+                _ => (*state.context).proxy_rejected[usize::from(a == GL_PROXY_TEXTURE_2D)],
+            }
+        } & (1 << b)
             != 0
     {
         // Feasibility of the virtual device, not just its larger native GPU.
@@ -366,6 +372,16 @@ unsafe fn execute(
                 GL_STEREO | GL_AUX_BUFFERS => (),
                 GL_TEXTURE_BINDING_1D => integers[0] = state.binding_1d as i32,
                 GL_TEXTURE_BINDING_2D => integers[0] = state.binding_2d as i32,
+                // The active unit's cube map binding (ARB_texture_cube_map).
+                GL_TEXTURE_BINDING_CUBE_MAP => {
+                    if state.context.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    let cube = unsafe { (*state.context).bound_texture_cube };
+                    if !cube.is_null() {
+                        integers[0] = unsafe { (*cube).guest_name } as i32;
+                    }
+                }
                 GL_ATTRIB_STACK_DEPTH => integers[0] = state.attrib_depth as i32,
                 GL_MAX_ATTRIB_STACK_DEPTH => integers[0] = 16,
                 GL_MAX_EVAL_ORDER => {
@@ -374,7 +390,9 @@ unsafe fn execute(
                 GL_MAX_PIXEL_MAP_TABLE => {
                     integers[0] = unsafe { crate::pixels::limit(api)? } as i32
                 }
-                GL_MAX_TEXTURE_SIZE => integers[0] = DG_GL_MAX_TEXTURE_DIMENSION as i32,
+                GL_MAX_TEXTURE_SIZE | GL_MAX_CUBE_MAP_TEXTURE_SIZE => {
+                    integers[0] = DG_GL_MAX_TEXTURE_DIMENSION as i32
+                }
                 GL_MAX_VIEWPORT_DIMS => {
                     integers[0] = DG_GL_MAX_DIMENSION as i32;
                     integers[1] = integers[0];
@@ -416,7 +434,7 @@ unsafe fn execute(
     }
     if logical {
         for i in 0..count {
-            doubles[i] = if a == GL_TEXTURE_BINDING_2D {
+            doubles[i] = if matches!(a, GL_TEXTURE_BINDING_2D | GL_TEXTURE_BINDING_CUBE_MAP) {
                 integers[i] as u32 as f64
             } else {
                 integers[i] as f64

@@ -30,6 +30,9 @@ BOOL JglTextureBordersAvailable(void) {
 BOOL JglCompressedTexturesAvailable(void) {
     return CompressedSupport;
 }
+BOOL JglTextureCubeMapAvailable(void) {
+    return FALSE; /* Cube faces: tests/guest/opengl/cube-map.cpp. */
+}
 BOOL JglCompiling(void) {
     return Compiling;
 }

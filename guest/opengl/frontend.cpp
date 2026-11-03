@@ -99,6 +99,9 @@ BOOL JglCompressedTexturesAvailable(void) {
 BOOL JglFogCoordAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_FOG_COORD);
 }
+BOOL JglTextureCubeMapAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_CUBE_MAP);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -118,11 +121,12 @@ BOOL JglFogCoordAvailable(void) {
 #define JGL_COMPRESSED_TEXTURE_EXTENSIONS                                                          \
     "GL_ARB_texture_compression GL_EXT_texture_compression_s3tc"
 #define JGL_FOG_COORD_EXTENSIONS "GL_EXT_fog_coord"
+#define JGL_CUBE_MAP_EXTENSIONS "GL_ARB_texture_cube_map GL_EXT_texture_cube_map"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
                        sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
-                       sizeof(JGL_FOG_COORD_EXTENSIONS)];
+                       sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -143,8 +147,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_COMPRESSED_TEXTURE_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_FOG_COORD)
         AppendExtensions(&at, JGL_FOG_COORD_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_TEXTURE_CUBE_MAP)
+        AppendExtensions(&at, JGL_CUBE_MAP_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_CUBE_MAP_EXTENSIONS
 #undef JGL_FOG_COORD_EXTENSIONS
 #undef JGL_COMPRESSED_TEXTURE_EXTENSIONS
 #undef JGL_TEXTURE_CONTROL_EXTENSIONS
@@ -286,6 +293,29 @@ JGL_INLINE ULONG *Record(JGL_CONTEXT *c, ULONG operation, ULONG context, ULONG d
     ++c->Records;
     return record + 8;
 }
+/* CopyTexImage2D/CopyTexSubImage2D target the 2D image or, once negotiated, a
+ * cube map face. A face record is checked here exactly as the host checks it:
+ * an invalid one is a local GL error, never a record that fails the batch. */
+static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
+    const BOOL image = function == FEnum_glCopyTexImage2D;
+    const ULONG width = a[image ? 5 : 6], height = a[image ? 6 : 7];
+    if (!JglImage2DTarget(a[0]))
+        return GL_INVALID_ENUM;
+    if (!JglCubeFace(a[0]))
+        return 0;
+    if (a[1] > DG_GL_MAX_TEXTURE_LEVEL || width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1] ||
+        height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
+        return GL_INVALID_VALUE;
+    /* Square, borderless faces with a base or sized internal format (the
+     * component counts 1-4 are not copy formats). */
+    if (image && (width != height || a[7] ||
+                  !((a[2] >= 0x1906 && a[2] <= 0x190a) /* ALPHA, RGB, RGBA, LUMINANCE(_ALPHA) */ ||
+                    a[2] == 0x8049 /* INTENSITY */ || a[2] == 0x2a10 /* R3_G3_B2 */ ||
+                    (a[2] >= 0x803b && a[2] <= 0x8048) || (a[2] >= 0x804a && a[2] <= 0x804d) ||
+                    (a[2] >= 0x804f && a[2] <= 0x805b))))
+        return GL_INVALID_VALUE;
+    return 0;
+}
 JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
                                  const void *arguments) {
     ULONG *record, i;
@@ -368,6 +398,13 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
     if (function == FEnum_glFogf && JglFogCount(*(const ULONG *)arguments) != 1) {
         CommandError(c, GL_INVALID_ENUM);
         return;
+    }
+    if (function == FEnum_glCopyTexImage2D || function == FEnum_glCopyTexSubImage2D) {
+        GLenum error = CopyTexture2DError(function, (const ULONG *)arguments);
+        if (error) {
+            CommandError(c, error);
+            return;
+        }
     }
     if (function == FEnum_glCopyTexImage2D && words == 8 && ((const ULONG *)arguments)[7] &&
         !JglTextureBordersAvailable()) {
@@ -892,7 +929,8 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) {
     if (!JglCommandReady())
         return;
     c = CurrentContext();
-    if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D) {
+    if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D &&
+        !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable())) {
         CommandError(c, GL_INVALID_ENUM);
         return;
     }

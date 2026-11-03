@@ -234,6 +234,35 @@ Current build and evidence navigation: [guest runtime](../README.md),
 [guest tools](../../tools/README.md), and [execution evidence](../../docs/progress.md).
 Historical benchmark paths above belong to the original Juke evidence tree.
 
+### Texture control, compression, fog coordinates and cube maps
+
+`DG_CAP_GL_TEXTURE_CONTROL` adds `GL_ATI_texture_env_combine3`,
+`GL_ATI_texture_mirror_once` and `GL_SGIS_generate_mipmap`; the host charges
+generated levels with the image that produces them. Name-sized scalars
+(`TexParameter`, `TexEnv`, `Hint`, `Fog`) are validated locally against the same
+tables as their vector forms, so an unknown name is `GL_INVALID_ENUM` instead of
+a record that fails the batch and the context.
+
+`DG_CAP_GL_COMPRESSED_TEXTURES` adds `GL_ARB_texture_compression` and
+`GL_EXT_texture_compression_s3tc`: exact-size `CompressedTexImage2D` (or none
+for zero-defined storage), block-row `CompressedTexSubImage2D` bands, chunked
+`GetCompressedTexImage`, and S3TC/generic compressed internal formats for
+`TexImage2D`. Every split 2D upload starts its tiles on 4-pixel boundaries of
+its rectangle and gathers padded rows, so uncompressed sources into compressed
+storage stay block aligned.
+
+`DG_CAP_GL_FOG_COORD` adds `GL_EXT_fog_coord`: `FogCoord*` inside Begin/End and
+lists, `FOG_COORDINATE_SOURCE`, and a fog coordinate client array carried in
+DrawArraysEXT slot 14. Without it Wine could not fog D3D's pretransformed
+vertices after texturing.
+
+`DG_CAP_GL_TEXTURE_CUBE_MAP` adds `GL_ARB_texture_cube_map` and
+`GL_EXT_texture_cube_map`: a third binding per unit, square face uploads, copies,
+reads and compressed faces, `PROXY_TEXTURE_CUBE_MAP`, `TEXTURE_WRAP_R`,
+`NORMAL_MAP`/`REFLECTION_MAP` texture generation, `TEXTURE_BINDING_CUBE_MAP` and
+`MAX_CUBE_MAP_TEXTURE_SIZE`. The host tracks dimensions, charges and undefined
+levels per face.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

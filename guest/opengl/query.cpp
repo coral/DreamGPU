@@ -46,6 +46,10 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
             *output = kind == DG_GL_RESULT_BOOL ? (type)(local != 0) : (type)local;                \
             return;                                                                                \
         }                                                                                          \
+        if (JglCubeMapQueryRejected(pname)) {                                                      \
+            JglSetError(GL_INVALID_ENUM);                                                          \
+            return;                                                                                \
+        }                                                                                          \
         if (JglQuery(FEnum_##name, args, kind, result, sizeof(result), &bytes))                    \
             CopyMemory(output, result, bytes);                                                     \
     }
@@ -58,6 +62,10 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
     void APIENTRY name(GLenum target, GLenum pname, type *output) {                                \
         ULONG args[3] = {target, pname, 0}, bytes;                                                 \
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
+        if (output && JglReady() && JglCubeMapQueryRejected(target)) {                             \
+            JglSetError(GL_INVALID_ENUM);                                                          \
+            return;                                                                                \
+        }                                                                                          \
         if (output && JglQuery(FEnum_##name, args, kind, result, sizeof(result), &bytes))          \
             CopyMemory(output, result, bytes);                                                     \
     }
@@ -84,6 +92,10 @@ void APIENTRY glGetClipPlane(GLenum plane, GLdouble *equation) {
     void APIENTRY name(GLenum target, GLint level, GLenum pname, type *output) {                   \
         ULONG args[3] = {target, (ULONG)level, pname}, bytes;                                      \
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
+        if (output && JglReady() && JglCubeMapQueryRejected(target)) {                             \
+            JglSetError(GL_INVALID_ENUM);                                                          \
+            return;                                                                                \
+        }                                                                                          \
         if (output && JglQuery(FEnum_##name, args, kind, result, sizeof(result), &bytes))          \
             CopyMemory(output, result, bytes);                                                     \
     }
@@ -100,6 +112,10 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
          cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e || cap == 0x8457) &&
         JglArrayQuery(cap, &local))
         return local != 0;
+    if (JglCubeMapQueryRejected(cap)) {
+        JglSetError(GL_INVALID_ENUM);
+        return GL_FALSE;
+    }
     JglQuery(FEnum_glIsEnabled, args, DG_GL_RESULT_BOOL, &result, sizeof(result), &bytes);
     return result;
 }

@@ -192,7 +192,7 @@ unsafe fn bind(
     serial: u64,
     errors: *mut u32,
 ) -> Result<(), u32> {
-    if target != GL_TEXTURE_1D && target != GL_TEXTURE_2D {
+    if !matches!(target, GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
         return Err(11);
     }
     let located = if name == 0 {
@@ -225,20 +225,21 @@ unsafe fn bind(
         if unsafe { *memory.count } >= DG_GL_MAX_TEXTURES {
             return Err(9);
         }
-        texture =
-            unsafe { (memory.allocate)(memory.opaque, core::mem::size_of::<Texture>()) }.cast();
+        // The first bind fixes the target; a cube map gets its face table.
+        texture = unsafe {
+            super::allocate(
+                memory,
+                target,
+                Texture {
+                    guest_name: name,
+                    ..Texture::default()
+                },
+            )
+        };
         if texture.is_null() {
             return Err(6);
         }
         unsafe {
-            core::ptr::write(
-                texture,
-                Texture {
-                    guest_name: name,
-                    target,
-                    ..Texture::default()
-                },
-            );
             remember(api, errors);
             api.dg_glGenTextures.unwrap()(1, core::ptr::addr_of_mut!((*texture).name));
             if (*texture).name == 0 {
@@ -288,6 +289,8 @@ pub unsafe extern "C" fn dreamgpu_texture_bind(
 /// # Safety
 /// Data is a validated immutable list of `count` little-endian names. Native
 /// context bindings and namespace obey the same ownership as `texture_bind`.
+/// Each binding slot holding a deleted texture reverts to the default of that
+/// texture's target, so any set of a context's slots may be passed.
 #[no_mangle]
 pub unsafe extern "C" fn dreamgpu_texture_delete(
     memory: *const Memory,
@@ -296,11 +299,11 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
     count: u32,
     default_2d: *mut Texture,
     default_1d: *mut Texture,
+    default_cube: *mut Texture,
     bindings: *const *mut *mut Texture,
     binding_count: u32,
 ) {
     assert!(count <= DG_GL_MAX_TEXTURES);
-    // Bindings alternate 2D, 1D for each texture unit.
     let bindings = unsafe { core::slice::from_raw_parts(bindings, binding_count as usize) };
     let api = unsafe { &*(*memory).api };
     for i in 0..count as usize {
@@ -314,12 +317,12 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
             api.dg_glDeleteTextures.unwrap()(1, core::ptr::addr_of!((*texture).name));
             (*texture).deleted = 1;
             remove(ns, slot);
-            for (index, &binding) in bindings.iter().enumerate() {
-                let default = if index % 2 == 0 {
-                    default_2d
-                } else {
-                    default_1d
-                };
+            let default = match (*texture).target {
+                GL_TEXTURE_1D => default_1d,
+                GL_TEXTURE_CUBE_MAP => default_cube,
+                _ => default_2d,
+            };
+            for &binding in bindings {
                 if *binding == texture {
                     (*default).refs = (*default)
                         .refs

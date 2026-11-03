@@ -4,6 +4,8 @@
 mod border_sampling;
 #[path = "native_qemu/compressed.rs"]
 mod compressed;
+#[path = "native_qemu/cube_map.rs"]
+mod cube_map;
 #[path = "native_qemu/cursor.rs"]
 mod cursor;
 #[path = "native_qemu/depth.rs"]

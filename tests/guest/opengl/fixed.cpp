@@ -22,6 +22,9 @@ BOOL JglFixedStateAvailable(void) {
 BOOL JglTextureControlAvailable(void) {
     return TextureControl;
 }
+BOOL JglTextureCubeMapAvailable(void) {
+    return FALSE;
+}
 const GLubyte *JglExtensions(void) {
     return Negotiated;
 }

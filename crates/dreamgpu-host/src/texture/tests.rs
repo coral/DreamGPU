@@ -18,6 +18,10 @@ struct Mock {
     offsets: Vec<i32>,
     generate: i32,
     generate_error: u32,
+    /// Native targets of 2D images/subimages, zero fills and parameter queries.
+    targets: Vec<u32>,
+    zero_targets: Vec<u32>,
+    parameter_targets: Vec<u32>,
 }
 thread_local! { static MOCK: RefCell<Mock> = RefCell::new(Mock::default()); }
 fn index(key: u32) -> usize {
@@ -64,7 +68,7 @@ unsafe extern "C" fn image1(
     image(1, pixels);
 }
 unsafe extern "C" fn image2(
-    _: u32,
+    target: u32,
     _: i32,
     _: i32,
     width: i32,
@@ -76,6 +80,7 @@ unsafe extern "C" fn image2(
 ) {
     MOCK.with(|v| {
         let mut v = v.borrow_mut();
+        v.targets.push(target);
         v.width = width;
         v.height = height;
         v.border = border;
@@ -101,7 +106,7 @@ unsafe extern "C" fn sub1(
     image(3, pixels);
 }
 unsafe extern "C" fn sub2(
-    _: u32,
+    target: u32,
     _: i32,
     _: i32,
     _: i32,
@@ -111,12 +116,21 @@ unsafe extern "C" fn sub2(
     _: u32,
     pixels: *const c_void,
 ) {
+    MOCK.with(|v| v.borrow_mut().targets.push(target));
     image(4, pixels);
 }
-unsafe extern "C" fn zero(_: *mut c_void, _: *mut Texture, _: u32, _: u32, _: u32) -> u32 {
+unsafe extern "C" fn zero(
+    _: *mut c_void,
+    _: *mut Texture,
+    target: u32,
+    _: u32,
+    _: u32,
+    _: u32,
+) -> u32 {
     MOCK.with(|v| {
         let mut v = v.borrow_mut();
         v.zeros += 1;
+        v.zero_targets.push(target);
         v.zero_error
     })
 }
@@ -148,10 +162,11 @@ unsafe extern "C" fn level(_: u32, _: i32, key: u32, out: *mut i32) {
         v.error = v.query_error;
     });
 }
-unsafe extern "C" fn parameter(_: u32, key: u32, out: *mut i32) {
+unsafe extern "C" fn parameter(target: u32, key: u32, out: *mut i32) {
     assert_eq!(key, GL_GENERATE_MIPMAP);
     MOCK.with(|v| {
         let mut v = v.borrow_mut();
+        v.parameter_targets.push(target);
         unsafe { *out = v.generate };
         v.error = v.generate_error;
     });
@@ -608,4 +623,209 @@ fn generated_mip_chains_are_charged_with_their_defining_image() {
         .0,
         Err(9)
     );
+}
+
+#[test]
+fn cube_faces_track_levels_charges_bounds_and_undefined_images_separately() {
+    let mut api = api();
+    api.dg_glGetTexParameteriv = Some(parameter);
+    MOCK.with(|v| *v.borrow_mut() = Mock::default());
+    let mut faces = [Face::EMPTY; FACES];
+    let mut t = Texture {
+        target: GL_TEXTURE_CUBE_MAP,
+        faces: &mut faces,
+        ..Texture::default()
+    };
+    let mut total = 0;
+    let face = |n: u32| GL_TEXTURE_CUBE_MAP_POSITIVE_X + n;
+    let image = |target: u32, side: u32| {
+        [
+            target,
+            0,
+            GL_RGBA8,
+            side,
+            side,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+        ]
+    };
+    // Two faces of different sizes: each is charged and tracked on its own,
+    // and the texture's arrays summarize them.
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(face(0), 4),
+            64
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(face(3), 8),
+            256
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!(total, 320);
+    assert_eq!((faces[0].widths[0], faces[0].levels[0]), (4, 64));
+    assert_eq!((faces[3].widths[0], faces[3].heights[0]), (8, 8));
+    assert_eq!((t.levels[0], t.widths[0], t.undefined_levels), (320, 0, 0));
+    // Mipmap generation is a parameter of the cube map, never of a face.
+    assert_eq!(
+        MOCK.with(|v| v.borrow().parameter_targets.clone()),
+        [GL_TEXTURE_CUBE_MAP; 2]
+    );
+    // Redefining one face replaces only that face's charge.
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(face(0), 2),
+            16
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!(
+        (total, t.levels[0], faces[0].levels[0], faces[3].levels[0]),
+        (272, 272, 16, 256)
+    );
+    // Subimage bounds use the face's own level: inside -Y, outside +X.
+    let tile = |target: u32| [target, 0, 2, 2, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexSubImage2D,
+            tile(face(0)),
+            16
+        ),
+        (Ok(()), GL_INVALID_VALUE)
+    );
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexSubImage2D,
+            tile(face(3)),
+            16
+        ),
+        (Ok(()), 0)
+    );
+    // A failed zero fill poisons that face's level, and the summary, until a
+    // complete subimage of the same face defines it.
+    MOCK.with(|v| v.borrow_mut().zero_error = GL_OUT_OF_MEMORY);
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(face(4), 2),
+            0
+        ),
+        (Err(11), GL_OUT_OF_MEMORY)
+    );
+    MOCK.with(|v| v.borrow_mut().zero_error = 0);
+    assert_eq!((faces[4].undefined_levels, t.undefined_levels), (1, 1));
+    assert_eq!(faces[0].undefined_levels | faces[3].undefined_levels, 0);
+    let full = |target: u32| [target, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexSubImage2D,
+            full(face(0)),
+            16
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!(t.undefined_levels, 1);
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexSubImage2D,
+            full(face(4)),
+            16
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!((faces[4].undefined_levels, t.undefined_levels), (0, 0));
+    assert_eq!(total, 288);
+    // Native calls and the zero fill name the face, never TEXTURE_2D.
+    MOCK.with(|v| {
+        let v = v.borrow();
+        assert!(v.targets.iter().all(|&target| cube_face(target).is_some()));
+        assert_eq!(v.zero_targets, [face(4)]);
+    });
+    // A face record never reaches a 2D texture, nor a 2D record a cube map.
+    let calls = MOCK.with(|v| v.borrow().uploads.len());
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(GL_TEXTURE_2D, 2),
+            16
+        )
+        .0,
+        Err(DG_GL_ERROR_TEXTURE)
+    );
+    let mut flat = Texture::default();
+    assert_eq!(
+        run(
+            &api,
+            &mut flat,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(face(1), 2),
+            16
+        )
+        .0,
+        Err(DG_GL_ERROR_TEXTURE)
+    );
+    assert_eq!(MOCK.with(|v| v.borrow().uploads.len()), calls);
+    assert_eq!(total, 288);
+}
+
+#[test]
+fn texture_and_face_layouts_match_the_c_mirror() {
+    let pointer = core::mem::size_of::<usize>();
+    assert_eq!(
+        core::mem::offset_of!(Texture, faces),
+        core::mem::offset_of!(Texture, levels) + 12 * 8
+    );
+    assert_eq!(core::mem::size_of::<Texture>() % 8, 0);
+    assert_eq!(
+        core::mem::size_of::<Texture>(),
+        core::mem::offset_of!(Texture, faces) + pointer.max(8)
+    );
+    assert_eq!(core::mem::offset_of!(Face, undefined_levels), 3 * 12 * 4);
+    assert_eq!(core::mem::offset_of!(Face, levels), 3 * 12 * 4 + 8);
+    assert_eq!(core::mem::size_of::<Face>(), 3 * 12 * 4 + 8 + 12 * 8);
+    assert_eq!(
+        binding_target(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z),
+        GL_TEXTURE_CUBE_MAP
+    );
+    assert_eq!(
+        binding_target(GL_TEXTURE_CUBE_MAP_NEGATIVE_Z + 1),
+        GL_PROXY_TEXTURE_CUBE_MAP
+    );
+    assert_eq!(cube_face(GL_TEXTURE_CUBE_MAP), None);
+    assert_eq!(cube_face(GL_TEXTURE_CUBE_MAP_POSITIVE_Y), Some(2));
 }

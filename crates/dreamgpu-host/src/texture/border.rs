@@ -516,6 +516,11 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
         query::remember(a, core::ptr::addr_of_mut!((*c).guest_errors))?;
     }
     let texture = unsafe {
+        // An enabled cube map takes precedence over 2D and 1D; its faces never
+        // carry borders and native sampling is exact.
+        if a.dg_glIsEnabled.unwrap()(GL_TEXTURE_CUBE_MAP) != 0 {
+            return Ok(());
+        }
         if a.dg_glIsEnabled.unwrap()(GL_TEXTURE_2D) != 0 {
             two
         } else if a.dg_glIsEnabled.unwrap()(GL_TEXTURE_1D) != 0 {
@@ -529,7 +534,8 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
         let other = unsafe {
             a.dg_glActiveTexture.unwrap()(GL_TEXTURE0 + unit);
             let on = a.dg_glIsEnabled.unwrap()(GL_TEXTURE_2D) != 0
-                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_1D) != 0;
+                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_1D) != 0
+                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_CUBE_MAP) != 0;
             a.dg_glActiveTexture.unwrap()(GL_TEXTURE0);
             on
         };

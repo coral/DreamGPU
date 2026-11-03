@@ -65,10 +65,12 @@ pub(crate) fn texgen_params(coord: u32, pname: u32) -> u32 {
 }
 
 pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
-    if !matches!(target, GL_TEXTURE_1D | GL_TEXTURE_2D) {
+    if !matches!(target, GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
         return 0;
     }
     match pname {
+        // The GL 1.2 name, for the cube map's third coordinate only.
+        GL_TEXTURE_WRAP_R => u32::from(target == GL_TEXTURE_CUBE_MAP),
         GL_TEXTURE_BORDER_COLOR => 4,
         GL_TEXTURE_MIN_FILTER
         | GL_TEXTURE_MAG_FILTER
@@ -231,6 +233,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_POINT_SIZE_MAX
         | GL_POINT_FADE_THRESHOLD_SIZE
         | GL_TEXTURE_BINDING_2D
+        | GL_TEXTURE_BINDING_CUBE_MAP
+        | GL_MAX_CUBE_MAP_TEXTURE_SIZE
         | GL_ATTRIB_STACK_DEPTH
         | GL_MAX_ATTRIB_STACK_DEPTH
         | GL_MATRIX_MODE
@@ -467,6 +471,18 @@ fn texture_2d_internal_format(format: u32) -> bool {
         )
 }
 
+/// Image targets of 2D-shaped records: TEXTURE_2D or one cube map face.
+fn image_2d_target(target: u32) -> bool {
+    target == GL_TEXTURE_2D || crate::texture::cube_face(target).is_some()
+}
+/// Cube faces (and the cube proxy) are square images without borders. The
+/// record carries the whole shape, so the frontend reports violations as
+/// GL_INVALID_VALUE and the host refuses them as malformed.
+fn cube_image_shape(target: u32, width: u32, height: u32, border: u32) -> bool {
+    !(crate::texture::cube_face(target).is_some() || target == GL_PROXY_TEXTURE_CUBE_MAP)
+        || (width == height && border == 0)
+}
+
 fn buffer_selection(mode: u32, draw: bool) -> bool {
     match mode {
         GL_FRONT | GL_FRONT_LEFT | GL_BACK | GL_BACK_LEFT | GL_LEFT => true,
@@ -493,6 +509,7 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_SCISSOR_TEST
             | GL_TEXTURE_1D
             | GL_TEXTURE_2D
+            | GL_TEXTURE_CUBE_MAP
             | GL_CULL_FACE
             | GL_LIGHTING
             | GL_FOG
@@ -601,7 +618,8 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
         return 0;
     }
     let (wi, hi) = if image { (5, 6) } else { (6, 7) };
-    if a[0] != GL_TEXTURE_2D
+    if !image_2d_target(a[0])
+        || (image && !cube_image_shape(a[0], a[wi], a[hi], a[7]))
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
         || a[wi] > DG_GL_MAX_TEXTURE_DIMENSION + 2
         || a[hi] > DG_GL_MAX_TEXTURE_DIMENSION + 2
@@ -763,14 +781,16 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let h = a[if image { 4 } else { 5 }];
     let pixel_bytes = texture_pixel_bytes(a[6], a[7]);
     if image
-        && a[0]
+        && (a[0]
             == if one {
                 GL_PROXY_TEXTURE_1D
             } else {
                 GL_PROXY_TEXTURE_2D
             }
+            || (!one && a[0] == GL_PROXY_TEXTURE_CUBE_MAP))
     {
         return if a[1] <= DG_GL_MAX_TEXTURE_LEVEL
+            && cube_image_shape(a[0], w, h, a[5])
             && a[5] <= 1
             && w <= i32::MAX as u32
             && h <= i32::MAX as u32
@@ -789,7 +809,11 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
         };
     }
     let allocate_only = image && data.is_empty();
-    if a[0] != (if one { GL_TEXTURE_1D } else { GL_TEXTURE_2D })
+    if !(if one {
+        a[0] == GL_TEXTURE_1D
+    } else {
+        image_2d_target(a[0])
+    }) || (image && !cube_image_shape(a[0], w, h, a[5]))
         || (one && (h != 1 || (!image && a[3] != 0)))
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
         || (!image && (w == 0 || h == 0))
@@ -823,8 +847,9 @@ fn compressed_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let ok = if function == FEnum_glCompressedTexImage2D {
         // target, level, internalformat, width, height, border, imageSize
         let block = crate::texture::s3tc_block_bytes(a[2]);
-        let proxy = a[0] == GL_PROXY_TEXTURE_2D;
-        (a[0] == GL_TEXTURE_2D || proxy)
+        let proxy = matches!(a[0], GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP);
+        (image_2d_target(a[0]) || proxy)
+            && cube_image_shape(a[0], a[3], a[4], a[5])
             && block != 0
             && a[1] <= DG_GL_MAX_TEXTURE_LEVEL
             && a[3] <= limit(a[1])
@@ -835,7 +860,7 @@ fn compressed_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     } else {
         // target, level, xoffset, yoffset, width, height, format, imageSize
         let block = crate::texture::s3tc_block_bytes(a[6]);
-        a[0] == GL_TEXTURE_2D
+        image_2d_target(a[0])
             && block != 0
             && a[1] <= DG_GL_MAX_TEXTURE_LEVEL
             && a[2].is_multiple_of(4)
@@ -922,7 +947,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             if wide {
                 kind = DG_GL_RESULT_FLOAT;
             }
-            if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D)
+            if (a == GL_TEXTURE_1D || image_2d_target(a))
                 && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
                 && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
                 && d < (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
@@ -938,7 +963,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 0 => DG_GL_MAX_RESULT_BYTES / 4,
                 n => n,
             };
-            if a == GL_TEXTURE_2D
+            if image_2d_target(a)
                 && b & 0xffff <= DG_GL_MAX_TEXTURE_LEVEL
                 && n <= DG_GL_MAX_READBACK_BYTES / 4
                 && d < DG_GL_MAX_TEXTURE_DIMENSION * DG_GL_MAX_TEXTURE_DIMENSION
@@ -1011,7 +1036,9 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 DG_GL_RESULT_INT
             };
             if d == 0 {
-                if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D) && b == GL_TEXTURE_RESIDENT {
+                if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP)
+                    && b == GL_TEXTURE_RESIDENT
+                {
                     1
                 } else {
                     texture_params(a, b)
@@ -1027,10 +1054,15 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 DG_GL_RESULT_INT
             };
             u32::from(
-                matches!(
-                    a,
-                    GL_TEXTURE_1D | GL_TEXTURE_2D | GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D
-                ) && b <= DG_GL_MAX_TEXTURE_LEVEL
+                (image_2d_target(a)
+                    || matches!(
+                        a,
+                        GL_TEXTURE_1D
+                            | GL_PROXY_TEXTURE_1D
+                            | GL_PROXY_TEXTURE_2D
+                            | GL_PROXY_TEXTURE_CUBE_MAP
+                    ))
+                    && b <= DG_GL_MAX_TEXTURE_LEVEL
                     && matches!(
                         d,
                         GL_TEXTURE_WIDTH

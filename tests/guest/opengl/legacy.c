@@ -61,6 +61,9 @@ BOOL JglCompressedTexturesAvailable(void) {
 BOOL JglFogCoordAvailable(void) {
     return FogCoord;
 }
+BOOL JglTextureCubeMapAvailable(void) {
+    return FALSE;
+}
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
     assert(module == (HINSTANCE)1);
     if (!((ULONG_PTR)name >> 16))

@@ -41,7 +41,8 @@
  * imageSize bytes. GetCompressedTexImage is a QUERY of target, level | words<<16,
  * first word, returning RESULT_INT words of the native compressed image (zero
  * words count keeps 128). TexImage2D additionally accepts the S3TC and generic
- * COMPRESSED_* internal formats. Only TEXTURE_2D (and its proxy) is compressed. */
+ * COMPRESSED_* internal formats. Only TEXTURE_2D (and its proxy) is compressed,
+ * and cube map faces with DG_CAP_GL_TEXTURE_CUBE_MAP. */
 #define DG_CAP_GL_COMPRESSED_TEXTURES 0x40000
 #define DG_GL_COMPRESSED_BLOCK 4
 /* Fog coordinates: EXT_fog_coord. FogCoordf (one float word) is an ordinary
@@ -50,6 +51,17 @@
  * or DOUBLE fog coordinate per vertex; the host answers FOG_COORDINATE_SOURCE
  * and CURRENT_FOG_COORDINATE. */
 #define DG_CAP_GL_FOG_COORD 0x80000
+/* Cube maps: ARB_texture_cube_map (EXT_texture_cube_map). TEXTURE_CUBE_MAP is a
+ * BindTexture/Enable/TexParameter target (adding TEXTURE_WRAP_R) with its own
+ * binding per texture unit, covered by TEXTURE_BIT; a name keeps the target of
+ * its first bind. The six face targets replace TEXTURE_2D in the existing
+ * TexImage2D/TexSubImage2D, CopyTexImage2D/CopyTexSubImage2D, S3TC compressed,
+ * GetTexImage, GetCompressedTexImage and GetTexLevelParameter records, and
+ * PROXY_TEXTURE_CUBE_MAP in their proxies. Face images are square, borderless
+ * and use the 2D level limits; each face tracks its own levels. TexGen accepts
+ * NORMAL_MAP and REFLECTION_MAP. The host answers TEXTURE_BINDING_CUBE_MAP and
+ * MAX_CUBE_MAP_TEXTURE_SIZE (DG_GL_MAX_TEXTURE_DIMENSION). */
+#define DG_CAP_GL_TEXTURE_CUBE_MAP 0x100000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

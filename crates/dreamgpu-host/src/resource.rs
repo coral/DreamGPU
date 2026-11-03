@@ -7,7 +7,10 @@ use crate::{
     gl_api::*,
     query,
     state::{dreamgpu_context_select_buffers, ContextState},
-    texture::{dreamgpu_texture_wait, dreamgpu_texture_written, names::Memory, Texture},
+    texture::{
+        cube_face, dreamgpu_texture_wait, dreamgpu_texture_written, image_levels, names::Memory,
+        owns, set_image_levels, Texture,
+    },
 };
 use core::ptr::{addr_of_mut, null_mut};
 macro_rules! gl {($api:expr, $name:ident($($arg:expr),* $(,)?)) => {{#[allow(unused_unsafe)] let result = unsafe { $api.$name.expect("complete native GL table")($($arg),*) }; result }};}
@@ -339,6 +342,11 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
         }
         return 0;
     }
+    // The copied image array: the bound texture's own, or one cube face.
+    if t.is_null() || unsafe { !owns(t, words[0]) } {
+        return DG_GL_ERROR_TEXTURE;
+    }
+    let mut f = unsafe { image_levels(t, words[0]) };
     let level = words[1] as usize;
     let x = words[if image || one { 3 } else { 4 }] as i32;
     let y = words[if image || one { 4 } else { 5 }] as i32;
@@ -363,13 +371,13 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     }
     let next = unsafe {
         if !image && !one {
-            let border = i64::from((*t).borders[level]);
+            let border = i64::from(f.borders[level]);
             let x = i64::from(words[2] as i32);
             let y = i64::from(words[3] as i32);
             if x < -border
                 || y < -border
-                || x + i64::from(w) > i64::from((*t).widths[level]) - border
-                || y + i64::from(h) > i64::from((*t).heights[level]) - border
+                || x + i64::from(w) > i64::from(f.widths[level]) - border
+                || y + i64::from(h) > i64::from(f.heights[level]) - border
             {
                 query::store(errors, GL_INVALID_VALUE);
                 return 0;
@@ -377,7 +385,7 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
         }
         if image {
             match (*total)
-                .checked_sub((*t).levels[level])
+                .checked_sub(f.levels[level])
                 .and_then(|n| n.checked_add(allocation))
             {
                 Some(n) if n <= u64::from(DG_GL_MAX_TEXTURE_BYTES) => n,
@@ -546,12 +554,13 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     unsafe {
         dreamgpu_texture_written(api, t, serial);
         if image {
+            f.levels[level] = defined_allocation;
+            f.widths[level] = defined_width;
+            f.heights[level] = defined_height;
+            f.borders[level] = defined_border;
+            f.undefined_levels &= !(1 << level);
             *total = defined_total;
-            (*t).levels[level] = defined_allocation;
-            (*t).widths[level] = defined_width;
-            (*t).heights[level] = defined_height;
-            (*t).borders[level] = defined_border;
-            (*t).undefined_levels &= !(1 << level);
+            set_image_levels(t, words[0], &f);
         }
     }
     0
@@ -625,17 +634,28 @@ impl Drop for ClearState<'_> {
 /// # Safety
 /// Newly allocated texture is bound with canonical unpack state; dimensions
 /// validated. Deleted-but-bound texture names must never be rebound/attached.
+/// `target` names the defined image array: the texture's own or a cube face.
 #[no_mangle]
 pub unsafe extern "C" fn dreamgpu_texture_zero(
     memory: *const Memory,
     t: *const Texture,
+    target: u32,
     level: u32,
     w: u32,
     h: u32,
 ) -> u32 {
     let m = unsafe { &*memory };
     let a = unsafe { &*m.api };
+    if unsafe { !owns(t, target) } {
+        return GL_INVALID_OPERATION;
+    }
     let one = unsafe { (*t).target } == GL_TEXTURE_1D;
+    // A cube face is cleared and filled through its own face target.
+    let target = if cube_face(target).is_some() {
+        target
+    } else {
+        GL_TEXTURE_2D
+    };
     if w == 0
         || h == 0
         || w > DG_GL_MAX_TEXTURE_DIMENSION + 2
@@ -678,7 +698,7 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         );
         return gl!(a, dg_glGetError());
     }
-    let border = unsafe { (*t).borders[level as usize] } as i32;
+    let border = unsafe { image_levels(t, target).borders[level as usize] } as i32;
     if !(0..=1).contains(&border) || w < 2 * border as u32 || h < 2 * border as u32 {
         return GL_INVALID_OPERATION;
     }
@@ -719,7 +739,7 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
             dg_glFramebufferTexture2D(
                 GL_FRAMEBUFFER,
                 GL_COLOR_ATTACHMENT0,
-                GL_TEXTURE_2D,
+                target,
                 (*t).name,
                 level as i32
             )
@@ -758,7 +778,7 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         gl!(
             a,
             dg_glTexSubImage2D(
-                GL_TEXTURE_2D,
+                target,
                 level as i32,
                 -border,
                 y as i32 - border,
@@ -834,7 +854,11 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
 ) -> u32 {
     let m = unsafe { &*memory };
     let a = unsafe { &*m.api };
-    let encoded_level = level;
+    if t.is_null() || unsafe { !owns(t, target) } {
+        return DG_GL_ERROR_TEXTURE;
+    }
+    // One cube face is a separate image: it has its own cache identity.
+    let encoded_level = level | (cube_face(target).map_or(0, |f| f as u32 + 1) << 16);
     let compressed = level & crate::texture::READ_COMPRESSED != 0;
     let pixel_bytes = if level & DG_GL_TEXTURE_READ_FLOAT != 0 {
         16
@@ -846,6 +870,7 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
         return DG_GL_ERROR_TEXTURE;
     }
     let level = level as usize;
+    let f = unsafe { image_levels(t, target) };
     let bytes = if compressed {
         // The level's own compressed size, from the native image. `first`
         // and the cache then count 32-bit words of that image. Pending guest
@@ -879,13 +904,11 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
         }
         size as u64
     } else {
-        unsafe {
-            u64::from((*t).widths[level]) * u64::from((*t).heights[level]) * u64::from(pixel_bytes)
-        }
+        u64::from(f.widths[level]) * u64::from(f.heights[level]) * u64::from(pixel_bytes)
     };
     if bytes == 0
         || u64::from(first) * u64::from(pixel_bytes) >= bytes
-        || unsafe { (*t).undefined_levels } & (1 << level) != 0
+        || f.undefined_levels & (1 << level) != 0
     {
         return DG_GL_ERROR_TEXTURE;
     }

@@ -202,6 +202,7 @@ fn deleted_bound_storage_lives_until_last_owner_and_names_reuse() {
             1,
             default2,
             default1,
+            core::ptr::null_mut(),
             [
                 core::ptr::addr_of_mut!(binding2),
                 core::ptr::addr_of_mut!(binding1),

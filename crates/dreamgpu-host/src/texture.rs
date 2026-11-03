@@ -24,6 +24,12 @@ pub struct Texture {
     pub heights: [u32; 12],
     pub borders: [u32; 12],
     pub levels: [u64; 12],
+    /// A cube map's per-face level tracking, in the texture's own allocation;
+    /// null for 1D and 2D textures, whose only image is tracked above. For a
+    /// cube map the arrays above summarize its faces instead: `levels` holds
+    /// each level's charge over all six faces and `undefined_levels` their
+    /// union, so accounting and draw admission treat every texture alike.
+    pub faces: *mut [Face; FACES],
 }
 impl Default for Texture {
     fn default() -> Self {
@@ -42,8 +48,124 @@ impl Default for Texture {
             heights: [0; 12],
             borders: [0; 12],
             levels: [0; 12],
+            faces: core::ptr::null_mut(),
         }
     }
+}
+
+/// Faces of a cube map (ARB_texture_cube_map), POSITIVE_X through NEGATIVE_Z.
+pub(crate) const FACES: usize = 6;
+/// Level tracking of one image array: a 1D/2D texture's image or one cube face.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct Face {
+    pub widths: [u32; 12],
+    pub heights: [u32; 12],
+    pub borders: [u32; 12],
+    pub undefined_levels: u32,
+    pub levels: [u64; 12],
+}
+impl Face {
+    pub(crate) const EMPTY: Self = Self {
+        widths: [0; 12],
+        heights: [0; 12],
+        borders: [0; 12],
+        undefined_levels: 0,
+        levels: [0; 12],
+    };
+}
+/// The face index of a cube face target.
+pub(crate) fn cube_face(target: u32) -> Option<usize> {
+    let face = target.wrapping_sub(GL_TEXTURE_CUBE_MAP_POSITIVE_X) as usize;
+    (face < FACES).then_some(face)
+}
+/// The binding target owning an image target: a cube face belongs to its cube map.
+pub(crate) fn binding_target(target: u32) -> u32 {
+    if cube_face(target).is_some() {
+        GL_TEXTURE_CUBE_MAP
+    } else {
+        target
+    }
+}
+/// Level tracking of the image array `target` names in `t`: the texture's own
+/// for 1D and 2D, or one face of a cube map.
+///
+/// # Safety
+/// `t` is a live render-owned texture; a non-null face table is its own.
+pub(crate) unsafe fn image_levels(t: *const Texture, target: u32) -> Face {
+    unsafe {
+        if (*t).faces.is_null() {
+            Face {
+                widths: (*t).widths,
+                heights: (*t).heights,
+                borders: (*t).borders,
+                undefined_levels: (*t).undefined_levels,
+                levels: (*t).levels,
+            }
+        } else {
+            (*(*t).faces)[cube_face(target).unwrap_or(0)]
+        }
+    }
+}
+/// Store the image array `target` names, keeping a cube map's summary exact.
+///
+/// # Safety
+/// Same ownership as `image`; no reference into `t` is live across the call.
+pub(crate) unsafe fn set_image_levels(t: *mut Texture, target: u32, value: &Face) {
+    unsafe {
+        if (*t).faces.is_null() {
+            (*t).widths = value.widths;
+            (*t).heights = value.heights;
+            (*t).borders = value.borders;
+            (*t).undefined_levels = value.undefined_levels;
+            (*t).levels = value.levels;
+            return;
+        }
+        let faces = &mut *(*t).faces;
+        faces[cube_face(target).unwrap_or(0)] = *value;
+        (*t).undefined_levels = faces.iter().fold(0, |all, f| all | f.undefined_levels);
+        for level in 0..12 {
+            (*t).levels[level] = faces.iter().map(|f| f.levels[level]).sum();
+        }
+    }
+}
+/// A cube map and its face table, allocated (and freed) as one object.
+#[repr(C)]
+struct CubeStorage {
+    texture: Texture,
+    faces: [Face; FACES],
+}
+/// Allocate and initialize a texture object of a binding target. A cube map
+/// carries its face table in the same allocation, released with the texture.
+///
+/// # Safety
+/// Memory callbacks belong to the render worker; the result is uninitialized
+/// only on failure (null).
+pub(crate) unsafe fn allocate(m: &names::Memory, target: u32, value: Texture) -> *mut Texture {
+    let cube = target == GL_TEXTURE_CUBE_MAP;
+    let bytes = if cube {
+        core::mem::size_of::<CubeStorage>()
+    } else {
+        core::mem::size_of::<Texture>()
+    };
+    let t: *mut Texture = unsafe { (m.allocate)(m.opaque, bytes) }.cast();
+    if t.is_null() {
+        return t;
+    }
+    unsafe {
+        t.write(Texture {
+            target,
+            faces: core::ptr::null_mut(),
+            ..value
+        });
+        if cube {
+            let storage = t.cast::<CubeStorage>();
+            let faces = core::ptr::addr_of_mut!((*storage).faces);
+            faces.write([Face::EMPTY; FACES]);
+            (*t).faces = faces;
+        }
+    }
+    t
 }
 
 unsafe fn wait(api: &DreamGpuGlApi, t: *mut Texture, serial: u64) {
@@ -127,7 +249,9 @@ pub(crate) unsafe fn proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 {
     }
 }
 
-pub type Zero = unsafe extern "C" fn(*mut c_void, *mut Texture, u32, u32, u32) -> u32;
+/// Zero-define a level of the image array `target` (texture, target, level,
+/// width, height); the level's border is already recorded in the texture.
+pub type Zero = unsafe extern "C" fn(*mut c_void, *mut Texture, u32, u32, u32, u32) -> u32;
 
 /// Whether the bound texture regenerates its mip chain on level changes
 /// (SGIS_generate_mipmap). The native query runs after pending errors were
@@ -191,6 +315,9 @@ unsafe fn upload(
     if !image && function != FEnum_glTexSubImage1D && function != FEnum_glTexSubImage2D {
         return Err(3);
     }
+    if unsafe { !owns(texture, a[0]) } {
+        return Err(DG_GL_ERROR_TEXTURE);
+    }
     let level = a[1] as usize;
     let w = a[if image { 3 } else { 4 }];
     let h = a[if image { 4 } else { 5 }];
@@ -208,8 +335,9 @@ unsafe fn upload(
     } else {
         4
     };
-    // Generated levels are charged with the image that produces them.
-    let chain = image && unsafe { generates_mipmaps(api, a[0]) };
+    // Generated levels are charged with the image that produces them. The
+    // parameter belongs to the binding target, not to one cube face.
+    let chain = image && unsafe { generates_mipmaps(api, binding_target(a[0])) };
     // S3TC storage is charged at its compressed size.
     let block = if image { s3tc_block_bytes(a[2]) } else { 0 };
     let level_bytes = |w: u32, h: u32| {
@@ -220,7 +348,9 @@ unsafe fn upload(
         }
     };
     let allocation = with_chain(level_bytes(w, h), chain);
-    let old = unsafe { (*texture).levels[level] };
+    // The image array this record defines: the texture's own, or one face.
+    let mut f = unsafe { image_levels(texture, a[0]) };
+    let old = f.levels[level];
     let new_total = if image {
         let n = unsafe { *total }
             .checked_sub(old)
@@ -231,13 +361,7 @@ unsafe fn upload(
         }
         n
     } else {
-        let (width, height, border) = unsafe {
-            (
-                (*texture).widths[level],
-                (*texture).heights[level],
-                (*texture).borders[level],
-            )
-        };
+        let (width, height, border) = (f.widths[level], f.heights[level], f.borders[level]);
         let x = i64::from(a[2] as i32);
         let y = i64::from(a[3] as i32);
         if !one
@@ -270,7 +394,7 @@ unsafe fn upload(
     unsafe {
         wait(api, texture, serial);
     }
-    let mut sub_start = -(unsafe { (*texture).borders[level] } as i32);
+    let mut sub_start = -(f.borders[level] as i32);
     if one && !image {
         let mut width = 0;
         let mut border = 0;
@@ -447,12 +571,20 @@ unsafe fn upload(
         }
     }
     if allocated {
-        unsafe {
-            (*texture).borders[level] = defined_border;
-        }
+        f.borders[level] = defined_border;
+        unsafe { set_image_levels(texture, a[0], &f) };
     }
     if allocated && error == 0 && bytes == 0 && defined_width != 0 && defined_height != 0 {
-        error = unsafe { zero(opaque, texture, level as u32, defined_width, defined_height) };
+        error = unsafe {
+            zero(
+                opaque,
+                texture,
+                a[0],
+                level as u32,
+                defined_width,
+                defined_height,
+            )
+        };
     }
     for (i, key) in stores.iter().enumerate() {
         unsafe {
@@ -460,17 +592,18 @@ unsafe fn upload(
         }
     }
     if allocated {
+        f.levels[level] = defined_allocation;
+        f.widths[level] = defined_width;
+        f.heights[level] = defined_height;
+        f.borders[level] = defined_border;
+        if error != 0 {
+            f.undefined_levels |= 1 << level;
+        } else {
+            f.undefined_levels &= !(1 << level);
+        }
         unsafe {
             *total = defined_total;
-            (*texture).levels[level] = defined_allocation;
-            (*texture).widths[level] = defined_width;
-            (*texture).heights[level] = defined_height;
-            (*texture).borders[level] = defined_border;
-            if error != 0 {
-                (*texture).undefined_levels |= 1 << level;
-            } else {
-                (*texture).undefined_levels &= !(1 << level);
-            }
+            set_image_levels(texture, a[0], &f);
         }
     }
     if allocated || error == 0 {
@@ -487,24 +620,36 @@ unsafe fn upload(
     if !image
         && a[2] as i32 == sub_start
         && a[3] as i32 == if one { 0 } else { sub_start }
-        && w == unsafe { (*texture).widths[level] }
-        && h == unsafe { (*texture).heights[level] }
+        && w == f.widths[level]
+        && h == f.heights[level]
     {
-        unsafe {
-            (*texture).undefined_levels &= !(1 << level);
-        }
+        f.undefined_levels &= !(1 << level);
+        unsafe { set_image_levels(texture, a[0], &f) };
     }
     Ok(())
 }
 
-/// Native proxy evaluation of a validated S3TC CompressedTexImage2D.
+/// Whether `t` owns the image array `target` names: its own 1D/2D image, or
+/// a face of a cube map with its face table.
+///
+/// # Safety
+/// `t` is a live render-owned texture.
+pub(crate) unsafe fn owns(t: *const Texture, target: u32) -> bool {
+    unsafe {
+        (*t).target == binding_target(target)
+            && (*t).faces.is_null() == (cube_face(target).is_none())
+    }
+}
+
+/// Native proxy evaluation of a validated S3TC CompressedTexImage2D (2D or
+/// cube map proxy).
 pub(crate) unsafe fn compressed_proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 {
     let (Some(image), Some(error)) = (api.dg_glCompressedTexImage2D, api.dg_glGetError) else {
         return GL_INVALID_OPERATION;
     };
     unsafe {
         image(
-            GL_PROXY_TEXTURE_2D,
+            a[0],
             a[1] as i32,
             a[2],
             a[3] as i32,
@@ -517,7 +662,8 @@ pub(crate) unsafe fn compressed_proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 
     }
 }
 
-/// CompressedTexImage2D/CompressedTexSubImage2D on the bound 2D texture.
+/// CompressedTexImage2D/CompressedTexSubImage2D on the bound 2D texture or
+/// one face of the bound cube map.
 /// Arguments passed `data_validate`: S3TC format, exact image size, block-aligned
 /// offsets and a payload that is empty (zero-defined image) or exactly the image.
 /// Rules that depend on the level's current image are GL errors, never record
@@ -543,16 +689,17 @@ pub(crate) unsafe fn compressed(
     let api = unsafe { &*m.api };
     let get_error = api.dg_glGetError.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
     let level = a[1] as usize;
-    if level > DG_GL_MAX_TEXTURE_LEVEL as usize {
+    if level > DG_GL_MAX_TEXTURE_LEVEL as usize || unsafe { !owns(texture, a[0]) } {
         return Err(DG_GL_ERROR_TEXTURE);
     }
+    let mut f = unsafe { image_levels(texture, a[0]) };
     if function == FEnum_glCompressedTexImage2D {
-        let image = api
+        let native = api
             .dg_glCompressedTexImage2D
             .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
         let size = u64::from(a[6]);
         let n = unsafe { *total }
-            .checked_sub(unsafe { (*texture).levels[level] })
+            .checked_sub(f.levels[level])
             .and_then(|v| v.checked_add(size))
             .ok_or(9u32)?;
         if n > u64::from(DG_GL_MAX_TEXTURE_BYTES) {
@@ -569,8 +716,8 @@ pub(crate) unsafe fn compressed(
             data.as_ptr()
         };
         unsafe {
-            image(
-                GL_TEXTURE_2D,
+            native(
+                a[0],
                 level as i32,
                 a[2],
                 a[3] as i32,
@@ -585,13 +732,14 @@ pub(crate) unsafe fn compressed(
             *gl_error = error;
             return Ok(());
         }
+        f.levels[level] = size;
+        f.widths[level] = a[3];
+        f.heights[level] = a[4];
+        f.borders[level] = 0;
+        f.undefined_levels &= !(1 << level);
         unsafe {
             *total = n;
-            (*texture).levels[level] = size;
-            (*texture).widths[level] = a[3];
-            (*texture).heights[level] = a[4];
-            (*texture).borders[level] = 0;
-            (*texture).undefined_levels &= !(1 << level);
+            set_image_levels(texture, a[0], &f);
             written(api, texture, serial);
         }
         return Ok(());
@@ -602,8 +750,8 @@ pub(crate) unsafe fn compressed(
     let sub = api
         .dg_glCompressedTexSubImage2D
         .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
-    let (width, height) = unsafe { ((*texture).widths[level], (*texture).heights[level]) };
-    let [_, _, x, y, w, h, format, size] = *a;
+    let (width, height) = (f.widths[level], f.heights[level]);
+    let [target, _, x, y, w, h, format, size] = *a;
     // EXT_texture_compression_s3tc: partial blocks only where the update
     // reaches the level's edge; the update must lie inside the image.
     if width == 0
@@ -618,7 +766,7 @@ pub(crate) unsafe fn compressed(
     }
     unsafe {
         sub(
-            GL_TEXTURE_2D,
+            target,
             level as i32,
             x as i32,
             y as i32,

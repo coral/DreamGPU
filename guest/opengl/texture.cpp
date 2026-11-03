@@ -278,9 +278,10 @@ static BOOL CompressedInternalFormat2D(GLint format) {
            JglCompressedTexturesAvailable();
 }
 
+/* 2D records target TEXTURE_2D or, once negotiated, one cube map face. */
 static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, GLenum format,
                      GLenum type, ULONG *components, GLint border = 0) {
-    if (target != GL_TEXTURE_2D) {
+    if (!JglImage2DTarget(target)) {
         JglCommandError(GL_INVALID_ENUM);
         return FALSE;
     }
@@ -553,16 +554,18 @@ invalid:
  * They execute immediately even while compiling a display list. */
 static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsizei width,
                        GLsizei height, GLint border, GLenum format, GLenum type) {
+    const BOOL cube = target == JGL_PROXY_TEXTURE_CUBE_MAP;
     if (!JglReady() || !PixelBytes(format, type, TRUE))
         return;
     if (!JglTextureImagesAvailable()) {
         JglSetError(GL_INVALID_OPERATION);
         return;
     }
+    /* Cube map faces are square and borderless. */
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
-        border > 1 ||
+        border > 1 || (cube && (width != height || border)) ||
         (!InternalFormat(internal_format) &&
-         !(target == 0x8064 && CompressedInternalFormat2D(internal_format)))) {
+         !(target != 0x8063 && CompressedInternalFormat2D(internal_format)))) {
         JglSetError(GL_INVALID_VALUE);
         return;
     }
@@ -578,7 +581,8 @@ static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsize
 void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GLsizei width,
                            GLsizei height, GLint border, GLenum format, GLenum type,
                            const void *pixels) {
-    if (target == 0x8064 /* PROXY_TEXTURE_2D */) {
+    if (target == 0x8064 /* PROXY_TEXTURE_2D */ ||
+        (target == JGL_PROXY_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable())) {
         ProxyImage(target, level, internal_format, width, height, border, format, type);
         return;
     }
@@ -589,7 +593,9 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
         !Validate(target, level, width, height, format, type, &components, border))
         return;
     const BOOL compressed = CompressedInternalFormat2D(internal_format);
+    /* Cube map faces are square and borderless. */
     if (width < 2 * border || height < 2 * border ||
+        (JglCubeFace(target) && (width != height || border)) ||
         (!InternalFormat(internal_format) && !compressed)) {
         JglCommandError(GL_INVALID_VALUE);
         return;

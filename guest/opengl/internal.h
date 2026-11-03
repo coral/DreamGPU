@@ -92,14 +92,37 @@ BOOL JglTextureControlAvailable(void);
 BOOL JglCompressedTexturesAvailable(void);
 /* EXT_fog_coord: FogCoordf, the fog coordinate array and FOG_COORDINATE_SOURCE. */
 BOOL JglFogCoordAvailable(void);
+/* ARB_texture_cube_map: the cube map binding target, six face image targets,
+ * its proxy, TEXTURE_WRAP_R and the NORMAL_MAP/REFLECTION_MAP texgen modes. */
+BOOL JglTextureCubeMapAvailable(void);
+#define JGL_TEXTURE_CUBE_MAP 0x8513
+#define JGL_TEXTURE_CUBE_MAP_POSITIVE_X 0x8515
+#define JGL_PROXY_TEXTURE_CUBE_MAP 0x851b
+/* A face target, POSITIVE_X..NEGATIVE_Z, once negotiated. */
+static inline BOOL JglCubeFace(GLenum target) {
+    return target - JGL_TEXTURE_CUBE_MAP_POSITIVE_X < 6 && JglTextureCubeMapAvailable();
+}
+/* Image targets of the 2D records: TEXTURE_2D or, once negotiated, one face. */
+static inline BOOL JglImage2DTarget(GLenum target) {
+    return target == 0x0de1 /* TEXTURE_2D */ || JglCubeFace(target);
+}
+/* Cube map enums (TEXTURE_CUBE_MAP through MAX_CUBE_MAP_TEXTURE_SIZE) as query
+ * names: without negotiation they stay the local GL_INVALID_ENUM they were. */
+static inline BOOL JglCubeMapQueryRejected(GLenum name) {
+    return name - JGL_TEXTURE_CUBE_MAP <= 0x851c - JGL_TEXTURE_CUBE_MAP &&
+           !JglTextureCubeMapAvailable();
+}
 /* Value counts of the TexParameter/TexEnv names the host accepts, and Hint
  * validity. Scalar and vector entrypoints share them: an unknown name is a local
  * GL_INVALID_ENUM, never a record the host rejects as malformed (which would
  * fail the whole batch and the context). Zero means invalid. */
 static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
-    if (target != 0x0de0 && target != 0x0de1) /* TEXTURE_1D, TEXTURE_2D */
+    const BOOL cube = target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable();
+    if (target != 0x0de0 && target != 0x0de1 && !cube) /* TEXTURE_1D, TEXTURE_2D */
         return 0;
     switch (pname) {
+        case 0x8072: /* TEXTURE_WRAP_R, for the cube map only */
+            return cube ? 1 : 0;
         case 0x1004: /* TEXTURE_BORDER_COLOR */
             return 4;
         case 0x2801:

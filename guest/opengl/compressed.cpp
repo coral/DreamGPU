@@ -1,5 +1,6 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
- * ARB_texture_compression with EXT_texture_compression_s3tc, TEXTURE_2D only.
+ * ARB_texture_compression with EXT_texture_compression_s3tc, for TEXTURE_2D and,
+ * with negotiated cube maps, each (square) cube map face.
  * Compressed images are opaque rows of 4x4 blocks. They travel as exact byte
  * slices of whole block rows, never unpacked, copied before each call returns.
  * The host rejects a malformed record by failing the whole batch and with it
@@ -51,13 +52,13 @@ static ULONG CompressedCapacity(ULONG block) {
  * many block rows as fit, the last one the remaining (possibly partial)
  * height. A block row larger than one record is split into chunks of whole
  * blocks, the last chunk taking the remaining width. Validation is complete. */
-static BOOL CompressedBands(GLint level, ULONG x, ULONG y, ULONG width, ULONG height, GLenum format,
-                            ULONG block, ULONG capacity, const BYTE *data) {
+static BOOL CompressedBands(GLenum target, GLint level, ULONG x, ULONG y, ULONG width, ULONG height,
+                            GLenum format, ULONG block, ULONG capacity, const BYTE *data) {
     const ULONG side = DG_GL_COMPRESSED_BLOCK;
     const ULONG across = (width + side - 1) / side, down = (height + side - 1) / side;
     const ULONG stride = across * block;
     ULONG row = 0, args[8];
-    args[0] = GL_TEXTURE_2D;
+    args[0] = target;
     args[1] = (ULONG)level;
     args[6] = format;
     while (row < down) {
@@ -90,7 +91,8 @@ static BOOL CompressedBands(GLint level, ULONG x, ULONG y, ULONG width, ULONG he
  * compiling a display list, and never read caller memory. */
 static void CompressedImage(GLenum target, GLint level, GLenum internal_format, GLsizei width,
                             GLsizei height, GLint border, GLsizei image_size, const void *data) {
-    const BOOL proxy = target == JGL_PROXY_TEXTURE_2D;
+    const BOOL cube_proxy = target == JGL_PROXY_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable();
+    const BOOL proxy = target == JGL_PROXY_TEXTURE_2D || cube_proxy;
     void (*error)(GLenum) = proxy ? JglSetError : JglCommandError;
     ULONG block, bytes, capacity;
     if (!(proxy ? JglReady() : JglCommandReady()))
@@ -100,11 +102,13 @@ static void CompressedImage(GLenum target, GLint level, GLenum internal_format, 
         return;
     }
     block = CompressedBlockBytes(internal_format);
-    if ((target != GL_TEXTURE_2D && !proxy) || !block) {
+    if ((!JglImage2DTarget(target) && !proxy) || !block) {
         error(GL_INVALID_ENUM);
         return;
     }
+    /* Cube map faces are square. */
     if (border || !CompressedLevel(level) || width < 0 || height < 0 ||
+        ((cube_proxy || JglCubeFace(target)) && width != height) ||
         (ULONG)width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level ||
         (ULONG)height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) {
         error(GL_INVALID_VALUE);
@@ -126,7 +130,7 @@ static void CompressedImage(GLenum target, GLint level, GLenum internal_format, 
     }
     capacity = CompressedCapacity(block);
     if (capacity && JglData(FEnum_glCompressedTexImage2D, args, 7, NULL, 0))
-        CompressedBands(level, 0, 0, width, height, internal_format, block, capacity,
+        CompressedBands(target, level, 0, 0, width, height, internal_format, block, capacity,
                         (const BYTE *)data);
 }
 
@@ -141,7 +145,7 @@ static void CompressedSubImage(GLenum target, GLint level, GLint x, GLint y, GLs
         return;
     }
     block = CompressedBlockBytes(format);
-    if (target != GL_TEXTURE_2D || !block) {
+    if (!JglImage2DTarget(target) || !block) {
         JglCommandError(GL_INVALID_ENUM);
         return;
     }
@@ -172,7 +176,8 @@ static void CompressedSubImage(GLenum target, GLint level, GLint x, GLint y, GLs
     }
     capacity = CompressedCapacity(block);
     if (capacity)
-        CompressedBands(level, x, y, width, height, format, block, capacity, (const BYTE *)data);
+        CompressedBands(target, level, x, y, width, height, format, block, capacity,
+                        (const BYTE *)data);
 }
 
 /* Native compressed bytes, read in bounded QUERY chunks straight into the
@@ -186,7 +191,7 @@ static void CompressedRead(GLenum target, GLint level, void *image) {
         JglSetError(GL_INVALID_OPERATION);
         return;
     }
-    if (target != GL_TEXTURE_2D) {
+    if (!JglImage2DTarget(target)) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }

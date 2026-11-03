@@ -14,6 +14,11 @@ typedef struct DreamGpuWork {
 typedef void (*DreamGpuTransfer)(void *opaque, uint32_t op, uint32_t bpp, uint64_t src,
                                  uint64_t dst, uint32_t bytes, uint32_t color);
 struct DreamGpuGlApi;
+/* Level tracking of one cube map face. */
+typedef struct DreamGpuTextureFace {
+    uint32_t widths[12], heights[12], borders[12], undefined_levels;
+    uint64_t levels[12];
+} DreamGpuTextureFace;
 typedef struct DreamGpuTexture {
     uint32_t name, target;
     uint64_t version;
@@ -22,6 +27,8 @@ typedef struct DreamGpuTexture {
     uint64_t writer_serial, waiter_serial;
     uint32_t widths[12], heights[12], borders[12];
     uint64_t levels[12];
+    /* A cube map's six faces (the arrays above then summarize them), else NULL. */
+    DreamGpuTextureFace *faces;
 } DreamGpuTexture;
 typedef struct DreamGpuTextureEntry {
     uint32_t name;
@@ -77,8 +84,16 @@ typedef struct DreamGpuContextState {
     uint32_t active_unit, unit_limit;
     DreamGpuTexture *units[8][2];
     DreamGpuUnitAttrib unit_attrib[16];
+    /* Rust-owned cube map state, with the same active-unit ownership. */
+    DreamGpuTexture *default_texture_cube, *bound_texture_cube;
+    DreamGpuTexture *units_cube[8];
+    DreamGpuTexture *cube_attrib[16][8];
+    uint32_t proxy_rejected_cube;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
+/* The active unit's texture owning an image target (a cube face selects the
+ * cube map; anything else but TEXTURE_1D selects the 2D binding). */
+DreamGpuTexture *dreamgpu_context_texture(const DreamGpuContextState *state, uint32_t target);
 uint32_t dreamgpu_context_state_init(const DreamGpuTextureMemory *memory,
                                      DreamGpuContextState *state, DreamGpuTextureNamespace *shared);
 void dreamgpu_context_state_release(const DreamGpuTextureMemory *memory,
@@ -95,17 +110,18 @@ void dreamgpu_texture_namespace_unref(const DreamGpuTextureMemory *memory,
 uint32_t dreamgpu_texture_bind(const DreamGpuTextureMemory *memory, DreamGpuTextureNamespace *ns,
                                uint32_t target, uint32_t name, DreamGpuTexture *default_texture,
                                DreamGpuTexture **binding, uint64_t serial, uint32_t *errors);
-/* Bindings alternate 2D, 1D for each texture unit. */
+/* A binding holding a deleted texture reverts to its target's default. */
 void dreamgpu_texture_delete(const DreamGpuTextureMemory *memory, DreamGpuTextureNamespace *ns,
                              const uint8_t *data, uint32_t count, DreamGpuTexture *default_2d,
-                             DreamGpuTexture *default_1d, DreamGpuTexture *const *const *bindings,
-                             uint32_t binding_count);
+                             DreamGpuTexture *default_1d, DreamGpuTexture *default_cube,
+                             DreamGpuTexture *const *const *bindings, uint32_t binding_count);
 DreamGpuTexture *dreamgpu_texture_lookup(DreamGpuTextureNamespace *ns, uint32_t name);
 void dreamgpu_texture_wait(const struct DreamGpuGlApi *api, DreamGpuTexture *texture,
                            uint64_t serial);
 void dreamgpu_texture_written(const struct DreamGpuGlApi *api, DreamGpuTexture *texture,
                               uint64_t serial);
-typedef uint32_t (*DreamGpuZeroTexture)(void *, DreamGpuTexture *, uint32_t, uint32_t, uint32_t);
+typedef uint32_t (*DreamGpuZeroTexture)(void *, DreamGpuTexture *, uint32_t, uint32_t, uint32_t,
+                                        uint32_t);
 uint32_t dreamgpu_texture_upload(const struct DreamGpuGlApi *api, DreamGpuTexture *texture,
                                  uint64_t *total, uint64_t serial, uint32_t function,
                                  const uint32_t *args, const uint8_t *data, uint32_t bytes,
@@ -172,7 +188,7 @@ void dreamgpu_drawable_exchange(const struct DreamGpuGlApi *, DreamGpuNativeDraw
 uint32_t dreamgpu_texture_copy(const struct DreamGpuGlApi *, DreamGpuTexture *, uint64_t *,
                                uint32_t *, uint64_t, uint32_t, uint32_t, const uint8_t *);
 uint32_t dreamgpu_texture_zero(const DreamGpuTextureMemory *, const DreamGpuTexture *, uint32_t,
-                               uint32_t, uint32_t);
+                               uint32_t, uint32_t, uint32_t);
 void dreamgpu_read_cache_release(const DreamGpuTextureMemory *, DreamGpuReadCache *);
 void dreamgpu_read_cache_forget(const DreamGpuTextureMemory *, DreamGpuReadCache *,
                                 const DreamGpuTexture *);

@@ -666,3 +666,223 @@ fn s3tc_record_shapes_are_exact_and_level_rules_are_left_to_execution() {
         DG_GL_ERROR_TEXTURE
     );
 }
+
+#[test]
+fn cube_map_targets_faces_and_proxies_have_exact_record_shapes() {
+    const FACES: [u32; 6] = [
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_X,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_Y,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_Z,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+    ];
+    // The binding target takes every 2D parameter plus WRAP_R, which no other
+    // target accepts; faces and the proxy are never parameter targets.
+    for pname in [
+        GL_TEXTURE_MIN_FILTER,
+        GL_TEXTURE_WRAP_S,
+        GL_TEXTURE_MAX_LEVEL,
+        GL_TEXTURE_MAX_ANISOTROPY_EXT,
+        GL_GENERATE_MIPMAP,
+        GL_TEXTURE_WRAP_R,
+    ] {
+        assert_eq!(texture_params(GL_TEXTURE_CUBE_MAP, pname), 1, "{pname:#x}");
+    }
+    assert_eq!(
+        texture_params(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BORDER_COLOR),
+        4
+    );
+    for target in [
+        GL_TEXTURE_1D,
+        GL_TEXTURE_2D,
+        FACES[0],
+        GL_PROXY_TEXTURE_CUBE_MAP,
+    ] {
+        assert_eq!(texture_params(target, GL_TEXTURE_WRAP_R), 0, "{target:#x}");
+    }
+    assert_eq!(texture_params(FACES[2], GL_TEXTURE_MIN_FILTER), 0);
+    let mut v = [0u32; 8];
+    v[..2].copy_from_slice(&[GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R]);
+    assert_eq!(data_validate(FEnum_glTexParameteriv, &v, &[0; 4]), 0);
+    // NORMAL_MAP/REFLECTION_MAP travel as TEXTURE_GEN_MODE values of S, T and R.
+    for coord in [GL_S, GL_T, GL_R] {
+        assert_eq!(texgen_params(coord, GL_TEXTURE_GEN_MODE), 1);
+    }
+    assert!(query_cap(GL_TEXTURE_CUBE_MAP) && query_cap(GL_TEXTURE_GEN_R));
+    assert!(!query_cap(FACES[0]));
+
+    // Every face is a 2D-shaped image: square, borderless, 2D level limits.
+    let image = |target: u32, w: u32, h: u32, border: u32, n: usize| {
+        let a = [target, 0, GL_RGBA8, w, h, border, GL_RGBA, GL_UNSIGNED_BYTE];
+        data_validate(FEnum_glTexImage2D, &a, &vec![0; n])
+    };
+    for face in FACES {
+        assert_eq!(image(face, 4, 4, 0, 64), 0);
+        assert_eq!(image(face, 4, 4, 0, 0), 0); // allocation only
+        assert_eq!(image(face, 0, 0, 0, 0), 0); // empty definition
+        assert_eq!(image(face, 4, 2, 0, 32), DG_GL_ERROR_TEXTURE); // not square
+        assert_eq!(image(face, 6, 6, 1, 144), DG_GL_ERROR_TEXTURE); // bordered
+        let sub = [face, 0, 1, 1, 2, 3, GL_RGBA, GL_UNSIGNED_BYTE];
+        assert_eq!(data_validate(FEnum_glTexSubImage2D, &sub, &[0; 24]), 0);
+    }
+    assert_eq!(image(2048, 4, 4, 0, 64), DG_GL_ERROR_TEXTURE);
+    let mut level = [
+        FACES[1],
+        1,
+        GL_RGBA8,
+        2048,
+        2048,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(
+        data_validate(FEnum_glTexImage2D, &level, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    level[3] = 1024;
+    level[4] = 1024;
+    assert_eq!(data_validate(FEnum_glTexImage2D, &level, &[]), 0);
+    // The binding target and the face after NEGATIVE_Z are not image targets.
+    for target in [GL_TEXTURE_CUBE_MAP, GL_TEXTURE_CUBE_MAP_NEGATIVE_Z + 1] {
+        assert_eq!(
+            image(target, 4, 4, 0, 64),
+            DG_GL_ERROR_TEXTURE,
+            "{target:#x}"
+        );
+    }
+    let one = [FACES[0], 0, GL_RGBA8, 4, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &one, &[0; 16]),
+        DG_GL_ERROR_TEXTURE
+    );
+    // The proxy: square, borderless, compressed formats allowed, never data.
+    let mut proxy = [
+        GL_PROXY_TEXTURE_CUBE_MAP,
+        0,
+        GL_RGBA8,
+        2048,
+        2048,
+        0,
+        GL_RGBA,
+        GL_UNSIGNED_BYTE,
+    ];
+    assert_eq!(data_validate(FEnum_glTexImage2D, &proxy, &[]), 0);
+    assert_eq!(
+        data_validate(FEnum_glTexImage2D, &proxy, &[0; 4]),
+        DG_GL_ERROR_TEXTURE
+    );
+    proxy[2] = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+    assert_eq!(data_validate(FEnum_glTexImage2D, &proxy, &[]), 0);
+    proxy[4] = 1024;
+    assert_eq!(
+        data_validate(FEnum_glTexImage2D, &proxy, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+    proxy[4] = 2048;
+    proxy[5] = 1;
+    assert_eq!(
+        data_validate(FEnum_glTexImage2D, &proxy, &[]),
+        DG_GL_ERROR_TEXTURE
+    );
+
+    // Copies: faces like 2D, CopyTexImage2D square and borderless.
+    let copy = |target: u32, w: u32, h: u32, border: u32| {
+        call_validate(
+            FEnum_glCopyTexImage2D,
+            &[target, 0, GL_RGBA8, 0, 0, w, h, border],
+        )
+    };
+    assert_eq!(copy(FACES[3], 8, 8, 0), 0);
+    assert_eq!(copy(FACES[3], 8, 4, 0), DG_GL_ERROR_TEXTURE);
+    assert_eq!(copy(FACES[3], 10, 10, 1), DG_GL_ERROR_TEXTURE);
+    assert_eq!(copy(GL_TEXTURE_2D, 8, 4, 0), 0);
+    assert_eq!(copy(GL_TEXTURE_CUBE_MAP, 8, 8, 0), DG_GL_ERROR_TEXTURE);
+    assert_eq!(
+        call_validate(FEnum_glCopyTexSubImage2D, &[FACES[4], 0, 1, 2, 0, 0, 3, 5]),
+        0
+    );
+
+    // S3TC on faces: square images, aligned updates; the cube proxy too.
+    let dxt1 = GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
+    let compressed = |a: [u32; 7], n: usize| {
+        let mut w = [0u32; 8];
+        w[..7].copy_from_slice(&a);
+        data_validate(FEnum_glCompressedTexImage2D, &w, &vec![0u8; n])
+    };
+    assert_eq!(compressed([FACES[5], 0, dxt1, 8, 8, 0, 32], 32), 0);
+    assert_eq!(
+        compressed([GL_PROXY_TEXTURE_CUBE_MAP, 0, dxt1, 8, 8, 0, 32], 0),
+        0
+    );
+    for (bad, n) in [
+        ([FACES[5], 0, dxt1, 8, 4, 0, 16], 16),
+        ([GL_PROXY_TEXTURE_CUBE_MAP, 0, dxt1, 8, 4, 0, 16], 0),
+        ([GL_TEXTURE_CUBE_MAP, 0, dxt1, 8, 8, 0, 32], 32),
+    ] {
+        assert_eq!(compressed(bad, n), DG_GL_ERROR_TEXTURE, "{bad:?}");
+    }
+    let sub = [FACES[0], 0, 4, 0, 4, 4, dxt1, 8];
+    assert_eq!(
+        data_validate(FEnum_glCompressedTexSubImage2D, &sub, &[0; 8]),
+        0
+    );
+
+    // Queries: per-face levels and reads, the proxy, parameters and state.
+    for face in FACES {
+        assert_eq!(
+            query_shape(FEnum_glGetTexLevelParameteriv, [face, 3, GL_TEXTURE_WIDTH]),
+            (1, DG_GL_RESULT_INT)
+        );
+        assert_eq!(query_shape(FEnum_glGetTexImage, [face, 0, 0]).0, 128);
+        assert_eq!(
+            query_shape(FEnum_glGetCompressedTexImage, [face, 4 << 16, 0]).0,
+            4
+        );
+    }
+    assert_eq!(
+        query_shape(
+            FEnum_glGetTexLevelParameterfv,
+            [GL_PROXY_TEXTURE_CUBE_MAP, 0, GL_TEXTURE_HEIGHT]
+        ),
+        (1, DG_GL_RESULT_FLOAT)
+    );
+    for target in [GL_TEXTURE_CUBE_MAP, GL_PROXY_TEXTURE_CUBE_MAP] {
+        assert_eq!(query_shape(FEnum_glGetTexImage, [target, 0, 0]).0, 0);
+    }
+    assert_eq!(
+        query_shape(
+            FEnum_glGetTexLevelParameteriv,
+            [GL_TEXTURE_CUBE_MAP, 0, GL_TEXTURE_WIDTH]
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        query_shape(
+            FEnum_glGetTexParameteriv,
+            [GL_TEXTURE_CUBE_MAP, GL_TEXTURE_WRAP_R, 0]
+        ),
+        (1, DG_GL_RESULT_INT)
+    );
+    assert_eq!(
+        query_shape(
+            FEnum_glGetTexParameteriv,
+            [GL_TEXTURE_CUBE_MAP, GL_TEXTURE_RESIDENT, 0]
+        )
+        .0,
+        1
+    );
+    assert_eq!(
+        query_shape(FEnum_glGetTexParameteriv, [FACES[0], GL_TEXTURE_WRAP_S, 0]).0,
+        0
+    );
+    for pname in [
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_BINDING_CUBE_MAP,
+        GL_MAX_CUBE_MAP_TEXTURE_SIZE,
+    ] {
+        assert_eq!(query_state_count(pname), 1, "{pname:#x}");
+    }
+}
