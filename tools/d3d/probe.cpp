@@ -178,6 +178,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
     }
     return TRUE;
 }
+#include "stage-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -310,6 +311,9 @@ static void Run(void) {
     Pixels(&locked);
     if (!HR(SURFACE(UnlockRect, surface), "FAIL unlock backbuffer"))
         return;
+    if (failed)
+        return;
+    stage_probe::Run(device, surface);
     if (failed)
         return;
     Log("STAGE present");
