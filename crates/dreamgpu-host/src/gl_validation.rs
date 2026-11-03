@@ -65,12 +65,16 @@ pub(crate) fn texgen_params(coord: u32, pname: u32) -> u32 {
 }
 
 pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
-    if !matches!(target, GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
+    if !matches!(
+        target,
+        GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_3D
+    ) {
         return 0;
     }
     match pname {
-        // The GL 1.2 name, for the cube map's third coordinate only.
-        GL_TEXTURE_WRAP_R => u32::from(target == GL_TEXTURE_CUBE_MAP),
+        // The GL 1.2 third coordinate, a parameter of every target. Frontends
+        // without negotiated 3D textures send it only for cube maps.
+        GL_TEXTURE_WRAP_R => 1,
         GL_TEXTURE_BORDER_COLOR => 4,
         GL_TEXTURE_MIN_FILTER
         | GL_TEXTURE_MAG_FILTER
@@ -244,6 +248,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_TEXTURE_BINDING_2D
         | GL_TEXTURE_BINDING_CUBE_MAP
         | GL_MAX_CUBE_MAP_TEXTURE_SIZE
+        | GL_TEXTURE_BINDING_3D
+        | GL_MAX_3D_TEXTURE_SIZE
         | GL_ATTRIB_STACK_DEPTH
         | GL_MAX_ATTRIB_STACK_DEPTH
         | GL_MATRIX_MODE
@@ -392,6 +398,10 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glTexImage1D | FEnum_glTexSubImage1D | FEnum_glTexImage2D | FEnum_glTexSubImage2D => {
             DG_GL_FUNCTION_INLINE_DATA | 8
         }
+        // EXT_texture3D (DG_CAP_GL_TEXTURE_3D).
+        FEnum_glTexImage3D => DG_GL_FUNCTION_INLINE_DATA | 9,
+        FEnum_glTexSubImage3D => DG_GL_FUNCTION_INLINE_DATA | 10,
+        FEnum_glCopyTexSubImage3D => 9,
         FEnum_glDeleteTextures | FEnum_glFogfv | FEnum_glLightModelfv | FEnum_glClipPlane => {
             DG_GL_FUNCTION_INLINE_DATA | 1
         }
@@ -476,7 +486,7 @@ pub(crate) fn function_words(function: u32) -> u32 {
 fn copy_1d_internal_format(format: u32) -> bool {
     matches!(format,GL_ALPHA|GL_LUMINANCE|GL_LUMINANCE_ALPHA|GL_INTENSITY|GL_RGB|GL_RGBA|GL_R3_G3_B2|0x803b..=0x8048|0x804a..=0x804d|0x804f..=0x805b)
 }
-fn texture_internal_format(format: u32) -> bool {
+pub(crate) fn texture_internal_format(format: u32) -> bool {
     (1..=4).contains(&format) || copy_1d_internal_format(format)
 }
 /// 2D images also accept S3TC and the generic compressed formats; native GL
@@ -534,6 +544,7 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_TEXTURE_1D
             | GL_TEXTURE_2D
             | GL_TEXTURE_CUBE_MAP
+            | GL_TEXTURE_3D
             | GL_CULL_FACE
             | GL_LIGHTING
             | GL_FOG
@@ -1058,10 +1069,16 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             if wide {
                 kind = DG_GL_RESULT_FLOAT;
             }
-            if (a == GL_TEXTURE_1D || image_2d_target(a))
+            // A 3D level numbers its pixels through all of its images.
+            let pixels = if a == GL_TEXTURE_3D {
+                DG_GL_MAX_3D_TEXTURE_SIZE.pow(3)
+            } else {
+                (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
+            };
+            if (matches!(a, GL_TEXTURE_1D | GL_TEXTURE_3D) || image_2d_target(a))
                 && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
                 && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
-                && d < (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
+                && d < pixels
             {
                 n * pixel_words
             } else {
@@ -1190,8 +1207,10 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 DG_GL_RESULT_INT
             };
             if d == 0 {
-                if matches!(a, GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP)
-                    && b == GL_TEXTURE_RESIDENT
+                if matches!(
+                    a,
+                    GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_3D
+                ) && b == GL_TEXTURE_RESIDENT
                 {
                     1
                 } else {
@@ -1215,12 +1234,15 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                             | GL_PROXY_TEXTURE_1D
                             | GL_PROXY_TEXTURE_2D
                             | GL_PROXY_TEXTURE_CUBE_MAP
+                            | GL_TEXTURE_3D
+                            | GL_PROXY_TEXTURE_3D
                     ))
                     && b <= DG_GL_MAX_TEXTURE_LEVEL
                     && matches!(
                         d,
                         GL_TEXTURE_WIDTH
                             | GL_TEXTURE_HEIGHT
+                            | GL_TEXTURE_DEPTH
                             | GL_TEXTURE_INTERNAL_FORMAT
                             | GL_TEXTURE_BORDER
                             | GL_TEXTURE_RED_SIZE
@@ -1324,15 +1346,19 @@ fn query_validate(function: u32, args: [u32; 3]) -> u32 {
 // C callers supply immutable host-owned snapshots. Every pointer is borrowed only
 // for the call; size/metadata validation precedes slice construction or indexing.
 unsafe fn args8(function: u32, args: *const u8) -> Option<[u32; 8]> {
+    unsafe { args_n(function, args) }
+}
+/// The first `N` (or fewer) declared argument words, the rest zero.
+pub(crate) unsafe fn args_n<const N: usize>(function: u32, args: *const u8) -> Option<[u32; N]> {
     let words = function_words(function);
     if words == u32::MAX {
         return None;
     }
-    let n = (words & !DG_GL_FUNCTION_KIND_MASK).min(8) as usize;
+    let n = ((words & !DG_GL_FUNCTION_KIND_MASK) as usize).min(N);
     if n != 0 && args.is_null() {
         return None;
     }
-    let mut a = [0; 8];
+    let mut a = [0; N];
     for (i, v) in a.iter_mut().enumerate().take(n) {
         *v = unsafe {
             u32::from_le_bytes(core::ptr::read_unaligned(args.add(i * 4).cast::<[u8; 4]>()))
@@ -1375,8 +1401,14 @@ pub unsafe extern "C" fn dreamgpu_gl_call_validate(function: u32, args: *const u
             | FEnum_glProgramEnvParameter4fARB
             | FEnum_glProgramLocalParameter4fARB
             | FEnum_glVertexAttrib4fARB
+            | FEnum_glCopyTexSubImage3D
     ) {
         return 0;
+    }
+    if function == FEnum_glCopyTexSubImage3D {
+        return unsafe { args_n::<10>(function, args) }.map_or(DG_GL_ERROR_UNSUPPORTED, |a| {
+            crate::texture::volume::validate_copy(&a)
+        });
     }
     unsafe { args8(function, args) }
         .map_or(DG_GL_ERROR_UNSUPPORTED, |a| call_validate(function, &a))
@@ -1394,7 +1426,7 @@ pub unsafe extern "C" fn dreamgpu_gl_data_validate(
     if metadata == u32::MAX || metadata & DG_GL_FUNCTION_KIND_MASK != DG_GL_FUNCTION_INLINE_DATA {
         return DG_GL_ERROR_UNSUPPORTED;
     }
-    let Some(a) = (unsafe { args8(function, args) }) else {
+    let Some(a) = (unsafe { args_n::<10>(function, args) }) else {
         return DG_GL_ERROR_BATCH;
     };
     if bytes != 0 && data.is_null() {
@@ -1405,6 +1437,10 @@ pub unsafe extern "C" fn dreamgpu_gl_data_validate(
     } else {
         unsafe { core::slice::from_raw_parts(data, bytes as usize) }
     };
+    if matches!(function, FEnum_glTexImage3D | FEnum_glTexSubImage3D) {
+        return crate::texture::volume::validate(function, &a, data);
+    }
+    let a: [u32; 8] = a[..8].try_into().unwrap();
     data_validate(function, &a, data)
 }
 /// # Safety

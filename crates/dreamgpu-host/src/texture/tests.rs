@@ -812,8 +812,12 @@ fn texture_and_face_layouts_match_the_c_mirror() {
     );
     assert_eq!(core::mem::size_of::<Texture>() % 8, 0);
     assert_eq!(
+        core::mem::offset_of!(Texture, depths),
+        core::mem::offset_of!(Texture, faces) + pointer
+    );
+    assert_eq!(
         core::mem::size_of::<Texture>(),
-        core::mem::offset_of!(Texture, faces) + pointer.max(8)
+        (core::mem::offset_of!(Texture, depths) + 12 * 4).next_multiple_of(8)
     );
     assert_eq!(core::mem::offset_of!(Face, undefined_levels), 3 * 12 * 4);
     assert_eq!(core::mem::offset_of!(Face, levels), 3 * 12 * 4 + 8);

@@ -194,7 +194,7 @@ int main() {
         assert(c->Error && !memcmp(saved, c->Arrays.Attribute, sizeof(saved)));
     }
     clear(c);
-    JGL_UNPACK pack = {8, 7, 6, 5, 1, 1}, unpack = {2, 11, 12, 13, 0, 1};
+    JGL_UNPACK pack = {8, 7, 6, 5, 1, 1, 0, 0}, unpack = {2, 11, 12, 13, 0, 1, 0, 0};
     *JglPack() = pack;
     *JglUnpack() = unpack;
     AliasPushClientAttrib(3);

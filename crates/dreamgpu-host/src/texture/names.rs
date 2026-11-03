@@ -196,7 +196,10 @@ unsafe fn bind(
     serial: u64,
     errors: *mut u32,
 ) -> Result<(), u32> {
-    if !matches!(target, GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP) {
+    if !matches!(
+        target,
+        GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_3D
+    ) {
         return Err(11);
     }
     let located = if name == 0 {
@@ -304,6 +307,7 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
     default_2d: *mut Texture,
     default_1d: *mut Texture,
     default_cube: *mut Texture,
+    default_3d: *mut Texture,
     bindings: *const *mut *mut Texture,
     binding_count: u32,
 ) {
@@ -324,6 +328,7 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
             let default = match (*texture).target {
                 GL_TEXTURE_1D => default_1d,
                 GL_TEXTURE_CUBE_MAP => default_cube,
+                GL_TEXTURE_3D => default_3d,
                 _ => default_2d,
             };
             for &binding in bindings {

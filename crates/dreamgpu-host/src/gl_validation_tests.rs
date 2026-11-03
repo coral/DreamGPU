@@ -697,12 +697,17 @@ fn cube_map_targets_faces_and_proxies_have_exact_record_shapes() {
         texture_params(GL_TEXTURE_CUBE_MAP, GL_TEXTURE_BORDER_COLOR),
         4
     );
+    // TEXTURE_WRAP_R is a parameter of every binding target (GL 1.2 and
+    // EXT_texture3D); the frontend gates it, never a face or a proxy.
     for target in [
         GL_TEXTURE_1D,
         GL_TEXTURE_2D,
-        FACES[0],
-        GL_PROXY_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_3D,
     ] {
+        assert_eq!(texture_params(target, GL_TEXTURE_WRAP_R), 1, "{target:#x}");
+    }
+    for target in [FACES[0], GL_PROXY_TEXTURE_CUBE_MAP, GL_PROXY_TEXTURE_3D] {
         assert_eq!(texture_params(target, GL_TEXTURE_WRAP_R), 0, "{target:#x}");
     }
     assert_eq!(texture_params(FACES[2], GL_TEXTURE_MIN_FILTER), 0);

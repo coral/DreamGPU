@@ -139,6 +139,14 @@
     {
       "file": "0034-geforce-fx-npot-quirk.patch",
       "sha256": "b0c27093d21dc8a3b74973e641882023e56e63a468269b3816ba2b8736ac7fb4"
+    },
+    {
+      "file": "0035-volume-row-alignment.patch",
+      "sha256": "7466201ff792f7817031e6329350ad2a9e9f542a563726956f0b3304469b618d"
+    },
+    {
+      "file": "0036-volume-map-binding.patch",
+      "sha256": "af2ec3da035a0b8521c871ea058cd04d55aa68c504d862e4be9d3dda44563d85"
     }
   ],
   "files": {
@@ -277,6 +285,10 @@
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",
       "after_sha256": "dcae0ded1010a8d9b54d50519dcc70f076783739057651981264f163cc6eac71"
+    },
+    "wined3d/volume.c": {
+      "before_sha256": "1c0abf7585df1f8282b26226553aa3943ff13266ee4f34c535655e8095061c7e",
+      "after_sha256": "5e33c012e949df92a0c278f1d5c60ab58b840d0791abc9bf8a8aba8166f17d2a"
     }
   }
 }

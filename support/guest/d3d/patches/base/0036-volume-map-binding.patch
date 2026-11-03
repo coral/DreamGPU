@@ -1,0 +1,14 @@
+--- a/wined3d/volume.c
++++ b/wined3d/volume.c
+@@ -761,6 +761,11 @@
+ 
+     volume->texture_level = level;
+     volume->locations = WINED3D_LOCATION_DISCARDED;
++    /* DreamGPU: resource_init leaves map_binding zero (this tree comments the
++     * default out; surfaces set their own). A zero binding made every map
++     * invalidate WINED3D_LOCATION_SYSMEM along with everything else, so
++     * LockBox data was lost and the next load found no location at all. */
++    volume->resource.map_binding = WINED3D_LOCATION_SYSMEM;
+ 
+     if (desc->pool == WINED3D_POOL_DEFAULT && desc->usage & WINED3DUSAGE_DYNAMIC
+             && gl_info->supported[ARB_PIXEL_BUFFER_OBJECT]

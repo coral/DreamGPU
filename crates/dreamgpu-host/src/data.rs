@@ -22,12 +22,13 @@ unsafe extern "C" fn zero(
 ) -> u32 {
     unsafe { resource::dreamgpu_texture_zero(opaque.cast::<Memory>(), t, target, level, w, h) }
 }
-/// Rejected-level mask of a proxy target: 1D, 2D or cube map.
+/// Rejected-level mask of a proxy target: 1D, 2D, cube map or 3D.
 unsafe fn proxy_mask(state: *mut ContextState, target: u32) -> *mut u32 {
     unsafe {
         match target {
             GL_PROXY_TEXTURE_1D => addr_of_mut!((*state).proxy_rejected[0]),
             GL_PROXY_TEXTURE_CUBE_MAP => addr_of_mut!((*state).proxy_rejected_cube),
+            GL_PROXY_TEXTURE_3D => addr_of_mut!((*state).proxy_rejected_3d),
             _ => addr_of_mut!((*state).proxy_rejected[1]),
         }
     }
@@ -153,16 +154,18 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
     }
     let metadata = validation::dreamgpu_gl_function_words(function);
     let words = metadata & !DG_GL_FUNCTION_INLINE_DATA;
-    if metadata & DG_GL_FUNCTION_INLINE_DATA == 0 || words > 8 {
+    if metadata & DG_GL_FUNCTION_INLINE_DATA == 0 || words > 10 {
         return DG_GL_ERROR_UNSUPPORTED;
     }
     if in_begin != 0 && function != FEnum_glMaterialfv {
         return DG_GL_ERROR_CONTEXT;
     }
-    let mut a = [0; 8];
-    for (i, w) in a.iter_mut().enumerate().take(words as usize) {
+    // Only the 3D image records (EXT_texture3D) carry more than eight words.
+    let mut wide = [0; 10];
+    for (i, w) in wide.iter_mut().enumerate().take(words as usize) {
         *w = u32::from_le(unsafe { args.add(i * 4).cast::<u32>().read_unaligned() });
     }
+    let a: [u32; 8] = wide[..8].try_into().unwrap();
     let m = unsafe { &*memory };
     let api = unsafe { &*m.api };
     let texture = unsafe { bound(state, a[0]) };
@@ -317,11 +320,51 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 (*state).default_texture,
                 (*state).default_texture_1d,
                 (*state).default_texture_cube,
+                (*state).default_texture_3d,
                 bindings.as_ptr(),
                 bindings.len() as u32,
             )
         };
         return 0;
+    }
+    if matches!(function, FEnum_glTexImage3D | FEnum_glTexSubImage3D) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        unsafe {
+            if let Err(e) = query::remember(api, errors) {
+                return e;
+            }
+        }
+        if function == FEnum_glTexImage3D && wide[0] == GL_PROXY_TEXTURE_3D {
+            unsafe {
+                let error = crate::texture::volume::proxy(
+                    api,
+                    &mut *proxy_mask(state, GL_PROXY_TEXTURE_3D),
+                    &wide,
+                );
+                query::store(errors, error);
+            }
+            return 0;
+        }
+        unsafe { dreamgpu_texture_wait(m.api, texture, serial) };
+        let mut gl_error = 0;
+        let e = unsafe {
+            crate::texture::volume::upload(
+                m,
+                texture,
+                m.bytes,
+                serial,
+                function,
+                &wide,
+                data,
+                &mut gl_error,
+            )
+        };
+        unsafe { query::store(errors, gl_error) };
+        return e.map_or_else(|e| e, |()| 0);
     }
     if matches!(
         function,

@@ -297,6 +297,9 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glEnableVertexAttribArrayARB : glEnableVertexAttribArrayARB) dg_glEnableVertexAttribArrayARB;
     __typeof__(1 ? glDisableVertexAttribArrayARB : glDisableVertexAttribArrayARB) dg_glDisableVertexAttribArrayARB;
     __typeof__(1 ? glGetVertexAttribfvARB : glGetVertexAttribfvARB) dg_glGetVertexAttribfvARB;
+    __typeof__(1 ? glTexImage3D : glTexImage3D) dg_glTexImage3D;
+    __typeof__(1 ? glTexSubImage3D : glTexSubImage3D) dg_glTexSubImage3D;
+    __typeof__(1 ? glCopyTexSubImage3D : glCopyTexSubImage3D) dg_glCopyTexSubImage3D;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -441,5 +444,7 @@ typedef struct DreamGpuGlApi {
     .dg_glVertexAttribPointerARB = glVertexAttribPointerARB,                                        \
     .dg_glEnableVertexAttribArrayARB = glEnableVertexAttribArrayARB,                                \
     .dg_glDisableVertexAttribArrayARB = glDisableVertexAttribArrayARB,                              \
-    .dg_glGetVertexAttribfvARB = glGetVertexAttribfvARB
+    .dg_glGetVertexAttribfvARB = glGetVertexAttribfvARB,                                            \
+    .dg_glTexImage3D = glTexImage3D, .dg_glTexSubImage3D = glTexSubImage3D,                         \
+    .dg_glCopyTexSubImage3D = glCopyTexSubImage3D
 #endif

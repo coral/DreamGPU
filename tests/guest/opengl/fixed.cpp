@@ -9,7 +9,7 @@ static ULONG ScalarFunctions[4], ScalarWords[4][4], ScalarCount;
 static ULONG Error, Calls, Function, Bytes, Words, Queries, ResultCount = 4;
 static BYTE Data[32];
 static ULONG Arguments[3];
-static JGL_UNPACK Pack = {4, 0, 0, 0, 0, 0}, Unpack = {4, 0, 0, 0, 0, 0};
+static JGL_UNPACK Pack = {4, 0, 0, 0, 0, 0, 0, 0}, Unpack = {4, 0, 0, 0, 0, 0, 0, 0};
 BOOL JglSupportsSecondary(void) {
     return Secondary;
 }
@@ -29,6 +29,9 @@ BOOL JglFragmentProgramAvailable(void) {
     return FALSE;
 }
 BOOL JglVertexProgramAvailable(void) {
+    return FALSE;
+}
+BOOL JglTexture3DAvailable(void) {
     return FALSE;
 }
 GLubyte *JglProgramErrorBuffer(void) {

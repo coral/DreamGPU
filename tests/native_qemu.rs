@@ -34,6 +34,8 @@ mod primary16;
 mod raster;
 #[path = "native_qemu/secondary.rs"]
 mod secondary;
+#[path = "native_qemu/texture_3d.rs"]
+mod texture_3d;
 #[path = "native_qemu/texture_control.rs"]
 mod texture_control;
 #[path = "native_qemu/textures.rs"]

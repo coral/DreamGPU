@@ -471,16 +471,18 @@ invalid:
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void *pixels) {
     ULONG args[3], bytes, pixel_bytes, row, column, i, at = 0, total;
     ULONG *rgba, capacity;
-    GLint width = 0, height = 1;
-    ULONG_PTR stride, skip, first, span, end;
+    GLint width = 0, height = 1, depth = 1;
+    ULONG_PTR stride, skip, first, span, end, image_stride, images;
+    /* A 3D level is all of its images (EXT_texture3D). */
+    const BOOL volume = target == JGL_TEXTURE_3D && JglTexture3DAvailable();
     JGL_UNPACK *pack;
     BOOL wide =
         WideReadColor(type) || (target == GL_TEXTURE_1D && JglDepthStencilReadbackAvailable());
     ULONG wire_bytes = wide ? 16 : 4, kind = wide ? DG_GL_RESULT_FLOAT : DG_GL_RESULT_INT;
     if (!JglReady())
         return;
-    /* TEXTURE_2D or, once negotiated, one cube map face. */
-    if (target != GL_TEXTURE_1D && !JglImage2DTarget(target)) {
+    /* TEXTURE_2D or, once negotiated, one cube map face or TEXTURE_3D. */
+    if (target != GL_TEXTURE_1D && !JglImage2DTarget(target) && !volume) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }
@@ -505,10 +507,18 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
                       sizeof(height), &bytes))
             return;
     }
-    if (!width || !height)
+    if (volume) {
+        args[2] = 0x8071; /* TEXTURE_DEPTH */
+        if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &depth, sizeof(depth),
+                      &bytes))
+            return;
+    }
+    if (!width || !height || !depth)
         return;
-    if (width < 0 || height < 0 || width > DG_GL_MAX_TEXTURE_DIMENSION + 2 ||
-        height > DG_GL_MAX_TEXTURE_DIMENSION + 2)
+    if (width < 0 || height < 0 || depth < 0 || width > DG_GL_MAX_TEXTURE_DIMENSION + 2 ||
+        height > DG_GL_MAX_TEXTURE_DIMENSION + 2 ||
+        (volume && (width > DG_GL_MAX_3D_TEXTURE_SIZE || height > DG_GL_MAX_3D_TEXTURE_SIZE ||
+                    depth > DG_GL_MAX_3D_TEXTURE_SIZE)))
         goto invalid;
     pack = JglPack();
     if (!Multiply(pack->RowLength ? (ULONG_PTR)pack->RowLength : (ULONG_PTR)width, pixel_bytes,
@@ -516,17 +526,23 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         !Add(stride, pack->Alignment - 1, &stride))
         goto invalid;
     stride &= ~((ULONG_PTR)pack->Alignment - 1);
-    if (!Multiply(target == GL_TEXTURE_1D ? 0 : pack->SkipRows, stride, &first) ||
-        !Multiply(pack->SkipPixels, pixel_bytes, &skip) || !Add(first, skip, &first) ||
-        !Multiply(height - 1, stride, &span) || !Add(span, (ULONG_PTR)width * pixel_bytes, &span) ||
-        !Add(first, span, &end) || !Add((ULONG_PTR)pixels, end, &end) ||
-        !Add((ULONG_PTR)pixels, first, &first))
+    /* Images are PACK_IMAGE_HEIGHT (or height) rows apart, after
+     * PACK_SKIP_IMAGES of them; other targets have one image. */
+    images = volume && pack->ImageHeight ? (ULONG_PTR)pack->ImageHeight : (ULONG_PTR)height;
+    if (!Multiply(images, stride, &image_stride) ||
+        !Multiply(volume ? (ULONG_PTR)pack->SkipImages : 0, image_stride, &first) ||
+        !Multiply(target == GL_TEXTURE_1D ? 0 : pack->SkipRows, stride, &skip) ||
+        !Add(first, skip, &first) || !Multiply(pack->SkipPixels, pixel_bytes, &skip) ||
+        !Add(first, skip, &first) || !Multiply((ULONG_PTR)depth - 1, image_stride, &span) ||
+        !Add(first, span, &end) || !Multiply(height - 1, stride, &span) ||
+        !Add(span, (ULONG_PTR)width * pixel_bytes, &span) || !Add(end, span, &end) ||
+        !Add((ULONG_PTR)pixels, end, &end) || !Add((ULONG_PTR)pixels, first, &first))
         goto invalid;
     capacity = JglReadbackCapacity();
     rgba = JglReadbackBuffer();
     if (!rgba)
         return;
-    total = (ULONG)width * height;
+    total = (ULONG)width * height * depth;
     args[2] = 0;
     while (at < total) {
         ULONG count = total - at, requested;
@@ -549,7 +565,8 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
             BYTE *dest;
             row = (at + i) / (ULONG)width;
             column = (at + i) % (ULONG)width;
-            dest = (BYTE *)first + row * stride + column * pixel_bytes;
+            dest = (BYTE *)first + row / (ULONG)height * image_stride +
+                   row % (ULONG)height * stride + column * pixel_bytes;
             StoreReadPixel(dest, rgba + i * (wire_bytes / 4), format, type, pack->SwapBytes, TRUE,
                            wide);
         }

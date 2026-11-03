@@ -2167,6 +2167,8 @@ pub const DG_GL_MAX_PROGRAM_BYTES: u32 = 65280;
 pub const DG_GL_MAX_PROGRAMS: u32 = 4096;
 pub const DG_GL_PROGRAM_NAME_BATCH: u32 = 128;
 pub const DG_GL_MAX_VERTEX_ATTRIBS: u32 = 16;
+pub const DG_CAP_GL_TEXTURE_3D: u32 = 8388608;
+pub const DG_GL_MAX_3D_TEXTURE_SIZE: u32 = 256;
 pub const DG_GL_VERTEX_BYTES: u32 = 64;
 pub const DG_GL_VERTEX_POSITION: u32 = 0;
 pub const DG_GL_VERTEX_COLOR: u32 = 16;
@@ -6421,5 +6423,47 @@ pub struct DreamGpuGlApi {
         ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
     pub dg_glGetVertexAttribfvARB: ::core::option::Option<
         unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint, arg3: *mut f32),
+    >,
+    pub dg_glTexImage3D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+            arg7: ::core::ffi::c_int,
+            arg8: ::core::ffi::c_uint,
+            arg9: ::core::ffi::c_uint,
+            arg10: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glTexSubImage3D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+            arg7: ::core::ffi::c_int,
+            arg8: ::core::ffi::c_int,
+            arg9: ::core::ffi::c_uint,
+            arg10: ::core::ffi::c_uint,
+            arg11: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glCopyTexSubImage3D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+            arg7: ::core::ffi::c_int,
+            arg8: ::core::ffi::c_int,
+            arg9: ::core::ffi::c_int,
+        ),
     >,
 }

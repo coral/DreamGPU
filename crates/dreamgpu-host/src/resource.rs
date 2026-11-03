@@ -309,6 +309,13 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
     args: *const u8,
 ) -> u32 {
     let a = unsafe { &*api };
+    if function == FEnum_glCopyTexSubImage3D {
+        // EXT_texture3D: one image of the bound 3D texture's level.
+        let Some(words) = (unsafe { crate::gl_validation::args_n::<10>(function, args) }) else {
+            return DG_GL_ERROR_UNSUPPORTED;
+        };
+        return unsafe { crate::texture::volume::copy(a, t, errors, serial, has_drawable, &words) };
+    }
     if !matches!(
         function,
         FEnum_glCopyTexImage2D
@@ -871,6 +878,13 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
     }
     let level = level as usize;
     let f = unsafe { image_levels(t, target) };
+    // A 3D level is read through all of its images (EXT_texture3D).
+    let volume = target == GL_TEXTURE_3D;
+    let images = if volume {
+        unsafe { (*t).depths[level] }
+    } else {
+        1
+    };
     let bytes = if compressed {
         // The level's own compressed size, from the native image. `first`
         // and the cache then count 32-bit words of that image. Pending guest
@@ -904,7 +918,10 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
         }
         size as u64
     } else {
-        u64::from(f.widths[level]) * u64::from(f.heights[level]) * u64::from(pixel_bytes)
+        u64::from(f.widths[level])
+            * u64::from(f.heights[level])
+            * u64::from(images)
+            * u64::from(pixel_bytes)
     };
     if bytes == 0
         || u64::from(first) * u64::from(pixel_bytes) >= bytes
@@ -913,12 +930,12 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
         return DG_GL_ERROR_TEXTURE;
     }
     // Cache length and offsets are u32 even on a 64-bit host.
-    if bytes > u64::from(u32::MAX)
-        || bytes
-            > u64::from(DG_GL_MAX_TEXTURE_DIMENSION + 2)
-                * u64::from(DG_GL_MAX_TEXTURE_DIMENSION + 2)
-                * u64::from(pixel_bytes)
-    {
+    let largest = if volume {
+        u64::from(DG_GL_MAX_3D_TEXTURE_SIZE).pow(3)
+    } else {
+        u64::from(DG_GL_MAX_TEXTURE_DIMENSION + 2) * u64::from(DG_GL_MAX_TEXTURE_DIMENSION + 2)
+    };
+    if bytes > u64::from(u32::MAX) || bytes > largest * u64::from(pixel_bytes) {
         return DG_GL_ERROR_LIMIT;
     }
     let reload = unsafe {

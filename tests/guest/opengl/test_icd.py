@@ -239,9 +239,9 @@ int main() {
     t->Functions.Indexi(2147483647);GLdouble index;memcpy(&index,ScalarArgs,8);assert(ScalarFn==FEnum_glIndexd&&ScalarWords==2&&index==2147483647.0);
     GLboolean edge=7;t->Functions.EdgeFlagv(&edge);assert(ScalarFn==FEnum_glEdgeFlag&&ScalarArgs[0]==1);
     t->Functions.ClearAccum(-2,.25f,.5f,2);assert(ScalarFn==FEnum_glClearAccum&&ScalarWords==4);
-    BYTE input[280];memset(input,0x69,sizeof(input));*JglUnpack()={8,40,1,3,0,1};
+    BYTE input[280];memset(input,0x69,sizeof(input));*JglUnpack()={8,40,1,3,0,1,0,0};
     t->Functions.PolygonStipple(input);for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x)assert(bool(Pattern[y*4+x/8]&(1<<(7-x%8)))==bool(input[8+y*8+(3+x)/8]&(1<<((3+x)%8))));
-    BYTE output[280],expected[280];memset(output,0xa5,sizeof(output));memcpy(expected,output,sizeof(output));*JglPack()={8,40,1,3,0,1};
+    BYTE output[280],expected[280];memset(output,0xa5,sizeof(output));memcpy(expected,output,sizeof(output));*JglPack()={8,40,1,3,0,1,0,0};
     for(unsigned y=0;y<32;++y)for(unsigned x=0;x<32;++x){BYTE &v=expected[8+y*8+(3+x)/8];BYTE bit=1<<((3+x)%8);if(Pattern[y*4+x/8]&(1<<(7-x%8)))v|=bit;else v&=~bit;}
     t->Functions.GetPolygonStipple(output);assert(!memcmp(output,expected,sizeof(output)));
     memset(output,0xa5,sizeof(output));ReplyBytes=127;t->Functions.GetPolygonStipple(output);for(BYTE v:output)assert(v==0xa5);assert(ErrorValue==GL_INVALID_OPERATION);ReplyBytes=128;
@@ -286,7 +286,7 @@ int main() {
 
     // Real linked dgpugl exports must reach the same bodies and context state
     // as the system ICD, including push through one route/pop through the other.
-    *JglPack()={8,7,3,2,1,1}; *JglUnpack()={4,0,0,0,0,0};
+    *JglPack()={8,7,3,2,1,1,0,0}; *JglUnpack()={4,0,0,0,0,0,0,0};
     glPushClientAttrib(1); JglPack()->Alignment=1; JglUnpack()->RowLength=8;
     t->Functions.PopClientAttrib(); assert(JglPack()->Alignment==8&&JglUnpack()->RowLength==0);
     t->Functions.PushClientAttrib(1); JglPack()->RowLength=0;

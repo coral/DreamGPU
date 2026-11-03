@@ -404,3 +404,30 @@ FX 5800", `nv4_disp.dll` 6.14.11.7516 on NT (4.14.11.7516 on Win9x), with
 DreamGPU's fixed 64 MiB of video memory (0001). `test_geforce_fx_quirk.py`
 runs the prepared card guess, the NPOT bookkeeping and the quirk under
 ASan/UBSan. The diagnostic stack is rebased onto it.
+
+`0035-volume-row-alignment.patch` states the unpack alignment of volume
+uploads. DreamGPU's `EXT_texture3D` (`DG_CAP_GL_TEXTURE_3D`) makes WineD3D
+claim `D3DPTEXTURECAPS_VOLUMEMAP`, and volume levels then travel through
+`glTexSubImage3D`. A volume's memory pads every row to the device's surface
+alignment (`wined3d_volume_get_pitch`, four for D3D8/9), while rows converted
+for upload (V8U8, L6V5U5, ...) are tight. A context is created with unpack
+alignment one, but every `VBOX_WITH_WINE_FIX_SURFUPDATA` surface upload
+leaves it at the surface alignment. So a volume whose row bytes are not a
+multiple of four (an L8 or A8L8 mip level, an odd-width 16-bit level, a
+converted level) was read with whichever alignment came last: skewed texels,
+or reads past the end of the converted copy. Uploads now use the surface
+alignment for volume memory and one for converted rows, then restore the
+previous value; the frontend answers `GL_UNPACK_ALIGNMENT` locally, so this
+costs no host query. Downloads need no change: the pack alignment stays the
+surface alignment (the depth transfers push and pop it). `test_volume_alignment.py`
+runs the prepared upload under ASan/UBSan. The diagnostic stack does not touch
+`volume.c`.
+
+`0036-volume-map-binding.patch` gives volumes a SYSMEM map binding. This wine9x
+tree comments out `resource_init`'s default `map_binding`; surfaces set their
+own, volumes never did. `wined3d_volume_map` invalidates every location except
+the binding, so with a zero binding it also discarded the system-memory copy
+that LockBox had just exposed. The next texture load then found no location
+("Implement texture loading from 0") and the volume sampled black. The
+installed volume probe failed this way on Win2000 until this patch.
+`test_volume_map_binding.py` checks the prepared source.

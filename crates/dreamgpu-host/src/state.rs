@@ -100,22 +100,34 @@ pub struct ContextState {
     /// The bound VERTEX_PROGRAM_ARB object (ARB_vertex_program), with the
     /// fragment binding's ownership; the error state above is shared.
     pub vertex_program: *mut crate::program::Program,
+    /// Rust-only 3D texture state (EXT_texture3D), with the cube map state's
+    /// ownership: `bound_texture_3d` is the active unit's binding, `units_3d`
+    /// every other unit's (null for the active unit), and `attrib_3d` saves
+    /// every unit's binding, in unit order, with each TEXTURE_BIT entry.
+    pub default_texture_3d: *mut Texture,
+    pub bound_texture_3d: *mut Texture,
+    pub units_3d: [*mut Texture; UNITS],
+    pub attrib_3d: [[*mut Texture; UNITS]; STACK],
+    /// PROXY_TEXTURE_3D levels rejected by the virtual limits.
+    pub proxy_rejected_3d: u32,
 }
 impl ContextState {
-    /// Every unit's (2D, 1D, cube map) binding, including the active unit's.
-    pub(crate) fn unit_bindings(&self) -> [[*mut Texture; 3]; UNITS] {
-        let mut all = [[null_mut(); 3]; UNITS];
+    /// Every unit's (2D, 1D, cube map, 3D) binding, including the active unit's.
+    pub(crate) fn unit_bindings(&self) -> [[*mut Texture; 4]; UNITS] {
+        let mut all = [[null_mut(); 4]; UNITS];
         for (unit, out) in all.iter_mut().enumerate() {
             *out = [
                 self.units[unit][0],
                 self.units[unit][1],
                 self.units_cube[unit],
+                self.units_3d[unit],
             ];
         }
         all[self.active_unit as usize] = [
             self.bound_texture,
             self.bound_texture_1d,
             self.bound_texture_cube,
+            self.bound_texture_3d,
         ];
         all
     }
@@ -123,6 +135,12 @@ impl ContextState {
     fn cube_bindings(&self) -> [*mut Texture; UNITS] {
         let mut all = self.units_cube;
         all[self.active_unit as usize] = self.bound_texture_cube;
+        all
+    }
+    /// Every unit's 3D texture binding, in unit order.
+    fn bindings_3d(&self) -> [*mut Texture; UNITS] {
+        let mut all = self.units_3d;
+        all[self.active_unit as usize] = self.bound_texture_3d;
         all
     }
     const EMPTY: Self = Self {
@@ -155,10 +173,16 @@ impl ContextState {
         program_error: -1,
         program_error_kind: 0,
         vertex_program: null_mut(),
+        default_texture_3d: null_mut(),
+        bound_texture_3d: null_mut(),
+        units_3d: [null_mut(); UNITS],
+        attrib_3d: [[null_mut(); UNITS]; STACK],
+        proxy_rejected_3d: 0,
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
-/// face belongs to the cube map; anything else but 1D selects the 2D binding.
+/// face belongs to the cube map; anything else but 1D and 3D selects the 2D
+/// binding.
 ///
 /// # Safety
 /// Read-only render-owned state.
@@ -167,6 +191,7 @@ pub(crate) unsafe fn bound(state: *const ContextState, target: u32) -> *mut Text
         match crate::texture::binding_target(target) {
             GL_TEXTURE_1D => (*state).bound_texture_1d,
             GL_TEXTURE_CUBE_MAP => (*state).bound_texture_cube,
+            GL_TEXTURE_3D => (*state).bound_texture_3d,
             _ => (*state).bound_texture,
         }
     }
@@ -209,7 +234,7 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
     unsafe {
         state.write(ContextState::EMPTY);
     }
-    if unsafe { *m.count } > DG_GL_MAX_TEXTURES - 3 {
+    if unsafe { *m.count } > DG_GL_MAX_TEXTURES - 4 {
         return DG_GL_ERROR_LIMIT;
     }
     let namespace = if shared.is_null() {
@@ -236,8 +261,13 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
     } else {
         unsafe { crate::texture::allocate(m, GL_TEXTURE_CUBE_MAP, initial()) }
     };
-    if cube.is_null() {
-        for texture in [two, one] {
+    let volume = if cube.is_null() {
+        null_mut()
+    } else {
+        unsafe { crate::texture::allocate(m, GL_TEXTURE_3D, initial()) }
+    };
+    if volume.is_null() {
+        for texture in [two, one, cube] {
             if !texture.is_null() {
                 unsafe {
                     (m.free)(m.opaque, texture.cast());
@@ -259,11 +289,13 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
             .refs
             .checked_add(1)
             .expect("namespace reference overflow");
-        *m.count += 3;
+        *m.count += 4;
         let mut units = [[two, one]; UNITS];
         units[0] = [null_mut(); 2];
         let mut units_cube = [cube; UNITS];
         units_cube[0] = null_mut();
+        let mut units_3d = [volume; UNITS];
+        units_3d[0] = null_mut();
         state.write(ContextState {
             textures: namespace,
             default_texture: two,
@@ -274,6 +306,9 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
             default_texture_cube: cube,
             bound_texture_cube: cube,
             units_cube,
+            default_texture_3d: volume,
+            bound_texture_3d: volume,
+            units_3d,
             ..ContextState::EMPTY
         });
     }
@@ -300,20 +335,27 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     unsafe { crate::selection::release(&*memory, &mut old.capture) };
     unsafe { crate::lists::release(&*memory, old.lists) };
     assert!(old.attrib_depth as usize <= STACK);
-    for ((saved, units), cube) in old.attrib[..old.attrib_depth as usize]
+    for (((saved, units), cube), volume) in old.attrib[..old.attrib_depth as usize]
         .iter()
         .zip(&old.unit_attrib)
         .zip(&old.cube_attrib)
+        .zip(&old.attrib_3d)
     {
         unsafe {
             dreamgpu_texture_unref(memory, saved.texture);
             dreamgpu_texture_unref(memory, saved.texture_1d);
-            for texture in units.units.iter().flatten().chain(cube) {
+            for texture in units.units.iter().flatten().chain(cube).chain(volume) {
                 dreamgpu_texture_unref(memory, *texture);
             }
         }
     }
-    for texture in old.units.iter().flatten().chain(&old.units_cube) {
+    for texture in old
+        .units
+        .iter()
+        .flatten()
+        .chain(&old.units_cube)
+        .chain(&old.units_3d)
+    {
         unsafe { dreamgpu_texture_unref(memory, *texture) };
     }
     // Before the namespace: the last context's release frees its programs.
@@ -328,6 +370,8 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
         dreamgpu_texture_unref(memory, old.default_texture_1d);
         dreamgpu_texture_unref(memory, old.bound_texture_cube);
         dreamgpu_texture_unref(memory, old.default_texture_cube);
+        dreamgpu_texture_unref(memory, old.bound_texture_3d);
+        dreamgpu_texture_unref(memory, old.default_texture_3d);
         dreamgpu_texture_namespace_unref(memory, old.textures);
     }
 }
@@ -415,6 +459,7 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
     }
     let mut units = UnitAttrib::EMPTY;
     let mut cube = [null_mut(); UNITS];
+    let mut volume = [null_mut(); UNITS];
     if mask & GL_TEXTURE_BIT != 0 {
         unsafe {
             saved.texture = (*state).bound_texture;
@@ -425,10 +470,12 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
                 units: (*state).units,
             };
             cube = (*state).cube_bindings();
+            volume = (*state).bindings_3d();
             for texture in [saved.texture, saved.texture_1d]
                 .iter()
                 .chain(units.units.iter().flatten())
                 .chain(&cube)
+                .chain(&volume)
             {
                 if !texture.is_null() {
                     (**texture).refs = (**texture)
@@ -443,6 +490,7 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
         (*state).attrib[depth] = saved;
         (*state).unit_attrib[depth] = units;
         (*state).cube_attrib[depth] = cube;
+        (*state).attrib_3d[depth] = volume;
         (*state).attrib_depth += 1;
     }
     Ok(())
@@ -472,7 +520,8 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
     }
     let saved_units = unsafe { (*state).unit_attrib[depth - 1] };
     let saved_cube = unsafe { (*state).cube_attrib[depth - 1] };
-    let (restored, restored_count) = distinct(&saved, &saved_units, &saved_cube);
+    let saved_3d = unsafe { (*state).attrib_3d[depth - 1] };
+    let (restored, restored_count) = distinct(&saved, &saved_units, &saved_cube, &saved_3d);
     if !saved.texture.is_null() {
         for texture in &restored[..restored_count] {
             unsafe { dreamgpu_texture_wait(api, *texture, serial) };
@@ -508,6 +557,7 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
             let old_one = (*state).bound_texture_1d;
             let old_units = (*state).units;
             let old_cube = (*state).cube_bindings();
+            let old_3d = (*state).bindings_3d();
             (*state).bound_texture = saved.texture;
             (*state).bound_texture_1d = saved.texture_1d;
             (*state).units = saved_units.units;
@@ -516,9 +566,12 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
             (*state).bound_texture_cube = saved_cube[active];
             (*state).units_cube = saved_cube;
             (*state).units_cube[active] = null_mut();
+            (*state).bound_texture_3d = saved_3d[active];
+            (*state).units_3d = saved_3d;
+            (*state).units_3d[active] = null_mut();
             dreamgpu_texture_unref(memory, old_two);
             dreamgpu_texture_unref(memory, old_one);
-            for texture in old_units.iter().flatten().chain(&old_cube) {
+            for texture in old_units.iter().flatten().chain(&old_cube).chain(&old_3d) {
                 dreamgpu_texture_unref(memory, *texture);
             }
             // Native PopAttrib restored parameters of every unit's binding.
@@ -529,6 +582,7 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
         (*state).attrib[depth - 1] = Attrib::EMPTY;
         (*state).unit_attrib[depth - 1] = UnitAttrib::EMPTY;
         (*state).cube_attrib[depth - 1] = [null_mut(); UNITS];
+        (*state).attrib_3d[depth - 1] = [null_mut(); UNITS];
         (*state).attrib_depth -= 1;
         select(api, state)?;
     }
@@ -540,13 +594,15 @@ fn distinct(
     saved: &Attrib,
     units: &UnitAttrib,
     cube: &[*mut Texture; UNITS],
-) -> ([*mut Texture; 2 + 3 * UNITS], usize) {
-    let mut out = [null_mut(); 2 + 3 * UNITS];
+    volume: &[*mut Texture; UNITS],
+) -> ([*mut Texture; 2 + 4 * UNITS], usize) {
+    let mut out = [null_mut(); 2 + 4 * UNITS];
     let mut n = 0;
     for &texture in [saved.texture, saved.texture_1d]
         .iter()
         .chain(units.units.iter().flatten())
         .chain(cube)
+        .chain(volume)
     {
         if !texture.is_null() && !out[..n].contains(&texture) {
             out[n] = texture;
@@ -555,20 +611,22 @@ fn distinct(
     }
     (out, n)
 }
-/// Every unit's live (2D, 1D, cube map) binding slot, for texture deletion.
-pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Texture; 3 * UNITS] {
-    let mut slots = [null_mut(); 3 * UNITS];
+/// Every unit's live (2D, 1D, cube map, 3D) binding slot, for texture deletion.
+pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Texture; 4 * UNITS] {
+    let mut slots = [null_mut(); 4 * UNITS];
     unsafe {
         let active = (*state).active_unit as usize;
-        for (unit, triple) in slots.as_chunks_mut::<3>().0.iter_mut().enumerate() {
+        for (unit, quad) in slots.as_chunks_mut::<4>().0.iter_mut().enumerate() {
             if unit == active {
-                triple[0] = addr_of_mut!((*state).bound_texture);
-                triple[1] = addr_of_mut!((*state).bound_texture_1d);
-                triple[2] = addr_of_mut!((*state).bound_texture_cube);
+                quad[0] = addr_of_mut!((*state).bound_texture);
+                quad[1] = addr_of_mut!((*state).bound_texture_1d);
+                quad[2] = addr_of_mut!((*state).bound_texture_cube);
+                quad[3] = addr_of_mut!((*state).bound_texture_3d);
             } else {
-                triple[0] = addr_of_mut!((*state).units[unit][0]);
-                triple[1] = addr_of_mut!((*state).units[unit][1]);
-                triple[2] = addr_of_mut!((*state).units_cube[unit]);
+                quad[0] = addr_of_mut!((*state).units[unit][0]);
+                quad[1] = addr_of_mut!((*state).units[unit][1]);
+                quad[2] = addr_of_mut!((*state).units_cube[unit]);
+                quad[3] = addr_of_mut!((*state).units_3d[unit]);
             }
         }
     }
@@ -596,6 +654,8 @@ unsafe fn switch_unit(state: *mut ContextState, unit: u32) {
     s.units[unit as usize] = [null_mut(); 2];
     s.units_cube[s.active_unit as usize] = s.bound_texture_cube;
     s.bound_texture_cube = core::mem::replace(&mut s.units_cube[unit as usize], null_mut());
+    s.units_3d[s.active_unit as usize] = s.bound_texture_3d;
+    s.bound_texture_3d = core::mem::replace(&mut s.units_3d[unit as usize], null_mut());
     s.active_unit = unit;
 }
 /// Draw admission for every texture unit: an enabled target must not sample
@@ -619,6 +679,7 @@ pub(crate) unsafe fn prepare_textures(
             (triple[0], GL_TEXTURE_2D),
             (triple[1], GL_TEXTURE_1D),
             (triple[2], GL_TEXTURE_CUBE_MAP),
+            (triple[3], GL_TEXTURE_3D),
         ] {
             if texture.is_null() || unsafe { (*texture).undefined_levels } == 0 {
                 continue;
@@ -708,6 +769,10 @@ unsafe fn scalar(
                         (*state).default_texture_cube,
                         addr_of_mut!((*state).bound_texture_cube),
                     ),
+                    GL_TEXTURE_3D => (
+                        (*state).default_texture_3d,
+                        addr_of_mut!((*state).bound_texture_3d),
+                    ),
                     _ => (
                         (*state).default_texture,
                         addr_of_mut!((*state).bound_texture),
@@ -733,7 +798,8 @@ unsafe fn scalar(
         FEnum_glCopyTexImage2D
         | FEnum_glCopyTexSubImage2D
         | FEnum_glCopyTexImage1D
-        | FEnum_glCopyTexSubImage1D => {
+        | FEnum_glCopyTexSubImage1D
+        | FEnum_glCopyTexSubImage3D => {
             let result =
                 unsafe { copy.ok_or(DG_GL_ERROR_UNSUPPORTED)?(opaque, function, args.as_ptr()) };
             if result != 0 {

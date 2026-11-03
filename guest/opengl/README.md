@@ -315,6 +315,26 @@ hidden from `wglGetProcAddress`, and the vertex program modes stay local
 `GL_INVALID_ENUM`. `tests/guest/opengl/test_vertex_program.py` covers the
 contract and the i686 wrappers.
 
+`DG_CAP_GL_TEXTURE_3D` adds `GL_EXT_texture3D`, last in the extension string,
+and six exports under core and EXT names: `TexImage3D`, `TexSubImage3D` (by
+hand, `texture.cpp`) and `CopyTexSubImage3D` (generated scalars). `TEXTURE_3D`
+becomes a binding, enable and parameter target, `PROXY_TEXTURE_3D` an
+immediate proxy, `TEXTURE_WRAP_R` a parameter of every target, and the
+`UNPACK/PACK_IMAGE_HEIGHT` and `SKIP_IMAGES` pixel storage client state
+(saved with the rest of `CLIENT_PIXEL_STORE_BIT`). Images are gathered from the
+caller's layout into tight rows then images in the 2D wire forms (packed types
+expand to RGBA8, swapped components are swapped), one TexImage3D record when
+the volume fits, otherwise a payload-free image followed by TexSubImage3D slabs
+of whole images or 2D tiles of one image. A split subimage reads the level's
+three sizes first; while compiling a list it is `GL_OUT_OF_MEMORY`. Everything
+the host would refuse (target, level, sizes above `DG_GL_MAX_3D_TEXTURE_SIZE >>
+level`, compressed or unknown internal formats, `GL_BITMAP`, a border) is a
+local error. `GetTexImage` of a level reads its depth too and places images
+through the pack image state. Without the capability the exports fail locally
+with `GL_INVALID_OPERATION`, are hidden from `wglGetProcAddress`, and every new
+enum stays the local `GL_INVALID_ENUM` it was. `tests/guest/opengl/test_texture_3d.py`
+covers the contract.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

@@ -515,6 +515,11 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
         /* PACK and UNPACK selectors have matching low offsets. */
         pname += GL_UNPACK_ALIGNMENT - GL_PACK_ALIGNMENT;
     }
+    /* PACK_SKIP_IMAGES/PACK_IMAGE_HEIGHT precede their UNPACK names by two. */
+    if ((pname == 0x806b || pname == 0x806c) && JglTexture3DAvailable()) {
+        unpack = JglPack();
+        pname += 2;
+    }
     switch (pname) {
         case GL_UNPACK_SWAP_BYTES:
             unpack->SwapBytes = param != 0;
@@ -542,10 +547,22 @@ void APIENTRY glPixelStorei(GLenum pname, GLint param) {
                 goto invalid;
             unpack->SkipPixels = param;
             return;
-        default:
-            JglSetError(GL_INVALID_ENUM);
+        case 0x806d: /* UNPACK_SKIP_IMAGES (EXT_texture3D) */
+        case 0x806e: /* UNPACK_IMAGE_HEIGHT */
+            if (!JglTexture3DAvailable())
+                break;
+            if (param < 0)
+                goto invalid;
+            if (pname == 0x806d)
+                unpack->SkipImages = param;
+            else
+                unpack->ImageHeight = param;
             return;
+        default:
+            break;
     }
+    JglSetError(GL_INVALID_ENUM);
+    return;
 invalid:
     JglSetError(GL_INVALID_VALUE);
 }
@@ -859,6 +876,309 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei
                          : Layout1D(width, components, pixels, &layout)))
         return;
     Upload(target, level, xoffset, 0, width, 1, format, type, components, &layout, capacity);
+}
+
+/* EXT_texture3D (DG_CAP_GL_TEXTURE_3D). Everything the host would refuse as a
+ * malformed record is a local GL error here; offsets and rectangles against
+ * the level's actual image are host GL errors. 3D images are borderless. */
+
+/* Largest width, height or depth of a validated level (0..11). */
+static ULONG Limit3D(GLint level) {
+    return (ULONG)DG_GL_MAX_3D_TEXTURE_SIZE >> level;
+}
+
+/* Rows of the first image, plus the distance between images from
+ * UNPACK_IMAGE_HEIGHT and the first image from UNPACK_SKIP_IMAGES. */
+typedef struct {
+    JGL_PIXEL_LAYOUT Image;
+    ULONG_PTR ImageStride;
+} JGL_VOLUME_LAYOUT;
+
+static BOOL Layout3D(GLsizei width, GLsizei height, GLsizei depth, ULONG components,
+                     const void *pixels, JGL_VOLUME_LAYOUT *layout) {
+    JGL_UNPACK *unpack = JglUnpack();
+    ULONG_PTR rows = unpack->ImageHeight ? (ULONG_PTR)unpack->ImageHeight : (ULONG_PTR)height;
+    ULONG_PTR skip, span, end;
+    if (!Layout(width, height, components, pixels, &layout->Image))
+        return FALSE;
+    /* Layout checked the first image's last row; add the images before it. */
+    if (!Multiply(rows, layout->Image.Stride, &layout->ImageStride) ||
+        !Multiply((ULONG_PTR)unpack->SkipImages, layout->ImageStride, &skip) ||
+        !Multiply((ULONG_PTR)depth - 1, layout->ImageStride, &span) || !Add(skip, span, &span) ||
+        !Add((ULONG_PTR)layout->Image.First, span, &end) ||
+        !Add(end, ((ULONG_PTR)height - 1) * layout->Image.Stride, &end) ||
+        !Add(end, layout->Image.RowBytes, &end)) {
+        JglCommandError(GL_INVALID_VALUE);
+        return FALSE;
+    }
+    layout->Image.First += skip;
+    return TRUE;
+}
+
+/* One row of a record in its wire form: direct components unchanged, swapped
+ * multi-byte components or packed pairs, or GL 1.2 packed pixels as RGBA8
+ * (the same forms as the 2D records). */
+static void WireRow(BYTE *out, const unsigned char *in, ULONG columns, ULONG components,
+                    GLenum format, GLenum type) {
+    const ULONG unit = ScalarBytes(type);
+    if (DirectPixels(type)) {
+        CopyMemory(out, in, columns * components);
+    } else if (unit) {
+        for (ULONG i = 0; i < columns * components; i += unit)
+            for (ULONG j = 0; j < unit; ++j)
+                out[i + j] = in[i + unit - 1 - j];
+    } else if (Packed16(type)) {
+        for (ULONG i = 0; i < columns; ++i) {
+            out[i * 2] = in[i * 2 + 1];
+            out[i * 2 + 1] = in[i * 2];
+        }
+    } else {
+        ConvertPacked(out, in, columns, format, type);
+    }
+}
+
+/* A slab of rows, columns and images of the caller's volume, written straight
+ * into its record. */
+typedef struct {
+    const JGL_VOLUME_LAYOUT *Layout;
+    ULONG X, Y, Z, Columns, Rows, Images, Components, WireBytes;
+    GLenum Format, Type;
+} JGL_VOLUME_TILE;
+static void GatherVolume(void *opaque, BYTE *destination) {
+    const JGL_VOLUME_TILE *t = (const JGL_VOLUME_TILE *)opaque;
+    for (ULONG image = 0; image < t->Images; ++image)
+        for (ULONG row = 0; row < t->Rows; ++row)
+            WireRow(destination + (image * t->Rows + row) * t->Columns * t->WireBytes,
+                    t->Layout->Image.First + (t->Z + image) * t->Layout->ImageStride +
+                        (t->Y + row) * t->Layout->Image.Stride + t->X * t->Components,
+                    t->Columns, t->Components, t->Format, t->Type);
+}
+
+/* Whole images per record when one fits, else the 2D tiles of one image. */
+typedef struct {
+    ULONG Rows, Columns, Images;
+} JGL_SLAB_SHAPE;
+static JGL_SLAB_SHAPE SlabShape(ULONG width, ULONG height, ULONG depth, ULONG wire_bytes,
+                                ULONG capacity) {
+    const ULONG image = width * height * wire_bytes;
+    JGL_SLAB_SHAPE shape = {height, width, 1};
+    if (image <= capacity) {
+        shape.Images = capacity / image < depth ? capacity / image : depth;
+        return shape;
+    }
+    const JGL_TILE_SHAPE tile = TileShape(width, height, wire_bytes, capacity, TRUE);
+    shape.Rows = tile.Rows;
+    shape.Columns = tile.Columns;
+    return shape;
+}
+
+static ULONG Capacity3D(ULONG words, ULONG wire_bytes) {
+    ULONG capacity = JglMaxDataBytes(words) & ~3UL;
+    if (capacity < wire_bytes) {
+        JglCommandError(GL_OUT_OF_MEMORY);
+        return 0;
+    }
+    return capacity;
+}
+
+/* TexSubImage3D records of a validated volume, slab by slab. */
+static BOOL Upload3D(GLint level, GLint xoffset, GLint yoffset, GLint zoffset, GLsizei width,
+                     GLsizei height, GLsizei depth, GLenum format, GLenum type, ULONG components,
+                     const JGL_VOLUME_LAYOUT *layout, JGL_SLAB_SHAPE shape) {
+    JGL_VOLUME_TILE tile = {
+        layout, 0, 0, 0, 0, 0, 0, components, WirePixelBytes(type, components), format, type};
+    ULONG args[10];
+    for (tile.Z = 0; tile.Z < (ULONG)depth; tile.Z += tile.Images) {
+        tile.Images = shape.Images < (ULONG)depth - tile.Z ? shape.Images : (ULONG)depth - tile.Z;
+        for (tile.Y = 0; tile.Y < (ULONG)height; tile.Y += tile.Rows) {
+            tile.Rows = shape.Rows < (ULONG)height - tile.Y ? shape.Rows : (ULONG)height - tile.Y;
+            for (tile.X = 0; tile.X < (ULONG)width; tile.X += tile.Columns) {
+                tile.Columns =
+                    shape.Columns < (ULONG)width - tile.X ? shape.Columns : (ULONG)width - tile.X;
+                args[0] = JGL_TEXTURE_3D;
+                args[1] = (ULONG)level;
+                args[2] = (ULONG)xoffset + tile.X;
+                args[3] = (ULONG)yoffset + tile.Y;
+                args[4] = (ULONG)zoffset + tile.Z;
+                args[5] = tile.Columns;
+                args[6] = tile.Rows;
+                args[7] = tile.Images;
+                args[8] = WireFormat(format, type);
+                args[9] = WireType(type);
+                if (!JglCaptureData(FEnum_glTexSubImage3D, args, 10,
+                                    tile.Columns * tile.Rows * tile.Images * tile.WireBytes,
+                                    GatherVolume, &tile))
+                    return FALSE;
+            }
+        }
+    }
+    return TRUE;
+}
+
+/* PROXY_TEXTURE_3D executes immediately, even while compiling a list. Sizes
+ * beyond the virtual limits and a border reject the proxy level on the host. */
+void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLenum internal_format, GLsizei width,
+                              GLsizei height, GLsizei depth, GLint border, GLenum format,
+                              GLenum type, const void *pixels) {
+    const BOOL proxy = target == JGL_PROXY_TEXTURE_3D;
+    void (*error)(GLenum) = proxy ? JglSetError : JglCommandError;
+    ULONG components, wire, capacity, args[9];
+    JGL_VOLUME_LAYOUT layout;
+    if (!(proxy ? JglReady() : JglCommandReady()))
+        return;
+    if (!JglTexture3DAvailable()) {
+        error(GL_INVALID_OPERATION);
+        return;
+    }
+    if (target != JGL_TEXTURE_3D && !proxy) {
+        error(GL_INVALID_ENUM);
+        return;
+    }
+    if ((!proxy && !NormalizeType(format, &type)) ||
+        !(components = PixelBytes(format, type, proxy)))
+        return;
+    if (type == 0x1a00 /* BITMAP */) {
+        error(GL_INVALID_ENUM);
+        return;
+    }
+    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || border < 0 || border > 1 || width < 0 ||
+        height < 0 || depth < 0 || width < 2 * border || height < 2 * border ||
+        depth < 2 * border || !InternalFormat((GLint)internal_format) ||
+        (!proxy && ((ULONG)width > Limit3D(level) + 2 * border ||
+                    (ULONG)height > Limit3D(level) + 2 * border ||
+                    (ULONG)depth > Limit3D(level) + 2 * border))) {
+        error(GL_INVALID_VALUE);
+        return;
+    }
+    args[0] = target;
+    args[1] = (ULONG)level;
+    args[2] = internal_format;
+    args[3] = (ULONG)width;
+    args[4] = (ULONG)height;
+    args[5] = (ULONG)depth;
+    args[6] = (ULONG)border;
+    args[7] = WireFormat(format, type);
+    args[8] = WireType(type);
+    if (proxy) {
+        JglData(FEnum_glTexImage3D, args, 9, NULL, 0);
+        return;
+    }
+    if (border) {
+        error(GL_INVALID_OPERATION); /* 3D images are borderless (gl.h). */
+        return;
+    }
+    if (!width || !height || !depth)
+        pixels = NULL; /* Empty definitions replace storage without reading caller memory. */
+    wire = WirePixelBytes(type, components);
+    if (pixels) {
+        if (!(capacity = Capacity3D(9, wire)) ||
+            !Layout3D(width, height, depth, components, pixels, &layout))
+            return;
+        /* A volume that fits one record defines and fills its image at once. */
+        if ((ULONG)width * height * depth <= capacity / wire) {
+            JGL_VOLUME_TILE whole = {
+                &layout,      0,          0,    0,      (ULONG)width, (ULONG)height,
+                (ULONG)depth, components, wire, format, type};
+            JglCaptureData(FEnum_glTexImage3D, args, 9, (ULONG)width * height * depth * wire,
+                           GatherVolume, &whole);
+            return;
+        }
+    }
+    if (!JglData(FEnum_glTexImage3D, args, 9, NULL, 0) || !pixels ||
+        !(capacity = Capacity3D(10, wire)))
+        return;
+    Upload3D(level, 0, 0, 0, width, height, depth, format, type, components, &layout,
+             SlabShape(width, height, depth, wire, capacity));
+}
+void APIENTRY glTexImage3D(GLenum target, GLint level, GLint internal_format, GLsizei width,
+                           GLsizei height, GLsizei depth, GLint border, GLenum format, GLenum type,
+                           const void *pixels) {
+    glTexImage3DEXT(target, level, (GLenum)internal_format, width, height, depth, border, format,
+                    type, pixels);
+}
+
+void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                                 GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
+                                 GLenum format, GLenum type, const void *pixels) {
+    ULONG components, wire, capacity, limit;
+    JGL_VOLUME_LAYOUT layout;
+    if (!JglCommandReady())
+        return;
+    if (!JglTexture3DAvailable()) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (target != JGL_TEXTURE_3D) {
+        JglCommandError(GL_INVALID_ENUM);
+        return;
+    }
+    if (!NormalizeType(format, &type) || !(components = PixelBytes(format, type)))
+        return;
+    if (type == 0x1a00 /* BITMAP */) {
+        JglCommandError(GL_INVALID_ENUM);
+        return;
+    }
+    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL) {
+        JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    limit = Limit3D(level);
+    if (xoffset < 0 || yoffset < 0 || zoffset < 0 || width < 0 || height < 0 || depth < 0 ||
+        (ULONG)xoffset > limit || (ULONG)yoffset > limit || (ULONG)zoffset > limit ||
+        (ULONG)width > limit - xoffset || (ULONG)height > limit - yoffset ||
+        (ULONG)depth > limit - zoffset) {
+        JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    if (!width || !height || !depth)
+        return;
+    if (!pixels) {
+        JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    wire = WirePixelBytes(type, components);
+    if (!(capacity = Capacity3D(10, wire)) ||
+        !Layout3D(width, height, depth, components, pixels, &layout))
+        return;
+    const JGL_SLAB_SHAPE shape = SlabShape(width, height, depth, wire, capacity);
+    // Splitting must not turn an invalid rectangle into a valid partial write.
+    // The image extent is execution-dependent while compiling a display list.
+    if (shape.Images < (ULONG)depth || shape.Rows < (ULONG)height || shape.Columns < (ULONG)width) {
+        GLint extent[3] = {0, 0, 0};
+        ULONG query[] = {JGL_TEXTURE_3D, (ULONG)level, 0}, bytes = 0;
+        if (JglCompiling()) {
+            JglCommandError(GL_OUT_OF_MEMORY);
+            return;
+        }
+        for (ULONG axis = 0; axis < 3; ++axis) {
+            query[2] = axis == 2 ? 0x8071 /* TEXTURE_DEPTH */ : 0x1000 + axis; /* WIDTH/HEIGHT */
+            if (!JglQuery(FEnum_glGetTexLevelParameteriv, query, DG_GL_RESULT_INT, &extent[axis],
+                          sizeof(GLint), &bytes))
+                return;
+            if (bytes != sizeof(GLint) || extent[axis] < 0 ||
+                (ULONG)extent[axis] > DG_GL_MAX_3D_TEXTURE_SIZE) {
+                JglCommandError(GL_INVALID_OPERATION);
+                return;
+            }
+        }
+        if (!extent[0] || !extent[1] || !extent[2]) {
+            JglCommandError(GL_INVALID_OPERATION);
+            return;
+        }
+        if (width > extent[0] - xoffset || height > extent[1] - yoffset ||
+            depth > extent[2] - zoffset) {
+            JglCommandError(GL_INVALID_VALUE);
+            return;
+        }
+    }
+    Upload3D(level, xoffset, yoffset, zoffset, width, height, depth, format, type, components,
+             &layout, shape);
+}
+void APIENTRY glTexSubImage3D(GLenum target, GLint level, GLint xoffset, GLint yoffset,
+                              GLint zoffset, GLsizei width, GLsizei height, GLsizei depth,
+                              GLenum format, GLenum type, const void *pixels) {
+    glTexSubImage3DEXT(target, level, xoffset, yoffset, zoffset, width, height, depth, format, type,
+                       pixels);
 }
 
 } /* extern C */

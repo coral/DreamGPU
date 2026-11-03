@@ -109,6 +109,9 @@ BOOL JglFragmentProgramAvailable(void) {
 BOOL JglVertexProgramAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM);
 }
+BOOL JglTexture3DAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_3D);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -131,13 +134,14 @@ BOOL JglVertexProgramAvailable(void) {
 #define JGL_CUBE_MAP_EXTENSIONS "GL_ARB_texture_cube_map GL_EXT_texture_cube_map"
 #define JGL_FRAGMENT_PROGRAM_EXTENSIONS "GL_ARB_fragment_program"
 #define JGL_VERTEX_PROGRAM_EXTENSIONS "GL_ARB_vertex_program"
+#define JGL_TEXTURE_3D_EXTENSIONS "GL_EXT_texture3D"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
                        sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
                        sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS) +
                        sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
-                       sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS)];
+                       sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -164,8 +168,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_FRAGMENT_PROGRAM_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM)
         AppendExtensions(&at, JGL_VERTEX_PROGRAM_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_TEXTURE_3D)
+        AppendExtensions(&at, JGL_TEXTURE_3D_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_TEXTURE_3D_EXTENSIONS
 #undef JGL_VERTEX_PROGRAM_EXTENSIONS
 #undef JGL_FRAGMENT_PROGRAM_EXTENSIONS
 #undef JGL_CUBE_MAP_EXTENSIONS
@@ -439,6 +446,24 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
     }
     if (function == FEnum_glCopyTexImage2D || function == FEnum_glCopyTexSubImage2D) {
         GLenum error = CopyTexture2DError(function, (const ULONG *)arguments);
+        if (error) {
+            CommandError(c, error);
+            return;
+        }
+    }
+    /* EXT_texture3D: the record exists only once negotiated, and the host
+     * rejects any target, level or rectangle size it does not admit. Offsets
+     * against the level are GL errors on the host. */
+    if (function == FEnum_glCopyTexSubImage3D) {
+        const ULONG *a = (const ULONG *)arguments;
+        GLenum error = 0;
+        if (!(HostCapabilities & DG_CAP_GL_TEXTURE_3D))
+            error = GL_INVALID_OPERATION;
+        else if (a[0] != JGL_TEXTURE_3D)
+            error = GL_INVALID_ENUM;
+        else if (a[1] > DG_GL_MAX_TEXTURE_LEVEL || a[7] > DG_GL_MAX_3D_TEXTURE_SIZE ||
+                 a[8] > DG_GL_MAX_3D_TEXTURE_SIZE)
+            error = GL_INVALID_VALUE;
         if (error) {
             CommandError(c, error);
             return;
@@ -985,7 +1010,8 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) {
         return;
     c = CurrentContext();
     if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D &&
-        !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable())) {
+        !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable()) &&
+        !(target == JGL_TEXTURE_3D && JglTexture3DAvailable())) {
         CommandError(c, GL_INVALID_ENUM);
         return;
     }

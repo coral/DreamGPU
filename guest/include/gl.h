@@ -111,6 +111,28 @@
  * the vertex array and provokes drawing. */
 #define DG_CAP_GL_VERTEX_PROGRAM 0x400000
 #define DG_GL_MAX_VERTEX_ATTRIBS 16
+/* 3D textures: EXT_texture3D with the TexSubImage3DEXT and CopyTexSubImage3DEXT
+ * forms. TEXTURE_3D is a BindTexture/Enable/TexParameter target with its own
+ * binding per texture unit, covered by TEXTURE_BIT; a name keeps the target of
+ * its first bind. TEXTURE_WRAP_R is a TexParameter of every target. Records use
+ * the core function numbers. TexImage3D is DATA with nine words (target, level,
+ * internalformat, width, height, depth, border, format, type) carrying exactly
+ * width*height*depth pixels, or none for zero-defined storage; PROXY_TEXTURE_3D
+ * carries none. TexSubImage3D is DATA with ten words (target, level, xoffset,
+ * yoffset, zoffset, width, height, depth, format, type) carrying exactly its
+ * pixels. Pixels are tight rows, then images, in the TexImage2D wire formats
+ * and types; the frontend resolves UNPACK_IMAGE_HEIGHT and UNPACK_SKIP_IMAGES.
+ * CopyTexSubImage3D is a CALL of nine words (target, level, xoffset, yoffset,
+ * zoffset, x, y, width, height). Images use the uncompressed internal formats,
+ * each dimension at most DG_GL_MAX_3D_TEXTURE_SIZE >> level; a border of 1 is
+ * GL_INVALID_OPERATION (its proxy is rejected). Offsets outside the defined
+ * level are GL errors, not record faults. GetTexImage of TEXTURE_3D numbers
+ * the first pixel in x, then y, then z order; GetTexLevelParameter accepts
+ * TEXTURE_3D, PROXY_TEXTURE_3D and TEXTURE_DEPTH. The host answers
+ * TEXTURE_BINDING_3D and MAX_3D_TEXTURE_SIZE (DG_GL_MAX_3D_TEXTURE_SIZE or a
+ * smaller native limit). Residency charges every image of a level. */
+#define DG_CAP_GL_TEXTURE_3D 0x800000
+#define DG_GL_MAX_3D_TEXTURE_SIZE 256
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

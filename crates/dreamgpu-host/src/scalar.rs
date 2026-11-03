@@ -67,6 +67,7 @@ unsafe fn execute(
         | FEnum_glCopyTexSubImage1D
         | FEnum_glCopyTexImage2D
         | FEnum_glCopyTexSubImage2D
+        | FEnum_glCopyTexSubImage3D
         | FEnum_glTexParameteri
         | FEnum_glTexParameterf
         | FEnum_glTexEnvi

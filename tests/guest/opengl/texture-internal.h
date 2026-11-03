@@ -44,7 +44,7 @@ typedef unsigned char BYTE;
 extern "C" {
 #endif
 typedef struct {
-    GLint Alignment, RowLength, SkipRows, SkipPixels, SwapBytes, LsbFirst;
+    GLint Alignment, RowLength, SkipRows, SkipPixels, SwapBytes, LsbFirst, ImageHeight, SkipImages;
 } JGL_UNPACK;
 BOOL JglReady(void);
 void JglSetError(GLenum);
@@ -67,6 +67,11 @@ static inline BOOL JglCubeFace(GLenum target) {
 static inline BOOL JglImage2DTarget(GLenum target) {
     return target == 0x0de1 /* TEXTURE_2D */ || JglCubeFace(target);
 }
+/* 3D texture enums, as in guest/opengl/internal.h. */
+BOOL JglTexture3DAvailable(void);
+#define JGL_TEXTURE_3D 0x806f
+#define JGL_PROXY_TEXTURE_3D 0x8070
+#define JGL_TEXTURE_WRAP_R 0x8072
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);

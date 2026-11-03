@@ -297,6 +297,10 @@ EXPORTS
     glGetVertexAttribfvARB=glGetVertexAttribfvARB@12
     glGetVertexAttribivARB=glGetVertexAttribivARB@12
     glGetVertexAttribPointervARB=glGetVertexAttribPointervARB@12
+    glTexImage3D=glTexImage3D@40
+    glTexSubImage3D=glTexSubImage3D@44
+    glTexImage3DEXT=glTexImage3DEXT@40
+    glTexSubImage3DEXT=glTexSubImage3DEXT@44
     glClearColor=glClearColor@16
     glClear=glClear@4
     glEnable=glEnable@4
@@ -353,6 +357,8 @@ EXPORTS
     glHint=glHint@8
     glCopyTexImage2D=glCopyTexImage2D@32
     glCopyTexSubImage2D=glCopyTexSubImage2D@32
+    glCopyTexSubImage3D=glCopyTexSubImage3D@36
+    glCopyTexSubImage3DEXT=glCopyTexSubImage3DEXT@36
     glLoadMatrixf=glLoadMatrixf@4
     glMultMatrixf=glMultMatrixf@4
     glLoadMatrixd=glLoadMatrixd@4

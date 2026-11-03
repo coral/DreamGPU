@@ -7,6 +7,13 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
     JGL_UNPACK *unpack = JglUnpack();
     if (!unpack)
         return FALSE;
+    /* PACK/UNPACK_SKIP_IMAGES and _IMAGE_HEIGHT (EXT_texture3D) */
+    if (name - 0x806b <= 3 && JglTexture3DAvailable()) {
+        if (name < 0x806d)
+            unpack = JglPack();
+        *value = name & 1 ? unpack->SkipImages : unpack->ImageHeight;
+        return TRUE;
+    }
     if (name == GL_PACK_SWAP_BYTES || name == GL_PACK_LSB_FIRST || name == GL_PACK_ALIGNMENT ||
         name == GL_PACK_ROW_LENGTH || name == GL_PACK_SKIP_ROWS || name == GL_PACK_SKIP_PIXELS) {
         unpack = JglPack();
@@ -46,7 +53,8 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
             *output = kind == DG_GL_RESULT_BOOL ? (type)(local != 0) : (type)local;                \
             return;                                                                                \
         }                                                                                          \
-        if (JglCubeMapQueryRejected(pname) || JglProgramQueryRejected(pname)) {                    \
+        if (JglCubeMapQueryRejected(pname) || JglProgramQueryRejected(pname) ||                    \
+            JglTexture3DQueryRejected(pname)) {                                                    \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -62,13 +70,23 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
     void APIENTRY name(GLenum target, GLenum pname, type *output) {                                \
         ULONG args[3] = {target, pname, 0}, bytes;                                                 \
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
-        if (output && JglReady() && JglCubeMapQueryRejected(target)) {                             \
+        if (output && JglReady() &&                                                                \
+            (JglCubeMapQueryRejected(target) || JglTexture3DQueryRejected(target) ||               \
+             ((FEnum_##name == FEnum_glGetTexParameterfv ||                                        \
+               FEnum_##name == FEnum_glGetTexParameteriv) &&                                       \
+              WrapRRejected(target, pname)))) {                                                    \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
         if (output && JglQuery(FEnum_##name, args, kind, result, sizeof(result), &bytes))          \
             CopyMemory(output, result, bytes);                                                     \
     }
+/* TEXTURE_WRAP_R belongs to the cube map, and to every target once 3D
+ * textures are negotiated; otherwise it stays the local GL_INVALID_ENUM. */
+static BOOL WrapRRejected(GLenum target, GLenum pname) {
+    return pname == JGL_TEXTURE_WRAP_R && !JglTexture3DAvailable() &&
+           !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable());
+}
 PAIR_QUERY(glGetTexParameterfv, GLfloat, DG_GL_RESULT_FLOAT)
 PAIR_QUERY(glGetTexParameteriv, GLint, DG_GL_RESULT_INT)
 PAIR_QUERY(glGetTexEnvfv, GLfloat, DG_GL_RESULT_FLOAT)
@@ -92,7 +110,9 @@ void APIENTRY glGetClipPlane(GLenum plane, GLdouble *equation) {
     void APIENTRY name(GLenum target, GLint level, GLenum pname, type *output) {                   \
         ULONG args[3] = {target, (ULONG)level, pname}, bytes;                                      \
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
-        if (output && JglReady() && JglCubeMapQueryRejected(target)) {                             \
+        if (output && JglReady() &&                                                                \
+            (JglCubeMapQueryRejected(target) || JglTexture3DQueryRejected(target) ||               \
+             JglTexture3DQueryRejected(pname))) {                                                  \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -112,7 +132,8 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
          cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e || cap == 0x8457) &&
         JglArrayQuery(cap, &local))
         return local != 0;
-    if (JglCubeMapQueryRejected(cap) || JglProgramQueryRejected(cap)) {
+    if (JglCubeMapQueryRejected(cap) || JglProgramQueryRejected(cap) ||
+        JglTexture3DQueryRejected(cap)) {
         JglSetError(GL_INVALID_ENUM);
         return GL_FALSE;
     }

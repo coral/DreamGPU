@@ -29,6 +29,8 @@ typedef struct DreamGpuTexture {
     uint64_t levels[12];
     /* A cube map's six faces (the arrays above then summarize them), else NULL. */
     DreamGpuTextureFace *faces;
+    /* Images of each level of a 3D texture, else zero. */
+    uint32_t depths[12];
 } DreamGpuTexture;
 typedef struct DreamGpuTextureEntry {
     uint32_t name;
@@ -97,10 +99,15 @@ typedef struct DreamGpuContextState {
     uint32_t program_error_kind;
     /* Rust-owned ARB_vertex_program binding. */
     void *vertex_program;
+    /* Rust-owned 3D texture state, with the cube map state's ownership. */
+    DreamGpuTexture *default_texture_3d, *bound_texture_3d;
+    DreamGpuTexture *units_3d[8];
+    DreamGpuTexture *attrib_3d[16][8];
+    uint32_t proxy_rejected_3d;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the
- * cube map; anything else but TEXTURE_1D selects the 2D binding). */
+ * cube map; anything else but TEXTURE_1D and TEXTURE_3D selects the 2D binding). */
 DreamGpuTexture *dreamgpu_context_texture(const DreamGpuContextState *state, uint32_t target);
 uint32_t dreamgpu_context_state_init(const DreamGpuTextureMemory *memory,
                                      DreamGpuContextState *state, DreamGpuTextureNamespace *shared);
@@ -122,7 +129,8 @@ uint32_t dreamgpu_texture_bind(const DreamGpuTextureMemory *memory, DreamGpuText
 void dreamgpu_texture_delete(const DreamGpuTextureMemory *memory, DreamGpuTextureNamespace *ns,
                              const uint8_t *data, uint32_t count, DreamGpuTexture *default_2d,
                              DreamGpuTexture *default_1d, DreamGpuTexture *default_cube,
-                             DreamGpuTexture *const *const *bindings, uint32_t binding_count);
+                             DreamGpuTexture *default_3d, DreamGpuTexture *const *const *bindings,
+                             uint32_t binding_count);
 DreamGpuTexture *dreamgpu_texture_lookup(DreamGpuTextureNamespace *ns, uint32_t name);
 void dreamgpu_texture_wait(const struct DreamGpuGlApi *api, DreamGpuTexture *texture,
                            uint64_t serial);

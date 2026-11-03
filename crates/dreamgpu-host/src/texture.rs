@@ -5,6 +5,7 @@ use core::ffi::c_void;
 pub(crate) mod border;
 pub(crate) mod control;
 pub(crate) mod names;
+pub(crate) mod volume;
 // Linux uses provider border storage; CGL uses the private fragment sampler.
 pub(crate) const BORDER_IMAGES: bool = true;
 
@@ -30,6 +31,10 @@ pub struct Texture {
     /// each level's charge over all six faces and `undefined_levels` their
     /// union, so accounting and draw admission treat every texture alike.
     pub faces: *mut [Face; FACES],
+    /// Image count (depth) of each level of a 3D texture (EXT_texture3D);
+    /// zero for other targets. `widths`/`heights` give each image's size and
+    /// `levels` charges all of a level's images.
+    pub depths: [u32; 12],
 }
 impl Default for Texture {
     fn default() -> Self {
@@ -49,6 +54,7 @@ impl Default for Texture {
             borders: [0; 12],
             levels: [0; 12],
             faces: core::ptr::null_mut(),
+            depths: [0; 12],
         }
     }
 }

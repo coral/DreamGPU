@@ -33,6 +33,9 @@ BOOL JglCompressedTexturesAvailable(void) {
 BOOL JglTextureCubeMapAvailable(void) {
     return FALSE; /* Cube faces: tests/guest/opengl/cube-map.cpp. */
 }
+BOOL JglTexture3DAvailable(void) {
+    return FALSE; /* 3D images: tests/guest/opengl/texture-3d.cpp. */
+}
 BOOL JglCompiling(void) {
     return Compiling;
 }
@@ -117,8 +120,8 @@ static void Reset(ULONG maximum) {
     Queries = 0;
     QueryBytes = 4;
     QueryFail = Compiling = FALSE;
-    Unpack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
-    Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+    Unpack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
+    Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
 }
 static void Image(GLsizei w, GLsizei h, GLenum format, const void *pixels) {
     glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, w, h, 0, format, GL_UNSIGNED_BYTE, pixels);
@@ -226,7 +229,7 @@ static void PackedTextures(void) {
             }
         memcpy(saved, source, sizeof(source));
         Reset(8);
-        Unpack = (JGL_UNPACK){8, 7, 1, 1, 0, 0};
+        Unpack = (JGL_UNPACK){8, 7, 1, 1, 0, 0, 0, 0};
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 5, 2, 0, cases[f].Format, cases[f].Type,
                      source + 1);
         assert(!Error && Count == (bytes == 2 ? 5 : 7) && !Tiles[0].Bytes);
@@ -245,7 +248,7 @@ static void PackedTextures(void) {
         assert(!memcmp(Tiles[1].Pixels, expected, 8)); /* Immutable converted bytes. */
 
         Reset(64);
-        Unpack = (JGL_UNPACK){8, 7, 1, 1, 0, 0};
+        Unpack = (JGL_UNPACK){8, 7, 1, 1, 0, 0, 0, 0};
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 5, 2, 0, cases[f].Format, cases[f].Type, saved + 1);
         if (bytes == 2) {
             // Padded rows: one record gathering both rows, not two row records.
@@ -257,7 +260,7 @@ static void PackedTextures(void) {
         }
 
         Reset(8);
-        Unpack = (JGL_UNPACK){8, 7, 123, 1, 0, 0};
+        Unpack = (JGL_UNPACK){8, 7, 123, 1, 0, 0, 0, 0};
         glTexSubImage1D(GL_TEXTURE_1D, 0, 4, 5, cases[f].Format, cases[f].Type, saved + 1 + stride);
         assert(!Error && Count == (bytes == 2 ? 2 : 3) && Tiles[0].Args[2] == 4 &&
                Tiles[Count - 1].Args[2] == 8);
@@ -338,7 +341,7 @@ static void PackedTextures(void) {
                         (unsigned char)(wide[f].Word[x] >> (8 * i));
                 }
             Reset(64);
-            Unpack = (JGL_UNPACK){1, 0, 0, 0, 0, 0};
+            Unpack = (JGL_UNPACK){1, 0, 0, 0, 0, 0, 0, 0};
             glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 4, 1, 0, wide[f].Format, wide[f].Type, source);
             assert(!Error && Count == 2 && Tiles[0].Args[6] == GL_RGBA &&
                    Tiles[0].Args[7] == GL_UNSIGNED_BYTE);
@@ -347,7 +350,7 @@ static void PackedTextures(void) {
             if (wide[f].Bytes == 1)
                 continue;
             Reset(64);
-            Unpack = (JGL_UNPACK){1, 0, 0, 0, 0, 0};
+            Unpack = (JGL_UNPACK){1, 0, 0, 0, 0, 0, 0, 0};
             Unpack.SwapBytes = 1;
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 4, 1, wide[f].Format, wide[f].Type, swapped);
             assert(!Error && Count == 1 && !memcmp(Tiles[0].Pixels, wide[f].RGBA, 16));
@@ -667,7 +670,7 @@ static void ScalarTextures(void) {
                                     source[1 + (y + 1) * stride + (x + 1) * bpp + c * type.Unit +
                                            (swap ? type.Unit - 1 - j : j)];
                 Reset(32);
-                Unpack = (JGL_UNPACK){8, 7, 1, 1, (GLint)swap, 0};
+                Unpack = (JGL_UNPACK){8, 7, 1, 1, (GLint)swap, 0, 0, 0};
                 glTexImage2D(GL_TEXTURE_2D, 0, 0x805b /* RGBA16 */, 5, 2, 0, format.Format,
                              type.Type, source + 1);
                 assert(!Error && Count > 1 && !Tiles[0].Bytes);
@@ -691,7 +694,7 @@ static void ScalarTextures(void) {
         unsigned char bits[16] = {0, 0, 0, 0, 0x96, 0x69, 0, 0, 0x5a, 0xa5};
         unsigned char actual[18] = {};
         Reset(4);
-        Unpack = (JGL_UNPACK){4, 13, 1, 3, 1, (GLint)lsb};
+        Unpack = (JGL_UNPACK){4, 13, 1, 3, 1, (GLint)lsb, 0, 0};
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 9, 2, 0, 0x1900, 0x1a00, bits);
         assert(!Error && Count == 7);
         for (ULONG i = 1; i < Count; ++i) {
@@ -706,13 +709,13 @@ static void ScalarTextures(void) {
                        ((bits[(y + 1) * 4 + bit / 8] >> (lsb ? bit % 8 : 7 - bit % 8)) & 1));
             }
         Reset(64);
-        Unpack = (JGL_UNPACK){8, 1000, INT32_MAX, 3, 0, (GLint)lsb};
+        Unpack = (JGL_UNPACK){8, 1000, INT32_MAX, 3, 0, (GLint)lsb, 0, 0};
         glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, 9, 0, 0x1900, 0x1a00, bits + 4);
         assert(!Error && Count == 2 && !memcmp(Tiles[1].Pixels, actual, 9));
     }
     for (GLenum target : {0x8063u, 0x8064u}) {
         Reset(0);
-        Unpack = (JGL_UNPACK){8, INT32_MAX, INT32_MAX, INT32_MAX, 1, 1};
+        Unpack = (JGL_UNPACK){8, INT32_MAX, INT32_MAX, INT32_MAX, 1, 1, 0, 0};
         if (target == 0x8063)
             glTexImage1D(target, 0, 0x805b, INT32_MAX, 0, GL_RGBA, 0x1406, (const void *)1);
         else

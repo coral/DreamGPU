@@ -127,11 +127,12 @@ unsafe fn execute(
         FEnum_glGetTexLevelParameteriv | FEnum_glGetTexLevelParameterfv
     ) && matches!(
         a,
-        GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP
+        GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP | GL_PROXY_TEXTURE_3D
     ) && !state.context.is_null()
         && unsafe {
             match a {
                 GL_PROXY_TEXTURE_CUBE_MAP => (*state.context).proxy_rejected_cube,
+                GL_PROXY_TEXTURE_3D => (*state.context).proxy_rejected_3d,
                 _ => (*state.context).proxy_rejected[usize::from(a == GL_PROXY_TEXTURE_2D)],
             }
         } & (1 << b)
@@ -401,6 +402,21 @@ unsafe fn execute(
                         integers[0] = unsafe { (*cube).guest_name } as i32;
                     }
                 }
+                // The active unit's 3D binding (EXT_texture3D).
+                GL_TEXTURE_BINDING_3D => {
+                    if state.context.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    let volume = unsafe { (*state.context).bound_texture_3d };
+                    if !volume.is_null() {
+                        integers[0] = unsafe { (*volume).guest_name } as i32;
+                    }
+                }
+                // The protocol limit, or a smaller native one.
+                GL_MAX_3D_TEXTURE_SIZE => {
+                    call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
+                    integers[0] = integers[0].clamp(0, DG_GL_MAX_3D_TEXTURE_SIZE as i32);
+                }
                 GL_ATTRIB_STACK_DEPTH => integers[0] = state.attrib_depth as i32,
                 GL_MAX_ATTRIB_STACK_DEPTH => integers[0] = 16,
                 GL_MAX_EVAL_ORDER => {
@@ -477,7 +493,10 @@ unsafe fn execute(
     }
     if logical {
         for i in 0..count {
-            doubles[i] = if matches!(a, GL_TEXTURE_BINDING_2D | GL_TEXTURE_BINDING_CUBE_MAP) {
+            doubles[i] = if matches!(
+                a,
+                GL_TEXTURE_BINDING_2D | GL_TEXTURE_BINDING_CUBE_MAP | GL_TEXTURE_BINDING_3D
+            ) {
                 integers[i] as u32 as f64
             } else {
                 integers[i] as f64
@@ -575,11 +594,8 @@ unsafe fn program(
         FEnum_glGetVertexAttribfvARB => {
             let mut values = [0f32; 4];
             unsafe {
-                api.dg_glGetVertexAttribfvARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?(
-                    a,
-                    b,
-                    values.as_mut_ptr(),
-                )
+                api.dg_glGetVertexAttribfvARB
+                    .ok_or(DG_GL_ERROR_UNSUPPORTED)?(a, b, values.as_mut_ptr())
             };
             for (i, v) in values.into_iter().enumerate() {
                 put(i, v.to_bits());

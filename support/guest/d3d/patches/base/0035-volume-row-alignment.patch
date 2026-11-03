@@ -1,0 +1,29 @@
+--- a/wined3d/volume.c
++++ b/wined3d/volume.c
+@@ -77,6 +77,7 @@
+     UINT depth = volume->resource.depth;
+     const void *mem = data->addr;
+     void *converted_mem = NULL;
++    GLint alignment;
+ 
+     TRACE("volume %p, context %p, level %u, format %s (%#x).\n",
+             volume, context, volume->texture_level, debug_d3dformat(format->id),
+@@ -109,10 +110,18 @@
+         checkGLcall("glBindBuffer");
+     }
+ 
++    /* DreamGPU: volume memory pads each row to the device's surface alignment
++     * (wined3d_volume_get_pitch); converted rows are tightly packed. The
++     * context's unpack alignment is whatever the last surface upload left
++     * (one, or the surface alignment), so state it for this upload. */
++    gl_info->gl_ops.gl.p_glGetIntegerv(GL_UNPACK_ALIGNMENT, &alignment);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ALIGNMENT,
++            format->convert ? 1 : volume->resource.device->surface_alignment);
+     GL_EXTCALL(glTexSubImage3D(GL_TEXTURE_3D, volume->texture_level, 0, 0, 0,
+             width, height, depth,
+             format->glFormat, format->glType, mem));
+     checkGLcall("glTexSubImage3D");
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_UNPACK_ALIGNMENT, alignment);
+ 
+     if (data->buffer_object)
+     {

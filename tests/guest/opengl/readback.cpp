@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "internal.h"
-static JGL_UNPACK pack = {4, 0, 0, 0, 0, 0};
+static JGL_UNPACK pack = {4, 0, 0, 0, 0, 0, 0, 0};
 static ULONG capacity = 65536, calls, error, scratch[16384];
 static GLint texture_width = 1024, texture_height = 1024;
 BOOL JglReady(void) {
@@ -11,6 +11,9 @@ BOOL JglReady(void) {
 }
 BOOL JglTextureCubeMapAvailable(void) {
     return FALSE;
+}
+BOOL JglTexture3DAvailable(void) {
+    return FALSE; /* 3D levels: tests/guest/opengl/texture-3d.cpp. */
 }
 void JglSetError(GLenum e) {
     error = e;

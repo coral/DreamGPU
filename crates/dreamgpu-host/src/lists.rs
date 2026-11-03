@@ -409,11 +409,14 @@ unsafe fn capture(
     let s = unsafe { (*c).lists };
     let proxy = matches!(
         f,
-        FEnum_glTexImage1D | FEnum_glTexImage2D | FEnum_glCompressedTexImage2D
+        FEnum_glTexImage1D | FEnum_glTexImage2D | FEnum_glCompressedTexImage2D | FEnum_glTexImage3D
     ) && args.len() >= 4
         && matches!(
             word(args, 0),
-            GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP
+            GL_PROXY_TEXTURE_1D
+                | GL_PROXY_TEXTURE_2D
+                | GL_PROXY_TEXTURE_CUBE_MAP
+                | GL_PROXY_TEXTURE_3D
         );
     if s.is_null() || unsafe { (*s).mode } == 0 || immediate(f) || proxy {
         return true;

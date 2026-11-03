@@ -33,7 +33,7 @@ ULONG JglReadbackCapacity(void) {
 ULONG *JglReadbackBuffer(void) {
     return Readback;
 }
-static JGL_UNPACK Pack = {4, 0, 0, 0, 0, 0};
+static JGL_UNPACK Pack = {4, 0, 0, 0, 0, 0, 0, 0};
 static void Marker(void) {}
 BOOL JglReady(void) {
     return Ready;
@@ -68,6 +68,9 @@ BOOL JglFragmentProgramAvailable(void) {
     return FALSE;
 }
 BOOL JglVertexProgramAvailable(void) {
+    return FALSE;
+}
+BOOL JglTexture3DAvailable(void) {
     return FALSE;
 }
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
@@ -321,7 +324,7 @@ int main(void) {
     glDeleteTextures(-1, names);
     assert(Error == GL_INVALID_VALUE && Calls == 3);
     Error = 0;
-    Pack = (JGL_UNPACK){8, 137, 1, 2, 0, 0};
+    Pack = (JGL_UNPACK){8, 137, 1, 2, 0, 0, 0, 0};
     memset(image, 0xcc, sizeof(image));
     glReadPixels(10, 20, 130, 2, GL_RGB, GL_UNSIGNED_BYTE, image);
     assert(QueryCalls == 4 && !Error); /*128+2 pixels per row, no hidden full read. */
@@ -334,7 +337,7 @@ int main(void) {
     for (i = 0; i < 422; ++i)
         assert(image[i] == 0xcc);
     assert(image[812] == 0xcc && image[837] == 0xcc && image[1228] == 0xcc);
-    Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+    Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
     glReadPixels(7, 9, 1, 1, 0x80e1, GL_UNSIGNED_BYTE, image);
     assert(image[0] == 0x55 && image[1] == 9 && image[2] == 7 && image[3] == 0xaa);
     memset(image, 0xcc, sizeof(image));
@@ -370,7 +373,7 @@ int main(void) {
         BYTE texture[1060];
         ULONG j;
         memset(texture, 0xcc, sizeof(texture));
-        Pack = (JGL_UNPACK){8, 0, 999, 2, 0, 0};
+        Pack = (JGL_UNPACK){8, 0, 999, 2, 0, 0, 0, 0};
         Error = 0;
         ShortReply = 0;
         glGetTexImage(GL_TEXTURE_1D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture);
@@ -387,7 +390,7 @@ int main(void) {
             assert(texture[j] == expected);
         }
         memset(texture, 0xcc, sizeof(texture));
-        Pack = (JGL_UNPACK){8, 0, 999, 2, 0, 0};
+        Pack = (JGL_UNPACK){8, 0, 999, 2, 0, 0, 0, 0};
         glGetTexImage(GL_TEXTURE_1D, 0, 0x80e1, 0x8367, texture + 1);
         assert(!Error && texture[8] == 0xcc && texture[9] == 0x33 && texture[10] == 0x22 &&
                texture[11] == 0 && texture[12] == 0xff && texture[525] == 0xcc);
@@ -398,7 +401,7 @@ int main(void) {
         glGetTexImage(GL_TEXTURE_1D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture + 1);
         assert(texture[9] == 0 && texture[10] == 0x22 && texture[11] == 0x33 &&
                texture[12] == 0xff);
-        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
         ShortReply = 1;
         Error = 0;
         glGetTexImage(GL_TEXTURE_1D, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture);
@@ -415,7 +418,7 @@ int main(void) {
         PackedOracle = TRUE;
         for (swapped = 0; swapped < 2; ++swapped) {
             memset(packed, 0xcc, sizeof(packed));
-            Pack = (JGL_UNPACK){8, 257, 1, 1, (GLint)swapped, 0};
+            Pack = (JGL_UNPACK){8, 257, 1, 1, (GLint)swapped, 0, 0, 0};
             Error = 0;
             Calls = QueryCalls;
             glGetTexImage(GL_TEXTURE_2D, 0, GL_RGB, 0x8363, packed + 1);
@@ -451,7 +454,7 @@ int main(void) {
         for (c = 0; c < sizeof(cases) / sizeof(cases[0]); ++c)
             for (swapped = 0; swapped < 2; ++swapped)
                 for (api = 0; api < 2; ++api) {
-                    Pack = (JGL_UNPACK){4, 0, 0, 0, (GLint)swapped, 0};
+                    Pack = (JGL_UNPACK){4, 0, 0, 0, (GLint)swapped, 0, 0, 0};
                     memset(image, 0xcc, sizeof(image));
                     Error = 0;
                     if (api)
@@ -464,7 +467,7 @@ int main(void) {
                 }
         FixedPixel = FALSE;
         /* RGB565 framebuffer tiling uses two-byte destination strides. */
-        Pack = (JGL_UNPACK){8, 137, 1, 2, 0, 0};
+        Pack = (JGL_UNPACK){8, 137, 1, 2, 0, 0, 0, 0};
         memset(image, 0xcc, sizeof(image));
         Calls = QueryCalls;
         glReadPixels(10, 20, 130, 2, GL_RGB, 0x8363, image + 1);
@@ -480,7 +483,7 @@ int main(void) {
             }
             assert(image[i] == expected);
         }
-        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
         for (api = 0; api < 2; ++api) {
             memset(image, 0xcc, sizeof(image));
             memcpy(before, image, sizeof(image));
@@ -507,7 +510,7 @@ int main(void) {
         static const GLenum types[] = {0x1400, 0x1402, 0x1403, 0x1404,
                                        0x1405, 0x1406, 0x8036, 0x8368};
         ULONG k;
-        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
         for (k = 0; k < sizeof(types) / sizeof(types[0]); ++k) {
             Calls = QueryCalls;
             Error = 0;
@@ -551,7 +554,7 @@ int main(void) {
                     ULONG components = cases[k].type >= 0x8000 ? 1 : 4;
                     ULONG expected[] = {cases[k].red, cases[k].green, cases[k].blue,
                                         cases[k].alpha};
-                    Pack = (JGL_UNPACK){4, 0, 0, 0, (GLint)swapped, 0};
+                    Pack = (JGL_UNPACK){4, 0, 0, 0, (GLint)swapped, 0, 0, 0};
                     memset(image, 0xcc, sizeof(image));
                     if (api)
                         glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, cases[k].type, image + 1);
@@ -575,7 +578,7 @@ int main(void) {
             TextureWidth = 33;
             TextureHeight = 2;
             for (api = 0; api < 2; ++api) {
-                Pack = (JGL_UNPACK){8, 33, 1, 0, 0, 0};
+                Pack = (JGL_UNPACK){8, 33, 1, 0, 0, 0, 0, 0};
                 memset(tiled, 0xcc, sizeof(tiled));
                 if (api)
                     glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, 0x1406, tiled + 1);
@@ -596,7 +599,7 @@ int main(void) {
             TextureWidth = TextureHeight = 1;
         }
         /* Non-8bit 1D texture data remains exact even with 16bit scalar output. */
-        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
         FloatPixel[0] = 12345 / 65535.0f;
         FloatPixel[1] = 23456 / 65535.0f;
         FloatPixel[2] = 34567 / 65535.0f;
@@ -675,7 +678,7 @@ int main(void) {
          * pixels across a transport boundary, in either bit order. */
         FixedPixel = FALSE;
         for (swapped = 0; swapped < 2; ++swapped) {
-            Pack = (JGL_UNPACK){4, 141, 1, 3, 1, (GLint)swapped};
+            Pack = (JGL_UNPACK){4, 141, 1, 3, 1, (GLint)swapped, 0, 0};
             memset(image, 0xa5, sizeof(image));
             glReadPixels(1, 0, 130, 2, 0x1901, 0x1a00, image);
             assert(!Error);
@@ -696,7 +699,7 @@ int main(void) {
         assert(Error == GL_INVALID_OPERATION && Calls == QueryCalls);
         Error = 0;
         /* Malformed wide replies do not mutate output. */
-        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0};
+        Pack = (JGL_UNPACK){4, 0, 0, 0, 0, 0, 0, 0};
         ShortReply = 1;
         memcpy(before, image, sizeof(image));
         Error = 0;

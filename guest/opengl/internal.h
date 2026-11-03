@@ -7,8 +7,9 @@
 #include <GL/gl.h>
 #include "gl.h"
 #include "gl-funcs.h"
+/* ImageHeight and SkipImages exist with negotiated 3D textures (EXT_texture3D). */
 typedef struct {
-    GLint Alignment, RowLength, SkipRows, SkipPixels, SwapBytes, LsbFirst;
+    GLint Alignment, RowLength, SkipRows, SkipPixels, SwapBytes, LsbFirst, ImageHeight, SkipImages;
 } JGL_UNPACK;
 /* Client array slots follow the DrawArraysEXT descriptor order: seven legacy
  * slots, texture coordinates of units 1-7, then the fog coordinate. Without
@@ -118,6 +119,21 @@ static inline BOOL JglCubeMapQueryRejected(GLenum name) {
     return name - JGL_TEXTURE_CUBE_MAP <= 0x851c - JGL_TEXTURE_CUBE_MAP &&
            !JglTextureCubeMapAvailable();
 }
+/* EXT_texture3D: the TEXTURE_3D binding target, its proxy, 3D images, subimages,
+ * copies and readback, TEXTURE_WRAP_R on every target, TEXTURE_DEPTH and the
+ * IMAGE_HEIGHT/SKIP_IMAGES pixel storage. */
+BOOL JglTexture3DAvailable(void);
+#define JGL_TEXTURE_3D 0x806f
+#define JGL_PROXY_TEXTURE_3D 0x8070
+#define JGL_TEXTURE_WRAP_R 0x8072
+/* EXT_texture3D enums as query names (TEXTURE_BINDING_3D, the pixel storage,
+ * TEXTURE_3D, its proxy, TEXTURE_DEPTH, MAX_3D_TEXTURE_SIZE): without
+ * negotiation they stay the local GL_INVALID_ENUM they were. TEXTURE_WRAP_R is
+ * a parameter name, gated with the target (JglTextureParameterCount). */
+static inline BOOL JglTexture3DQueryRejected(GLenum name) {
+    return name - 0x806a <= 0x8073 - 0x806a && name != JGL_TEXTURE_WRAP_R &&
+           !JglTexture3DAvailable();
+}
 /* ARB_fragment_program: program objects, ProgramString, env/local parameters,
  * the FRAGMENT_PROGRAM_ARB enable and its state queries. */
 BOOL JglFragmentProgramAvailable(void);
@@ -172,11 +188,12 @@ GLubyte *JglProgramErrorBuffer(void);
  * fail the whole batch and the context). Zero means invalid. */
 static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
     const BOOL cube = target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable();
-    if (target != 0x0de0 && target != 0x0de1 && !cube) /* TEXTURE_1D, TEXTURE_2D */
+    const BOOL volume = target == JGL_TEXTURE_3D && JglTexture3DAvailable();
+    if (target != 0x0de0 && target != 0x0de1 && !cube && !volume) /* TEXTURE_1D, TEXTURE_2D */
         return 0;
     switch (pname) {
-        case 0x8072: /* TEXTURE_WRAP_R, for the cube map only */
-            return cube ? 1 : 0;
+        case JGL_TEXTURE_WRAP_R: /* the cube map's, and every target's with 3D textures */
+            return cube || JglTexture3DAvailable() ? 1 : 0;
         case 0x1004: /* TEXTURE_BORDER_COLOR */
             return 4;
         case 0x2801:

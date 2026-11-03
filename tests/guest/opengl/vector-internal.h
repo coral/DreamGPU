@@ -42,6 +42,7 @@ BOOL JglCompressedTexturesAvailable(void);
 BOOL JglFogCoordAvailable(void);
 BOOL JglFragmentProgramAvailable(void);
 BOOL JglVertexProgramAvailable(void);
+BOOL JglTexture3DAvailable(void);
 static inline BOOL JglProgramsAvailable(void) {
     return JglFragmentProgramAvailable() || JglVertexProgramAvailable();
 }

@@ -497,6 +497,32 @@ JGL_PACKING_ONLY void APIENTRY glFogCoordfEXT(GLfloat a0) {
     __builtin_memcpy(words + 0, &a0, 4);
     Scalar(FEnum_glFogCoordf, 1, words);
 }
+JGL_PACKING_ONLY void APIENTRY glCopyTexSubImage3D(GLenum a0, GLint a1, GLint a2, GLint a3, GLint a4, GLint a5, GLint a6, GLsizei a7, GLsizei a8) {
+    ULONG words[9];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    words[4] = (ULONG)a4;
+    words[5] = (ULONG)a5;
+    words[6] = (ULONG)a6;
+    words[7] = (ULONG)a7;
+    words[8] = (ULONG)a8;
+    Scalar(FEnum_glCopyTexSubImage3D, 9, words);
+}
+JGL_PACKING_ONLY void APIENTRY glCopyTexSubImage3DEXT(GLenum a0, GLint a1, GLint a2, GLint a3, GLint a4, GLint a5, GLint a6, GLsizei a7, GLsizei a8) {
+    ULONG words[9];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    words[4] = (ULONG)a4;
+    words[5] = (ULONG)a5;
+    words[6] = (ULONG)a6;
+    words[7] = (ULONG)a7;
+    words[8] = (ULONG)a8;
+    Scalar(FEnum_glCopyTexSubImage3D, 9, words);
+}
 JGL_PACKING_ONLY void APIENTRY glLoadMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixf, 16, matrix); }
 JGL_PACKING_ONLY void APIENTRY glMultMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glMultMatrixf, 16, matrix); }
 JGL_PACKING_ONLY void APIENTRY glLoadMatrixd(const GLdouble *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixd, 32, matrix); }
