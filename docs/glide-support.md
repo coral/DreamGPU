@@ -1,27 +1,126 @@
 # Glide provider scope
 
-The current DreamGPU provider is `glide2x.dll`, translated through the same
-DreamGPU OpenGL channel as WineD3D. The installer must put the provider and its
-shared runtime in the Windows system directory. Games using that API use normal
-Windows DLL loading; application-local deployment is a diagnostic fixture only.
+DreamGPU ships two Glide providers, `glide2x.dll` and `glide3x.dll`. Both link the
+same pinned OpenGLide core (with the checked DreamGPU patch stack) and translate
+through the DreamGPU OpenGL channel used by WineD3D. The installer must put the
+providers and their shared runtime in the Windows system directory. Games using
+these APIs use normal Windows DLL loading; application-local deployment is a
+diagnostic fixture only.
 
-| API | Source available | Current package | Remaining work |
+| API | Source | Current package | Remaining work |
 | --- | --- | --- | --- |
 | Glide2x | Pinned `vendor/qemu-xtra/openglide`, with checked DreamGPU adaptations | `glide2x.dll` | Finish installer ownership/removal and final OS/host acceptance |
-| Glide3x | Donor `openglide/Glide3x.def`, `g3wrap.cpp`, or `g2xwrap/wr301dll.cpp` | Not shipped as a supported provider | Audit layout conversion and state/query semantics, implement missing behavior, add normal-loader pixel and lifecycle probes, then integrate packaging |
+| Glide3x | DreamGPU front end `guest/glide/glide3.cpp` and `glide3-core.h` on the same core; the donor `g3wrap.cpp` is not linked | `glide3x.dll` (Windows 98 and Windows 2000/XP packages) | Guest runtime acceptance (`DGSYSG3.EXE`, games) and the partial rows below |
 | Glide 2.11 (`glide.dll`) | Donor `g2xwrap/wr211dll.cpp` and `gl211wrp.def` | Not shipped as a supported provider | Audit the older ABI and forwarding exports, add legacy compiler/import checks and a real public-API probe before packaging |
 
-The current CMake source list includes `g3wrap.cpp`, but links the **Glide2x export
-table**. Compiling that source does not establish a Glide3x ABI. In the pinned
-donor, `grFinish` and `grFlush` are empty, and vertex-layout offset handling needs
-bounds and disabled-attribute review. Renaming the existing DLL to `glide3x.dll`
-would therefore be an incorrect support claim.
+## Glide 3.x provider
+
+`glide3x.dll` is a separate CMake target. It compiles the OpenGLide core units
+exactly as `glide2x.dll` does, but replaces the donor `g3wrap.cpp` with the
+DreamGPU front end and links its own export table, `guest/glide/glide3x.def`.
+`glide2x.dll` keeps its historical source list (still including the unexported
+donor wrapper), `Glide2x.def` and link options, so its exports and behaviour are
+unchanged.
+
+The donor wrapper was not adapted. Besides the empty `grFinish`/`grFlush`, its
+layout offsets were unbounded and offset zero meant "disabled", `GR_PARAM_Q1`
+overwrote TMU1 `tow`, clip coordinates ignored the viewport origin and texture
+scale, `grGet` reported success for unknown names and zero-filled caller buffers,
+strip/fan helpers kept static state with inconsistent winding, and Glide 3 fog
+modes reached the Glide 2 core with Glide 2 meanings.
+
+### ABI
+
+The DLL exports the 93 functions of the 3dfx Glide 3.x `glide.h`/`glideutl.h`
+plus four exports the Voodoo `glide3x.dll` also carries (`grCheckForRoom`,
+`grGlideGetVersion`, `grSetNumPendingBuffers`, `grSstConfigPipeline`): 97 stdcall
+names such as `_grDrawVertexArray@12` and `_grSstWinOpen@28`. Each `.def` entry
+maps `_grName@N` to `dg3_grName@N` and the target links with
+`--disable-stdcall-fixup`, so a prototype whose argument bytes differ from its
+export cannot link. `test_glide3_exports.py` checks the `.def` against the `dg3_`
+prototypes (compiled for i686 Windows with `static_assert`s over their real
+parameter types) and against an independent table of the SDK argument counts;
+the package build compares the linked export table with the `.def`.
+
+`GrContext_t` is a 32-bit handle, `GrTexInfo` carries log2 LOD/aspect values, and
+`GrLfbInfo_t`, `GrResolution` and `Gu3dfInfo` keep their 32-bit layouts. The
+`grGlideGetState` and `grGlideGetVertexLayout` blobs are DreamGPU records (sizes
+from `grGet`) with a magic and version; the setters ignore foreign or corrupt
+blobs.
+
+### Coverage
+
+| Area | Status | Notes |
+| --- | --- | --- |
+| `grGlideInit/Shutdown`, `grSstSelect` | Implemented | Init resets the vertex layout, coordinate space, depth range and counters |
+| `grSstWinOpen/Close`, `grSelectContext` | Implemented | One context per board, as on Voodoo: a stable non-zero handle, selectable only while open; close rejects foreign handles; reopen on the same HWND |
+| Glide 3 default state | Implemented | Clamp, point sampling, no mipmaps and a disabled texture combine at open; window coordinates and a full-window viewport |
+| `grVertexLayout`, `grReset(GR_VERTEX_PARAMETER)` | Implemented | XY, Z, W, Q, FOG_EXT, A, RGB, PARGB, ST0/1 and Q0/1. Offsets must fit a 1024-byte vertex; an out-of-range enable disables the parameter. Disabled parameters are never read. Colour type follows the last enabled colour parameter. XY is read at offset 0, as by the hardware setup code |
+| `grDrawPoint/Line/Triangle`, `grAADrawTriangle` | Implemented | Converted to the core's Glide 2 vertices; edge antialiasing is not emulated |
+| `grDrawVertexArray(Contiguous)` | Implemented | Points, lines, line strips, triangles, strips, fans, polygons and both `_CONTINUE` modes using the setup unit's last two vertices and strip parity. Strip winding alternates for culling. Stride is Glide's `stride & ~3`. A null array or vertex pointer stops the draw; wrapping address arithmetic is refused |
+| `grCoordinateSpace`, `grViewport`, `grDepthRange` | Implemented | Window coordinates: Z, Q (else W, else 1) and per-TMU Qn. Clip coordinates: 1/W, viewport origin and size, depth range, 0..1 float colours, ST scaled by 1/W and the texture's aspect scale |
+| `grGet` | Implemented | Exact byte length per name; null buffers, wrong lengths and unknown names return 0 without writing. Pixel counters, rasterized-triangle counts and swap history are not observable and are not reported |
+| `grGetString`, `grQueryResolutions`, `grReset` | Implemented | A single-TMU Voodoo Banshee, Glide 3.01, no extensions advertised. Resolutions follow the 3dfx template rules within the frame-buffer budget |
+| `grGlideGet/SetState`, `grGlideGet/SetVertexLayout` | Implemented | Core state plus the fog table, STW hint and Glide 3 layout, coordinate space, viewport, fog mode and texture scale. The core replays colour combine before texture combine and blending last, which recomputed the order-derived combine flags (texture enable, local/other use) from stale state and disabled texturing; the blob carries those flags and restores them exactly (`test_glide3_state.py`) |
+| Texture memory and downloads | Implemented | `grTexMin/MaxAddress`, `grTexCalc/TextureMemRequired`, `grTexSource`, `grTexDownloadMipMap/Level/LevelPartial`, `grTexDownloadTable/Partial`, `grTexNCCTable`: log2 descriptors are validated and translated; application descriptors are never modified. One TMU; TMU1 calls are ignored |
+| `grLfbLock/Unlock/ReadRegion/WriteRegion` | Implemented | Reads must lie inside the frame buffer; writes are clipped to it. The Glide 3 `pixelPipeline` flag reaches the core lock |
+| `grFinish/grFlush` | Implemented | Flush submits batched Glide work (`glFlush`); finish also waits for the GPU (`glFinish`) |
+| Fog | Implemented | Glide 3 fog modes are renumbered for the core; FOG_EXT feeds the fog iterator |
+| Combine, blend, depth, chroma, cull, clip, dither | Implemented | Enumerations are validated before reaching the core's tables |
+| `gu3dfGetInfo/Load`, fog and gamma utilities | Implemented | Bounded `.3df` parser with Glide 3 header values; gamma uses the core's display ramp |
+| `grEnable/grDisable` | Partial | Modes are recorded; `GR_AA_ORDERED` and video smoothing have no effect |
+| LFB pixel pipeline | Partial | Only the clip rectangle applies; `GR_LFB_PIXEL_PIPE` reports false |
+| FOG_EXT with W-buffering | Partial | Depth keeps Q, so fog then uses Q instead of the fog coordinate |
+| `GR_TEXTABLE_PALETTE_6666_EXT` | Partial | Not advertised; colours are accepted, palette alpha stays opaque in the core |
+| Mipmap downloads | Partial | As for Glide 2, the core keeps the largest level and generates the chain |
+| `GR_TEXTURECLAMP_MIRROR_EXT` | Stubbed | Not advertised; wraps |
+| `grStippleMode/Pattern` | Stubbed | Recorded only |
+| `grTexDetailControl`, `grTexMultibase(Address)`, `grLfbWriteColorFormat/Swizzle`, `grLfbConstantAlpha/Depth`, `grSstConfigPipeline`, `grCheckForRoom`, `grSetNumPendingBuffers` | Stubbed | Validated and accepted; the core has no equivalent behaviour |
+| `grGetProcAddress` | Stubbed | Returns null: no Glide 3 extensions are provided |
+
+### Installation and verification
+
+`glide3x.dll` is in the installer's shared runtime next to `glide2x.dll`, so the
+same journalled before-image capture, staging, activation, rollback, repair and
+uninstall code owns it on Windows 98 and Windows 2000/XP. An upgrade from an
+installation without it records its absent original, and removal deletes it.
+
+Activation still requires the six accepted normal-loader proofs (OpenGL, Glide 2,
+Direct3D 6–9). Glide 3 has a separate oracle in the package tools, `DGSYSG3.EXE`
+from `tools/glide/probe3.cpp`. Run it as `C:\DGSYSG3.EXE` with working directory
+`C:\` (runner route `PROBE <request-id> sysglide3`, 90 s budget); it writes
+`C:\DGSYSG3.LOG`, reads the frame once per stage, and reports each wrong block
+with its first wrong pixel, actual and expected values.
+It rejects preloaded or neighbouring Glide providers, requires `glide3x.dll` and
+`dgpugl.dll` from the system directory, resolves all 97 decorated exports, checks
+the `grGet` and `grQueryResolutions` contracts, and checks exact pixels for a
+layout with disabled and out-of-range parameters, a contiguous strip under both
+cull signs, a continued fan, clip coordinates, a log2 texture, restored state and
+layout blobs and 16-bit LFB writes. It then performs eight swaps, closes the
+context and reinitializes on the same window. Adding it to activation is a
+separate decision after guest acceptance.
+
+Source gates: `tests/guest/glide/test_glide3_core.py` (layout, conversion,
+assembly, `grGet`, resolutions, textures, fog and `.3df` under ASan/UBSan),
+`test_glide3_state.py` (the actual core combine/state code: replay defect and
+exact restore), `test_glide3_exports.py` and `test_glide3_system_loader.py`.
+
+The shared core's `grGlideSetState` has the same replay-order defect for
+`glide2x.dll`; it is left unchanged there so Glide 2 behaviour stays identical.
+
+### Remaining
+
+- Runtime acceptance of `DGSYSG3.EXE` and Glide 3 games (for example Diablo II
+  `-3dfx`) on the six guest/host combinations; none is recorded yet.
+- The partial and stubbed rows above, multiple TMUs, and Glide 3.10/Napalm
+  additions (extension entry points, 32-bit formats, 2048-texel textures).
+
+## Other notes
 
 The donor G2X wrapper Makefile defaults to `-march=x86-64-v2`; that build recipe is
-not suitable for DreamGPU's 32-bit legacy guests. A future wrapper must use the
-existing audited Cargo/CMake toolchain and retain its original notices and source
-provenance. These are separate compatibility extensions, not prerequisites for
-activating the tested Glide2x provider.
+not suitable for DreamGPU's 32-bit legacy guests. Providers use the existing
+audited Cargo/CMake toolchain and retain their original notices and source
+provenance.
 
 `tools/glide/probe.cpp` is shared by diagnostic `DGGLIDE.EXE` and ordinary-system
 `DGSYSGR.EXE`. The system variant rejects neighboring providers, verifies loaded

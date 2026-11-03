@@ -1,7 +1,7 @@
 # Graphics contracts and milestone verification
 
 The current target is reliable behavior for shipped OpenGL 1.1/WGL, DirectDraw,
-legacy Direct3D through the D3D8/9 providers, and Glide2x on Windows 98/2000/XP,
+legacy Direct3D through the D3D8/9 providers, and Glide2x and Glide3x on Windows 98/2000/XP,
 with macOS and Linux hosts. Earlier game and installer passes establish those
 workloads only. Entrypoint dispatch coverage does not establish API conformance.
 
@@ -226,6 +226,10 @@ later milestone; source tests do not require guest installation.
 
 ## Installed API acceptance
 
+Glide 3: `PROBE <id> sysglide3` runs the installed `C:\DGSYSG3.EXE` from `C:\` and writes
+`C:\DGSYSG3.LOG`. It is not an installer activation proof; record it with a Glide 3 game
+(Diablo II `-3dfx`) on each combination.
+
 Use disposable clones. Do not install the milestone into the user's VM.
 The fixed serial runner accepts `capd3d6`, `capd3d8`, `capd3d9` and `capgl`;
 [capability.md](../tools/d3d/capability.md) documents staging and collected JSON.
@@ -339,6 +343,20 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
 - **Turok 3Dfx demo** (Glide, Win98 SE): faults before its video DLL loads,
   identically without any Glide provider and on an emulated Pentium III, so the
   fault is not DreamGPU's. Its cause is unknown.
+- **Diablo II 1.12** (Win2000): installs and plays in DirectDraw and Direct3D
+  modes (menus, hero select, town). Its `-3dfx` mode needs `glide3x.dll`.
+- **Unreal Tournament GOTY** (Glide, Win98 SE): renders CityIntro through the
+  system glide2x provider. A stale application-local `glide2x.dll` in the
+  image's `UT99\System` (an old OpenGLide 0.09rc9 build) hung it in
+  `grSstOpen`; it is not part of DreamGPU.
+- **3DMark2001 SE** (Win2000): installs, then refuses to start ("requires a
+  processor with MMX instructions"). Its bundled SystemInfo reports no CPU
+  family, no clocks and no capabilities on this VM. A P6 CPUID signature and
+  an SMBIOS Pentium III processor entry did not change that, so the cause lies
+  in its own detection (kernel driver or SMBIOS reading), not in DreamGPU.
+- **GTA Vice City** (Win2000): installs, then exits silently before loading
+  D3D8. The executable is SecuROM-protected (`.cms_t`/`.cms_d` sections), and
+  SecuROM's physical-disc checks fail on an emulated CD drive.
 
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,

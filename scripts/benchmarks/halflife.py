@@ -168,7 +168,7 @@ class Serial:
             return parts[0], parts[2] if len(parts) == 3 else None
 
 
-PROBES = ("sysui", "sysrecover", "hlevidence", "sysrepair", "sysinstall", "sysresume", "sysupgrade", "sysrollback", "sysremove", "drvbind", "drvcheck", "drvrestore", "sysgl", "bordergl", "sysglide", "setupcheck", "ntloader", "ntrename", "ntrestore", "ntruntime", "sysddraw", "sysddrawnative", "sysd3d6", "sysd3d7", "sysd3d8", "sysd3d9", "capd3d6", "capd3d8", "capd3d9", "capgl", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
+PROBES = ("sysui", "sysrecover", "hlevidence", "sysrepair", "sysinstall", "sysresume", "sysupgrade", "sysrollback", "sysremove", "drvbind", "drvcheck", "drvrestore", "sysgl", "bordergl", "sysglide", "sysglide3", "setupcheck", "ntloader", "ntrename", "ntrestore", "ntruntime", "sysddraw", "sysddrawnative", "sysd3d6", "sysd3d7", "sysd3d8", "sysd3d9", "capd3d6", "capd3d8", "capd3d9", "capgl", "hldebug", "win9xinstall", "win9xdiag", "dual", "lifecycle", "arrays", "windows", "modes", "win98", "loader", "setup98", "update98", "d3d6", "d3d7", "d3d8", "d3d9", "glide", "utsetup", "utglide", "utlogs", "utdsetup", "utd3d", "ntupdate", "ntdiag")
 
 
 def parse_probe(raw, name="arrays"):

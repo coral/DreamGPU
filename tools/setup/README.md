@@ -23,12 +23,15 @@ The normal provider paths are:
 
 - OpenGL: Microsoft system `opengl32.dll` and GDI load `dgpuicd.dll`.
 - Glide2: the system `glide2x.dll` uses the DreamGPU OpenGL frontend.
+- Glide3: the system `glide3x.dll` shares that core; it is owned like the other
+  shared providers but is not one of the six activation proofs. Its packaged
+  `DGSYSG3.EXE` oracle is run separately.
 - DirectDraw and Direct3D6–9: system providers use the packaged WineD3D
   translation libraries and DreamGPU acceleration.
 
 Games use their ordinary renderer selection. Installation does not require
 copying DLLs beside games, a custom OpenGL driver argument or patched imports.
-Glide1/3 and a native Direct3D HAL are not advertised. API coverage and measured
+Glide 2.11 and a native Direct3D HAL are not advertised. API coverage and measured
 native-provider limitations are recorded in [the plan](../../docs/plan.md).
 
 ## Status

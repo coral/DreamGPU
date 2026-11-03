@@ -20,8 +20,11 @@ constexpr Providers providers(Os os) {
     return {supported, supported, supported, supported};
 #endif
 }
-constexpr const char *shared_runtime[] = {"dgpugl.dll", "glide2x.dll", "wined3d.dll",
-                                          "winedd.dll", "wined8.dll",  "wined9.dll"};
+// glide3x.dll is journalled, restored and removed like every shared provider.
+// Its packaged DGSYSG3 oracle is run explicitly; it is not an activation
+// helper, so activation still requires exactly the six system_probes below.
+constexpr const char *shared_runtime[] = {"dgpugl.dll", "glide2x.dll", "wined3d.dll", "winedd.dll",
+                                          "wined8.dll", "wined9.dll",  "glide3x.dll"};
 // Exact system destinations; public DirectX replacement is owned by the
 // boot transaction, and aliases derive from captured OS files, never payloads.
 constexpr const char *public_runtime[] = {"ddraw.dll", "d3d8.dll", "d3d9.dll"};

@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "catalog_complete": false,
-  "scope": "Shipped OpenGL 1.1/WGL, DirectDraw and legacy D3D through D3D8/9, Glide2x. This initial inventory records known contracts and gaps; broad rows still require expansion. Presence of a test is not proof of semantic completion.",
+  "scope": "Shipped OpenGL 1.1/WGL, DirectDraw and legacy D3D through D3D8/9, Glide2x and Glide3x. This initial inventory records known contracts and gaps; broad rows still require expansion. Presence of a test is not proof of semantic completion.",
   "platforms": [
     {
       "guest": "windows98",
@@ -311,6 +311,18 @@
     "d3d-geforce-fx-quirk": {
       "scope": "source",
       "path": "tests/guest/d3d/test_geforce_fx_quirk.py"
+    },
+    "glide3-core": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_glide3_core.py"
+    },
+    "glide3-exports": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_glide3_exports.py"
+    },
+    "glide3-loader": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_glide3_system_loader.py"
     }
   },
   "contracts": [
@@ -1460,6 +1472,77 @@
         "guest-vshader"
       ],
       "remaining": "Negotiated by DG_CAP_GL_VERTEX_PROGRAM; without it the extension and entry points are hidden and vertex program modes stay GL_INVALID_ENUM. Generic client arrays travel in their own DATA record (the VertexAttribPointerARB function number, 16 conventional and 16 generic descriptors), so older kernels keep their DrawArrays/DrawArraysEXT admission. Attribute 0 is the position (the non-aliasing GL 2.0 model Mesa implements): its array supersedes the vertex array and generic attributes 1-15 never alias conventional ones. Host checks reject non-ASCII bytes and vertex.attrib[n] at or beyond MAX_VERTEX_ATTRIBS_ARB (16); other semantic limits are native. Every vertex load goes into a fresh native object that replaces the program's on success (Mesa 26.1 frees a serialized program twice when one vertex object is translated three times). Native pixel tests (Linux, private Mesa on Radeon) cover env-parameter transforms, every generic array type and size, current values inside and outside Begin/End, position aliasing, program matrices and state.matrix.mvp, per-vertex point size, two-sided colours, relative addressing, parse and host-detected failures, invalid-program draws, display lists, ENABLE_BIT/CURRENT_BIT, combined vertex and fragment programs, sharing/isolation, and the vs_1_1/vs_2_0 programs WineD3D generates for the installed probe. Wine patch 0033 maps glVertexAttrib2svARB, clamps VS 2.0 NumTemps, sets VERTEX_PROGRAM_POINT_SIZE only for oPts writers, disables vertex programs for CPU depth uploads and binds the zero attribute as a client array without ARB_vertex_buffer_object. Expected caps: D3D9 VertexShaderVersion 2.0 with 256 constants, D3D8 1.1. VS 2.0 makes Wine report its NVIDIA fallback for that level, a GeForce FX 5800 (10de:0302, previously a GeForce 256), whose quirk enabled the rectangle textures DreamGPU lacks and blacked out DirectDraw/D3D6/D3D7 presentation until patch 0034. The installed D3D8/9 vertex shader probe (vs_1_1 for two constant sets, vs_2_0 on D3D9, vs_1_1 into ps_1_1) passes on Win2000, XP and Win98 SE (Linux host). Signed normalized generic arrays convert natively (c/32767) while immediate and ArrayElement 4N values follow GL 1.x; D3D point size limits, ARB_vertex_buffer_object, macOS CGL and games using vertex shaders remain unverified."
+    },
+    {
+      "id": "glide3.vertex",
+      "area": 11,
+      "api": "Glide3x",
+      "operation": "vertex layouts/window and clip coordinates/primitive assembly",
+      "format": "float and packed vertex parameters",
+      "resource": "draw",
+      "usage": "render",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "glide3-core"
+      ],
+      "remaining": "Run DGSYSG3.EXE (sysglide3) and a Glide 3 game on six installed combinations. Edge AA, stipple and FOG_EXT with W-buffering are partial."
+    },
+    {
+      "id": "glide3.queries",
+      "area": 12,
+      "api": "Glide3x",
+      "operation": "grGet/grGetString/grQueryResolutions/state and layout blobs/contexts",
+      "format": "n/a",
+      "resource": "context",
+      "usage": "state",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "glide3-core"
+      ],
+      "remaining": "Verify through the installed provider; pixel counters and swap history are not reported."
+    },
+    {
+      "id": "glide3.texture",
+      "area": 8,
+      "api": "Glide3x",
+      "operation": "log2 descriptors/download/palette/NCC/.3df",
+      "format": "exposed packed/indexed",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "texture memory",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "glide3-core",
+        "glide-download",
+        "glide-mips"
+      ],
+      "remaining": "Single TMU; core-generated mip chains; PALETTE_6666 alpha opaque."
+    },
+    {
+      "id": "glide3.provider",
+      "area": 20,
+      "api": "Glide3x",
+      "operation": "export ABI/system installation/normal loading",
+      "format": "n/a",
+      "resource": "provider",
+      "usage": "loading",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": "unverified",
+      "implementation": "unverified",
+      "tests": [
+        "glide3-exports",
+        "glide3-loader"
+      ],
+      "remaining": "Installer owns glide3x.dll; activation does not run DGSYSG3. Record sysglide3 plus a game per platform before making it an activation proof."
     }
   ]
 }

@@ -10,7 +10,7 @@ control channel, or exercise graphics behavior. They are separate from the
 | `nt/` | NT installer, driver/channel diagnostics and controlled shutdown |
 | `win9x/` | Win98 installation and OS prerequisite diagnostics |
 | `opengl/` | Public API, window, mode, retained-frame and lifecycle probes |
-| `glide/` | Public Glide pixel and presentation probe |
+| `glide/` | Public Glide 2 (`DGGLIDE`, `DGSYSGR`) and Glide 3 (`DGSYSG3`) pixel and presentation probes |
 | `d3d/` | Direct3D6/7/8/9 probes and fixed game preparation |
 | `unreal/` | Fixed UT99 media preparation, setup, run and log collection |
 

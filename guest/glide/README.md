@@ -1,7 +1,9 @@
 # DreamGPU guest Glide
 
 This source-built OpenGLide library translates legacy Glide2x calls into the
-same DreamGPU GL channel used by OpenGL and WineD3D. The host GPU renders the work;
+same DreamGPU GL channel used by OpenGL and WineD3D. `glide3x.dll` links the
+same core with the DreamGPU Glide 3 front end (`glide3.cpp`, `glide3-core.h`,
+`glide3-api.h`, `glide3x.def`) instead of the donor `g3wrap.cpp`. The host GPU renders the work;
 normal swap/presentation does not read the image through the guest CPU.
 
 Runtime adaptations stay in this directory. Exact patches live in `support/guest/glide/`. Rust prepares the pinned sources,
@@ -60,6 +62,6 @@ Glide math builds for Pentium III SSE1 (`-msse -mno-sse2 -mfpmath=sse`), includi
 
 With negotiated secondary color, local RGB is added after texturing and before blending. The donor fallback instead drew a second unconditionally additive pass, so fully transparent geometry or a multiplicative lightmap could incorrectly brighten the destination. The public probe distinguishes these equations using known pixels, rather than treating a brighter game screenshot as a correctness oracle. Glide fog-coordinate support remains a separate unsupported capability; no fog acceptance is claimed by these blending checks.
 
-See [Glide provider scope](../../docs/glide-support.md) for the separate Glide1/3
-source inventory and required compatibility work. Neither API is advertised by
-the current Glide2x package.
+See [Glide provider scope](../../docs/glide-support.md) for the Glide 3 coverage,
+ABI checks and its installed `DGSYSG3.EXE` oracle, and for the Glide 2.11 source
+inventory. Glide 2.11 is not shipped.

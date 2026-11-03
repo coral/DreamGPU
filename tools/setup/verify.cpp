@@ -68,10 +68,23 @@ bool hash_file(const char *path, Image &image) {
     h.finish(image.sha);
     return true;
 }
-constexpr const char *files[] = {"dgpugl.dll",   "glide2x.dll", "wined3d.dll", "winedd.dll",
-                                 "wined8.dll",   "wined9.dll",  "dgpuicd.dll", "opengl32.dll",
-                                 "ddraw.dll",    "d3d8.dll",    "d3d9.dll",    "dgpudisp.dll",
-                                 "dgpumini.drv", "dgpumini.vxd"};
+// The first entries are exactly setup::shared_runtime, in journal order.
+constexpr const char *files[] = {"dgpugl.dll",   "glide2x.dll",  "wined3d.dll", "winedd.dll",
+                                 "wined8.dll",   "wined9.dll",   "glide3x.dll", "dgpuicd.dll",
+                                 "opengl32.dll", "ddraw.dll",    "d3d8.dll",    "d3d9.dll",
+                                 "dgpudisp.dll", "dgpumini.drv", "dgpumini.vxd"};
+constexpr unsigned shared_count = sizeof(setup::shared_runtime) / sizeof(setup::shared_runtime[0]);
+constexpr bool shared_prefix() {
+    for (unsigned i = 0; i < shared_count; ++i)
+        for (unsigned c = 0;; ++c) {
+            if (files[i][c] != setup::shared_runtime[i][c])
+                return false;
+            if (!files[i][c])
+                break;
+        }
+    return true;
+}
+static_assert(shared_prefix(), "files[] must begin with the shared runtime");
 Image before[sizeof(files) / sizeof(files[0])];
 Image registry_before[4];
 constexpr const char *values[] = {"Dll", "Version", "DriverVersion", "Flags"};
@@ -190,7 +203,7 @@ bool journal(bool rolled_back) {
     static setup::lifecycle::Journal j;
     if (!store.load(j))
         return fail("journal identity");
-    if (j.count != 6 || j.generation != 1 ||
+    if (j.count != shared_count || j.generation != 1 ||
         j.state !=
             (rolled_back ? setup::lifecycle::State::failed : setup::lifecycle::State::staged))
         return fail("journal state");
@@ -225,8 +238,9 @@ bool verify() {
     char version[160];
     wsprintfA(version,
               "{\"event\":\"os\",\"platform\":%lu,\"major\":%lu,\"minor\":%lu,"
-              "\"global_files\":14,\"icd_values\":%u}",
+              "\"global_files\":%u,\"icd_values\":%u}",
               os.dwPlatformId, os.dwMajorVersion, os.dwMinorVersion,
+              unsigned(sizeof(files) / sizeof(files[0])),
               operating_system == setup::Os::win98 ? 1u : 4u);
     line(version);
     if (!absent_owned())
@@ -244,9 +258,9 @@ bool verify() {
     if (!run("/rollback /silent", 12, 20000) || !journal(true) ||
         !snapshot(false, "after_rollback"))
         return false;
-    line("PASS automated setupcheck: exact installer; default no private state; six staged "
+    line("PASS automated setupcheck: exact installer; default no private state; seven staged "
          "ownership records; "
-         "rollback; fourteen global hashes and OS-specific ICD values unchanged; system activation "
+         "rollback; fifteen global hashes and OS-specific ICD values unchanged; system activation "
          "never claimed");
     return true;
 }

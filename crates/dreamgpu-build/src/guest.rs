@@ -172,7 +172,7 @@ pub fn build(root: &Path, output: &Path) -> Result<()> {
         }
         run(Command::new("cmake").arg("--install").arg(&binary))?;
         crate::licenses::consolidate(&stage)?;
-        let imports = audit_package(&stage, &prefix)?;
+        let imports = audit_package(root, &stage, &prefix)?;
         let mut files = serde_json::Map::new();
         crate::native::record_tree(&stage, &stage, &mut files)?;
         crate::package_metadata::write(&stage, &files, &identity)?;
@@ -397,7 +397,8 @@ fn quote(value: &str) -> String {
     format!("'{}'", value.replace('\'', "'\\''"))
 }
 
-fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
+fn audit_package(root: &Path, stage: &Path, prefix: &str) -> Result<Value> {
+    let glide3_exports = def_exports(&fs::read_to_string(root.join("guest/glide/glide3x.def"))?)?;
     let mut files = Vec::new();
     collect_binaries(stage, &mut files)?;
     anyhow::ensure!(!files.is_empty(), "empty guest package");
@@ -457,7 +458,7 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
             "dgpumini.sys" => &["videoprt.sys", "ntoskrnl.exe", "hal.dll"],
             "dgpudisp.dll" => &["win32k.sys"],
             "dgpugl.dll" => &["kernel32.dll", "user32.dll", "gdi32.dll"],
-            "glide2x.dll" => &[
+            "glide2x.dll" | "glide3x.dll" => &[
                 "dgpugl.dll",
                 "gdi32.dll",
                 "user32.dll",
@@ -503,7 +504,7 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
                 "implicit-loader probe must retain its real marker DLL import"
             );
         }
-        if name == "wined3d.dll" || name == "glide2x.dll" {
+        if name == "wined3d.dll" || name == "glide2x.dll" || name == "glide3x.dll" {
             anyhow::ensure!(
                 libraries.iter().any(|s| s == "dgpugl.dll"),
                 "{relative} must import DreamGPU OpenGL"
@@ -524,6 +525,19 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
             }
         }
         let mut result = json!({"format":"PE32","imports":libraries});
+        if name == "glide3x.dll" {
+            // Decorated stdcall names are the ABI games import; the linked
+            // table must be exactly the checked .def, nothing more or less.
+            let mut exported = export_names(&details)?;
+            exported.sort();
+            let mut expected = glide3_exports.clone();
+            expected.sort();
+            anyhow::ensure!(
+                exported == expected,
+                "{relative}: export table differs from guest/glide/glide3x.def"
+            );
+            result["exports"] = json!(exported.len());
+        }
         if unreal_audit::applies(&name) {
             let assembly = capture(
                 Command::new(format!("{prefix}objdump"))
@@ -536,6 +550,60 @@ fn audit_package(stage: &Path, prefix: &str) -> Result<Value> {
         evidence.insert(relative, result);
     }
     Ok(Value::Object(evidence))
+}
+/// Export names from `objdump -p`'s "[Ordinal/Name Pointer] Table".
+fn export_names(details: &str) -> Result<Vec<String>> {
+    let mut lines = details.lines().skip_while(|line| {
+        !line
+            .trim_start()
+            .starts_with("[Ordinal/Name Pointer] Table")
+    });
+    anyhow::ensure!(lines.next().is_some(), "missing export name table");
+    let mut names = Vec::new();
+    for line in lines {
+        let line = line.trim();
+        if line.is_empty() {
+            break;
+        }
+        if line.starts_with('[') {
+            names.push(
+                line.split_whitespace()
+                    .last()
+                    .context("export name")?
+                    .to_owned(),
+            );
+        }
+    }
+    anyhow::ensure!(!names.is_empty(), "empty export name table");
+    Ok(names)
+}
+/// External names of a module definition file's EXPORTS section.
+fn def_exports(text: &str) -> Result<Vec<String>> {
+    let mut lines = text.lines().map(str::trim);
+    anyhow::ensure!(
+        lines.next().is_some_and(|l| l.starts_with("LIBRARY ")) && lines.next() == Some("EXPORTS"),
+        "module definition header"
+    );
+    let names: Vec<String> = lines
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            line.split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .to_owned()
+        })
+        .collect();
+    anyhow::ensure!(
+        !names.is_empty()
+            && names.iter().all(|name| {
+                name.starts_with('_')
+                    && name.split_once('@').is_some_and(|(_, bytes)| {
+                        !bytes.is_empty() && bytes.bytes().all(|b| b.is_ascii_digit())
+                    })
+            }),
+        "module definition exports must be decorated stdcall names"
+    );
+    Ok(names)
 }
 fn collect_binaries(dir: &Path, files: &mut Vec<PathBuf>) -> Result<()> {
     for item in fs::read_dir(dir)? {

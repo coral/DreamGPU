@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 //! Exercise the actual executable audits with bounded, synthetic structures.
 //! These are parser contracts, not substitutes for linking the real drivers.
-use super::{audit_ne, audit_vxd};
+use super::{audit_ne, audit_vxd, def_exports, export_names};
 fn put16(bytes: &mut [u8], offset: usize, value: u16) {
     bytes[offset..offset + 2].copy_from_slice(&value.to_le_bytes());
 }
@@ -94,4 +94,39 @@ fn le_ddb_requires_present_object_extent_page_and_module_identity() {
     for length in [0, 63, 0x181, 0x188, 0x10f, 0x122, 0x249] {
         assert!(audit_vxd(&original[..length]).is_err(), "length {length}");
     }
+}
+#[test]
+fn glide3_export_audit_reads_the_linked_name_table_and_checked_definition() {
+    let dump = "\tExport Address Table \t\t00000002\n\
+                [Ordinal/Name Pointer] Table -- Ordinal Base 1\n\
+                \t          Ordinal   Hint Name\n\
+                \t[   0] +base[   1]  0000 _grDrawVertexArray@12\n\
+                \t[   1] +base[   2]  0001 _grSstWinOpen@28\n\
+                \n\
+                The Function Table (interpreted .pdata section contents)\n";
+    assert_eq!(
+        export_names(dump).unwrap(),
+        ["_grDrawVertexArray@12", "_grSstWinOpen@28"]
+    );
+    assert!(export_names("no exports here\n").is_err());
+    assert!(export_names("[Ordinal/Name Pointer] Table\n\n").is_err());
+    let def = "LIBRARY glide3x.dll\nEXPORTS\n_grSstWinOpen@28 = dg3_grSstWinOpen@28\n\n";
+    assert_eq!(def_exports(def).unwrap(), ["_grSstWinOpen@28"]);
+    for bad in [
+        "EXPORTS\n_grSstWinOpen@28 = dg3_grSstWinOpen@28\n",
+        "LIBRARY glide3x.dll\nEXPORTS\ngrSstWinOpen = dg3_grSstWinOpen@28\n",
+        "LIBRARY glide3x.dll\nEXPORTS\n_grSstWinOpen@ = dg3_grSstWinOpen@28\n",
+        "LIBRARY glide3x.dll\nEXPORTS\n",
+    ] {
+        assert!(def_exports(bad).is_err(), "{bad}");
+    }
+}
+#[test]
+fn checked_glide3_definition_is_decorated() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let text = std::fs::read_to_string(root.join("guest/glide/glide3x.def")).unwrap();
+    let names = def_exports(&text).unwrap();
+    assert_eq!(names.len(), 97);
+    assert!(names.contains(&"_grDrawVertexArrayContiguous@16".to_owned()));
+    assert!(names.contains(&"_grLfbWriteRegion@36".to_owned()));
 }

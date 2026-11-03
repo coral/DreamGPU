@@ -298,7 +298,7 @@ class ProtocolTests(unittest.TestCase):
             self.assertIn('timedemo boundary',report['error']['message'])
 
     def test_probe_requires_matching_api_pass(self):
-        for name in ('sysgl', 'bordergl', 'sysglide', 'setupcheck', 'win9xinstall', 'win9xdiag', 'd3d6', 'd3d7', 'd3d8', 'd3d9', 'glide', 'windows', 'modes', 'win98', 'utlogs', 'utdsetup', 'utd3d', 'ntupdate'):
+        for name in ('sysgl', 'bordergl', 'sysglide', 'sysglide3', 'setupcheck', 'win9xinstall', 'win9xdiag', 'd3d6', 'd3d7', 'd3d8', 'd3d9', 'glide', 'windows', 'modes', 'win98', 'utlogs', 'utdsetup', 'utd3d', 'ntupdate'):
             with self.subTest(name=name):
                 raw = f'PASS automated {name}: real GPU pixels\n'.encode()
                 self.assertEqual(hl.parse_probe(raw, name), {'probe': name, 'passed': True})

@@ -551,6 +551,7 @@ static const PROBE_SPEC Probes[] = {
     {"bordergl", "C:\\DGBORDER.EXE", "C:\\DGBORDER.LOG", "", 30000},
     {"sysgl", "C:\\DGSYSGL.EXE", "C:\\DGSYSGL.LOG", "", 30000},
     {"sysglide", "C:\\DGSYSGR.EXE", "C:\\DGSYSGR.LOG", "", 30000},
+    {"sysglide3", "C:\\DGSYSG3.EXE", "C:\\DGSYSG3.LOG", "", 90000},
     {"setupcheck", "C:\\DGSETTST.EXE", "C:\\DGSETTST.LOG", "", 120000},
     {"ntrename", "C:\\DGRP.EXE", "C:\\DGRP.LOG", "", 30000},
     {"ntrestore", "C:\\DGRS.EXE", "C:\\DGRS.LOG", "", 30000},
@@ -777,6 +778,7 @@ static const char *Probe(const char *id, const PROBE_SPEC *spec) {
          Equal(spec->name, "sysremove") || Equal(spec->name, "drvbind") ||
          Equal(spec->name, "drvcheck") || Equal(spec->name, "drvrestore") ||
          Equal(spec->name, "sysgl") || Equal(spec->name, "bordergl") || Equal(spec->name, "sysglide") ||
+         Equal(spec->name, "sysglide3") ||
          Equal(spec->name, "setupcheck") || Equal(spec->name, "ntloader") ||
          Equal(spec->name, "ntruntime") || Equal(spec->name, "ntrename") ||
          Equal(spec->name, "ntrestore") || Equal(spec->name, "sysddraw") ||

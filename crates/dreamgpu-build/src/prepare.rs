@@ -356,6 +356,15 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
         root.join("guest/glide/texture-pool.cpp.inc"),
         glide.join("texture-pool.cpp.inc"),
     )?;
+    // DreamGPU's Glide 3 front end replaces the donor g3wrap.cpp in glide3x.
+    for (source, name) in [
+        ("glide3.cpp", "dg-glide3.cpp"),
+        ("glide3-core.h", "glide3-core.h"),
+        ("glide3-api.h", "glide3-api.h"),
+        ("glide3x.def", "dg-glide3x.def"),
+    ] {
+        copy(root.join("guest/glide").join(source), glide.join(name))?;
+    }
     copy(glide_source.join("LICENSE"), work.join("COPYING.LGPL-2.1"))?;
     let glu_text = text(&glu_source)?;
     let license = glu_text
@@ -581,6 +590,14 @@ mod tests {
         assert!(prepared.vmdisp.join("dg-icd16.h").is_file());
         assert!(prepared.wine.join("config.mk").is_file());
         assert!(prepared.glide.join("dg-imports.def").is_file());
+        for name in [
+            "dg-glide3.cpp",
+            "glide3-core.h",
+            "glide3-api.h",
+            "dg-glide3x.def",
+        ] {
+            assert!(prepared.glide.join(name).is_file(), "{name}");
+        }
         for (identity, debug) in [(true, false), (false, true), (true, true)] {
             let variant = output.join(format!("vmdisp-identity-{identity}-debug-{debug}"));
             copy_tree(&prepared.vmdisp, &variant).unwrap();

@@ -13,12 +13,12 @@ struct Payload {
     const char *path;
     char sha[65];
 };
-constexpr const char *Sources[] = {"application/dgpugl.dll",  "application/glide2x.dll",
-                                   "application/wined3d.dll", "application/winedd.dll",
-                                   "application/wined8.dll",  "application/wined9.dll",
-                                   "application/dgpuicd.dll", "switchers/ddraw_xp.dll",
-                                   "switchers/d3d8_xp.dll",   "switchers/d3d9_xp.dll"};
-static std::array<Payload, 10> payloads;
+constexpr const char *Sources[] = {
+    "application/dgpugl.dll",  "application/glide2x.dll", "application/wined3d.dll",
+    "application/winedd.dll",  "application/wined8.dll",  "application/wined9.dll",
+    "application/dgpuicd.dll", "switchers/ddraw_xp.dll",  "switchers/d3d8_xp.dll",
+    "switchers/d3d9_xp.dll",   "application/glide3x.dll"};
+static std::array<Payload, 11> payloads;
 static std::vector<BYTE> native() {
     std::vector<BYTE> bytes(128);
     bytes[0] = 'M';
@@ -36,7 +36,7 @@ static void initial() {
     using namespace fake_win32;
     reset();
     files[canon("C:\\WINDOWS\\DreamGPU")].directory = true;
-    for (unsigned n = 0; n < 10; ++n) {
+    for (unsigned n = 0; n < 11; ++n) {
         std::string content = "verified payload " + std::to_string(n);
         resources[100 + n] = {content.begin(), content.end()};
         payloads[n] = {unsigned(Os::nt5), 100 + n, unsigned(content.size()), Sources[n], {}};
@@ -335,8 +335,8 @@ static void preparation_conflicts() {
             assert(store.init("C:\\WINDOWS\\DreamGPU"));
             assert(system_plan(Os::nt5, payloads, j, true));
             assert(store.prepare_generation(j));
-            const char *path = alias ? "C:\\WINDOWS\\DreamGPU\\T00000001\\07.payload"
-                                     : "C:\\WINDOWS\\DreamGPU\\T00000001\\10.before";
+            const char *path = alias ? "C:\\WINDOWS\\DreamGPU\\T00000001\\08.payload"
+                                     : "C:\\WINDOWS\\DreamGPU\\T00000001\\11.before";
             auto &file = fake_win32::files[fake_win32::canon(path)];
             auto expected = native();
             file.bytes.assign(expected.begin(), expected.begin() + 17);
@@ -421,11 +421,11 @@ static void repair_plan_tests() {
         assert(store.publish_preparation(next));
         Engine repair(store, next);
         assert(repair.continue_apply(true) == Result::pending_reboot);
-        assert(store.classify(first, 10 + runtime, false) == Actual::after);
+        assert(store.classify(first, 11 + runtime, false) == Actual::after);
         assert(repair.rollback() == Result::complete);
         assert(fake_win32::files.at(fake_win32::canon(public_path.c_str())).bytes == native());
         for (unsigned n = 0; n < first.count; ++n)
-            if (n != 10 + runtime)
+            if (n != 11 + runtime)
                 assert(store.classify(first, n, false) == Actual::after);
     }
     for (unsigned conflict = 0; conflict < 4; ++conflict) {
@@ -479,12 +479,16 @@ int main() {
         Win32Store store;
         Journal j;
         assert(!system_plan(Os::nt5, payloads, j, false));
-        assert(prepare(store, j) && j.count == 18 && valid(j));
+        assert(prepare(store, j) && j.count == 19 && valid(j));
         preparation = fake_win32::mutation;
         original_files();
-        assert(j.items[9].phase == Phase::borrowed && !j.items[9].desired.exists);
-        assert(j.items[17].desired.value[0] == 1); // Real loader requires Flags=1.
-        for (unsigned n : {7u, 8u}) {
+        assert(j.items[10].phase == Phase::borrowed && !j.items[10].desired.exists);
+        assert(j.items[18].desired.value[0] == 1); // Real loader requires Flags=1.
+        // glide3x.dll is an owned shared provider with an absent original.
+        assert(!strcmp(j.items[6].path, "glide3x.dll") && j.items[6].kind == Kind::file &&
+               j.items[6].desired.exists && !j.items[6].original.exists &&
+               j.items[6].resource == payloads[10].id);
+        for (unsigned n : {8u, 9u}) {
             const auto &node = fake_win32::files.at(
                 fake_win32::canon((std::string("C:\\WINDOWS\\DreamGPU\\T00000001\\0") +
                                    std::to_string(n) + ".payload")
@@ -498,20 +502,23 @@ int main() {
         assert(j.state != State::activated); // Bytes are not runtime/API verification.
         assert(fake_win32::files.at(fake_win32::canon("C:\\WINDOWS\\SYSTEM\\ddsys.dll")).bytes ==
                native());
+        assert(fake_win32::files.at(fake_win32::canon("C:\\WINDOWS\\SYSTEM\\glide3x.dll")).bytes ==
+               fake_win32::resources[payloads[10].id]);
         // Upgrade must retain ownership of unchanged aliases. It must derive
         // from the first generation's OS originals, not the installed switcher.
         Journal next;
         assert(system_plan(Os::nt5, payloads, next, true));
         next.generation = 2;
         assert(capture_system(Os::nt5, store, next, &j));
-        assert(next.items[7].phase == Phase::prepared);
-        assert(same(next.items[7].desired, j.items[7].desired));
-        assert(next.items[7].original_generation == 1);
+        assert(next.items[8].phase == Phase::prepared);
+        assert(same(next.items[8].desired, j.items[8].desired));
+        assert(next.items[8].original_generation == 1);
         fake_win32::mutation = 0;
         assert(engine.rollback() == Result::complete);
         restoration = fake_win32::mutation;
         original_files();
         assert(!fake_win32::files.count(fake_win32::canon("C:\\WINDOWS\\SYSTEM\\ddsys.dll")));
+        assert(!fake_win32::files.count(fake_win32::canon("C:\\WINDOWS\\SYSTEM\\glide3x.dll")));
     }
     for (unsigned failure = 1; failure <= preparation; ++failure) {
         initial();
@@ -579,7 +586,7 @@ int main() {
         assert(engine.rollback() == Result::io_error);
         assert(fake_win32::keys.count(fake_win32::canon(nt_icd_key)));
     }
-    printf("PASS actual system provider plan: 18 items; %u preparation and %u mutation failure "
+    printf("PASS actual system provider plan: 19 items; %u preparation and %u mutation failure "
            "points, %u restoration faults; immutable aliases, ownership upgrade, foreign-key "
            "preservation\n",
            preparation, application, restoration);
