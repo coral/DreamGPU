@@ -62,6 +62,46 @@ Glide math builds for Pentium III SSE1 (`-msse -mno-sse2 -mfpmath=sse`), includi
 
 With negotiated secondary color, local RGB is added after texturing and before blending. The donor fallback instead drew a second unconditionally additive pass, so fully transparent geometry or a multiplicative lightmap could incorrectly brighten the destination. The public probe distinguishes these equations using known pixels, rather than treating a brighter game screenshot as a correctness oracle. Glide fog-coordinate support remains a separate unsupported capability; no fog acceptance is claimed by these blending checks.
 
+## Display mode
+
+Glide is full screen by default in both `glide2x.dll` and `glide3x.dll`: the
+display takes the Glide resolution and the game window becomes a popup at 0,0
+until the context closes. Put `InitFullScreen=0` in the `OpenGLid.ini` that the
+core writes in the game's working directory to keep a window. Files written by
+earlier builds are regenerated once; see
+[Full screen](../../docs/glide-support.md#full-screen).
+
+## Glide 3 call trace
+
+`glide3x.dll` can log every Glide 3 call with its arguments. Set the
+environment variable `DREAMGPU_GLIDE3_TRACE` to a file path in the environment
+the game starts from, for example on Windows 2000/XP:
+
+```bat
+cmd /c set DREAMGPU_GLIDE3_TRACE=C:\G3TRACE.LOG& cd /d "C:\Program Files\Diablo II"& start Game.exe -3dfx
+```
+
+On Windows 98, put `SET DREAMGPU_GLIDE3_TRACE=C:\G3TRACE.LOG` in a batch file
+that then starts the game, or in `AUTOEXEC.BAT` for programs started from
+Explorer. With the variable unset nothing is written and each call costs one
+branch. The file is recreated at the first Glide 3 call. It starts with the
+paths and sizes of the loaded `glide3x.dll`, `dgpugl.dll` and the executable,
+so a stray copy in a game directory is visible at once. Each line is
+`<sequence> <milliseconds> grName(key=value, ...)`:
+
+- Draw calls show the enabled parameters of each vertex under the current
+  layout (the first three of a vertex array).
+- Texture downloads show the descriptor, the byte count and an FNV-1a checksum
+  of the texels. Palette downloads show the first eight entries of the range and
+  a checksum.
+- Calls that return a value log it as `result` (`grGet` also logs the values
+  it wrote; `grLfbLock` the pointer and stride).
+
+Lines are buffered and written at every `grBufferSwap`, `grFlush`, `grFinish`,
+`grSstWinClose` and `grGlideShutdown`, and when the provider unloads. The log
+stops at 64 MiB with a marker line, which is about a minute of a busy game.
+Glide is single-threaded and so is the log.
+
 See [Glide provider scope](../../docs/glide-support.md) for the Glide 3 coverage,
 ABI checks and its installed `DGSYSG3.EXE` oracle, and for the Glide 2.11 source
 inventory. Glide 2.11 is not shipped.

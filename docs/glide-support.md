@@ -13,14 +13,48 @@ diagnostic fixture only.
 | Glide3x | DreamGPU front end `guest/glide/glide3.cpp` and `glide3-core.h` on the same core; the donor `g3wrap.cpp` is not linked | `glide3x.dll` (Windows 98 and Windows 2000/XP packages) | Guest runtime acceptance (`DGSYSG3.EXE`, games) and the partial rows below |
 | Glide 2.11 (`glide.dll`) | Donor `g2xwrap/wr211dll.cpp` and `gl211wrp.def` | Not shipped as a supported provider | Audit the older ABI and forwarding exports, add legacy compiler/import checks and a real public-API probe before packaging |
 
+## Full screen
+
+Both providers own the display while a Glide context is open, as Glide does on
+Voodoo hardware (`support/guest/glide/patches/0004-fullscreen-default.patch`):
+
+- `grSstWinOpen` switches the desktop to the Glide resolution at the current
+  colour depth (`ChangeDisplaySettings` with `CDS_FULLSCREEN`, so nothing is
+  written to the registry) and makes the game window a borderless popup at 0,0.
+  If the desktop already has that size, or no such mode exists at that depth,
+  the mode is left alone and only the popup is used.
+- `grSstWinClose`, `grGlideShutdown` and every failed open restore the mode and
+  the window's original style and position. Unloading the provider closes an
+  open context the same way. Windows 2000/XP also restore a temporary mode when
+  a process ends without closing Glide; on Windows 98 an abnormal exit can leave
+  the Glide mode until the next mode change.
+- `InitFullScreen=0` in `OpenGLid.ini` (in the game's working directory) keeps a
+  window and changes no mode.
+
+Earlier builds wrote `OpenGLid.ini` with `InitFullScreen=0` as a default, not a
+choice. The configuration now carries its own version (`Version=0.09rc9-dg2`):
+a file with any other version is regenerated once with `InitFullScreen=1`,
+through the core's existing version check. Hand edits to such an older file
+are reset by that regeneration; set `InitFullScreen=0` again afterwards for a
+window. A file that cannot be written or removed (a read-only directory)
+leaves the defaults in effect; previously this crashed or recursed.
+
+`DGSYSGR.EXE`, `DGGLIDE.EXE` and `DGSYSG3.EXE` record `DISPLAY before/open/closed
+<w>x<h>` and fail if a close does not restore the desktop size. The GL mode
+change itself is the path `tools/opengl/mode-probe.c` checks (WGL recreated
+after the change). `tests/guest/glide/test_fullscreen.py` compiles the patched
+configuration and window code: defaults, regeneration, the windowed override,
+unwritable directories, the mode and popup, and restoration on close and on
+failed opens.
+
 ## Glide 3.x provider
 
 `glide3x.dll` is a separate CMake target. It compiles the OpenGLide core units
 exactly as `glide2x.dll` does, but replaces the donor `g3wrap.cpp` with the
 DreamGPU front end and links its own export table, `guest/glide/glide3x.def`.
 `glide2x.dll` keeps its historical source list (still including the unexported
-donor wrapper), `Glide2x.def` and link options, so its exports and behaviour are
-unchanged.
+donor wrapper), `Glide2x.def` and link options, so its exports are unchanged. The
+shared core changes (such as [full screen](#full-screen)) apply to both.
 
 The donor wrapper was not adapted. Besides the empty `grFinish`/`grFlush`, its
 layout offsets were unbounded and offset zero meant "disabled", `GR_PARAM_Q1`
@@ -106,7 +140,16 @@ assembly, `grGet`, resolutions, textures, fog and `.3df` under ASan/UBSan),
 exact restore), `test_glide3_exports.py` and `test_glide3_system_loader.py`.
 
 The shared core's `grGlideSetState` has the same replay-order defect for
-`glide2x.dll`; it is left unchanged there so Glide 2 behaviour stays identical.
+`glide2x.dll`; it is left unchanged there.
+
+### Diagnostics
+
+`DREAMGPU_GLIDE3_TRACE=<file>` makes `glide3x.dll` log every Glide 3 call with
+its arguments, vertices, texture/palette checksums and results, after a header
+naming the loaded `glide3x.dll`, `dgpugl.dll` and executable. It is off unless
+the variable is set. See `guest/glide/README.md` for how to enable it and the
+format; `tests/guest/glide/test_glide3_trace.py` checks the formatter and that
+all 97 entry points are logged.
 
 ### Remaining
 

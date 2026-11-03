@@ -11,7 +11,7 @@ from pathlib import Path
 import re
 
 ROOT = Path(__file__).resolve().parents[3]
-SOURCES = [ROOT / name for name in ('tools/glide/probe3.cpp', 'tools/glide/provider3.h',
+SOURCES = [ROOT / name for name in ('tools/glide/probe3.cpp', 'tools/glide/provider3.h', 'tools/glide/display.h',
                                     'tools/glide/provider.h', 'tools/common/provider-clean.h',
                                     'guest/glide/glide3.cpp', 'guest/glide/glide3-core.h')]
 # Absent from Windows 95/98/Me KERNEL32/USER32 (or NT-only behaviour).

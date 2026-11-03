@@ -7,6 +7,7 @@
 // Standard headers precede OpenGLide's platform min/max macros.
 #include <initializer_list>
 #include <math.h>
+#include <new>
 #include <stddef.h>
 #include <stdio.h>
 #include "glide3-core.h"
@@ -59,6 +60,124 @@ struct Provider {
     bool open;
 } g;
 char context_token;
+
+// DREAMGPU_GLIDE3_TRACE=<file> logs every Glide 3 call with its arguments
+// (guest/glide/README.md). It is read once, at the first call; unset, each
+// call costs one branch. Glide is single-threaded, as is this log. Lines are
+// buffered and written at each swap, flush, finish, close and shutdown.
+constexpr dg3::u32 kTraceLimit = 64u << 20;
+struct Trace {
+    HANDLE file = nullptr;
+    dg3::u32 sequence = 0, start = 0, used = 0, written = 0;
+    dg3::trace::Line line;
+    char buffer[64 * 1024];
+};
+// Heap-allocated only while tracing: globals of this DLL are file-backed.
+Trace *trace_state;
+bool trace_checked;
+void trace_flush() {
+    Trace *t = trace_state;
+    DWORD wrote = 0;
+    if (t && t->used)
+        WriteFile(t->file, t->buffer, t->used, &wrote, nullptr);
+    if (t)
+        t->used = 0;
+}
+void trace_raw(const char *text, dg3::u32 bytes) {
+    if (!trace_state || trace_state->written >= kTraceLimit)
+        return;
+    Trace &t = *trace_state;
+    static const char full[] = "# trace limit (64 MiB) reached\r\n";
+    if (bytes > kTraceLimit - t.written - (sizeof(full) - 1)) {
+        text = full;
+        bytes = sizeof(full) - 1;
+        t.written = kTraceLimit;
+    } else
+        t.written += bytes;
+    if (bytes > sizeof(t.buffer) - t.used)
+        trace_flush();
+    memcpy(t.buffer + t.used, text, bytes);
+    t.used += bytes;
+}
+// "# <label> <path> bytes=<size>": identifies exactly which copies loaded.
+void trace_module(const char *label, HMODULE module) {
+    dg3::trace::Line &l = trace_state->line;
+    l.n = 0;
+    l.str("# ");
+    l.str(label);
+    l.put(' ');
+    char path[MAX_PATH];
+    const DWORD n = module ? GetModuleFileNameA(module, path, sizeof(path)) : 0;
+    if (n && n < sizeof(path)) {
+        path[n] = 0;
+        l.str(path);
+        HANDLE f = CreateFileA(path, GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, nullptr,
+                               OPEN_EXISTING, 0, nullptr);
+        if (f != INVALID_HANDLE_VALUE) {
+            l.str(" bytes=");
+            l.udec(GetFileSize(f, nullptr));
+            CloseHandle(f);
+        }
+    } else
+        l.str("(not loaded)");
+    l.str("\r\n");
+    trace_raw(l.text, l.n);
+}
+void trace_open() {
+    trace_checked = true;
+    char path[MAX_PATH];
+    const DWORD n = GetEnvironmentVariableA("DREAMGPU_GLIDE3_TRACE", path, sizeof(path));
+    if (!n || n >= sizeof(path))
+        return;
+    void *memory = HeapAlloc(GetProcessHeap(), 0, sizeof(Trace));
+    if (!memory)
+        return;
+    HANDLE f = CreateFileA(path, GENERIC_WRITE, FILE_SHARE_READ, nullptr, CREATE_ALWAYS,
+                           FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (f == INVALID_HANDLE_VALUE) {
+        HeapFree(GetProcessHeap(), 0, memory);
+        return;
+    }
+    trace_state = new (memory) Trace;
+    Trace &t = *trace_state;
+    t.file = f;
+    t.start = GetTickCount();
+    static const char header[] =
+        "# DreamGPU glide3x call trace v1: <sequence> <ms> call(arguments)\r\n";
+    trace_raw(header, sizeof(header) - 1);
+    MEMORY_BASIC_INFORMATION self;
+    trace_module("glide3x",
+                 VirtualQuery(reinterpret_cast<const void *>(&trace_open), &self, sizeof(self))
+                     ? HMODULE(self.AllocationBase)
+                     : nullptr);
+    trace_module("dgpugl", GetModuleHandleA("dgpugl.dll"));
+    trace_module("process", GetModuleHandleA(nullptr));
+    dg3::trace::Line &l = t.line;
+    l.n = 0;
+    l.str("# windows version=");
+    l.hex(GetVersion());
+    l.str("\r\n");
+    trace_raw(l.text, l.n);
+    trace_flush();
+}
+dg3::trace::Line *trace_call(const char *name) {
+    if (!trace_checked)
+        trace_open();
+    Trace *t = trace_state;
+    if (!t || t->written >= kTraceLimit)
+        return nullptr;
+    t->line.begin(++t->sequence, GetTickCount() - t->start, name);
+    return &t->line;
+}
+void trace_commit(dg3::trace::Line &l) {
+    trace_raw(l.text, l.end());
+}
+// Writes what is still buffered when the process unloads the provider.
+struct TraceTail {
+    ~TraceTail() {
+        trace_flush();
+    }
+} trace_tail;
 
 Dg3Context context() {
     return Dg3Context(uintptr_t(&context_token));
@@ -185,6 +304,8 @@ bool read_file(const char *name, FileBytes &out) {
 
 // ---------------------------------------------------------------- rendering
 DG3_API(void) dg3_grDrawPoint(const void *pt) {
+    if (auto *t = trace_call("grDrawPoint"))
+        trace_commit(t->vertex("pt", g.layout, pt));
     if (!open() || !pt)
         return;
     dg3::Vertex2 v;
@@ -194,6 +315,8 @@ DG3_API(void) dg3_grDrawPoint(const void *pt) {
     g.setup.count = 0;
 }
 DG3_API(void) dg3_grDrawLine(const void *v1, const void *v2) {
+    if (auto *t = trace_call("grDrawLine"))
+        trace_commit(t->vertex("v1", g.layout, v1).vertex("v2", g.layout, v2));
     if (!open() || !v1 || !v2)
         return;
     const dg3::Space s = space();
@@ -205,6 +328,8 @@ DG3_API(void) dg3_grDrawLine(const void *v1, const void *v2) {
     g.setup.count = 0;
 }
 DG3_API(void) dg3_grDrawTriangle(const void *a, const void *b, const void *c) {
+    if (auto *t = trace_call("grDrawTriangle"))
+        trace_commit(t->vertex("a", g.layout, a).vertex("b", g.layout, b).vertex("c", g.layout, c));
     if (!open() || !a || !b || !c)
         return;
     const dg3::Space s = space();
@@ -217,15 +342,30 @@ DG3_API(void) dg3_grDrawTriangle(const void *a, const void *b, const void *c) {
     dg3::setup_after_triangle(g.setup, vb, vc);
 }
 DG3_API(void)
-dg3_grAADrawTriangle(const void *a, const void *b, const void *c, FxBool, FxBool, FxBool) {
+dg3_grAADrawTriangle(const void *a, const void *b, const void *c, FxBool ab_antialias,
+                     FxBool bc_antialias, FxBool ca_antialias) {
+    if (auto *t = trace_call("grAADrawTriangle"))
+        trace_commit(t->p("a", a)
+                         .p("b", b)
+                         .p("c", c)
+                         .u("ab_antialias", ab_antialias)
+                         .u("bc_antialias", bc_antialias)
+                         .u("ca_antialias", ca_antialias));
     // Edge antialiasing is not emulated; the triangle itself is exact.
     dg3_grDrawTriangle(a, b, c);
 }
 DG3_API(void) dg3_grVertexLayout(FxU32 param, FxI32 offset, FxU32 mode) {
+    if (auto *t = trace_call("grVertexLayout"))
+        trace_commit(t->x("param", param).i("offset", offset).u("mode", mode));
     if (dg3::set_param(g.layout, param, offset, mode) == dg3::SetResult::bad_offset)
         GlideMsg("DG_GLIDE3 rejected vertex layout 0x%x offset %d\n", param, offset);
 }
 DG3_API(void) dg3_grDrawVertexArray(FxU32 mode, FxU32 count, void *pointers) {
+    if (auto *t = trace_call("grDrawVertexArray"))
+        trace_commit(t->x("mode", mode)
+                         .u("count", count)
+                         .p("pointers", pointers)
+                         .array(g.layout, pointers, count));
     dg3::PointerSource source;
     if (!open() || !dg3::pointer_source(pointers, count, source))
         return;
@@ -234,6 +374,12 @@ DG3_API(void) dg3_grDrawVertexArray(FxU32 mode, FxU32 count, void *pointers) {
 }
 DG3_API(void)
 dg3_grDrawVertexArrayContiguous(FxU32 mode, FxU32 count, void *pointers, FxU32 stride) {
+    if (auto *t = trace_call("grDrawVertexArrayContiguous"))
+        trace_commit(t->x("mode", mode)
+                         .u("count", count)
+                         .p("pointers", pointers)
+                         .u("stride", stride)
+                         .strided(g.layout, pointers, count, stride));
     dg3::StrideSource source;
     if (!open() || !dg3::stride_source(pointers, count, stride, g.layout, source))
         return;
@@ -243,36 +389,60 @@ dg3_grDrawVertexArrayContiguous(FxU32 mode, FxU32 count, void *pointers, FxU32 s
 
 // ---------------------------------------------------------- buffers, context
 DG3_API(void) dg3_grBufferClear(FxU32 color, FxU8 alpha, FxU32 depth) {
+    if (auto *t = trace_call("grBufferClear"))
+        trace_commit(t->x("color", color).u("alpha", alpha).u("depth", depth));
     if (open())
         grBufferClear(color, alpha, FxU16(depth > 0xffff ? 0xffff : depth));
 }
-DG3_API(void) dg3_grBufferSwap(FxU32 swap_interval) {
+static void grBufferSwap_body(FxU32 swap_interval) {
     if (open())
         grBufferSwap(int(swap_interval & 0xff));
 }
+DG3_API(void) dg3_grBufferSwap(FxU32 swap_interval) {
+    if (auto *t = trace_call("grBufferSwap"))
+        trace_commit(t->u("swap_interval", swap_interval));
+    grBufferSwap_body(swap_interval);
+    trace_flush();
+}
 DG3_API(void) dg3_grRenderBuffer(FxI32 buffer) {
+    if (auto *t = trace_call("grRenderBuffer"))
+        trace_commit(t->i("buffer", buffer));
     if (open() && (buffer == GR_BUFFER_FRONTBUFFER || buffer == GR_BUFFER_BACKBUFFER))
         grRenderBuffer(buffer);
 }
 DG3_API(void) dg3_grErrorSetCallback(Dg3ErrorCallback fnc) {
+    if (auto *t = trace_call("grErrorSetCallback"))
+        trace_commit(t->x("fnc", dg3::u32(uintptr_t(fnc))));
     grErrorSetCallback(fnc);
 }
 // grFlush submits all batched Glide work; grFinish also waits for the GPU.
-DG3_API(void) dg3_grFlush(void) {
+static void grFlush_body(void) {
     if (!open())
         return;
     RenderDrawTriangles();
     glFlush();
 }
-DG3_API(void) dg3_grFinish(void) {
+DG3_API(void) dg3_grFlush(void) {
+    if (auto *t = trace_call("grFlush"))
+        trace_commit(*t);
+    grFlush_body();
+    trace_flush();
+}
+static void grFinish_body(void) {
     if (!open())
         return;
     RenderDrawTriangles();
     glFinish();
 }
-DG3_API(Dg3Context)
-dg3_grSstWinOpen(FxU32 hWnd, FxI32 screen_resolution, FxI32 refresh_rate, FxI32 color_format,
-                 FxI32 origin_location, int nColBuffers, int nAuxBuffers) {
+DG3_API(void) dg3_grFinish(void) {
+    if (auto *t = trace_call("grFinish"))
+        trace_commit(*t);
+    grFinish_body();
+    trace_flush();
+}
+static Dg3Context grSstWinOpen_body(FxU32 hWnd, FxI32 screen_resolution, FxI32 refresh_rate,
+                                    FxI32 color_format, FxI32 origin_location, int nColBuffers,
+                                    int nAuxBuffers) {
     dg3::u32 width, height;
     if (!OpenGL.GlideInit || !dg3::resolution_size(dg3::u32(screen_resolution), width, height) ||
         (origin_location != GR_ORIGIN_UPPER_LEFT && origin_location != GR_ORIGIN_LOWER_LEFT) ||
@@ -302,7 +472,25 @@ dg3_grSstWinOpen(FxU32 hWnd, FxI32 screen_resolution, FxI32 refresh_rate, FxI32 
     GlideMsg("DG_GLIDE3_OPEN_COMPLETE\n");
     return context();
 }
-DG3_API(FxBool) dg3_grSstWinClose(Dg3Context ctx) {
+DG3_API(Dg3Context)
+dg3_grSstWinOpen(FxU32 hWnd, FxI32 screen_resolution, FxI32 refresh_rate, FxI32 color_format,
+                 FxI32 origin_location, int nColBuffers, int nAuxBuffers) {
+    const Dg3Context result = grSstWinOpen_body(hWnd, screen_resolution, refresh_rate, color_format,
+                                                origin_location, nColBuffers, nAuxBuffers);
+    if (auto *t = trace_call("grSstWinOpen"))
+        trace_commit(t->x("hWnd", hWnd)
+                         .i("screen_resolution", screen_resolution)
+                         .i("refresh_rate", refresh_rate)
+                         .i("color_format", color_format)
+                         .i("origin_location", origin_location)
+                         .i("nColBuffers", nColBuffers)
+                         .i("nAuxBuffers", nAuxBuffers)
+                         .x("result", result)
+                         .u("width", Glide.WindowWidth)
+                         .u("height", Glide.WindowHeight));
+    return result;
+}
+static FxBool grSstWinClose_body(Dg3Context ctx) {
     if (ctx != context())
         return FXFALSE;
     if (g.open && OpenGL.WinOpen)
@@ -311,27 +499,57 @@ DG3_API(FxBool) dg3_grSstWinClose(Dg3Context ctx) {
     dg3::setup_reset(g.setup, false);
     return FXTRUE;
 }
+DG3_API(FxBool) dg3_grSstWinClose(Dg3Context ctx) {
+    const FxBool result = grSstWinClose_body(ctx);
+    if (auto *t = trace_call("grSstWinClose"))
+        trace_commit(t->x("ctx", ctx).u("result", result));
+    trace_flush();
+    return result;
+}
 // One context per board, as on Voodoo hardware; its handle stays stable
 // across close/reopen and is selectable only while its window is open.
-DG3_API(FxBool) dg3_grSelectContext(Dg3Context ctx) {
+static FxBool grSelectContext_body(Dg3Context ctx) {
     return ctx == context() && open() ? FXTRUE : FXFALSE;
 }
+DG3_API(FxBool) dg3_grSelectContext(Dg3Context ctx) {
+    const FxBool result = grSelectContext_body(ctx);
+    if (auto *t = trace_call("grSelectContext"))
+        trace_commit(t->x("ctx", ctx).u("result", result));
+    return result;
+}
 DG3_API(void) dg3_grSstOrigin(FxI32 origin) {
+    if (auto *t = trace_call("grSstOrigin"))
+        trace_commit(t->i("origin", origin));
     if (open() && (origin == GR_ORIGIN_UPPER_LEFT || origin == GR_ORIGIN_LOWER_LEFT))
         grSstOrigin(origin);
 }
 DG3_API(void) dg3_grSstSelect(int which_sst) {
+    if (auto *t = trace_call("grSstSelect"))
+        trace_commit(t->i("which_sst", which_sst));
     if (which_sst == 0)
         grSstSelect(which_sst);
 }
 DG3_API(void) dg3_grSetNumPendingBuffers(FxI32 count) {
+    if (auto *t = trace_call("grSetNumPendingBuffers"))
+        trace_commit(t->i("count", count));
     g.pending_buffers = count > 0 ? dg3::u32(count) : 0;
 }
-DG3_API(void) dg3_grCheckForRoom(FxI32) {}
-DG3_API(void) dg3_grSstConfigPipeline(FxU32, FxU32, FxU32) {}
+DG3_API(void) dg3_grCheckForRoom(FxI32 n) {
+    if (auto *t = trace_call("grCheckForRoom"))
+        trace_commit(t->i("n", n));
+}
+DG3_API(void) dg3_grSstConfigPipeline(FxU32 device, FxU32 setting, FxU32 value) {
+    if (auto *t = trace_call("grSstConfigPipeline"))
+        trace_commit(t->x("device", device).x("setting", setting).x("value", value));
+}
 
 // ---------------------------------------------------------- pixel pipeline
 DG3_API(void) dg3_grAlphaBlendFunction(FxI32 rgb_sf, FxI32 rgb_df, FxI32 alpha_sf, FxI32 alpha_df) {
+    if (auto *t = trace_call("grAlphaBlendFunction"))
+        trace_commit(t->i("rgb_sf", rgb_sf)
+                         .i("rgb_df", rgb_df)
+                         .i("alpha_sf", alpha_sf)
+                         .i("alpha_df", alpha_df));
     for (FxI32 f : {rgb_sf, rgb_df, alpha_sf, alpha_df})
         if (f < GR_BLEND_ZERO || f > GR_BLEND_ALPHA_SATURATE)
             return;
@@ -340,31 +558,49 @@ DG3_API(void) dg3_grAlphaBlendFunction(FxI32 rgb_sf, FxI32 rgb_df, FxI32 alpha_s
 }
 DG3_API(void)
 dg3_grAlphaCombine(FxI32 function, FxI32 factor, FxI32 local, FxI32 other, FxBool invert) {
+    if (auto *t = trace_call("grAlphaCombine"))
+        trace_commit(t->i("function", function)
+                         .i("factor", factor)
+                         .i("local", local)
+                         .i("other", other)
+                         .u("invert", invert));
     if (open() && combine_ok(function, factor) && local >= 0 && local <= 2 && other >= 0 &&
         other <= 2)
         grAlphaCombine(function, factor, local, other, invert);
 }
 DG3_API(void) dg3_grAlphaControlsITRGBLighting(FxBool enable) {
+    if (auto *t = trace_call("grAlphaControlsITRGBLighting"))
+        trace_commit(t->u("enable", enable));
     if (open())
         grAlphaControlsITRGBLighting(enable);
 }
 DG3_API(void) dg3_grAlphaTestFunction(FxI32 function) {
+    if (auto *t = trace_call("grAlphaTestFunction"))
+        trace_commit(t->i("function", function));
     if (open() && function >= GR_CMP_NEVER && function <= GR_CMP_ALWAYS)
         grAlphaTestFunction(function);
 }
 DG3_API(void) dg3_grAlphaTestReferenceValue(FxU8 value) {
+    if (auto *t = trace_call("grAlphaTestReferenceValue"))
+        trace_commit(t->x("value", value));
     if (open())
         grAlphaTestReferenceValue(value);
 }
 DG3_API(void) dg3_grChromakeyMode(FxI32 mode) {
+    if (auto *t = trace_call("grChromakeyMode"))
+        trace_commit(t->i("mode", mode));
     if (open() && (mode == GR_CHROMAKEY_DISABLE || mode == GR_CHROMAKEY_ENABLE))
         grChromakeyMode(mode);
 }
 DG3_API(void) dg3_grChromakeyValue(FxU32 value) {
+    if (auto *t = trace_call("grChromakeyValue"))
+        trace_commit(t->x("value", value));
     if (open())
         grChromakeyValue(value);
 }
 DG3_API(void) dg3_grClipWindow(FxU32 minx, FxU32 miny, FxU32 maxx, FxU32 maxy) {
+    if (auto *t = trace_call("grClipWindow"))
+        trace_commit(t->u("minx", minx).u("miny", miny).u("maxx", maxx).u("maxy", maxy));
     if (!open())
         return;
     maxx = maxx < Glide.WindowWidth ? maxx : Glide.WindowWidth;
@@ -373,60 +609,92 @@ DG3_API(void) dg3_grClipWindow(FxU32 minx, FxU32 miny, FxU32 maxx, FxU32 maxy) {
 }
 DG3_API(void)
 dg3_grColorCombine(FxI32 function, FxI32 factor, FxI32 local, FxI32 other, FxBool invert) {
+    if (auto *t = trace_call("grColorCombine"))
+        trace_commit(t->i("function", function)
+                         .i("factor", factor)
+                         .i("local", local)
+                         .i("other", other)
+                         .u("invert", invert));
     if (open() && combine_ok(function, factor) && local >= 0 && local <= 2 && other >= 0 &&
         other <= 2)
         grColorCombine(function, factor, local, other, invert);
 }
 DG3_API(void) dg3_grColorMask(FxBool rgb, FxBool a) {
+    if (auto *t = trace_call("grColorMask"))
+        trace_commit(t->u("rgb", rgb).u("a", a));
     if (open())
         grColorMask(rgb, a);
 }
 DG3_API(void) dg3_grCullMode(FxI32 mode) {
+    if (auto *t = trace_call("grCullMode"))
+        trace_commit(t->i("mode", mode));
     if (open() && mode >= GR_CULL_DISABLE && mode <= GR_CULL_POSITIVE)
         grCullMode(mode);
 }
 DG3_API(void) dg3_grConstantColorValue(FxU32 value) {
+    if (auto *t = trace_call("grConstantColorValue"))
+        trace_commit(t->x("value", value));
     if (open())
         grConstantColorValue(value);
 }
 DG3_API(void) dg3_grDepthBiasLevel(FxI32 level) {
+    if (auto *t = trace_call("grDepthBiasLevel"))
+        trace_commit(t->i("level", level));
     if (open())
         grDepthBiasLevel(FxI16(level < -32768 ? -32768 : level > 32767 ? 32767 : level));
 }
 DG3_API(void) dg3_grDepthBufferFunction(FxI32 function) {
+    if (auto *t = trace_call("grDepthBufferFunction"))
+        trace_commit(t->i("function", function));
     if (open() && function >= GR_CMP_NEVER && function <= GR_CMP_ALWAYS)
         grDepthBufferFunction(function);
 }
 DG3_API(void) dg3_grDepthBufferMode(FxI32 mode) {
+    if (auto *t = trace_call("grDepthBufferMode"))
+        trace_commit(t->i("mode", mode));
     if (open() && mode >= GR_DEPTHBUFFER_DISABLE && mode <= GR_DEPTHBUFFER_WBUFFER_COMPARE_TO_BIAS)
         grDepthBufferMode(mode);
 }
 DG3_API(void) dg3_grDepthMask(FxBool mask) {
+    if (auto *t = trace_call("grDepthMask"))
+        trace_commit(t->u("mask", mask));
     if (open())
         grDepthMask(mask);
 }
 DG3_API(void) dg3_grDisableAllEffects(void) {
+    if (auto *t = trace_call("grDisableAllEffects"))
+        trace_commit(*t);
     if (!open())
         return;
     grDisableAllEffects();
     g.fog_mode = dg3::kFogDisable;
 }
 DG3_API(void) dg3_grDitherMode(FxI32 mode) {
+    if (auto *t = trace_call("grDitherMode"))
+        trace_commit(t->i("mode", mode));
     if (open() && mode >= GR_DITHER_DISABLE && mode <= GR_DITHER_4x4)
         grDitherMode(mode);
 }
 // Stippling is recorded for state queries only; no stipple is rasterized.
 DG3_API(void) dg3_grStippleMode(FxI32 mode) {
+    if (auto *t = trace_call("grStippleMode"))
+        trace_commit(t->i("mode", mode));
     g.stipple_mode = dg3::u32(mode);
 }
 DG3_API(void) dg3_grStipplePattern(FxU32 pattern) {
+    if (auto *t = trace_call("grStipplePattern"))
+        trace_commit(t->x("pattern", pattern));
     g.stipple_pattern = pattern;
 }
 DG3_API(void) dg3_grFogColorValue(FxU32 fogcolor) {
+    if (auto *t = trace_call("grFogColorValue"))
+        trace_commit(t->x("fogcolor", fogcolor));
     if (open())
         grFogColorValue(fogcolor);
 }
 DG3_API(void) dg3_grFogMode(FxU32 mode) {
+    if (auto *t = trace_call("grFogMode"))
+        trace_commit(t->u("mode", mode));
     dg3::u32 core_mode;
     if (!open() || !dg3::fog_mode(mode, core_mode))
         return;
@@ -434,10 +702,18 @@ DG3_API(void) dg3_grFogMode(FxU32 mode) {
     g.fog_mode = mode;
 }
 DG3_API(void) dg3_grFogTable(const Dg3Fog *ft) {
+    if (auto *t = trace_call("grFogTable"))
+        trace_commit(t->p("ft", ft).blob(ft, GR_FOG_TABLE_SIZE));
     if (open() && ft)
         grFogTable(ft);
 }
 DG3_API(void) dg3_grLoadGammaTable(FxU32 nentries, FxU32 *red, FxU32 *green, FxU32 *blue) {
+    if (auto *t = trace_call("grLoadGammaTable"))
+        trace_commit(t->u("nentries", nentries)
+                         .p("red", red)
+                         .p("green", green)
+                         .p("blue", blue)
+                         .gamma(nentries, red, green, blue));
     if (!open() || !red || !green || !blue)
         return;
     struct {
@@ -452,6 +728,8 @@ DG3_API(void) dg3_grLoadGammaTable(FxU32 nentries, FxU32 *red, FxU32 *green, FxU
     SetGammaTable(&ramp);
 }
 DG3_API(void) dg3_guGammaCorrectionRGB(FxFloat red, FxFloat green, FxFloat blue) {
+    if (auto *t = trace_call("guGammaCorrectionRGB"))
+        trace_commit(t->f("red", red).f("green", green).f("blue", blue));
     if (!open() || !(red > 0.f) || !(green > 0.f) || !(blue > 0.f))
         return;
     struct {
@@ -464,6 +742,9 @@ DG3_API(void) dg3_guGammaCorrectionRGB(FxFloat red, FxFloat green, FxFloat blue)
     SetGammaTable(&ramp);
 }
 DG3_API(void) dg3_grSplash(float x, float y, float width, float height, FxU32 frame) {
+    if (auto *t = trace_call("grSplash"))
+        trace_commit(
+            t->f("x", x).f("y", y).f("width", width).f("height", height).u("frame", frame));
     if (!open())
         return;
     // The core splash renders Glide 2 vertices with a shared TMU 1/w.
@@ -474,7 +755,7 @@ DG3_API(void) dg3_grSplash(float x, float y, float width, float height, FxU32 fr
 }
 
 // ---------------------------------------------------------- queries, modes
-DG3_API(FxU32) dg3_grGet(FxU32 pname, FxU32 plength, FxI32 *params) {
+static FxU32 grGet_body(FxU32 pname, FxU32 plength, FxI32 *params) {
     dg3::Facts f;
     f.fb_bytes = fb_bytes();
     f.tmu_bytes = OpenGL.GlideInit ? dg3::u32(Glide.TextureMemory) : 0;
@@ -490,7 +771,18 @@ DG3_API(FxU32) dg3_grGet(FxU32 pname, FxU32 plength, FxI32 *params) {
     f.pending_swaps = dg3::u32(grBufferNumPending());
     return dg3::get(pname, plength, params, f);
 }
-DG3_API(const char *) dg3_grGetString(FxU32 pname) {
+DG3_API(FxU32) dg3_grGet(FxU32 pname, FxU32 plength, FxI32 *params) {
+    const FxU32 result = grGet_body(pname, plength, params);
+    if (auto *t = trace_call("grGet"))
+        trace_commit(t->x("pname", pname)
+                         .u("plength", plength)
+                         .p("params", params)
+                         .u("result", result)
+                         .words("values", reinterpret_cast<const dg3::u32 *>(params),
+                                params ? (result < 32 ? result : 32) / 4 : 0));
+    return result;
+}
+static const char *grGetString_body(FxU32 pname) {
     switch (pname) {
         case 0xa0:
             return " "; // GR_EXTENSION: no Glide 3 extensions are advertised
@@ -506,10 +798,22 @@ DG3_API(const char *) dg3_grGetString(FxU32 pname) {
             return "ERROR";
     }
 }
-DG3_API(FxI32) dg3_grQueryResolutions(const Dg3Resolution *resTemplate, Dg3Resolution *output) {
+DG3_API(const char *) dg3_grGetString(FxU32 pname) {
+    const char *const result = grGetString_body(pname);
+    if (auto *t = trace_call("grGetString"))
+        trace_commit(t->x("pname", pname).s("result", result));
+    return result;
+}
+static FxI32 grQueryResolutions_body(const Dg3Resolution *resTemplate, Dg3Resolution *output) {
     return dg3::query_resolutions(resTemplate, output, fb_bytes());
 }
-DG3_API(FxBool) dg3_grReset(FxU32 what) {
+DG3_API(FxI32) dg3_grQueryResolutions(const Dg3Resolution *resTemplate, Dg3Resolution *output) {
+    const FxI32 result = grQueryResolutions_body(resTemplate, output);
+    if (auto *t = trace_call("grQueryResolutions"))
+        trace_commit(t->p("resTemplate", resTemplate).p("output", output).i("result", result));
+    return result;
+}
+static FxBool grReset_body(FxU32 what) {
     switch (what) {
         case dg3::kStatsPoints:
             g.points = 0;
@@ -530,60 +834,117 @@ DG3_API(FxBool) dg3_grReset(FxU32 what) {
             return FXFALSE;
     }
 }
-DG3_API(Dg3Proc) dg3_grGetProcAddress(char *) {
+DG3_API(FxBool) dg3_grReset(FxU32 what) {
+    const FxBool result = grReset_body(what);
+    if (auto *t = trace_call("grReset"))
+        trace_commit(t->x("what", what).u("result", result));
+    return result;
+}
+static Dg3Proc grGetProcAddress_body(char *) {
     return nullptr; // no extension entry points are provided
+}
+DG3_API(Dg3Proc) dg3_grGetProcAddress(char *procName) {
+    const Dg3Proc result = grGetProcAddress_body(procName);
+    if (auto *t = trace_call("grGetProcAddress"))
+        trace_commit(t->s("procName", procName).x("result", dg3::u32(uintptr_t(result))));
+    return result;
 }
 // GR_AA_ORDERED, GR_ALLOW_MIPMAP_DITHER, GR_PASSTHRU and GR_VIDEO_SMOOTHING
 // are recorded only. GR_SHAMELESS_PLUG maps to the core's plug state.
 DG3_API(void) dg3_grEnable(FxU32 mode) {
+    if (auto *t = trace_call("grEnable"))
+        trace_commit(t->u("mode", mode));
     if (mode >= 1 && mode < 32)
         g.enables |= 1u << mode;
     if (mode == 0x04)
         grGlideShamelessPlug(FXTRUE);
 }
 DG3_API(void) dg3_grDisable(FxU32 mode) {
+    if (auto *t = trace_call("grDisable"))
+        trace_commit(t->u("mode", mode));
     if (mode >= 1 && mode < 32)
         g.enables &= ~(1u << mode);
     if (mode == 0x04)
         grGlideShamelessPlug(FXFALSE);
 }
 DG3_API(void) dg3_grCoordinateSpace(FxU32 mode) {
+    if (auto *t = trace_call("grCoordinateSpace"))
+        trace_commit(t->u("mode", mode));
     if (mode == dg3::kWindowCoords || mode == dg3::kClipCoords)
         g.coords = mode;
 }
 DG3_API(void) dg3_grDepthRange(FxFloat n, FxFloat f) {
+    if (auto *t = trace_call("grDepthRange"))
+        trace_commit(t->f("n", n).f("f", f));
     dg3::set_depth_range(g.view, n, f);
 }
 DG3_API(void) dg3_grViewport(FxI32 x, FxI32 y, FxI32 width, FxI32 height) {
+    if (auto *t = trace_call("grViewport"))
+        trace_commit(t->i("x", x).i("y", y).i("width", width).i("height", height));
     dg3::set_viewport(g.view, x, y, width, height);
 }
 
 // ---------------------------------------------------------- textures
-DG3_API(FxU32) dg3_grTexCalcMemRequired(FxI32 lodmin, FxI32 lodmax, FxI32 aspect, FxI32 fmt) {
+static FxU32 grTexCalcMemRequired_body(FxI32 lodmin, FxI32 lodmax, FxI32 aspect, FxI32 fmt) {
     if (!dg3::tex_ok(lodmin, lodmax, aspect, fmt))
         return 0;
     return grTexCalcMemRequired(dg3::lod2(lodmin), dg3::lod2(lodmax), dg3::aspect2(aspect), fmt);
 }
-DG3_API(FxU32) dg3_grTexTextureMemRequired(FxU32 evenOdd, Dg3TexInfo *info) {
+DG3_API(FxU32) dg3_grTexCalcMemRequired(FxI32 lodmin, FxI32 lodmax, FxI32 aspect, FxI32 fmt) {
+    const FxU32 result = grTexCalcMemRequired_body(lodmin, lodmax, aspect, fmt);
+    if (auto *t = trace_call("grTexCalcMemRequired"))
+        trace_commit(t->i("lodmin", lodmin)
+                         .i("lodmax", lodmax)
+                         .i("aspect", aspect)
+                         .x("fmt", fmt)
+                         .u("result", result));
+    return result;
+}
+static FxU32 grTexTextureMemRequired_body(FxU32 evenOdd, Dg3TexInfo *info) {
     dg3::TexInfo t;
     if (!even_odd_ok(evenOdd) || !tex_from(info, t))
         return 0;
     GrTexInfo core = glide2(t);
     return grTexTextureMemRequired(evenOdd, &core);
 }
-DG3_API(FxU32) dg3_grTexMinAddress(FxI32) {
+DG3_API(FxU32) dg3_grTexTextureMemRequired(FxU32 evenOdd, Dg3TexInfo *info) {
+    const FxU32 result = grTexTextureMemRequired_body(evenOdd, info);
+    if (auto *t = trace_call("grTexTextureMemRequired"))
+        trace_commit(t->x("evenOdd", evenOdd).tex("info", info).u("result", result));
+    return result;
+}
+static FxU32 grTexMinAddress_body(FxI32) {
     return 0;
 }
+DG3_API(FxU32) dg3_grTexMinAddress(FxI32 tmu) {
+    const FxU32 result = grTexMinAddress_body(tmu);
+    if (auto *t = trace_call("grTexMinAddress"))
+        trace_commit(t->i("tmu", tmu).u("result", result));
+    return result;
+}
 // The largest valid start address of the single emulated TMU.
-DG3_API(FxU32) dg3_grTexMaxAddress(FxI32 tmu) {
+static FxU32 grTexMaxAddress_body(FxI32 tmu) {
     const FxU32 total = OpenGL.GlideInit ? FxU32(Glide.TextureMemory) : 0;
     return tmu == GR_TMU0 && total >= dg3::kTextureAlignBytes ? total - dg3::kTextureAlignBytes : 0;
 }
+DG3_API(FxU32) dg3_grTexMaxAddress(FxI32 tmu) {
+    const FxU32 result = grTexMaxAddress_body(tmu);
+    if (auto *t = trace_call("grTexMaxAddress"))
+        trace_commit(t->i("tmu", tmu).u("result", result));
+    return result;
+}
 DG3_API(void) dg3_grTexNCCTable(FxU32 table) {
+    if (auto *t = trace_call("grTexNCCTable"))
+        trace_commit(t->x("table", table));
     if (open() && table <= GR_NCCTABLE_NCC1)
         grTexNCCTable(GR_TMU0, table);
 }
 DG3_API(void) dg3_grTexSource(FxI32 tmu, FxU32 startAddress, FxU32 evenOdd, Dg3TexInfo *info) {
+    if (auto *t = trace_call("grTexSource"))
+        trace_commit(t->i("tmu", tmu)
+                         .x("startAddress", startAddress)
+                         .x("evenOdd", evenOdd)
+                         .tex("info", info));
     dg3::TexInfo t;
     if (!open() || tmu != GR_TMU0 || !even_odd_ok(evenOdd) || !tex_from(info, t))
         return;
@@ -592,6 +953,8 @@ DG3_API(void) dg3_grTexSource(FxI32 tmu, FxU32 startAddress, FxU32 evenOdd, Dg3T
     dg3::tex_scale(t.aspect, g.s_scale[0], g.t_scale[0]);
 }
 DG3_API(void) dg3_grTexClampMode(FxI32 tmu, FxI32 s_clampmode, FxI32 t_clampmode) {
+    if (auto *t = trace_call("grTexClampMode"))
+        trace_commit(t->i("tmu", tmu).i("s_clampmode", s_clampmode).i("t_clampmode", t_clampmode));
     // GR_TEXTURECLAMP_MIRROR_EXT (2) is not advertised; it wraps.
     auto mode = [](FxI32 m) { return m == GR_TEXTURECLAMP_CLAMP ? m : GR_TEXTURECLAMP_WRAP; };
     if (open() && tmu == GR_TMU0 && s_clampmode >= 0 && s_clampmode <= 2 && t_clampmode >= 0 &&
@@ -601,26 +964,51 @@ DG3_API(void) dg3_grTexClampMode(FxI32 tmu, FxI32 s_clampmode, FxI32 t_clampmode
 DG3_API(void)
 dg3_grTexCombine(FxI32 tmu, FxI32 rgb_function, FxI32 rgb_factor, FxI32 alpha_function,
                  FxI32 alpha_factor, FxBool rgb_invert, FxBool alpha_invert) {
+    if (auto *t = trace_call("grTexCombine"))
+        trace_commit(t->i("tmu", tmu)
+                         .i("rgb_function", rgb_function)
+                         .i("rgb_factor", rgb_factor)
+                         .i("alpha_function", alpha_function)
+                         .i("alpha_factor", alpha_factor)
+                         .u("rgb_invert", rgb_invert)
+                         .u("alpha_invert", alpha_invert));
     if (open() && tmu == GR_TMU0 && combine_ok(rgb_function, rgb_factor) &&
         combine_ok(alpha_function, alpha_factor))
         grTexCombine(GR_TMU0, rgb_function, rgb_factor, alpha_function, alpha_factor, rgb_invert,
                      alpha_invert);
 }
 DG3_API(void) dg3_grTexDetailControl(FxI32 tmu, int lod_bias, FxU8 detail_scale, float detail_max) {
+    if (auto *t = trace_call("grTexDetailControl"))
+        trace_commit(t->i("tmu", tmu)
+                         .i("lod_bias", lod_bias)
+                         .u("detail_scale", detail_scale)
+                         .f("detail_max", detail_max));
     if (open() && tmu == GR_TMU0)
         grTexDetailControl(GR_TMU0, lod_bias, detail_scale, detail_max);
 }
 DG3_API(void) dg3_grTexFilterMode(FxI32 tmu, FxI32 minfilter_mode, FxI32 magfilter_mode) {
+    if (auto *t = trace_call("grTexFilterMode"))
+        trace_commit(t->i("tmu", tmu)
+                         .i("minfilter_mode", minfilter_mode)
+                         .i("magfilter_mode", magfilter_mode));
     if (open() && tmu == GR_TMU0 && minfilter_mode >= 0 && minfilter_mode <= 1 &&
         magfilter_mode >= 0 && magfilter_mode <= 1)
         grTexFilterMode(GR_TMU0, minfilter_mode, magfilter_mode);
 }
 DG3_API(void) dg3_grTexLodBiasValue(FxI32 tmu, float bias) {
+    if (auto *t = trace_call("grTexLodBiasValue"))
+        trace_commit(t->i("tmu", tmu).f("bias", bias));
     if (open() && tmu == GR_TMU0)
         grTexLodBiasValue(GR_TMU0, bias);
 }
 DG3_API(void)
 dg3_grTexDownloadMipMap(FxI32 tmu, FxU32 startAddress, FxU32 evenOdd, Dg3TexInfo *info) {
+    if (auto *t = trace_call("grTexDownloadMipMap"))
+        trace_commit(t->i("tmu", tmu)
+                         .x("startAddress", startAddress)
+                         .x("evenOdd", evenOdd)
+                         .tex("info", info)
+                         .texels(info));
     dg3::TexInfo t;
     if (!open() || tmu != GR_TMU0 || !even_odd_ok(evenOdd) || !tex_from(info, t) || !t.data)
         return;
@@ -631,16 +1019,25 @@ dg3_grTexDownloadMipMap(FxI32 tmu, FxU32 startAddress, FxU32 evenOdd, Dg3TexInfo
 DG3_API(void)
 dg3_grTexDownloadMipMapLevel(FxI32 tmu, FxU32 startAddress, FxI32 thisLod, FxI32 largeLod,
                              FxI32 aspectRatio, FxI32 format, FxU32 evenOdd, void *data) {
+    if (auto *t = trace_call("grTexDownloadMipMapLevel"))
+        trace_commit(t->i("tmu", tmu)
+                         .x("startAddress", startAddress)
+                         .i("thisLod", thisLod)
+                         .i("largeLod", largeLod)
+                         .i("aspectRatio", aspectRatio)
+                         .x("format", format)
+                         .x("evenOdd", evenOdd)
+                         .p("data", data)
+                         .level(thisLod, aspectRatio, format, data, 0, -1));
     if (!open() || tmu != GR_TMU0 || !even_odd_ok(evenOdd) || !data ||
         !dg3::tex_ok(thisLod, largeLod, aspectRatio, format))
         return;
     grTexDownloadMipMapLevel(GR_TMU0, startAddress, dg3::lod2(thisLod), dg3::lod2(largeLod),
                              dg3::aspect2(aspectRatio), format, evenOdd, data);
 }
-DG3_API(FxBool)
-dg3_grTexDownloadMipMapLevelPartial(FxI32 tmu, FxU32 startAddress, FxI32 thisLod, FxI32 largeLod,
-                                    FxI32 aspectRatio, FxI32 format, FxU32 evenOdd, void *data,
-                                    int start, int end) {
+static FxBool grTexDownloadMipMapLevelPartial_body(FxI32 tmu, FxU32 startAddress, FxI32 thisLod,
+                                                   FxI32 largeLod, FxI32 aspectRatio, FxI32 format,
+                                                   FxU32 evenOdd, void *data, int start, int end) {
     dg3::u32 width, rows;
     if (!open() || tmu != GR_TMU0 || !even_odd_ok(evenOdd) || !data ||
         !dg3::tex_ok(thisLod, largeLod, aspectRatio, format))
@@ -651,6 +1048,27 @@ dg3_grTexDownloadMipMapLevelPartial(FxI32 tmu, FxU32 startAddress, FxI32 thisLod
     grTexDownloadMipMapLevelPartial(GR_TMU0, startAddress, dg3::lod2(thisLod), dg3::lod2(largeLod),
                                     dg3::aspect2(aspectRatio), format, evenOdd, data, start, end);
     return FXTRUE;
+}
+DG3_API(FxBool)
+dg3_grTexDownloadMipMapLevelPartial(FxI32 tmu, FxU32 startAddress, FxI32 thisLod, FxI32 largeLod,
+                                    FxI32 aspectRatio, FxI32 format, FxU32 evenOdd, void *data,
+                                    int start, int end) {
+    const FxBool result = grTexDownloadMipMapLevelPartial_body(
+        tmu, startAddress, thisLod, largeLod, aspectRatio, format, evenOdd, data, start, end);
+    if (auto *t = trace_call("grTexDownloadMipMapLevelPartial"))
+        trace_commit(t->i("tmu", tmu)
+                         .x("startAddress", startAddress)
+                         .i("thisLod", thisLod)
+                         .i("largeLod", largeLod)
+                         .i("aspectRatio", aspectRatio)
+                         .x("format", format)
+                         .x("evenOdd", evenOdd)
+                         .p("data", data)
+                         .i("start", start)
+                         .i("end", end)
+                         .level(thisLod, aspectRatio, format, data, start, end)
+                         .u("result", result));
+    return result;
 }
 // GR_TEXTABLE_PALETTE_6666_EXT is not advertised. Its colours are accepted;
 // the shared palette path keeps palette texels opaque.
@@ -666,6 +1084,8 @@ static void download_palette(FxU32 type, const FxU32 *data, int start, int end) 
     grTexDownloadTablePartial(GR_TMU0, GR_TEXTABLE_PALETTE, converted, start, end);
 }
 DG3_API(void) dg3_grTexDownloadTable(FxU32 type, void *data) {
+    if (auto *t = trace_call("grTexDownloadTable"))
+        trace_commit(t->x("type", type).p("data", data).table(type, data, 0, 255));
     if (!open() || !data)
         return;
     if (type == GR_TEXTABLE_NCC0 || type == GR_TEXTABLE_NCC1)
@@ -674,6 +1094,12 @@ DG3_API(void) dg3_grTexDownloadTable(FxU32 type, void *data) {
         download_palette(type, static_cast<const FxU32 *>(data), 0, 255);
 }
 DG3_API(void) dg3_grTexDownloadTablePartial(FxU32 type, void *data, int start, int end) {
+    if (auto *t = trace_call("grTexDownloadTablePartial"))
+        trace_commit(t->x("type", type)
+                         .p("data", data)
+                         .i("start", start)
+                         .i("end", end)
+                         .table(type, data, start, end));
     if (!open() || !data)
         return;
     if (type == GR_TEXTABLE_NCC0 || type == GR_TEXTABLE_NCC1) {
@@ -685,17 +1111,27 @@ DG3_API(void) dg3_grTexDownloadTablePartial(FxU32 type, void *data, int start, i
         download_palette(type, static_cast<const FxU32 *>(data), start, end);
 }
 DG3_API(void) dg3_grTexMipMapMode(FxI32 tmu, FxI32 mode, FxBool lodBlend) {
+    if (auto *t = trace_call("grTexMipMapMode"))
+        trace_commit(t->i("tmu", tmu).i("mode", mode).u("lodBlend", lodBlend));
     if (open() && tmu == GR_TMU0 && mode >= GR_MIPMAP_DISABLE && mode <= GR_MIPMAP_NEAREST_DITHER)
         grTexMipMapMode(GR_TMU0, mode, lodBlend);
 }
 // Multibase addressing is accepted and validated; the core samples the base.
 DG3_API(void) dg3_grTexMultibase(FxI32 tmu, FxBool enable) {
+    if (auto *t = trace_call("grTexMultibase"))
+        trace_commit(t->i("tmu", tmu).u("enable", enable));
     if (open() && tmu == GR_TMU0)
         grTexMultibase(GR_TMU0, enable);
 }
 DG3_API(void)
 dg3_grTexMultibaseAddress(FxI32 tmu, FxU32 range, FxU32 startAddress, FxU32 evenOdd,
                           Dg3TexInfo *info) {
+    if (auto *t = trace_call("grTexMultibaseAddress"))
+        trace_commit(t->i("tmu", tmu)
+                         .x("range", range)
+                         .x("startAddress", startAddress)
+                         .x("evenOdd", evenOdd)
+                         .tex("info", info));
     dg3::TexInfo t;
     if (!open() || tmu != GR_TMU0 || !even_odd_ok(evenOdd) || !tex_from(info, t))
         return;
@@ -704,9 +1140,8 @@ dg3_grTexMultibaseAddress(FxI32 tmu, FxU32 range, FxU32 startAddress, FxU32 even
 }
 
 // ---------------------------------------------------------- frame buffer
-DG3_API(FxBool)
-dg3_grLfbLock(FxI32 type, FxI32 buffer, FxI32 writeMode, FxI32 origin, FxBool pixelPipeline,
-              Dg3LfbInfo *info) {
+static FxBool grLfbLock_body(FxI32 type, FxI32 buffer, FxI32 writeMode, FxI32 origin,
+                             FxBool pixelPipeline, Dg3LfbInfo *info) {
     // Read locks expose the buffer's own 16-bit format; writeMode is a
     // write-lock parameter and must not change a read lock's stride.
     const bool write = type & GR_LFB_WRITE_ONLY;
@@ -719,32 +1154,61 @@ dg3_grLfbLock(FxI32 type, FxI32 buffer, FxI32 writeMode, FxI32 origin, FxBool pi
     return grLfbLock(GrLock_t(type), buffer, write ? writeMode : GR_LFBWRITEMODE_ANY, origin,
                      pixelPipeline, reinterpret_cast<GrLfbInfo_t *>(info));
 }
-DG3_API(FxBool) dg3_grLfbUnlock(FxI32 type, FxI32 buffer) {
+DG3_API(FxBool)
+dg3_grLfbLock(FxI32 type, FxI32 buffer, FxI32 writeMode, FxI32 origin, FxBool pixelPipeline,
+              Dg3LfbInfo *info) {
+    const FxBool result = grLfbLock_body(type, buffer, writeMode, origin, pixelPipeline, info);
+    if (auto *t = trace_call("grLfbLock"))
+        trace_commit(t->x("type", type)
+                         .i("buffer", buffer)
+                         .x("writeMode", writeMode)
+                         .i("origin", origin)
+                         .u("pixelPipeline", pixelPipeline)
+                         .p("info", info)
+                         .u("result", result)
+                         .lfb(result ? info : nullptr));
+    return result;
+}
+static FxBool grLfbUnlock_body(FxI32 type, FxI32 buffer) {
     if (!open() || !lfb_buffer_ok(buffer))
         return FXFALSE;
     return grLfbUnlock(GrLock_t(type), buffer);
 }
+DG3_API(FxBool) dg3_grLfbUnlock(FxI32 type, FxI32 buffer) {
+    const FxBool result = grLfbUnlock_body(type, buffer);
+    if (auto *t = trace_call("grLfbUnlock"))
+        trace_commit(t->x("type", type).i("buffer", buffer).u("result", result));
+    return result;
+}
 DG3_API(void) dg3_grLfbConstantAlpha(FxU8 alpha) {
+    if (auto *t = trace_call("grLfbConstantAlpha"))
+        trace_commit(t->u("alpha", alpha));
     if (open())
         grLfbConstantAlpha(alpha);
 }
 DG3_API(void) dg3_grLfbConstantDepth(FxU32 depth) {
+    if (auto *t = trace_call("grLfbConstantDepth"))
+        trace_commit(t->u("depth", depth));
     if (open())
         grLfbConstantDepth(FxU16(depth > 0xffff ? 0xffff : depth));
 }
 DG3_API(void) dg3_grLfbWriteColorSwizzle(FxBool swizzleBytes, FxBool swapWords) {
+    if (auto *t = trace_call("grLfbWriteColorSwizzle"))
+        trace_commit(t->u("swizzleBytes", swizzleBytes).u("swapWords", swapWords));
     if (open())
         grLfbWriteColorSwizzle(swizzleBytes, swapWords);
 }
 DG3_API(void) dg3_grLfbWriteColorFormat(FxI32 colorFormat) {
+    if (auto *t = trace_call("grLfbWriteColorFormat"))
+        trace_commit(t->x("colorFormat", colorFormat));
     if (open())
         grLfbWriteColorFormat(colorFormat);
 }
 // Glide 3 adds pixelPipeline; it reaches the core lock, which applies the
 // clip rectangle. Pixels outside the frame buffer are discarded.
-DG3_API(FxBool)
-dg3_grLfbWriteRegion(FxI32 dst_buffer, FxU32 dst_x, FxU32 dst_y, FxI32 src_format, FxU32 src_width,
-                     FxU32 src_height, FxBool pixelPipeline, FxI32 src_stride, void *src_data) {
+static FxBool grLfbWriteRegion_body(FxI32 dst_buffer, FxU32 dst_x, FxU32 dst_y, FxI32 src_format,
+                                    FxU32 src_width, FxU32 src_height, FxBool pixelPipeline,
+                                    FxI32 src_stride, void *src_data) {
     const unsigned bytes = lfb_bytes(src_format);
     if (!open() || !src_data || !bytes || !lfb_buffer_ok(dst_buffer))
         return FXFALSE;
@@ -767,10 +1231,27 @@ dg3_grLfbWriteRegion(FxI32 dst_buffer, FxU32 dst_x, FxU32 dst_y, FxI32 src_forma
     grLfbUnlock(GR_LFB_WRITE_ONLY, dst_buffer);
     return FXTRUE;
 }
-// Reads 16-bit pixels; the region must lie inside the frame buffer.
 DG3_API(FxBool)
-dg3_grLfbReadRegion(FxI32 src_buffer, FxU32 src_x, FxU32 src_y, FxU32 src_width, FxU32 src_height,
-                    FxU32 dst_stride, void *dst_data) {
+dg3_grLfbWriteRegion(FxI32 dst_buffer, FxU32 dst_x, FxU32 dst_y, FxI32 src_format, FxU32 src_width,
+                     FxU32 src_height, FxBool pixelPipeline, FxI32 src_stride, void *src_data) {
+    const FxBool result = grLfbWriteRegion_body(dst_buffer, dst_x, dst_y, src_format, src_width,
+                                                src_height, pixelPipeline, src_stride, src_data);
+    if (auto *t = trace_call("grLfbWriteRegion"))
+        trace_commit(t->i("dst_buffer", dst_buffer)
+                         .u("dst_x", dst_x)
+                         .u("dst_y", dst_y)
+                         .x("src_format", src_format)
+                         .u("src_width", src_width)
+                         .u("src_height", src_height)
+                         .u("pixelPipeline", pixelPipeline)
+                         .i("src_stride", src_stride)
+                         .p("src_data", src_data)
+                         .u("result", result));
+    return result;
+}
+// Reads 16-bit pixels; the region must lie inside the frame buffer.
+static FxBool grLfbReadRegion_body(FxI32 src_buffer, FxU32 src_x, FxU32 src_y, FxU32 src_width,
+                                   FxU32 src_height, FxU32 dst_stride, void *dst_data) {
     if (!open() || !dst_data || !lfb_buffer_ok(src_buffer) || src_x > Glide.WindowWidth ||
         src_y > Glide.WindowHeight || src_width > Glide.WindowWidth - src_x ||
         src_height > Glide.WindowHeight - src_y || dst_stride < src_width * 2)
@@ -779,17 +1260,43 @@ dg3_grLfbReadRegion(FxI32 src_buffer, FxU32 src_x, FxU32 src_y, FxU32 src_width,
         return FXTRUE;
     return grLfbReadRegion(src_buffer, src_x, src_y, src_width, src_height, dst_stride, dst_data);
 }
+DG3_API(FxBool)
+dg3_grLfbReadRegion(FxI32 src_buffer, FxU32 src_x, FxU32 src_y, FxU32 src_width, FxU32 src_height,
+                    FxU32 dst_stride, void *dst_data) {
+    const FxBool result =
+        grLfbReadRegion_body(src_buffer, src_x, src_y, src_width, src_height, dst_stride, dst_data);
+    if (auto *t = trace_call("grLfbReadRegion"))
+        trace_commit(t->i("src_buffer", src_buffer)
+                         .u("src_x", src_x)
+                         .u("src_y", src_y)
+                         .u("src_width", src_width)
+                         .u("src_height", src_height)
+                         .u("dst_stride", dst_stride)
+                         .p("dst_data", dst_data)
+                         .u("result", result));
+    return result;
+}
 
 // ---------------------------------------------------------- library state
 DG3_API(void) dg3_grGlideInit(void) {
+    if (auto *t = trace_call("grGlideInit"))
+        trace_commit(*t);
     grGlideInit();
     reset_provider();
 }
-DG3_API(void) dg3_grGlideShutdown(void) {
+static void grGlideShutdown_body(void) {
     grGlideShutdown();
     g.open = false;
 }
+DG3_API(void) dg3_grGlideShutdown(void) {
+    if (auto *t = trace_call("grGlideShutdown"))
+        trace_commit(*t);
+    grGlideShutdown_body();
+    trace_flush();
+}
 DG3_API(void) dg3_grGlideGetState(void *state) {
+    if (auto *t = trace_call("grGlideGetState"))
+        trace_commit(t->p("state", state));
     if (!state)
         return;
     State3 s;
@@ -813,6 +1320,8 @@ DG3_API(void) dg3_grGlideGetState(void *state) {
     memcpy(state, &s, sizeof(s));
 }
 DG3_API(void) dg3_grGlideSetState(const void *state) {
+    if (auto *t = trace_call("grGlideSetState"))
+        trace_commit(t->p("state", state).blob(state, sizeof(State3)));
     if (!open() || !state)
         return;
     State3 s;
@@ -842,10 +1351,14 @@ DG3_API(void) dg3_grGlideSetState(const void *state) {
     }
 }
 DG3_API(void) dg3_grGlideGetVertexLayout(void *layout) {
+    if (auto *t = trace_call("grGlideGetVertexLayout"))
+        trace_commit(t->p("layout", layout));
     if (layout)
         memcpy(layout, &g.layout, sizeof(g.layout));
 }
 DG3_API(void) dg3_grGlideSetVertexLayout(const void *layout) {
+    if (auto *t = trace_call("grGlideSetVertexLayout"))
+        trace_commit(t->p("layout", layout).blob(layout, sizeof(dg3::Layout)));
     if (!layout)
         return;
     dg3::Layout l;
@@ -854,23 +1367,37 @@ DG3_API(void) dg3_grGlideSetVertexLayout(const void *layout) {
         g.layout = l;
 }
 DG3_API(void) dg3_grGlideGetVersion(char *version) {
+    if (auto *t = trace_call("grGlideGetVersion"))
+        trace_commit(t->p("version", version));
     if (version)
         memcpy(version, "Glide Version 3.01", sizeof("Glide Version 3.01"));
 }
 
 // ---------------------------------------------------------- utilities
-DG3_API(float) dg3_guFogTableIndexToW(int i) {
+static float guFogTableIndexToW_body(int i) {
     return guFogTableIndexToW(i);
 }
+DG3_API(float) dg3_guFogTableIndexToW(int i) {
+    const float result = guFogTableIndexToW_body(i);
+    if (auto *t = trace_call("guFogTableIndexToW"))
+        trace_commit(t->i("i", i).f("result", result));
+    return result;
+}
 DG3_API(void) dg3_guFogGenerateExp(Dg3Fog *fogtable, float density) {
+    if (auto *t = trace_call("guFogGenerateExp"))
+        trace_commit(t->p("fogtable", fogtable).f("density", density));
     if (fogtable)
         guFogGenerateExp(fogtable, density);
 }
 DG3_API(void) dg3_guFogGenerateExp2(Dg3Fog *fogtable, float density) {
+    if (auto *t = trace_call("guFogGenerateExp2"))
+        trace_commit(t->p("fogtable", fogtable).f("density", density));
     if (fogtable)
         guFogGenerateExp2(fogtable, density);
 }
 DG3_API(void) dg3_guFogGenerateLinear(Dg3Fog *fogtable, float nearZ, float farZ) {
+    if (auto *t = trace_call("guFogGenerateLinear"))
+        trace_commit(t->p("fogtable", fogtable).f("nearZ", nearZ).f("farZ", farZ));
     if (fogtable)
         guFogGenerateLinear(fogtable, nearZ, farZ);
 }
@@ -883,7 +1410,7 @@ static void df3_info(const dg3::Df3 &h, Dg3Gu3dfInfo &info) {
     info.header.format = h.format;
     info.mem_required = h.mem_required;
 }
-DG3_API(FxBool) dg3_gu3dfGetInfo(const char *filename, Dg3Gu3dfInfo *info) {
+static FxBool gu3dfGetInfo_body(const char *filename, Dg3Gu3dfInfo *info) {
     FileBytes file;
     dg3::Df3 h;
     if (!info || !read_file(filename, file) || !dg3::parse_3df(file.data, file.size, h))
@@ -891,8 +1418,14 @@ DG3_API(FxBool) dg3_gu3dfGetInfo(const char *filename, Dg3Gu3dfInfo *info) {
     df3_info(h, *info);
     return FXTRUE;
 }
+DG3_API(FxBool) dg3_gu3dfGetInfo(const char *filename, Dg3Gu3dfInfo *info) {
+    const FxBool result = gu3dfGetInfo_body(filename, info);
+    if (auto *t = trace_call("gu3dfGetInfo"))
+        trace_commit(t->s("filename", filename).p("info", info).u("result", result));
+    return result;
+}
 // Loads at most info->mem_required bytes, as reported by gu3dfGetInfo.
-DG3_API(FxBool) dg3_gu3dfLoad(const char *filename, Dg3Gu3dfInfo *info) {
+static FxBool gu3dfLoad_body(const char *filename, Dg3Gu3dfInfo *info) {
     FileBytes file;
     dg3::Df3 h;
     if (!info || !info->data || !read_file(filename, file) ||
@@ -906,4 +1439,10 @@ DG3_API(FxBool) dg3_gu3dfLoad(const char *filename, Dg3Gu3dfInfo *info) {
     memcpy(info->table, &table, sizeof(table));
     df3_info(h, *info);
     return FXTRUE;
+}
+DG3_API(FxBool) dg3_gu3dfLoad(const char *filename, Dg3Gu3dfInfo *info) {
+    const FxBool result = gu3dfLoad_body(filename, info);
+    if (auto *t = trace_call("gu3dfLoad"))
+        trace_commit(t->s("filename", filename).p("info", info).u("result", result));
+    return result;
 }

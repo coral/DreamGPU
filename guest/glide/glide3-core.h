@@ -882,4 +882,315 @@ inline bool load_3df(const u8 *p, size_t size, const Df3 &h, Df3Table &table, u8
         memcpy(data, at, h.mem_required);
     return true;
 }
+
+// Diagnostic call log (DREAMGPU_GLIDE3_TRACE). One line per Glide 3 call:
+// "<sequence> <ms> grName(key=value, ...)". The formatting is pure, so the
+// exact production text is checked on the host; glide3.cpp owns the file.
+namespace trace {
+constexpr unsigned kLineBytes = 1024, kReserve = 8; // room for "...)\r\n"
+inline u32 fnv1a(const void *data, size_t bytes) {
+    const u8 *p = static_cast<const u8 *>(data);
+    u32 h = 2166136261u;
+    for (size_t i = 0; p && i < bytes; ++i)
+        h = (h ^ p[i]) * 16777619u;
+    return h;
+}
+struct Line {
+    char text[kLineBytes];
+    unsigned n = 0, args = 0;
+    bool truncated = false;
+    void put(char c) {
+        if (n < kLineBytes - kReserve)
+            text[n++] = c;
+        else
+            truncated = true;
+    }
+    void str(const char *s) {
+        for (; s && *s; ++s)
+            put(*s);
+    }
+    void udec(uint64_t v) {
+        char d[24];
+        unsigned k = 0;
+        do {
+            d[k++] = char('0' + v % 10);
+            v /= 10;
+        } while (v);
+        while (k)
+            put(d[--k]);
+    }
+    void sdec(int64_t v) {
+        if (v < 0) {
+            put('-');
+            udec(uint64_t(0) - uint64_t(v));
+        } else
+            udec(uint64_t(v));
+    }
+    void digits(uint64_t v, unsigned count) {
+        char d[20];
+        for (unsigned k = count; k--;) {
+            d[k] = char('0' + v % 10);
+            v /= 10;
+        }
+        for (unsigned k = 0; k < count; ++k)
+            put(d[k]);
+    }
+    void hex(u32 v) {
+        str("0x");
+        for (int s = 28; s >= 0; s -= 4)
+            put("0123456789abcdef"[(v >> s) & 15]);
+    }
+    // Six decimals; scientific outside [1e-4, 1e9). No CRT formatting.
+    void flt(float value) {
+        u32 bits;
+        memcpy(&bits, &value, 4);
+        if ((bits & 0x7f800000u) == 0x7f800000u) {
+            str(bits & 0x7fffffu ? "nan" : bits >> 31 ? "-inf" : "inf");
+            return;
+        }
+        double v = value;
+        if (bits >> 31) {
+            put('-');
+            v = -v;
+        }
+        if (v != 0 && (v >= 1e9 || v < 1e-4)) {
+            int e = 0;
+            while (v >= 10) {
+                v /= 10;
+                ++e;
+            }
+            while (v < 1) {
+                v *= 10;
+                --e;
+            }
+            uint64_t m = uint64_t(v * 1e6 + 0.5);
+            if (m >= 10000000) {
+                m /= 10;
+                ++e;
+            }
+            udec(m / 1000000);
+            put('.');
+            digits(m % 1000000, 6);
+            put('e');
+            sdec(e);
+            return;
+        }
+        const uint64_t scaled = uint64_t(v * 1e6 + 0.5);
+        udec(scaled / 1000000);
+        put('.');
+        digits(scaled % 1000000, 6);
+    }
+    void begin(u32 sequence, u32 ms, const char *name) {
+        n = args = 0;
+        truncated = false;
+        udec(sequence);
+        put(' ');
+        udec(ms);
+        put(' ');
+        str(name);
+        put('(');
+    }
+    void key(const char *k) {
+        if (args++)
+            str(", ");
+        str(k);
+        put('=');
+    }
+    Line &i(const char *k, int64_t v) {
+        key(k);
+        sdec(v);
+        return *this;
+    }
+    Line &u(const char *k, uint64_t v) {
+        key(k);
+        udec(v);
+        return *this;
+    }
+    Line &x(const char *k, u32 v) {
+        key(k);
+        hex(v);
+        return *this;
+    }
+    Line &f(const char *k, float v) {
+        key(k);
+        flt(v);
+        return *this;
+    }
+    Line &p(const char *k, const void *v) {
+        key(k);
+        hex(u32(uintptr_t(v)));
+        return *this;
+    }
+    Line &s(const char *k, const char *v) {
+        key(k);
+        if (!v) {
+            str("null");
+            return *this;
+        }
+        put('"');
+        for (unsigned m = 0; v[m] && m < 160; ++m)
+            put(v[m] >= 32 && v[m] < 127 && v[m] != '"' ? v[m] : '?');
+        put('"');
+        return *this;
+    }
+    // Every word of a table or state blob, bounded by the caller.
+    Line &words(const char *k, const u32 *v, unsigned count) {
+        key(k);
+        put('[');
+        for (unsigned m = 0; v && m < count; ++m) {
+            if (m)
+                put(' ');
+            hex(v[m]);
+        }
+        put(']');
+        return *this;
+    }
+    // The enabled parameters of one vertex under the current layout.
+    Line &vertex(const char *k, const Layout &layout, const void *v) {
+        static constexpr const char *names[kSlots] = {"xy",  "z",     "w",   "q",   "fog", "a",
+                                                      "rgb", "pargb", "st0", "st1", "q0",  "q1"};
+        key(k);
+        if (!v) {
+            str("null");
+            return *this;
+        }
+        const u8 *bytes = static_cast<const u8 *>(v);
+        put('{');
+        for (unsigned s = 0; s < kSlots; ++s) {
+            if (s != kXY && !layout.param[s].enabled)
+                continue;
+            const u8 *at = bytes + (s == kXY ? 0 : layout.param[s].offset);
+            if (s != kXY)
+                put(' ');
+            str(names[s]);
+            put(':');
+            if (s == kPARGB) {
+                u32 c;
+                memcpy(&c, at, 4);
+                hex(c);
+                continue;
+            }
+            for (unsigned w = 0; w < kSlotBytes[s] / 4; ++w) {
+                float value;
+                memcpy(&value, at + 4 * w, 4);
+                if (w)
+                    put('/');
+                flt(value);
+            }
+        }
+        put('}');
+        return *this;
+    }
+    // grDrawVertexArray: the first three vertices of a pointer array.
+    Line &array(const Layout &layout, const void *pointers, u32 count) {
+        static constexpr const char *names[3] = {"v0", "v1", "v2"};
+        for (u32 k = 0; pointers && k < count && k < 3; ++k) {
+            const void *v;
+            memcpy(&v, static_cast<const u8 *>(pointers) + k * sizeof(void *), sizeof(v));
+            vertex(names[k], layout, v);
+        }
+        return *this;
+    }
+    // grDrawVertexArrayContiguous: the first three vertices of a strided run.
+    Line &strided(const Layout &layout, const void *base, u32 count, u32 stride) {
+        static constexpr const char *names[3] = {"v0", "v1", "v2"};
+        for (u32 k = 0; base && k < count && k < 3; ++k)
+            vertex(names[k], layout, static_cast<const u8 *>(base) + size_t(k) * stride);
+        return *this;
+    }
+    // A GrTexInfo, which has TexInfo's member types and therefore its layout.
+    Line &tex(const char *k, const void *info) {
+        if (!info)
+            return p(k, nullptr);
+        TexInfo t;
+        memcpy(&t, info, sizeof(t));
+        key(k);
+        put('{');
+        const unsigned outer = args;
+        args = 0;
+        i("small", t.small_lod)
+            .i("large", t.large_lod)
+            .i("aspect", t.aspect)
+            .x("format", u32(t.format));
+        p("data", t.data);
+        put('}');
+        args = outer;
+        return *this;
+    }
+    // Byte count and FNV-1a of a whole mipmap chain in host memory.
+    Line &texels(const void *info) {
+        if (!info)
+            return *this;
+        TexInfo t;
+        memcpy(&t, info, sizeof(t));
+        if (!t.data || !tex_ok(t))
+            return *this;
+        const u32 bytes = host_bytes(t);
+        return u("bytes", bytes).x("fnv", fnv1a(t.data, bytes));
+    }
+    // One level, or rows [start, end] of it when end >= 0.
+    Line &level(i32 lod, i32 aspect, i32 format, const void *data, i32 start, i32 end) {
+        if (!data || !tex_ok(lod, lod, aspect, format))
+            return *this;
+        u32 width, rows;
+        level_size(lod, aspect, width, rows);
+        if (end >= 0) {
+            if (start < 0 || end < start || u32(end) >= rows)
+                return *this;
+            rows = u32(end - start + 1);
+        }
+        const u32 bytes = width * rows * (format_16bit(format) ? 2 : 1);
+        return u("bytes", bytes).x("fnv", fnv1a(data, bytes));
+    }
+    // Palette entries [start, end]: the first eight words and a checksum.
+    Line &table(u32 type, const void *data, i32 start, i32 end) {
+        if (!data || (type != 2 && type != 3) || start < 0 || end < start || end > 255)
+            return *this;
+        u32 entries[8];
+        const u32 count = u32(end - start + 1) < 8 ? u32(end - start + 1) : 8;
+        memcpy(entries, static_cast<const u8 *>(data) + size_t(start) * 4, count * 4);
+        words("entries", entries, count);
+        return x("fnv", fnv1a(static_cast<const u8 *>(data) + size_t(start) * 4,
+                              size_t(end - start + 1) * 4));
+    }
+    Line &gamma(u32 entries, const u32 *red, const u32 *green, const u32 *blue) {
+        const size_t bytes = size_t(entries < 256 ? entries : 256) * 4;
+        if (red && green && blue)
+            x("red_fnv", fnv1a(red, bytes))
+                .x("green_fnv", fnv1a(green, bytes))
+                .x("blue_fnv", fnv1a(blue, bytes));
+        return *this;
+    }
+    Line &blob(const void *data, size_t bytes) {
+        return data ? x("fnv", fnv1a(data, bytes)) : *this;
+    }
+    // A successful grLfbLock's GrLfbInfo_t (same member types as LfbView).
+    struct LfbView {
+        int size;
+        void *ptr;
+        u32 stride;
+        i32 write_mode, origin;
+    };
+    Line &lfb(const void *info) {
+        if (!info)
+            return *this;
+        LfbView v;
+        memcpy(&v, info, sizeof(v));
+        return p("lfbPtr", v.ptr)
+            .u("strideInBytes", v.stride)
+            .x("writeMode", u32(v.write_mode))
+            .i("origin", v.origin);
+    }
+    // Terminates the line; returns its byte count (text is not NUL-terminated).
+    unsigned end() {
+        if (truncated)
+            for (const char *t = "..."; *t; ++t)
+                text[n++] = *t;
+        text[n++] = ')';
+        text[n++] = '\r';
+        text[n++] = '\n';
+        return n;
+    }
+};
+} // namespace trace
 } // namespace dg3

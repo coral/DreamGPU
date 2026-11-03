@@ -14,6 +14,7 @@ static void Record(const char *s) {
     WriteFile(Log, "\r\n", 2, &w, NULL);
     FlushFileBuffers(Log);
 }
+#include "display.h"
 #ifdef DG_SYSTEM_GLIDE
 #include "provider.h"
 #endif
@@ -148,6 +149,7 @@ static bool Run() {
         return false;
     }
     GlideSession session(pgrGlideInit, pgrGlideShutdown, pgrSstWinOpen, pgrSstWinClose);
+    const DesktopSize desktop = RecordDesktop("before");
     session.Init();
     Record("INIT");
     pgrSstSelect(0);
@@ -157,6 +159,7 @@ static bool Run() {
         return false;
     }
     Record("CONTEXT");
+    RecordDesktop("open");
     pgrCullMode(GR_CULL_DISABLE);
     pgrColorCombine(GR_COMBINE_FUNCTION_LOCAL, GR_COMBINE_FACTOR_NONE, GR_COMBINE_LOCAL_ITERATED,
                     GR_COMBINE_OTHER_NONE, FXFALSE);
@@ -327,6 +330,10 @@ static bool Run() {
     }
     session.Close();
     session.Shutdown();
+    if (!SameDesktop(RecordDesktop("closed"), desktop)) {
+        Record("FAIL display mode not restored after close");
+        passed = FALSE;
+    }
     /* Retail renderers can reject an initial mode and initialize again using
      * the same HWND. Check the real wrapper lifecycle, not only a fresh process. */
     Record("REINITIALIZE SAME WINDOW");
@@ -351,6 +358,10 @@ static bool Run() {
         session.Close();
     }
     session.Shutdown();
+    if (!SameDesktop(RecordDesktop("closed"), desktop)) {
+        Record("FAIL display mode not restored after reopened close");
+        passed = FALSE;
+    }
     return passed != FALSE;
 }
 
@@ -372,7 +383,7 @@ extern "C" void WINAPI WinMainCRTStartup(void) {
 #endif
         Record("triangle, RGB565 texture and same-address replacement, "
                "combiner-before-alpha/lightmap blending, 2304 exact GPU pixels, eight swaps, "
-               "same-window reinitialization and cleanup");
+               "same-window reinitialization, display restored after each close, and cleanup");
     }
     CloseHandle(Log);
     ExitProcess(passed ? 0 : 1);

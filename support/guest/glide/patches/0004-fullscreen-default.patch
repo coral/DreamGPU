@@ -1,0 +1,230 @@
+--- a/GLutil.cpp
++++ b/GLutil.cpp
+@@ -232,6 +232,10 @@
+ 
+     Find = NULL;
+     file = fopen( IniFile, "r" );
++    if ( !file )
++    {
++        return NULL;
++    }
+ 
+     while ( fgets( Buffer1, 255, file ) != NULL )
+     {
+@@ -244,6 +248,10 @@
+                 {
+                     Find[ strlen( Find ) - 1 ] = '\0';
+                 }
++                if ( *Find && Find[ strlen( Find ) - 1 ] == '\r' )
++                {
++                    Find[ strlen( Find ) - 1 ] = '\0';
++                }
+                 break;
+             }
+         }
+@@ -254,6 +262,11 @@
+     return Find;
+ }
+ 
++// DreamGPU writes its own configuration version. A file without it was written
++// by an earlier build (or another OpenGLide) whose InitFullScreen=0 was only the
++// old default, so it is regenerated once with the full-screen default.
++static const char DgConfigVersion[] = "0.09rc9-dg2";
++
+ void GetOptions( void )
+ {
+     FILE        * IniFile;
+@@ -261,7 +274,8 @@
+     char        Path[ 256 ];
+ 
+     UserConfig.FogEnable                    = true;
+-    UserConfig.InitFullScreen               = false;
++    // Like Glide on a Voodoo: the display switches to the game's resolution.
++    UserConfig.InitFullScreen               = true;
+     UserConfig.PrecisionFix                 = true;
+     UserConfig.CreateWindow                 = false;
+     UserConfig.EnableMipMaps                = false;
+@@ -296,15 +310,21 @@
+     
+     if ( access( Path, 0 ) == -1 )
+     {
++        // A read-only working directory keeps the defaults; never write NULL.
+         IniFile = fopen( Path, "w" );
++        if ( !IniFile )
++        {
++            return;
++        }
+         fprintf( IniFile, "Configuration File for OpenGLide\n\n" );
+         fprintf( IniFile, "Info:\n" );
+         fprintf( IniFile, "Priority goes from 0(HIGH) to 5(IDLE)\n" );
+         fprintf( IniFile, "Output resolution: 0 = original, 1.0-16.0 = scale factor, >16 = fixed width (height calculated automatically)\n" );
+         fprintf( IniFile, "Texture Memory goes from %d to %d\n", OGL_MIN_TEXTURE_BUFFER, OGL_MAX_TEXTURE_BUFFER );
+         fprintf( IniFile, "Frame Buffer Memory goes from %d to %d\n", OGL_MIN_FRAME_BUFFER, OGL_MAX_FRAME_BUFFER );
+-        fprintf( IniFile, "All other fields are boolean with 1(TRUE) and 0(FALSE)\n\n" );
+-        fprintf( IniFile, "Version=%s\n\n", OpenGLideVersion );
++        fprintf( IniFile, "All other fields are boolean with 1(TRUE) and 0(FALSE)\n" );
++        fprintf( IniFile, "InitFullScreen: 1 switches the display to the game's resolution, 0 keeps a window\n\n" );
++        fprintf( IniFile, "Version=%s\n\n", DgConfigVersion );
+         fprintf( IniFile, "[Options]\n" );
+         fprintf( IniFile, "WrapperPriority=%d\n", UserConfig.Priority );
+         fprintf( IniFile, "CreateWindow=%d\n", UserConfig.CreateWindow );
+@@ -329,7 +349,7 @@
+     else
+     {
+         Pointer = FindConfig( Path, "Version" );
+-        if ( Pointer && !strcmp( Pointer, OpenGLideVersion ) )
++        if ( Pointer && !strcmp( Pointer, DgConfigVersion ) )
+         {
+             if ( (Pointer = FindConfig(Path, "CreateWindow")) )
+                 UserConfig.CreateWindow = atoi( Pointer ) ? true : false;
+@@ -370,11 +390,11 @@
+             if ( (Pointer = FindConfig(Path, "ShamelessPlug")) )
+                 UserConfig.ShamelessPlug = atoi( Pointer ) ? true : false;;
+         }
+-        else
++        else if ( remove( Path ) == 0 )
+         {
+-            remove( Path );
+             GetOptions( );
+         }
++        // An undeletable stale file keeps the defaults instead of recursing.
+     }
+ }
+ 
+--- a/platform/windows/window.cpp
++++ b/platform/windows/window.cpp
+@@ -39,6 +39,28 @@
+ static BOOL ramp_stored  = false;
+ static BOOL mode_changed = false;
+ static int tainted_cursor;
++// Full screen replaces the game window's style and position; both are put
++// back, with the display mode, when the context closes or fails to open.
++static HWND  saved_hwnd;
++static LONG  saved_style;
++static RECT  saved_rect;
++
++static void RestoreDisplay(void)
++{
++    if ( mode_changed )
++    {
++        ResetScreenMode( );
++        mode_changed = false;
++    }
++    if ( saved_hwnd && IsWindow( saved_hwnd ) )
++    {
++        SetWindowLong( saved_hwnd, GWL_STYLE, saved_style );
++        SetWindowPos( saved_hwnd, NULL, saved_rect.left, saved_rect.top,
++                      saved_rect.right - saved_rect.left, saved_rect.bottom - saved_rect.top,
++                      SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED );
++    }
++    saved_hwnd = NULL;
++}
+ 
+ #define DPRINTF(fmt, ...)
+ static LONG WINAPI GlideWndProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
+@@ -115,6 +137,7 @@
+     }
+ 
+     mode_changed = false;
++    saved_hwnd = NULL;
+ 
+ #if (SIZEOF_INT_P == 4)
+     DISPLAY_DEVICE dd = { .cb = sizeof(DISPLAY_DEVICE) };
+@@ -134,11 +157,17 @@
+     if ( UserConfig.InitFullScreen )
+     {
+         if (!UserConfig.QEmu) {
++            // As on Voodoo hardware: the display takes the game's resolution
++            // and the game window becomes a borderless popup at the origin.
++            saved_hwnd = hwnd;
++            saved_style = GetWindowLong( hwnd, GWL_STYLE );
++            GetWindowRect( hwnd, &saved_rect );
++            mode_changed = SetScreenMode( width, height );
+             SetWindowLong( hwnd, 
+                            GWL_STYLE, 
+                            WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS );
+-            MoveWindow( hwnd, 0, 0, width, height, false );
+-            mode_changed = SetScreenMode( width, height );
++            SetWindowPos( hwnd, NULL, 0, 0, width, height,
++                          SWP_NOZORDER | SWP_NOACTIVATE | SWP_FRAMECHANGED );
+         }
+         else {
+             RECT rect;
+@@ -199,18 +228,18 @@
+     pfd.cStencilBits = 8;
+ 
+     GlideMsg("DG_WGL_FORMAT_BEGIN\n");
+-    if (!hDC) { Error("DG_WGL_GET_DC error=%lu\n", GetLastError()); return false; }
++    if (!hDC) { Error("DG_WGL_GET_DC error=%lu\n", GetLastError()); RestoreDisplay(); return false; }
+     PixFormat = GetPixelFormat(hDC);
+     if (!PixFormat) {
+         PixFormat = ChoosePixelFormat(hDC, &pfd);
+         if (!PixFormat || !SetPixelFormat(hDC, PixFormat, &pfd)) {
+             Error("DG_WGL_SET_FORMAT error=%lu\n", GetLastError());
+-            ReleaseDC(hWND, hDC); hDC = NULL; return false;
++            ReleaseDC(hWND, hDC); hDC = NULL; RestoreDisplay(); return false;
+         }
+     }
+     if (!DescribePixelFormat(hDC, PixFormat, sizeof(pfd), &pfd)) {
+         Error("DG_WGL_DESCRIBE_FORMAT error=%lu\n", GetLastError());
+-        ReleaseDC(hWND, hDC); hDC = NULL; return false;
++        ReleaseDC(hWND, hDC); hDC = NULL; RestoreDisplay(); return false;
+     }
+     GlideMsg("ColorBits = %d DepthBits = %d\n", pfd.cColorBits, pfd.cDepthBits);
+     UserConfig.FramebufferSRGB = false;
+@@ -223,13 +252,13 @@
+     hRC = wglCreateContext(hDC);
+     if (!hRC) {
+         Error("DG_WGL_CREATE error=%lu\n", GetLastError());
+-        ReleaseDC(hWND, hDC); hDC = NULL; return false;
++        ReleaseDC(hWND, hDC); hDC = NULL; RestoreDisplay(); return false;
+     }
+     GlideMsg("DG_WGL_BIND_BEGIN\n");
+     if (!wglMakeCurrent(hDC, hRC)) {
+         Error("DG_WGL_BIND error=%lu\n", GetLastError());
+         wglDeleteContext(hRC); hRC = NULL;
+-        ReleaseDC(hWND, hDC); hDC = NULL; return false;
++        ReleaseDC(hWND, hDC); hDC = NULL; RestoreDisplay(); return false;
+     }
+     DgSwapState = 0;
+     GlideMsg("DG_WGL_BOUND\n");
+@@ -260,10 +289,7 @@
+     wglDeleteContext( hRC );
+     ReleaseDC( hWND, hDC );
+ 
+-    if( mode_changed )
+-    {
+-        ResetScreenMode( );
+-    }
++    RestoreDisplay( );
+     for (; tainted_cursor; tainted_cursor--)
+         ShowCursor(TRUE);
+ }
+@@ -322,9 +348,14 @@
+     bool    found;
+     DEVMODE DevMode;
+ 
+-    hdc = GetDC( hWND );
++    // The desktop's depth; the game window may not exist yet.
++    hdc = GetDC( NULL );
+     bits_per_pixel = GetDeviceCaps( hdc, BITSPIXEL );
+-    ReleaseDC( hWND, hdc );
++    ReleaseDC( NULL, hdc );
++    if ( GetSystemMetrics( SM_CXSCREEN ) == xsize && GetSystemMetrics( SM_CYSCREEN ) == ysize )
++    {
++        return false; // already there: nothing to change or restore
++    }
+     
+     found = false;
+     DevMode.dmSize = sizeof( DEVMODE );
+@@ -342,7 +373,9 @@
+         }
+     }
+     
+-    return ( found && ChangeDisplaySettings( &DevMode, 0 ) == DISP_CHANGE_SUCCESSFUL );
++    // Temporary: never written to the registry. NT also restores it if the
++    // process ends without closing Glide; Windows 9x relies on the close.
++    return ( found && ChangeDisplaySettings( &DevMode, CDS_FULLSCREEN ) == DISP_CHANGE_SUCCESSFUL );
+ }
+ 
+ void ResetScreenMode()

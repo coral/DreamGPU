@@ -16,6 +16,10 @@
     {
       "file": "0003-native-packed-textures.patch",
       "sha256": "8f4b6519bb23a713d597adf7cd63acae9ec5d695ee1281f192815c51434d5658"
+    },
+    {
+      "file": "0004-fullscreen-default.patch",
+      "sha256": "c51a70922d541d170b5012eeeba11107a11500e3e94860ce4299d8b0d203baba"
     }
   ],
   "files": {
@@ -25,11 +29,11 @@
     },
     "platform/windows/window.cpp": {
       "before_sha256": "169d9262f9a91d2530cb11308c1e0ddc33d3c505ef870185c60139d4233de7db",
-      "after_sha256": "af4bc7fa67b1c3884475027ed2d070d48d5ff3b6c2bc48d5213a111d092823d0"
+      "after_sha256": "29f9e0ff7f74632e56baff92bac17407d6c1744a4b30389dd545822016385b28"
     },
     "GLutil.cpp": {
       "before_sha256": "9a045648d961af31a6768116d50f122d3709319a6bc6844be65d45f1b4207f5b",
-      "after_sha256": "79eae41b1f8da576c314eb74e8e5ec7f62f2d5c26825f3ffed39a98cadc59307"
+      "after_sha256": "fcf80a009afa917f30c572f748593fddae00e37b708a4bd03b79a9fd5ce0403d"
     },
     "GLExtensions.cpp": {
       "before_sha256": "8cad12a722f409db6cf9cd644d51a9df20be2bba5bb862872fc655ca309a4987",

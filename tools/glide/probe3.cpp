@@ -16,6 +16,7 @@ static void Record(const char *s) {
     WriteFile(Log, "\r\n", 2, &w, NULL);
     FlushFileBuffers(Log);
 }
+#include "display.h"
 #include "provider3.h"
 
 namespace {
@@ -355,8 +356,10 @@ static bool Run() {
             end();
         }
     } session{shutdown};
+    const DesktopSize desktop = RecordDesktop("before");
     if (!open())
         return false;
+    RecordDesktop("open");
     stage("CONTEXT");
 
     // grGet succeeds only with the exact length; failures leave the buffer.
@@ -575,6 +578,8 @@ static bool Run() {
     context = 0;
     pgrGlideShutdown();
     initialized = false;
+    if (!SameDesktop(RecordDesktop("closed"), desktop))
+        fail("FAIL display mode not restored after close");
     stage("EIGHT SWAPS AND CLOSE");
 
     // Retail renderers reinitialize on the same HWND.
@@ -595,6 +600,10 @@ static bool Run() {
     }
     pgrBufferSwap(0);
     stage("REOPENED");
+    shutdown();
+    if (!SameDesktop(RecordDesktop("closed"), desktop))
+        fail("FAIL display mode not restored after reopened close");
+    stage("CLOSED");
     return passed;
 }
 
@@ -609,7 +618,8 @@ extern "C" void WINAPI WinMainCRTStartup(void) {
         Record("97 decorated exports, grGet/grQueryResolutions contracts, layout triangles with "
                "disabled and out-of-range parameters, contiguous strip winding, fan continue, "
                "clip coordinates, log2 texture, state and layout restore, 16-bit LFB, eight "
-               "swaps, context close and same-window reinitialization");
+               "swaps, context close, same-window reinitialization and display restored after "
+               "each close");
     }
     CloseHandle(Log);
     ExitProcess(passed ? 0 : 1);
