@@ -1,0 +1,25 @@
+--- a/GLRender.cpp
++++ b/GLRender.cpp
+@@ -184,7 +184,21 @@
+         }
+     }
+     
+-    if( !OpenGL.Blend && Glide.State.ChromaKeyMode )
++    if( !OpenGL.Blend && Glide.State.ChromaKeyMode && InternalConfig.EXT_vertex_array )
++    {
++        // The keyed draw below as one array draw. Three-component colours give
++        // every vertex alpha 1, as glColor3fv does, so the alpha test sees only
++        // the keyed texture alpha. Five GL calls per vertex made chroma-keyed
++        // sprite games (Diablo II) pay the immediate-mode cost the normal path
++        // avoids.
++        glAlphaFunc( GL_GEQUAL, 0.5 );
++        glEnable( GL_ALPHA_TEST );
++        glColorPointer( 3, GL_FLOAT, 4 * sizeof( GLfloat ), &OGLRender.TColor[0] );
++        glDrawArrays( GL_TRIANGLES, 0, OGLRender.NumberOfTriangles * 3 );
++        glColorPointer( 4, GL_FLOAT, 0, &OGLRender.TColor[0] );
++        glDisable( GL_ALPHA_TEST );
++    }
++    else if( !OpenGL.Blend && Glide.State.ChromaKeyMode )
+     {
+         glAlphaFunc( GL_GEQUAL, 0.5 );
+         glEnable( GL_ALPHA_TEST );

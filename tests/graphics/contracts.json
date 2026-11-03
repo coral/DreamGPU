@@ -348,6 +348,10 @@
       "scope": "source",
       "path": "tests/guest/glide/test_chromakey.py"
     },
+    "glide-chromakey-arrays": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_chromakey_arrays.py"
+    },
     "glide3-trace": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_trace.py"

@@ -58,6 +58,16 @@ black) drew its menu text and logo on black rectangles. Patch
 `0005-chromakey-rgba.patch` fixes the rotation; `tests/guest/glide/test_chromakey.py`
 runs the patched conversion and palette keying for all four formats.
 
+A chroma-keyed batch with blending off is drawn under an alpha test
+(`GEQUAL 0.5`) on the keyed texture alpha. The donor drew those batches in
+immediate mode, five GL calls per vertex; patch `0006-chromakey-arrays.patch`
+draws them from the same arrays as every other batch, with a three-component
+colour pointer so vertex alpha stays 1 (`tests/guest/glide/test_chromakey_arrays.py`).
+With blending on, keyed texels are not discarded (real Voodoo hardware discards
+them in every blend mode). They are black with texture alpha 0: invisible under
+additive blending, and under source-alpha blending only when the alpha combine
+passes the texture alpha through.
+
 ## Glide 3.x provider
 
 `glide3x.dll` is a separate CMake target. It compiles the OpenGLide core units
