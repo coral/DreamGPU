@@ -165,6 +165,28 @@ and disposable-VM acceptance cycle:
   shader on D3D9 and vs_1_1 into ps_1_1 exactly on Win2000, XP and Win98 SE
   (Linux host). On macOS, CGL's aliasing and the border sampler under a vertex
   program are unverified.
+- 3D textures (`DG_CAP_GL_TEXTURE_3D`) add EXT_texture3D with the
+  TexSubImage3DEXT and CopyTexSubImage3DEXT forms: a fourth texture target
+  with its own default object, per-unit binding and attrib-stack slots, the
+  proxy target, TEXTURE_WRAP_R on every target, TEXTURE_DEPTH and the
+  UNPACK/PACK_IMAGE_HEIGHT and SKIP_IMAGES pixel storage. TexImage3D and
+  TexSubImage3D are nine- and ten-word DATA records carrying tight rows then
+  images (or nothing for zero-defined storage); the frontend resolves every
+  unpack value, splits large volumes into bounded slabs of whole images (or 2D
+  tiles of one image) and checks a split subimage against the level first.
+  CopyTexSubImage3D is a nine-word CALL. MAX_3D_TEXTURE_SIZE is 256 (or a
+  smaller native limit); images use the uncompressed formats and every 2D
+  wire type, are borderless (a border is GL_INVALID_OPERATION, its proxy is
+  rejected), and charge every image of a level. Enable precedence follows GL:
+  cube map, 3D, 2D, 1D. GetTexImage reads a level through all of its images.
+  Without the bit the extension, entry points, enums and pixel storage stay
+  hidden. Wine then claims D3DPTEXTURECAPS_VOLUMEMAP, MIPVOLUMEMAP and
+  VOLUMEMAP_POW2 (TextureCaps `+0x0004a000`), VolumeTextureFilterCaps
+  `0x03030300` on D3D9 (`0x0303033f` on D3D8, which keeps the legacy bits),
+  VolumeTextureAddressCaps `0x3f` and MaxVolumeExtent 256; DXT volumes stay
+  unclaimed. Wine patch 0035 states the unpack alignment of volume uploads (see
+  the patch README). The installed probe samples the four slices of a MANAGED
+  A8R8G8B8 volume exactly; it has not yet run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
@@ -349,11 +371,15 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
   system glide2x provider. A stale application-local `glide2x.dll` in the
   image's `UT99\System` (an old OpenGLide 0.09rc9 build) hung it in
   `grSstOpen`; it is not part of DreamGPU.
-- **3DMark2001 SE** (Win2000): installs, then refuses to start ("requires a
-  processor with MMX instructions"). Its bundled SystemInfo reports no CPU
-  family, no clocks and no capabilities on this VM. A P6 CPUID signature and
-  an SMBIOS Pentium III processor entry did not change that, so the cause lies
-  in its own detection (kernel driver or SMBIOS reading), not in DreamGPU.
+- **3DMark2001 SE** (Win2000, build 330 Pro): its bundled SystemInfo reports
+  no CPU family, clocks or capabilities, then warns that no MMX was found
+  (build 300 refuses to run). Windows itself reports MMX and SSE
+  (`IsProcessorFeaturePresent`), and a P6 or Pentium 4 CPUID signature, an
+  SMBIOS Pentium III entry and a 32-bit SMBIOS entry point all change nothing.
+  The Fill Rate test renders correctly through D3D8. Every scene test (Game 1,
+  Vertex Shader) crashes before issuing a shader or failing D3D call, inside
+  3DMark's own `P_VertexShader` cleanup, presumably on the code path chosen by
+  its failed CPU detection.
 - **GTA Vice City** (Win2000): installs, then exits silently before loading
   D3D8. The executable is SecuROM-protected (`.cms_t`/`.cms_d` sections), and
   SecuROM's physical-disc checks fail on an emulated CD drive.

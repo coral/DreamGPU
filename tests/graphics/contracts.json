@@ -312,6 +312,22 @@
       "scope": "source",
       "path": "tests/guest/d3d/test_geforce_fx_quirk.py"
     },
+    "gl-texture-3d": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_texture_3d.py"
+    },
+    "native-texture-3d": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/texture_3d.rs"
+    },
+    "d3d-volume-alignment": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_volume_alignment.py"
+    },
+    "guest-volume": {
+      "scope": "installed-api",
+      "path": "tools/d3d/volume-probe.inc"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -323,6 +339,22 @@
     "glide3-loader": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_system_loader.py"
+    },
+    "glide-fullscreen": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_fullscreen.py"
+    },
+    "glide3-trace": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_glide3_trace.py"
+    },
+    "glide3-state": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_glide3_state.py"
+    },
+    "glide3-win9x": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_glide3_win9x.py"
     }
   },
   "contracts": [
@@ -1474,6 +1506,27 @@
       "remaining": "Negotiated by DG_CAP_GL_VERTEX_PROGRAM; without it the extension and entry points are hidden and vertex program modes stay GL_INVALID_ENUM. Generic client arrays travel in their own DATA record (the VertexAttribPointerARB function number, 16 conventional and 16 generic descriptors), so older kernels keep their DrawArrays/DrawArraysEXT admission. Attribute 0 is the position (the non-aliasing GL 2.0 model Mesa implements): its array supersedes the vertex array and generic attributes 1-15 never alias conventional ones. Host checks reject non-ASCII bytes and vertex.attrib[n] at or beyond MAX_VERTEX_ATTRIBS_ARB (16); other semantic limits are native. Every vertex load goes into a fresh native object that replaces the program's on success (Mesa 26.1 frees a serialized program twice when one vertex object is translated three times). Native pixel tests (Linux, private Mesa on Radeon) cover env-parameter transforms, every generic array type and size, current values inside and outside Begin/End, position aliasing, program matrices and state.matrix.mvp, per-vertex point size, two-sided colours, relative addressing, parse and host-detected failures, invalid-program draws, display lists, ENABLE_BIT/CURRENT_BIT, combined vertex and fragment programs, sharing/isolation, and the vs_1_1/vs_2_0 programs WineD3D generates for the installed probe. Wine patch 0033 maps glVertexAttrib2svARB, clamps VS 2.0 NumTemps, sets VERTEX_PROGRAM_POINT_SIZE only for oPts writers, disables vertex programs for CPU depth uploads and binds the zero attribute as a client array without ARB_vertex_buffer_object. Expected caps: D3D9 VertexShaderVersion 2.0 with 256 constants, D3D8 1.1. VS 2.0 makes Wine report its NVIDIA fallback for that level, a GeForce FX 5800 (10de:0302, previously a GeForce 256), whose quirk enabled the rectangle textures DreamGPU lacks and blacked out DirectDraw/D3D6/D3D7 presentation until patch 0034. The installed D3D8/9 vertex shader probe (vs_1_1 for two constant sets, vs_2_0 on D3D9, vs_1_1 into ps_1_1) passes on Win2000, XP and Win98 SE (Linux host). Signed normalized generic arrays convert natively (c/32767) while immediate and ArrayElement 4N values follow GL 1.x; D3D point size limits, ARB_vertex_buffer_object, macOS CGL and games using vertex shaders remain unverified."
     },
     {
+      "id": "gl.texture-3d",
+      "area": 8,
+      "api": "OpenGL 1.1 + EXT_texture3D (D3D8/D3D9 volume textures through Wine)",
+      "operation": "TEXTURE_3D definition/subimage/copy/readback, zero-defined storage, proxies, mip levels, per-unit binding with TEXTURE_BIT, TEXTURE_WRAP_R, IMAGE_HEIGHT/SKIP_IMAGES pixel storage",
+      "format": "uncompressed internal formats; every 2D wire format and GL 1.2 packed type",
+      "resource": "volume texture",
+      "usage": "sampling",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-texture-3d",
+        "native-texture-3d",
+        "native",
+        "d3d-volume-alignment",
+        "guest-volume"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_TEXTURE_3D; without it the extension, entry points, enums and image pixel storage stay hidden. TexImage3D/TexSubImage3D are nine- and ten-word DATA records with tight payloads (the frontend resolves every unpack value and splits into bounded slabs of whole images or 2D tiles); CopyTexSubImage3D is a nine-word CALL. MAX_3D_TEXTURE_SIZE is 256; images are borderless (a border is GL_INVALID_OPERATION, its proxy rejected) and compressed 3D formats are not accepted. Native pixel tests (Linux, private Mesa on Radeon) sample slices at explicit R with NEAREST and LINEAR filtering, mip levels, WRAP_R, subimages, copies, readback through every image, zero definitions, tight RGB and packed payloads, proxies, display lists, per-unit bindings and TEXTURE_BIT, 3D over 2D precedence and the incomplete fallback. Wine claims VOLUMEMAP, MIPVOLUMEMAP and VOLUMEMAP_POW2; patch 0035 states the unpack alignment of volume uploads. The installed D3D8/9 volume probe (four LockBox slices of a MANAGED A8R8G8B8 4x4x4 texture) is untested on guests; DEFAULT-pool LockBox, volume mip chains through D3D, converted formats, shaders sampling volumes, macOS CGL and games remain unverified."
+    },
+    {
       "id": "glide3.vertex",
       "area": 11,
       "api": "Glide3x",
@@ -1503,7 +1556,8 @@
       "advertised": "unverified",
       "implementation": "unverified",
       "tests": [
-        "glide3-core"
+        "glide3-core",
+        "glide3-state"
       ],
       "remaining": "Verify through the installed provider; pixel counters and swap history are not reported."
     },
@@ -1540,7 +1594,9 @@
       "implementation": "unverified",
       "tests": [
         "glide3-exports",
-        "glide3-loader"
+        "glide3-loader",
+        "glide3-win9x",
+        "glide3-trace"
       ],
       "remaining": "Installer owns glide3x.dll; activation does not run DGSYSG3. Record sysglide3 plus a game per platform before making it an activation proof."
     }
