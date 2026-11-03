@@ -294,6 +294,20 @@ coordinate pointer on whichever client unit Wine's own loaders left selected,
 so every menu tile sampled one texel; it now selects unit 0. Menus and Quick
 Start render correctly; gameplay beyond Quick Start is unverified.
 
+Game checks on DreamGPU fixtures (2026-11-03, Linux host):
+- **Quake III Arena demo** (OpenGL, Win2000): installs, runs at 640×480, and its
+  menu and demo playback render correctly (lightmaps, additive effects, fog,
+  HUD).
+- **Expendable demo** (D3D6): runs at 640×480×16 on Win2000 and Win98 SE once
+  the retro profile hides modern CPUID 0x80000001 EDX bits (Juke 797432a). The
+  game's 3DNow! test (`test edx, 0xffffffff`) otherwise selects 3DNow! code that
+  faults on FEMMS. Whether it then enables its EMBM path is unverified.
+- **SimCity 3000** (DirectDraw, Win2000): reaches its menu and renders a
+  starter town's city view, UI and ticker after Wine patch 0032.
+- **Turok 3Dfx demo** (Glide, Win98 SE): faults before its video DLL loads,
+  identically without any Glide provider and on an emulated Pentium III, so the
+  fault is not DreamGPU's. Its cause is unknown.
+
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,
 batched GDI writes followed by ReleaseDC, and partial/keyed primary blits over
