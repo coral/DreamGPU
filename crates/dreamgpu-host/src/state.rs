@@ -89,6 +89,14 @@ pub struct ContextState {
     pub cube_attrib: [[*mut Texture; UNITS]; STACK],
     /// PROXY_TEXTURE_CUBE_MAP levels rejected by the virtual limits.
     pub proxy_rejected_cube: u32,
+    /// Rust-only ARB_fragment_program state: the bound FRAGMENT_PROGRAM_ARB
+    /// object (one reference; null is the default object before it is first
+    /// loaded, natively program zero), and a host-detected load failure
+    /// (`program::ERROR_*`, zero for none) whose position overrides the native
+    /// PROGRAM_ERROR_POSITION/STRING until the next native load.
+    pub program: *mut crate::program::Program,
+    pub program_error: i32,
+    pub program_error_kind: u32,
 }
 impl ContextState {
     /// Every unit's (2D, 1D, cube map) binding, including the active unit's.
@@ -140,6 +148,9 @@ impl ContextState {
         units_cube: [null_mut(); UNITS],
         cube_attrib: [[null_mut(); UNITS]; STACK],
         proxy_rejected_cube: 0,
+        program: null_mut(),
+        program_error: -1,
+        program_error_kind: 0,
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
@@ -301,6 +312,8 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     for texture in old.units.iter().flatten().chain(&old.units_cube) {
         unsafe { dreamgpu_texture_unref(memory, *texture) };
     }
+    // Before the namespace: the last context's release frees its programs.
+    unsafe { crate::program::release_binding(&*memory, old.program) };
     unsafe {
         dreamgpu_texture_unref(memory, old.bound_texture);
         dreamgpu_texture_unref(memory, old.default_texture);
@@ -555,7 +568,7 @@ pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Textu
     slots
 }
 /// Native fixed-function unit count, clamped to the logical table.
-unsafe fn unit_limit(api: &DreamGpuGlApi, state: *mut ContextState) -> Result<u32, u32> {
+pub(crate) unsafe fn unit_limit(api: &DreamGpuGlApi, state: *mut ContextState) -> Result<u32, u32> {
     unsafe {
         if (*state).unit_limit == 0 {
             let mut units = 0i32;
@@ -589,6 +602,9 @@ pub(crate) unsafe fn prepare_textures(
 ) -> Result<(), u32> {
     let (all, active) = unsafe { ((*state).unit_bindings(), (*state).active_unit) };
     let enabled = api.dg_glIsEnabled.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    // An enabled fragment program samples any unit's bound textures regardless
+    // of their fixed-function enables; asked once, only when it matters.
+    let mut program = None;
     for (unit, triple) in all.iter().enumerate() {
         // Undefined levels of any face poison an enabled cube map (the
         // texture's summary covers all six faces).
@@ -611,7 +627,9 @@ pub(crate) unsafe fn prepare_textures(
                     on
                 }
             };
-            if on != 0 {
+            if on != 0
+                || *program.get_or_insert_with(|| unsafe { enabled(GL_FRAGMENT_PROGRAM_ARB) } != 0)
+            {
                 return Err(DG_GL_ERROR_TEXTURE);
             }
         }
@@ -756,6 +774,17 @@ unsafe fn scalar(
             }
         }
         FEnum_glEnd => unsafe { crate::texture::border::finish(&*memory, state) },
+        FEnum_glBindProgramARB => {
+            return unsafe { crate::program::bind(&*memory, state, word(0), word(1)) };
+        }
+        // Only the vertex program modes the device does not implement.
+        FEnum_glEnable | FEnum_glDisable if crate::scalar::vertex_program_cap(word(0)) => unsafe {
+            error(state, GL_INVALID_ENUM)
+        },
+        FEnum_glProgramLocalParameter4fARB => {
+            let v = [2, 3, 4, 5].map(|i| f32::from_bits(word(i)));
+            return unsafe { crate::program::local(&*memory, state, word(0), word(1), v) };
+        }
         _ => return Err(DG_GL_ERROR_UNSUPPORTED),
     }
     Ok(())

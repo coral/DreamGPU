@@ -51,7 +51,10 @@ struct wined3d_gl_info {struct {struct {
  void (*p_glReadPixels)(int,int,int,int,int,int,void*);
  void (*p_glDrawPixels)(int,int,int,int,const void*);
  GLenum (*p_glGetError)(void);
-} gl;} gl_ops;};
+} gl;} gl_ops;
+ /* Indexed by the one extension the transfer consults (patch 0029). */
+ BOOL supported[1];};
+#define ARB_FRAGMENT_PROGRAM 0
 struct wined3d_context {int valid;struct wined3d_surface *current_rt;const struct wined3d_gl_info *gl_info;BOOL render_offscreen;void *hdc,*glCtx;};
 struct wined3d_device {struct wined3d_surface *onscreen_depth_stencil,*backbuffer_ds_rt;struct wined3d_context *backbuffer_ds_context;void *backbuffer_ds_hdc,*backbuffer_ds_glctx;};
 struct wined3d_bo_address {void *addr;unsigned buffer_object;};
@@ -115,7 +118,7 @@ int main(void)
  struct format format={1,2,16,0};
  struct wined3d_device device={0};
  struct wined3d_surface surface={{3,2,&format,&device},16,{0,0}};
- struct wined3d_gl_info gl={{{noop,push,push_attrib,pop,read_pixels,draw_pixels,get_error}}};
+ struct wined3d_gl_info gl={{{noop,push,push_attrib,pop,read_pixels,draw_pixels,get_error}},{1}};
  struct wined3d_context context={1,&surface,&gl,1,&device,&surface};
  device.onscreen_depth_stencil=&surface;device.backbuffer_ds_rt=&surface;device.backbuffer_ds_context=&context;
  device.backbuffer_ds_hdc=context.hdc;device.backbuffer_ds_glctx=context.glCtx;

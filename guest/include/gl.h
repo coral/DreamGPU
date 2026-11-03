@@ -62,6 +62,34 @@
  * NORMAL_MAP and REFLECTION_MAP. The host answers TEXTURE_BINDING_CUBE_MAP and
  * MAX_CUBE_MAP_TEXTURE_SIZE (DG_GL_MAX_TEXTURE_DIMENSION). */
 #define DG_CAP_GL_TEXTURE_CUBE_MAP 0x100000
+/* Fragment programs: ARB_fragment_program, target FRAGMENT_PROGRAM_ARB only.
+ * BindProgramARB (target, name) and ProgramEnvParameter4fARB/
+ * ProgramLocalParameter4fARB (target, index, four float words) are CALL records
+ * and compile into display lists. ProgramStringARB is DATA (target, format,
+ * length) carrying exactly length bytes, or none for a nonzero length the
+ * frontend cannot transfer (over DG_GL_MAX_PROGRAM_BYTES or its packet); it
+ * compiles into lists. The host fails a load with INVALID_OPERATION, setting
+ * the error position and string, for an untransferred string (position length),
+ * a byte outside 1-127 or a texture image unit/coordinate set reference beyond
+ * the reported limits (its offset), and parses into a private object first so a
+ * rejected string never changes the bound program. DeleteProgramsARB is DATA
+ * (count, at most DG_GL_MAX_PROGRAMS, then names) and executes immediately.
+ * QUERY records: GenProgramsARB (count 1..DG_GL_PROGRAM_NAME_BATCH) returns that
+ * many RESULT_INT names, all zero on failure; IsProgramARB (name) RESULT_BOOL;
+ * GetProgramivARB (target, pname) one RESULT_INT; GetProgramEnvParameterfvARB
+ * and GetProgramLocalParameterfvARB (target, index) four RESULT_FLOAT;
+ * GetProgramStringARB (target, words, first word) RESULT_INT words of the string,
+ * zero-padded; GetString(PROGRAM_ERROR_STRING_ARB) one NUL-terminated string of
+ * printable ASCII (other bytes mapped), at most DG_GL_MAX_RESULT_BYTES with its
+ * terminator. Enable/IsEnabled(FRAGMENT_PROGRAM_ARB), MATRIXi_ARB matrix
+ * modes and the CURRENT_MATRIX_ARB, PROGRAM_ERROR_POSITION_ARB, program matrix
+ * and MAX_TEXTURE_COORDS/IMAGE_UNITS_ARB state use existing records; the host
+ * clamps coordinate sets and image units to its texture units. Program names and
+ * objects, including the default object, share the texture namespace. */
+#define DG_CAP_GL_FRAGMENT_PROGRAM 0x200000
+#define DG_GL_MAX_PROGRAM_BYTES 0xff00
+#define DG_GL_MAX_PROGRAMS 4096
+#define DG_GL_PROGRAM_NAME_BATCH 128
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

@@ -112,6 +112,33 @@ static inline BOOL JglCubeMapQueryRejected(GLenum name) {
     return name - JGL_TEXTURE_CUBE_MAP <= 0x851c - JGL_TEXTURE_CUBE_MAP &&
            !JglTextureCubeMapAvailable();
 }
+/* ARB_fragment_program: program objects, ProgramString, env/local parameters,
+ * the FRAGMENT_PROGRAM_ARB enable and its state queries. */
+BOOL JglFragmentProgramAvailable(void);
+#define JGL_FRAGMENT_PROGRAM 0x8804
+/* State names ARB_fragment_program adds to Get*v and IsEnabled: FRAGMENT_PROGRAM,
+ * PROGRAM_ERROR_POSITION, CURRENT_MATRIX(_STACK_DEPTH), TRANSPOSE_CURRENT_MATRIX,
+ * MAX_PROGRAM_MATRICES/_STACK_DEPTH and MAX_TEXTURE_COORDS/IMAGE_UNITS. Without
+ * negotiation they stay the local GL_INVALID_ENUM the host returned before. */
+static inline BOOL JglFragmentProgramQueryRejected(GLenum name) {
+    switch (name) {
+        case JGL_FRAGMENT_PROGRAM:
+        case 0x864b:
+        case 0x8641:
+        case 0x8640:
+        case 0x88b7:
+        case 0x862f:
+        case 0x862e:
+        case 0x8871:
+        case 0x8872:
+            return !JglFragmentProgramAvailable();
+        default:
+            return FALSE;
+    }
+}
+/* Per-context NUL-terminated PROGRAM_ERROR_STRING_ARB storage (DG_GL_MAX_RESULT_BYTES),
+ * stable until the context is deleted; NULL without a context or memory. */
+GLubyte *JglProgramErrorBuffer(void);
 /* Value counts of the TexParameter/TexEnv names the host accepts, and Hint
  * validity. Scalar and vector entrypoints share them: an unknown name is a local
  * GL_INVALID_ENUM, never a record the host rejects as malformed (which would

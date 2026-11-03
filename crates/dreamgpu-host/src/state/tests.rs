@@ -398,7 +398,17 @@ fn context_state_c_abi_layout() {
             + 2 * pointer
             + 8 * pointer
             + 16 * 8 * pointer
-            + pointer
+            + 2 * pointer
+            + 8
+    );
+    // Appended ARB_fragment_program state: void *, int32_t, uint32_t in C.
+    assert_eq!(
+        core::mem::offset_of!(ContextState, program),
+        core::mem::offset_of!(ContextState, proxy_rejected_cube) + pointer
+    );
+    assert_eq!(
+        core::mem::offset_of!(ContextState, program_error_kind),
+        core::mem::offset_of!(ContextState, program) + pointer + 4
     );
     // Appended cube map state mirrors the C tail field for field.
     assert_eq!(

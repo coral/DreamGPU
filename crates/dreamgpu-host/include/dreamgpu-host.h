@@ -36,6 +36,8 @@ typedef struct DreamGpuTextureEntry {
 } DreamGpuTextureEntry;
 typedef struct DreamGpuTextureNamespace {
     uint32_t refs;
+    /* Rust-owned display list and ARB_fragment_program tables of the group. */
+    void *lists, *programs;
     DreamGpuTextureEntry entries[8192];
 } DreamGpuTextureNamespace;
 typedef struct DreamGpuTextureMemory {
@@ -89,6 +91,10 @@ typedef struct DreamGpuContextState {
     DreamGpuTexture *units_cube[8];
     DreamGpuTexture *cube_attrib[16][8];
     uint32_t proxy_rejected_cube;
+    /* Rust-owned ARB_fragment_program binding and host-detected load error. */
+    void *program;
+    int32_t program_error;
+    uint32_t program_error_kind;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the

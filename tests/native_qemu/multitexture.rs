@@ -102,7 +102,7 @@ fn arrays() -> Vec<u8> {
 fn expect(qemu: &mut Qemu, sequence: &mut u32, rgb: [u8; 3], label: &str) {
     let (_, result) = query(qemu, sequence, 0x7a4, &[0, 0, 8 | (8 << 16)]);
     assert_eq!(result.len(), 256, "{label}");
-    for pixel in result.chunks_exact(4) {
+    for pixel in result.as_chunks::<4>().0 {
         for c in 0..3 {
             let delta = i32::from(pixel[c]) - i32::from(rgb[c]);
             assert!(

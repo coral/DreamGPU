@@ -2163,6 +2163,9 @@ pub const DG_GL_MAX_TEXTURES: u32 = 4096;
 pub const DG_GL_MAX_TEXTURE_DIMENSION: u32 = 2048;
 pub const DG_GL_MAX_TEXTURE_BYTES: u32 = 268435456;
 pub const DG_GL_MAX_TEXTURE_LEVEL: u32 = 11;
+pub const DG_GL_MAX_PROGRAM_BYTES: u32 = 65280;
+pub const DG_GL_MAX_PROGRAMS: u32 = 4096;
+pub const DG_GL_PROGRAM_NAME_BATCH: u32 = 128;
 pub const DG_GL_VERTEX_BYTES: u32 = 64;
 pub const DG_GL_VERTEX_POSITION: u32 = 0;
 pub const DG_GL_VERTEX_COLOR: u32 = 16;
@@ -6333,4 +6336,63 @@ pub struct DreamGpuGlApi {
             arg3: *const ::core::ffi::c_void,
         ),
     >,
+    pub dg_glGenProgramsARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *mut ::core::ffi::c_uint),
+    >,
+    pub dg_glDeleteProgramsARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *const ::core::ffi::c_uint),
+    >,
+    pub dg_glBindProgramARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint),
+    >,
+    pub dg_glProgramStringARB: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: ::core::ffi::c_int,
+            arg4: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glProgramEnvParameter4fARB: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: f32,
+            arg4: f32,
+            arg5: f32,
+            arg6: f32,
+        ),
+    >,
+    pub dg_glProgramLocalParameter4fARB: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: f32,
+            arg4: f32,
+            arg5: f32,
+            arg6: f32,
+        ),
+    >,
+    pub dg_glGetProgramEnvParameterfvARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint, arg3: *mut f32),
+    >,
+    pub dg_glGetProgramLocalParameterfvARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint, arg3: *mut f32),
+    >,
+    pub dg_glGetProgramivARB: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glGetProgramStringARB: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glGetString:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint) -> *const u8>,
 }

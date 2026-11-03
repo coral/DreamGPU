@@ -288,10 +288,10 @@ fn qemu_cube_map_faces_texgen_levels_readback_units_and_deletion() {
         &[POSITIVE_X + 4, 64 << 16, 0],
     );
     assert_eq!(image.len(), 256);
-    for (index, texel) in image.chunks_exact(4).enumerate() {
+    for (index, texel) in image.as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (index % 8, index / 8);
         let expected = if x >= 4 && y >= 4 { blue_grey } else { olive };
-        assert_eq!(texel, expected, "+Z texel {x},{y}");
+        assert_eq!(*texel, expected, "+Z texel {x},{y}");
     }
     // A face of the same texture is its own image, not a cached continuation.
     let (_, other) = query(
@@ -331,10 +331,10 @@ fn qemu_cube_map_faces_texgen_levels_readback_units_and_deletion() {
         GET_TEX_IMAGE,
         &[POSITIVE_X + 2, 16 << 16, 0],
     );
-    for (index, texel) in copied.chunks_exact(4).enumerate() {
+    for (index, texel) in copied.as_chunks::<4>().0.iter().enumerate() {
         let (x, y) = (index % 4, index / 4);
         let inside = (1..3).contains(&x) && (1..3).contains(&y);
-        assert_eq!(texel, if inside { [0, 255, 0, 255] } else { FACES[2] });
+        assert_eq!(*texel, if inside { [0, 255, 0, 255] } else { FACES[2] });
     }
     // An allocation without pixels reads back as zero, through its face.
     submit(

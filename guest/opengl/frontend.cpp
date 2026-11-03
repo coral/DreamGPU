@@ -55,6 +55,7 @@ typedef struct {
     JGL_STATE_CACHE State;
     void *LargeQuery;
     ULONG *Readback;
+    GLubyte *ProgramError;
     PACKET Packet;
 } JGL_CONTEXT;
 static CRITICAL_SECTION Lock;
@@ -102,6 +103,9 @@ BOOL JglFogCoordAvailable(void) {
 BOOL JglTextureCubeMapAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_CUBE_MAP);
 }
+BOOL JglFragmentProgramAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_FRAGMENT_PROGRAM);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -122,11 +126,13 @@ BOOL JglTextureCubeMapAvailable(void) {
     "GL_ARB_texture_compression GL_EXT_texture_compression_s3tc"
 #define JGL_FOG_COORD_EXTENSIONS "GL_EXT_fog_coord"
 #define JGL_CUBE_MAP_EXTENSIONS "GL_ARB_texture_cube_map GL_EXT_texture_cube_map"
+#define JGL_FRAGMENT_PROGRAM_EXTENSIONS "GL_ARB_fragment_program"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
                        sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
-                       sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS)];
+                       sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS) +
+                       sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -149,8 +155,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_FOG_COORD_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_TEXTURE_CUBE_MAP)
         AppendExtensions(&at, JGL_CUBE_MAP_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_FRAGMENT_PROGRAM)
+        AppendExtensions(&at, JGL_FRAGMENT_PROGRAM_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_FRAGMENT_PROGRAM_EXTENSIONS
 #undef JGL_CUBE_MAP_EXTENSIONS
 #undef JGL_FOG_COORD_EXTENSIONS
 #undef JGL_COMPRESSED_TEXTURE_EXTENSIONS
@@ -531,7 +540,19 @@ ULONG *JglReadbackBuffer(void) {
         Error(c, GL_OUT_OF_MEMORY);
     return c->Readback;
 }
+GLubyte *JglProgramErrorBuffer(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c)
+        return NULL;
+    if (!c->ProgramError)
+        c->ProgramError = (GLubyte *)HeapAlloc(Heap, HEAP_ZERO_MEMORY, DG_GL_MAX_RESULT_BYTES);
+    if (!c->ProgramError)
+        Error(c, GL_OUT_OF_MEMORY);
+    return c->ProgramError;
+}
 static void FreeContext(JGL_CONTEXT *c) {
+    if (c->ProgramError)
+        HeapFree(Heap, 0, c->ProgramError);
     if (c->LargeQuery)
         HeapFree(Heap, 0, c->LargeQuery);
     if (c->Readback)

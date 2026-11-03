@@ -263,6 +263,31 @@ reads and compressed faces, `PROXY_TEXTURE_CUBE_MAP`, `TEXTURE_WRAP_R`,
 `MAX_CUBE_MAP_TEXTURE_SIZE`. The host tracks dimensions, charges and undefined
 levels per face.
 
+### ARB_fragment_program
+
+`DG_CAP_GL_FRAGMENT_PROGRAM` adds `GL_ARB_fragment_program`, last in
+`GL_EXTENSIONS`, with nineteen ARB-named exports: Gen/Delete/Bind/IsProgram,
+ProgramString, the four Env and Local parameter variants each and their f/d
+queries, GetProgramiv and GetProgramString. Only `FRAGMENT_PROGRAM_ARB` exists:
+the vertex program target (which WineD3D's ARB backend still drives for
+applications that create vertex shaders) is a local `GL_INVALID_ENUM`, as are
+an unknown format, the address-register GetProgramiv names and a GetProgramString
+pname other than `PROGRAM_STRING_ARB`; negative counts and lengths are
+`GL_INVALID_VALUE`. Bind, ProgramString and the parameters are compiled into
+display lists (errors deferred); Gen, Delete, Is and every query run at once.
+Names, objects and parse results belong to the host, so GenPrograms (in batches of
+`DG_GL_PROGRAM_NAME_BATCH`) and IsProgram are host queries. Float parameters are
+copied as bits; double variants convert to the float record and the double
+queries widen the float result. A string longer than the protocol bound or the
+negotiated packet travels without its bytes and fails on the host with
+`INVALID_OPERATION` at error position `len`. `PROGRAM_ERROR_STRING_ARB` is a host
+query into per-context storage that stays valid for the context. Without the
+capability the exports fail locally with `GL_INVALID_OPERATION`, are hidden from
+`wglGetProcAddress`, and the new Get/IsEnabled names stay local
+`GL_INVALID_ENUM`; Enable and `MatrixMode(MATRIXi_ARB)` pass through as before.
+`tests/guest/opengl/test_fragment_program.py` covers the contract and the i686
+parameter wrappers.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

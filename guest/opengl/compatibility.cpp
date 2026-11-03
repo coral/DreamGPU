@@ -24,7 +24,13 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glPointParameter", JglFixedStateAvailable},
                     {"glCompressedTex", JglCompressedTexturesAvailable},
                     {"glGetCompressedTex", JglCompressedTexturesAvailable},
-                    {"glFogCoord", JglFogCoordAvailable}};
+                    {"glFogCoord", JglFogCoordAvailable},
+                    {"glGenProgramsARB", JglFragmentProgramAvailable},
+                    {"glDeleteProgramsARB", JglFragmentProgramAvailable},
+                    {"glBindProgramARB", JglFragmentProgramAvailable},
+                    {"glIsProgramARB", JglFragmentProgramAvailable},
+                    {"glProgram", JglFragmentProgramAvailable},
+                    {"glGetProgram", JglFragmentProgramAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {

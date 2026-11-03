@@ -154,6 +154,14 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
     }
     match pname {
         GL_MODELVIEW_MATRIX | GL_PROJECTION_MATRIX | GL_TEXTURE_MATRIX => 16,
+        // ARB_fragment_program: the current matrix of any mode, program matrices.
+        GL_CURRENT_MATRIX_ARB | GL_TRANSPOSE_CURRENT_MATRIX_ARB => 16,
+        GL_CURRENT_MATRIX_STACK_DEPTH_ARB
+        | GL_MAX_PROGRAM_MATRICES_ARB
+        | GL_MAX_PROGRAM_MATRIX_STACK_DEPTH_ARB
+        | GL_PROGRAM_ERROR_POSITION_ARB
+        | GL_MAX_TEXTURE_COORDS_ARB
+        | GL_MAX_TEXTURE_IMAGE_UNITS_ARB => 1,
         GL_BLEND_COLOR | GL_COMPRESSED_TEXTURE_FORMATS => 4,
         GL_POINT_DISTANCE_ATTENUATION => 3,
         GL_CURRENT_RASTER_COLOR
@@ -395,6 +403,16 @@ pub(crate) fn function_words(function: u32) -> u32 {
         | FEnum_glTexEnvfv
         | FEnum_glTexEnviv => DG_GL_FUNCTION_INLINE_DATA | 2,
         FEnum_glBindTexture => 2,
+        // ARB_fragment_program (DG_CAP_GL_FRAGMENT_PROGRAM).
+        FEnum_glBindProgramARB => 2,
+        FEnum_glProgramEnvParameter4fARB | FEnum_glProgramLocalParameter4fARB => 6,
+        FEnum_glProgramStringARB => DG_GL_FUNCTION_INLINE_DATA | 3,
+        FEnum_glDeleteProgramsARB => DG_GL_FUNCTION_INLINE_DATA | 1,
+        FEnum_glGenProgramsARB | FEnum_glIsProgramARB => DG_GL_FUNCTION_QUERY | 1,
+        FEnum_glGetProgramivARB
+        | FEnum_glGetProgramEnvParameterfvARB
+        | FEnum_glGetProgramLocalParameterfvARB => DG_GL_FUNCTION_QUERY | 2,
+        FEnum_glGetProgramStringARB => DG_GL_FUNCTION_QUERY | 3,
         // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
         FEnum_glActiveTexture => 1,
         FEnum_glMultiTexCoord4f => 5,
@@ -531,7 +549,33 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_TEXTURE_GEN_R
             | GL_TEXTURE_GEN_Q
             | GL_POINT_SPRITE
+            | GL_FRAGMENT_PROGRAM_ARB
     )
+}
+
+/// GetProgramivARB names of a fragment program target. The address register
+/// names exist only with ARB_vertex_program.
+pub(crate) fn program_parameter(pname: u32) -> bool {
+    matches!(
+        pname,
+        GL_PROGRAM_LENGTH_ARB
+            | GL_PROGRAM_FORMAT_ARB
+            | GL_PROGRAM_BINDING_ARB
+            | GL_PROGRAM_INSTRUCTIONS_ARB..=GL_MAX_PROGRAM_NATIVE_ATTRIBS_ARB
+            | GL_MAX_PROGRAM_LOCAL_PARAMETERS_ARB
+            | GL_MAX_PROGRAM_ENV_PARAMETERS_ARB
+            | GL_PROGRAM_UNDER_NATIVE_LIMITS_ARB
+            | GL_PROGRAM_ALU_INSTRUCTIONS_ARB..=GL_MAX_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB
+    )
+}
+/// The validated ProgramStringARB record: exactly `length` payload bytes within
+/// the protocol bound, or none for a nonzero length the frontend could not send.
+fn program_string(a: &[u32; 8], data: &[u8]) -> bool {
+    a[0] == GL_FRAGMENT_PROGRAM_ARB
+        && a[1] == GL_PROGRAM_FORMAT_ASCII_ARB
+        && a[2] <= i32::MAX as u32
+        && ((data.len() as u64 == u64::from(a[2]) && a[2] <= DG_GL_MAX_PROGRAM_BYTES)
+            || (data.is_empty() && a[2] != 0))
 }
 
 fn vector_function(function: u32) -> bool {
@@ -579,6 +623,18 @@ fn hint_target(target: u32) -> bool {
     )
 }
 fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
+    if matches!(
+        function,
+        FEnum_glBindProgramARB
+            | FEnum_glProgramEnvParameter4fARB
+            | FEnum_glProgramLocalParameter4fARB
+    ) {
+        return if a[0] == GL_FRAGMENT_PROGRAM_ARB {
+            0
+        } else {
+            DG_GL_ERROR_UNSUPPORTED
+        };
+    }
     if matches!(function, FEnum_glDrawBuffer | FEnum_glReadBuffer) {
         return if buffer_selection(a[0], function == FEnum_glDrawBuffer) {
             0
@@ -763,6 +819,20 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     }
     if function == FEnum_glPrioritizeTextures {
         return if a[0] <= DG_GL_MAX_TEXTURES && data.len() as u64 == u64::from(a[0]) * 8 {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
+    if function == FEnum_glProgramStringARB {
+        return if program_string(a, data) {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
+    if function == FEnum_glDeleteProgramsARB {
+        return if a[0] <= DG_GL_MAX_PROGRAMS && data.len() as u64 == u64::from(a[0]) * 4 {
             0
         } else {
             DG_GL_ERROR_BATCH
@@ -1010,8 +1080,44 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
         }
         FEnum_glGetString => {
             kind = DG_GL_RESULT_STRING;
-            if b == 0 && d == 0 {
+            if b != 0 || d != 0 {
+                0
+            } else if a == GL_PROGRAM_ERROR_STRING_ARB {
+                // A capacity: the native text ends at its terminator.
+                DG_GL_MAX_RESULT_BYTES
+            } else {
                 query_string(a).map_or(0, |s| s.len() as u32)
+            }
+        }
+        FEnum_glGenProgramsARB => {
+            if b == 0 && d == 0 && (1..=DG_GL_PROGRAM_NAME_BATCH).contains(&a) {
+                a
+            } else {
+                0
+            }
+        }
+        FEnum_glIsProgramARB => {
+            kind = DG_GL_RESULT_BOOL;
+            u32::from(b == 0 && d == 0)
+        }
+        FEnum_glGetProgramivARB => {
+            u32::from(a == GL_FRAGMENT_PROGRAM_ARB && program_parameter(b) && d == 0)
+        }
+        FEnum_glGetProgramEnvParameterfvARB | FEnum_glGetProgramLocalParameterfvARB => {
+            kind = DG_GL_RESULT_FLOAT;
+            if a == GL_FRAGMENT_PROGRAM_ARB && d == 0 {
+                4
+            } else {
+                0
+            }
+        }
+        // target, words, first word of the program string.
+        FEnum_glGetProgramStringARB => {
+            if a == GL_FRAGMENT_PROGRAM_ARB
+                && (1..=DG_GL_MAX_READBACK_BYTES / 4).contains(&b)
+                && d <= DG_GL_MAX_PROGRAM_BYTES / 4
+            {
+                b
             } else {
                 0
             }
@@ -1217,6 +1323,9 @@ pub unsafe extern "C" fn dreamgpu_gl_call_validate(function: u32, args: *const u
             | FEnum_glCopyTexSubImage2D
             | FEnum_glCopyTexImage1D
             | FEnum_glCopyTexSubImage1D
+            | FEnum_glBindProgramARB
+            | FEnum_glProgramEnvParameter4fARB
+            | FEnum_glProgramLocalParameter4fARB
     ) {
         return 0;
     }

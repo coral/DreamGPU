@@ -271,6 +271,26 @@
     "guest-cube": {
       "scope": "installed-api",
       "path": "tools/d3d/cube-probe.inc"
+    },
+    "gl-fragment-program": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_fragment_program.py"
+    },
+    "native-fragment-program": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/fragment_program.rs"
+    },
+    "d3d-arbfp-adaptations": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_arbfp_adaptations.py"
+    },
+    "guest-shader": {
+      "scope": "installed-api",
+      "path": "tools/d3d/shader-probe.inc"
+    },
+    "d3d-arb-constant-dirty": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_arb_constant_dirty.py"
     }
   },
   "contracts": [
@@ -1376,6 +1396,28 @@
         "guest-cube"
       ],
       "remaining": "Negotiated by DG_CAP_GL_TEXTURE_CUBE_MAP. Native pixel tests sample all six faces through explicit STR coordinates and both texgen modes, and cover completeness, proxies and per-face redefinition. The installed D3D8/9 probe samples a MANAGED A8R8G8B8 cube texture's six faces exactly on Win2000, XP and Win98 SE (Linux host). Cube mip chains, compressed cube faces through D3D, render-to-cube-face, seamless/edge filtering, macOS CGL and the macOS border sampler for cube targets remain unverified."
+    },
+    {
+      "id": "gl.fragment-program",
+      "area": 8,
+      "api": "OpenGL 1.1 + ARB_fragment_program (D3D8/D3D9 pixel shaders 1.x-2.0, the ARB fixed-function fragment pipeline and arbfp blitter through Wine)",
+      "operation": "program objects and namespaces, ProgramString with error position/string, env/local parameters, FRAGMENT_PROGRAM_ARB enable, program matrices, program and limit queries, display lists, ENABLE_BIT",
+      "format": "ARBfp1.0 ASCII program strings up to DG_GL_MAX_PROGRAM_BYTES",
+      "resource": "fragment program object",
+      "usage": "fragment processing",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-fragment-program",
+        "native-fragment-program",
+        "native",
+        "d3d-arbfp-adaptations",
+        "guest-shader",
+        "d3d-arb-constant-dirty"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_FRAGMENT_PROGRAM; ARB_vertex_program is not implemented (vertex program modes are GL_INVALID_ENUM, Wine reports VertexShaderVersion 0). Native pixel tests (Linux, private Mesa on Radeon) cover TEX/TXP sampling of units with fixed-function texturing disabled, env versus per-object local parameters, program matrices, parse and host-detected load failures that keep the bound program, invalid-program draws, fixed-function fallback, deletion of the bound program, ENABLE_BIT, display-list compilation and sharing/isolation between contexts. Host checks reject non-ASCII bytes and texture[n]/texcoord[n] references beyond the reported 8 units; other semantic limits are native. On Linux the private Mesa provider rejects drawing with GL_INVALID_OPERATION while a program samples a texture with supplied borders; on macOS the border sampler steps aside and CGL ignores the borders. Wine patch 0029 adapts paletted textures, colour keys, the fixed-function program grammar, NP2 fixups, vertex-shader guards and depth uploads; 0030 keeps constants set between draws (no current context after 0012); 0031 declares the fixed-function generator's sign-fixup temporary. The installed D3D8/9 shader probe (ps_1_1, ps_2_0 on D3D9, D3DTOP_BUMPENVMAP from V8U8) passes on Win2000, XP and Win98 SE (Linux host) with PixelShaderVersion 2.0 (D3D8 1.4). Shader-model ps_1_2-1_4 instructions, texbem/texbeml in shaders, ps_2_0 flow limits, macOS CGL and games using pixel shaders remain unverified."
     }
   ]
 }

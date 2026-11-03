@@ -280,6 +280,17 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glGetCompressedTexImage : glGetCompressedTexImage) dg_glGetCompressedTexImage;
     __typeof__(1 ? glFogCoordf : glFogCoordf) dg_glFogCoordf;
     __typeof__(1 ? glFogCoordPointer : glFogCoordPointer) dg_glFogCoordPointer;
+    __typeof__(1 ? glGenProgramsARB : glGenProgramsARB) dg_glGenProgramsARB;
+    __typeof__(1 ? glDeleteProgramsARB : glDeleteProgramsARB) dg_glDeleteProgramsARB;
+    __typeof__(1 ? glBindProgramARB : glBindProgramARB) dg_glBindProgramARB;
+    __typeof__(1 ? glProgramStringARB : glProgramStringARB) dg_glProgramStringARB;
+    __typeof__(1 ? glProgramEnvParameter4fARB : glProgramEnvParameter4fARB) dg_glProgramEnvParameter4fARB;
+    __typeof__(1 ? glProgramLocalParameter4fARB : glProgramLocalParameter4fARB) dg_glProgramLocalParameter4fARB;
+    __typeof__(1 ? glGetProgramEnvParameterfvARB : glGetProgramEnvParameterfvARB) dg_glGetProgramEnvParameterfvARB;
+    __typeof__(1 ? glGetProgramLocalParameterfvARB : glGetProgramLocalParameterfvARB) dg_glGetProgramLocalParameterfvARB;
+    __typeof__(1 ? glGetProgramivARB : glGetProgramivARB) dg_glGetProgramivARB;
+    __typeof__(1 ? glGetProgramStringARB : glGetProgramStringARB) dg_glGetProgramStringARB;
+    __typeof__(1 ? glGetString : glGetString) dg_glGetString;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -407,5 +418,16 @@ typedef struct DreamGpuGlApi {
     .dg_glCompressedTexImage2D = glCompressedTexImage2D,                                            \
     .dg_glCompressedTexSubImage2D = glCompressedTexSubImage2D,                                      \
     .dg_glGetCompressedTexImage = glGetCompressedTexImage,                                          \
-    .dg_glFogCoordf = glFogCoordf, .dg_glFogCoordPointer = glFogCoordPointer
+    .dg_glFogCoordf = glFogCoordf, .dg_glFogCoordPointer = glFogCoordPointer,                       \
+    .dg_glGenProgramsARB = glGenProgramsARB,                                                        \
+    .dg_glDeleteProgramsARB = glDeleteProgramsARB,                                                  \
+    .dg_glBindProgramARB = glBindProgramARB,                                                        \
+    .dg_glProgramStringARB = glProgramStringARB,                                                    \
+    .dg_glProgramEnvParameter4fARB = glProgramEnvParameter4fARB,                                    \
+    .dg_glProgramLocalParameter4fARB = glProgramLocalParameter4fARB,                                \
+    .dg_glGetProgramEnvParameterfvARB = glGetProgramEnvParameterfvARB,                              \
+    .dg_glGetProgramLocalParameterfvARB = glGetProgramLocalParameterfvARB,                          \
+    .dg_glGetProgramivARB = glGetProgramivARB,                                                      \
+    .dg_glGetProgramStringARB = glGetProgramStringARB,                                              \
+    .dg_glGetString = glGetString
 #endif

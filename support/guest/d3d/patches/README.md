@@ -297,3 +297,50 @@ Real contents, buffer bindings, GL-side locations and non-owned drawables keep
 their previous paths. `test_discarded_depth.py` executes the prepared function
 under ASan/UBSan and fails without the patch. The diagnostic stack is rebased
 onto it with its call-site line numbers renumbered.
+
+`0029-arbfp-fixed-function.patch` adapts WineD3D to `GL_ARB_fragment_program`,
+which selects its ARB shader backend, arbfp fragment pipeline and arbfp
+blitter instead of the fixed-function pipeline and blitter:
+
+- Indexed (P8) surfaces, the front buffer included, keep expanding to BGRA on
+  the CPU with an identity fixup, and 2D P8 textures stay advertised (0013
+  gated them on the absence of ARB_fragment_program). Wine would otherwise give
+  P8 a palette-shader fixup that the pipeline rejects for textures, so
+  Microsoft Golf 1999 again lost its texture handles, and blits would read
+  expanded alpha as an index. Shader colour keying (which arbfp claims) still
+  converts P8 keys to alpha zero on the CPU, and the P8 shader key matches
+  exactly those texels.
+- Vertex shaders never compile, bind or enable a vertex program without
+  `GL_ARB_vertex_program` (VertexShaderVersion stays 0, so the vertex constant
+  arrays are empty); the backend otherwise wrote past them and enabled a
+  vertex program mode DreamGPU does not implement.
+- The fixed-function replacement program declares its colour key after the
+  fog `OPTION`: ARBfp accepts options only before any statement, so colour key
+  plus fog (common in Direct3D 7) failed to compile.
+- NP2 coordinate fixups are program locals; as environment parameters they
+  overwrote the application's `c0`.. constants whenever a shader sampled a
+  padded NP2 texture.
+- Projected bump mapping emits `MAD` instead of a three-operand `MUL`.
+- PS 2.0 `NumTemps` is clamped to the D3D9 range (native ARB reports more).
+- CPU depth uploads disable a fragment program left enabled by the last draw;
+  `ENABLE_BIT` (0022) restores it.
+
+`test_arbfp_adaptations.py` checks each change in the prepared source. The
+diagnostic stack is rebased onto it with its call-site line numbers renumbered.
+
+`0030-arb-constants-without-current-context.patch` marks ARB shader constants
+dirty even when no context is current. The ARB backend's dirty arrays belong to
+the device, but Wine marked them only when the changing thread had a current
+context. Since 0012 the outermost context release clears Wine's current context,
+so a `SetPixelShaderConstantF`/`SetVertexShaderConstantF` between draws found
+none. The previous constants then stayed loaded when the same context returned,
+because only a context switch forces a full reload. The installed D3D8/9 shader
+probe drew its second constant with the first's values until this patch.
+`test_arb_constant_dirty.py` fails without it.
+
+`0031-arbfp-sign-fixup-temp.patch` declares `TEMP TA` in the arbfp
+fixed-function generator. `gen_color_correction()` swizzles sign-fixed sources
+through `TA`, which only the shader-model generators declared. A V8U8 (or other
+emulated signed-format) texture in a fixed-function stage therefore produced a
+program that failed to parse, so `D3DTOP_BUMPENVMAP` drew nothing.
+`test_arbfp_adaptations.py` checks the declaration.

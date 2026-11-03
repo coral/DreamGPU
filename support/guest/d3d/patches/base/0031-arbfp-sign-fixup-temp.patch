@@ -1,0 +1,13 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -6427,6 +6427,10 @@
+ 
+     shader_addline(&buffer, "PARAM const = {1, 2, 4, 0.5};\n");
+     shader_addline(&buffer, "TEMP TMP;\n");
++    /* DreamGPU: gen_color_correction() swizzles sign-fixed sources (V8U8 and
++     * the other signed formats emulated with unsigned storage) through TA,
++     * which only the shader-model generators declared. */
++    shader_addline(&buffer, "TEMP TA;\n");
+     shader_addline(&buffer, "TEMP ret;\n");
+     if(tempreg_used || settings->sRGB_write) shader_addline(&buffer, "TEMP tempreg;\n");
+     shader_addline(&buffer, "TEMP arg0;\n");

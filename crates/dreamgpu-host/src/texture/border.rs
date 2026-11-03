@@ -515,6 +515,12 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
     unsafe {
         query::remember(a, core::ptr::addr_of_mut!((*c).guest_errors))?;
     }
+    // An enabled ARB fragment program replaces fixed-function fragment
+    // processing, this private sampler included; native sampling then
+    // ignores supplied borders.
+    if unsafe { a.dg_glIsEnabled.unwrap()(GL_FRAGMENT_PROGRAM_ARB) } != 0 {
+        return Ok(());
+    }
     let texture = unsafe {
         // An enabled cube map takes precedence over 2D and 1D; its faces never
         // carry borders and native sampling is exact.

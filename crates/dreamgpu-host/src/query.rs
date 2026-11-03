@@ -274,6 +274,24 @@ unsafe fn execute(
         }
         return Ok(());
     }
+    if matches!(
+        function,
+        FEnum_glGenProgramsARB
+            | FEnum_glIsProgramARB
+            | FEnum_glGetProgramivARB
+            | FEnum_glGetProgramEnvParameterfvARB
+            | FEnum_glGetProgramLocalParameterfvARB
+            | FEnum_glGetProgramStringARB
+    ) || (function == FEnum_glGetString && a == GL_PROGRAM_ERROR_STRING_ARB)
+    {
+        if state.context.is_null() || state.memory.is_null() {
+            return Err(DG_GL_ERROR_CONTEXT);
+        }
+        unsafe {
+            *bytes = program(api, state, function, [a, b, d], result, required)?;
+        }
+        return Ok(());
+    }
     if function == FEnum_glGetString {
         let string = dreamgpu_gl_query_string(a);
         if string.is_null() {
@@ -411,6 +429,26 @@ unsafe fn execute(
                 }
                 GL_MAX_LIGHTS => integers[0] = 8,
                 GL_MAX_CLIP_PLANES => integers[0] = 6,
+                // ARB_fragment_program: host-detected load failures override
+                // the native position; units never exceed the logical table.
+                GL_PROGRAM_ERROR_POSITION_ARB
+                | GL_MAX_TEXTURE_COORDS_ARB
+                | GL_MAX_TEXTURE_IMAGE_UNITS_ARB => {
+                    if state.context.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    integers[0] = if a == GL_PROGRAM_ERROR_POSITION_ARB {
+                        unsafe { crate::program::error_position(api, state.context)? }
+                    } else {
+                        let (coords, images) =
+                            unsafe { crate::program::limits(api, state.context)? };
+                        (if a == GL_MAX_TEXTURE_COORDS_ARB {
+                            coords
+                        } else {
+                            images
+                        }) as i32
+                    };
+                }
                 _ => logical = false,
             }
             if !logical {
@@ -478,6 +516,59 @@ unsafe fn execute(
         *bytes = required;
     }
     Ok(())
+}
+
+/// ARB_fragment_program queries answered from the context's program state, or
+/// natively for the bound object. `required` is the validated result size and
+/// the returned byte count, except for the error string, which ends at its
+/// terminator.
+unsafe fn program(
+    api: &DreamGpuGlApi,
+    state: &QueryState,
+    function: u32,
+    [a, b, d]: [u32; 3],
+    result: *mut u8,
+    required: u32,
+) -> Result<u32, u32> {
+    let c = state.context;
+    let put = |at: usize, word: u32| unsafe {
+        core::ptr::copy_nonoverlapping(word.to_le_bytes().as_ptr(), result.add(at * 4), 4);
+    };
+    match function {
+        FEnum_glGenProgramsARB => unsafe { crate::program::generate(&*state.memory, c, a, result) },
+        FEnum_glIsProgramARB => unsafe {
+            result.write(u8::from(crate::program::is_program(c, a)));
+        },
+        FEnum_glGetProgramivARB => {
+            let value = if b == GL_PROGRAM_BINDING_ARB {
+                unsafe { crate::program::binding(c) }
+            } else {
+                let mut value = 0;
+                unsafe {
+                    api.dg_glGetProgramivARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?(a, b, &mut value)
+                };
+                value as u32
+            };
+            put(0, value);
+        }
+        FEnum_glGetProgramEnvParameterfvARB | FEnum_glGetProgramLocalParameterfvARB => {
+            let get = if function == FEnum_glGetProgramEnvParameterfvARB {
+                api.dg_glGetProgramEnvParameterfvARB
+            } else {
+                api.dg_glGetProgramLocalParameterfvARB
+            };
+            let mut values = [0f32; 4];
+            unsafe { get.ok_or(DG_GL_ERROR_UNSUPPORTED)?(a, b, values.as_mut_ptr()) };
+            for (i, v) in values.into_iter().enumerate() {
+                put(i, v.to_bits());
+            }
+        }
+        FEnum_glGetProgramStringARB => unsafe {
+            crate::program::read_string(&*state.memory, a, b, d, result)?;
+        },
+        _ => return unsafe { crate::program::error_string(api, c, result, required as usize) },
+    }
+    Ok(required)
 }
 
 /// # Safety

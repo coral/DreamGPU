@@ -50,9 +50,12 @@ up to eight bytes per texel.
 This is the DreamGPU fixed-function GL 1.1 provider contract, not general Mesa
 conformance. Native programmable shaders using a bordered image are rejected
 with `GL_INVALID_OPERATION` before drawing; a defensive binding guard also
-prevents an incompatible sampler view of the private image. DreamGPU does not
-expose shader creation, source, or use commands through either frontend or its
-host command validator. No Mesa version or hardware capabilities are invented.
+prevents an incompatible sampler view of the private image. DreamGPU exposes no
+GLSL shader creation, source, or use commands through either frontend or its
+host command validator. Negotiated ARB_fragment_program assembly programs are
+programmable fragment processing too: while one is enabled, a draw sampling a
+bordered image fails with that `GL_INVALID_OPERATION`, a GL error that keeps
+the context. No Mesa version or hardware capabilities are invented.
 
 `tests/native_provider/border.c` checks real Radeon-rendered border colors,
 mip filters, base/max level changes, shared mutation/deleted bindings, and the

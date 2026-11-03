@@ -5,6 +5,8 @@ fn programmable_shader_catalog_entries_are_not_host_command_capabilities() {
     // The private provider's 1D border implementation targets fixed-function
     // GL1.1. A guest bypassing the ICD cannot gain shader access just because
     // the preserved upstream enumeration contains programmable API names.
+    // ARB_fragment_program assembly is negotiated separately and accepts only
+    // the fragment target (program::tests::record_shapes_follow_the_protocol).
     for function in [
         FEnum_glCreateShader,
         FEnum_glCreateShaderObjectARB,
@@ -15,7 +17,8 @@ fn programmable_shader_catalog_entries_are_not_host_command_capabilities() {
         FEnum_glUseProgram,
         FEnum_glUseProgramObjectARB,
         FEnum_glUseProgramStages,
-        FEnum_glProgramStringARB,
+        FEnum_glProgramParameteriARB,
+        FEnum_glLinkProgramARB,
     ] {
         assert_eq!(function_words(function), u32::MAX);
         assert_eq!(

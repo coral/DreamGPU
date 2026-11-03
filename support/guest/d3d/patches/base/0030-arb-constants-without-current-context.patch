@@ -1,0 +1,47 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -711,7 +711,6 @@
+ 
+ static void shader_arb_update_float_vertex_constants(struct wined3d_device *device, UINT start, UINT count)
+ {
+-    struct wined3d_context *context = context_get_current();
+     struct shader_arb_priv *priv = device->shader_priv;
+     unsigned int i;
+ 
+@@ -720,17 +719,16 @@
+         device->contexts[i]->constant_update_mask |= WINED3D_SHADER_CONST_VS_F;
+     }
+ 
+-    /* We don't want shader constant dirtification to be an O(contexts), so just dirtify the active
+-     * context. On a context switch the old context will be fully dirtified */
+-    if (!context || context->swapchain->device != device) return;
+-
++    /* DreamGPU: the dirty array belongs to the device, not to a context. The
++     * outermost context release clears Wine's current context (0012), so
++     * constants set between draws arrive with no context current; skipping
++     * them left the previous values loaded when the same context returned. */
+     memset(priv->vshader_const_dirty + start, 1, sizeof(*priv->vshader_const_dirty) * count);
+     priv->highest_dirty_vs_const = max(priv->highest_dirty_vs_const, start + count);
+ }
+ 
+ static void shader_arb_update_float_pixel_constants(struct wined3d_device *device, UINT start, UINT count)
+ {
+-    struct wined3d_context *context = context_get_current();
+     struct shader_arb_priv *priv = device->shader_priv;
+     unsigned int i;
+ 
+@@ -739,10 +737,10 @@
+         device->contexts[i]->constant_update_mask |= WINED3D_SHADER_CONST_PS_F;
+     }
+ 
+-    /* We don't want shader constant dirtification to be an O(contexts), so just dirtify the active
+-     * context. On a context switch the old context will be fully dirtified */
+-    if (!context || context->swapchain->device != device) return;
+-
++    /* DreamGPU: the dirty array belongs to the device, not to a context. The
++     * outermost context release clears Wine's current context (0012), so
++     * constants set between draws arrive with no context current; skipping
++     * them left the previous values loaded when the same context returned. */
+     memset(priv->pshader_const_dirty + start, 1, sizeof(*priv->pshader_const_dirty) * count);
+     priv->highest_dirty_ps_const = max(priv->highest_dirty_ps_const, start + count);
+ }

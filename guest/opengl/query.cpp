@@ -46,7 +46,7 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
             *output = kind == DG_GL_RESULT_BOOL ? (type)(local != 0) : (type)local;                \
             return;                                                                                \
         }                                                                                          \
-        if (JglCubeMapQueryRejected(pname)) {                                                      \
+        if (JglCubeMapQueryRejected(pname) || JglFragmentProgramQueryRejected(pname)) {            \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -112,12 +112,24 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
          cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e || cap == 0x8457) &&
         JglArrayQuery(cap, &local))
         return local != 0;
-    if (JglCubeMapQueryRejected(cap)) {
+    if (JglCubeMapQueryRejected(cap) || JglFragmentProgramQueryRejected(cap)) {
         JglSetError(GL_INVALID_ENUM);
         return GL_FALSE;
     }
     JglQuery(FEnum_glIsEnabled, args, DG_GL_RESULT_BOOL, &result, sizeof(result), &bytes);
     return result;
+}
+/* PROGRAM_ERROR_STRING_ARB: the host returns DG_GL_MAX_RESULT_BYTES of
+ * NUL-padded ASCII into per-context storage. The pointer stays valid for the
+ * context; its contents until the next query of the string. */
+static const GLubyte *ProgramErrorString(void) {
+    ULONG args[3] = {0x8874, 0, 0}, bytes = 0;
+    GLubyte *buffer = JglProgramErrorBuffer();
+    if (!buffer || !JglQuery(FEnum_glGetString, args, DG_GL_RESULT_STRING, buffer,
+                             DG_GL_MAX_RESULT_BYTES, &bytes))
+        return NULL;
+    buffer[DG_GL_MAX_RESULT_BYTES - 1] = 0;
+    return buffer;
 }
 /* The host supplies stable identity strings and no extension/version claim.
  * These public pointers stay valid across later queries and context switches.
@@ -140,6 +152,11 @@ const GLubyte *APIENTRY glGetString(GLenum name) {
          * that this evolving frontend implements a complete OpenGL version. */
         case GL_VERSION:
             return version;
+        case 0x8874: /* PROGRAM_ERROR_STRING_ARB */
+            if (JglFragmentProgramAvailable())
+                return ProgramErrorString();
+            JglSetError(GL_INVALID_ENUM);
+            return NULL;
         default:
             JglSetError(GL_INVALID_ENUM);
             return NULL;

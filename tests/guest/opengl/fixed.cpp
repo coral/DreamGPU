@@ -25,6 +25,12 @@ BOOL JglTextureControlAvailable(void) {
 BOOL JglTextureCubeMapAvailable(void) {
     return FALSE;
 }
+BOOL JglFragmentProgramAvailable(void) {
+    return FALSE;
+}
+GLubyte *JglProgramErrorBuffer(void) {
+    return NULL;
+}
 const GLubyte *JglExtensions(void) {
     return Negotiated;
 }

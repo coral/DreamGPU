@@ -100,6 +100,39 @@ and disposable-VM acceptance cycle:
   and readback record, the proxy target, and NORMAL_MAP/REFLECTION_MAP texgen.
   Completeness needs all six faces at one size; residency charges every face.
   Wine then claims D3DPTEXTURECAPS_CUBEMAP (and MIPCUBEMAP).
+- Fragment programs (`DG_CAP_GL_FRAGMENT_PROGRAM`) add ARB_fragment_program
+  (`FRAGMENT_PROGRAM_ARB` only). Program names live in a bounded table shared
+  with the texture namespace (wglShareLists): GenPrograms reserves names,
+  objects appear at first bind, the default object is private to each share
+  group, and a deleted program stays usable by other contexts until they
+  rebind. The host checks every ProgramString before native GL (transferred
+  length up to `DG_GL_MAX_PROGRAM_BYTES`, bytes 1-127, `texture[n]` and
+  `texcoord[n]` within the reported units), parses it into a private object
+  first, and only then loads the bound program, so a rejected string sets
+  INVALID_OPERATION and PROGRAM_ERROR_POSITION/STRING and leaves the program
+  untouched (Mesa 26 clears a program's input usage on a failed parse).
+  Env/local parameters, the enable (ENABLE_BIT), MATRIXi_ARB, CURRENT_MATRIX
+  and every GetProgram* query follow; binds, parameters and strings compile
+  into display lists, Gen/Delete/Is execute immediately. MAX_TEXTURE_COORDS and
+  MAX_TEXTURE_IMAGE_UNITS clamp to the logical units (8); other limits are
+  native. Objects and strings are charged to the 256 MiB resource budget.
+  Native vertex program modes are GL_INVALID_ENUM: the device implements no
+  ARB_vertex_program. An enabled program samples bound textures whatever their
+  fixed-function enables, so undefined-level admission covers every unit. On
+  macOS the border sampler steps aside while a program is enabled (CGL then
+  ignores supplied borders); on Linux the private Mesa provider rejects drawing
+  while a program samples a bordered image (GL_INVALID_OPERATION). From the
+  Wine source, Wine then selects its ARB shader backend, arbfp fragment pipeline
+  and arbfp blitter; VertexShaderVersion stays 0. Wine patches 0029–0031 adapt
+  it (see the patch README). Installed on Win2000, XP and Win98 SE (Linux
+  host), D3D9 reports PixelShaderVersion 2.0 (D3D8 1.4), PixelShader1xMaxValue
+  8, PS20 NumTemps 32, TextureOpCaps `0x03feffff` (adding BUMPENVMAP,
+  BUMPENVMAPLUMINANCE, MODULATEINVALPHA_ADDCOLOR, MODULATEINVCOLOR_ADDALPHA)
+  and PrimitiveMiscCaps `0x000a0ff2` (TSSARGTEMP). The installed probe renders a
+  ps_1_1 and a ps_2_0 shader exactly for two constants each, and a fixed-function
+  `D3DTOP_BUMPENVMAP` stage from a V8U8 map exactly for an identity and a zero
+  matrix. The thirteen stage cases, DXT, fog and cube probes, now running through
+  the arbfp pipeline, still pass.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
@@ -120,7 +153,8 @@ COMBINE and fog; native vertex processing and depth/stencil/blend tests remain
 active. Temporary texture-unit and program state is restored after immediate,
 array and evaluator draws. The atlas is invalidated by shared texture versions,
 retains referenced storage through name deletion and is charged against the
-resource budget. This does not advertise a public shader or multitexture API.
+resource budget. The sampler itself is not a public shader API, and it steps
+aside while a guest ARB fragment program is enabled.
 Exact native tests check 1D edges and 2D corners, signed border updates, copies,
 readback and subsequent draws. Differential tests compare all six minification
 filters and base-format/environment/fog combinations with ordinary textures.

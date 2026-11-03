@@ -386,11 +386,16 @@ unsafe fn error(c: *mut ContextState, e: u32) {
     }
 }
 // Commands which depend on client state are already canonicalized into their
-// DATA payload. Deletion and PixelStore are explicitly immediate in GL1.1.
+// DATA payload. Deletion and PixelStore are explicitly immediate in GL1.1, and
+// ARB_fragment_program executes DeleteProgramsARB immediately too.
 fn immediate(f: u32) -> bool {
     matches!(
         f,
-        FEnum_glFlush | FEnum_glFinish | FEnum_glPixelStorei | FEnum_glDeleteTextures
+        FEnum_glFlush
+            | FEnum_glFinish
+            | FEnum_glPixelStorei
+            | FEnum_glDeleteTextures
+            | FEnum_glDeleteProgramsARB
     )
 }
 unsafe fn capture(

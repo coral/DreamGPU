@@ -1,0 +1,223 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -515,9 +515,11 @@
+         }
+     }
+ 
++    /* DreamGPU: these are program locals after the shader's other locals;
++     * environment parameters alias the application's c# constants. */
+     for (i = 0; i < fixup->super.num_consts; ++i)
+     {
+-        GL_EXTCALL(glProgramEnvParameter4fvARB(GL_FRAGMENT_PROGRAM_ARB,
++        GL_EXTCALL(glProgramLocalParameter4fvARB(GL_FRAGMENT_PROGRAM_ARB,
+                 fixup->offset + i, &np2fixup_constants[i * 4]));
+     }
+ }
+@@ -699,7 +701,9 @@
+ static void shader_arb_load_constants(void *shader_priv, struct wined3d_context *context,
+         const struct wined3d_state *state)
+ {
+-    BOOL vs = use_vs(state);
++    /* DreamGPU: a vertex shader runs only with ARB_vertex_program; without it
++     * the vertex constant arrays are empty (vs_uniform_count 0). */
++    BOOL vs = use_vs(state) && context->gl_info->supported[ARB_VERTEX_PROGRAM];
+     BOOL ps = use_ps(state);
+ 
+     shader_arb_load_constants_internal(shader_priv, context, state, ps, vs, FALSE);
+@@ -3901,7 +3905,7 @@
+ 
+         fixup->super.num_consts = (cur_fixup_sampler + 1) >> 1;
+         if (fixup->super.num_consts) {
+-            shader_addline(buffer, "PARAM np2fixup[%u] = { program.env[%u..%u] };\n",
++            shader_addline(buffer, "PARAM np2fixup[%u] = { program.local[%u..%u] };\n",
+                            fixup->super.num_consts, fixup->offset, fixup->super.num_consts + fixup->offset - 1);
+         }
+     }
+@@ -4566,7 +4570,7 @@
+      * is quite expensive because it forces the driver to disable early Z discards. It is cheaper to
+      * duplicate the shader than have a no-op KIL instruction in every shader
+      */
+-    if (!d3d_info->vs_clipping && use_vs(state)
++    if (!d3d_info->vs_clipping && use_vs(state) && gl_info->supported[ARB_VERTEX_PROGRAM]
+             && state->render_states[WINED3D_RS_CLIPPING]
+             && state->render_states[WINED3D_RS_CLIPPLANEENABLE])
+         args->clip = 1;
+@@ -4751,7 +4755,9 @@
+         priv->fragment_pipe->enable_extension(gl_info, TRUE);
+     }
+ 
+-    if (use_vs(state))
++    /* DreamGPU: without ARB_vertex_program (VertexShaderVersion 0) never
++     * compile, bind or enable a vertex program; the ffp vertex pipe stays. */
++    if (use_vs(state) && gl_info->supported[ARB_VERTEX_PROGRAM])
+     {
+         struct wined3d_shader *vs = state->shader[WINED3D_SHADER_TYPE_VERTEX];
+         struct arb_vs_compile_args compile_args;
+@@ -6334,12 +6340,10 @@
+ 
+     shader_addline(&buffer, "!!ARBfp1.0\n");
+ 
++    /* DreamGPU: the colour key PARAMs are declared after the fog OPTION below;
++     * ARB_fragment_program accepts options only before any statement. */
+     if (settings->color_key_enabled)
+-    {
+-        shader_addline(&buffer, "PARAM color_key_low = program.env[%u];\n", ARB_FFP_CONST_COLOR_KEY_LOW);
+-        shader_addline(&buffer, "PARAM color_key_high = program.env[%u];\n", ARB_FFP_CONST_COLOR_KEY_HIGH);
+         tex_read[0] = TRUE;
+-    }
+ 
+     /* Find out which textures are read */
+     for (stage = 0; stage < MAX_TEXTURES; ++stage)
+@@ -6417,6 +6421,12 @@
+         default: FIXME("Unexpected fog setting %d\n", settings->fog);
+     }
+ 
++    if (settings->color_key_enabled)
++    {
++        shader_addline(&buffer, "PARAM color_key_low = program.env[%u];\n", ARB_FFP_CONST_COLOR_KEY_LOW);
++        shader_addline(&buffer, "PARAM color_key_high = program.env[%u];\n", ARB_FFP_CONST_COLOR_KEY_HIGH);
++    }
++
+     shader_addline(&buffer, "PARAM const = {1, 2, 4, 0.5};\n");
+     shader_addline(&buffer, "TEMP TMP;\n");
+     shader_addline(&buffer, "TEMP ret;\n");
+@@ -6486,7 +6496,7 @@
+             if (settings->op[stage].projected != proj_none) {
+                 if(settings->op[stage].projected == proj_count4) {
+                     shader_addline(&buffer, "MOV ret.w, fragment.texcoord[%u].w;\n", stage);
+-                    shader_addline(&buffer, "MUL ret.xyz, ret, fragment.texcoord[%u].w, fragment.texcoord[%u];\n", stage, stage);
++                    shader_addline(&buffer, "MAD ret.xyz, ret, fragment.texcoord[%u].w, fragment.texcoord[%u];\n", stage, stage);
+                 } else {
+                     shader_addline(&buffer, "MOV ret.w, fragment.texcoord[%u].z;\n", stage);
+                     shader_addline(&buffer, "MAD ret.xyz, ret, fragment.texcoord[%u].z, fragment.texcoord[%u];\n", stage, stage);
+@@ -6715,7 +6725,7 @@
+ 
+     if (state->render_states[WINED3D_RS_FOGTABLEMODE] == WINED3D_FOG_NONE)
+     {
+-        if (use_vs(state))
++        if (use_vs(state) && context->gl_info->supported[ARB_VERTEX_PROGRAM])
+         {
+             new_source = FOGSOURCE_VS;
+         }
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -861,11 +861,10 @@
+         FIXME("Color-keying not supported with format %s.\n", debug_d3dformat(format->id));
+     }
+ 
+-    /* FIXME: This should check if the blitter backend can do P8 conversion,
+-     * instead of checking for ARB_fragment_program. */
+-    if (format->id == WINED3DFMT_P8_UINT
+-            && !(texture->resource.device->adapter->gl_info.supported[ARB_FRAGMENT_PROGRAM]
+-            && texture->swapchain && texture == texture->swapchain->front_buffer))
++    /* DreamGPU: indexed surfaces, the front buffer included, always expand to
++     * BGRA on the CPU, also with ARB_fragment_program; the fragment-program
++     * palette blitter is not used (see the identity P8 fixup below). */
++    if (format->id == WINED3DFMT_P8_UINT)
+         return &convert_p8;
+ 
+     return NULL;
+@@ -2551,11 +2550,9 @@
+                 0, CHANNEL_SOURCE_X, 0, CHANNEL_SOURCE_X, 0, CHANNEL_SOURCE_X, 0, CHANNEL_SOURCE_X);
+     }
+ 
+-    if (gl_info->supported[ARB_FRAGMENT_PROGRAM])
+-    {
+-        idx = getFmtIdx(WINED3DFMT_P8_UINT);
+-        gl_info->formats[idx].color_fixup = create_complex_fixup_desc(COMPLEX_FIXUP_P8);
+-    }
++    /* DreamGPU: P8 keeps an identity fixup. Every indexed surface is expanded
++     * to BGRA on upload, so shaders, the fixed-function replacement and the
++     * blitters sample ordinary colors, never palette indices. */
+ 
+     if (gl_info->supported[ARB_VERTEX_ARRAY_BGRA])
+     {
+@@ -2725,11 +2722,10 @@
+     init_format_filter_info(gl_info, adapter->driver_info.vendor);
+ 
+     /* This backend expands indexed 2D textures and their attached palette to
+-     * BGRA before upload. Do not advertise cube/volume or render-target P8,
+-     * or the separate fragment-program palette path. */
+-    if (!gl_info->supported[ARB_FRAGMENT_PROGRAM])
+-        gl_info->formats[getFmtIdx(WINED3DFMT_P8_UINT)].flags[WINED3D_GL_RES_TYPE_TEX_2D]
+-                |= WINED3DFMT_FLAG_TEXTURE | WINED3DFMT_FLAG_FILTERING;
++     * BGRA before upload, with either fragment pipeline. Do not advertise
++     * cube/volume or render-target P8. */
++    gl_info->formats[getFmtIdx(WINED3DFMT_P8_UINT)].flags[WINED3D_GL_RES_TYPE_TEX_2D]
++            |= WINED3DFMT_FLAG_TEXTURE | WINED3DFMT_FLAG_FILTERING;
+ 
+     return TRUE;
+ 
+@@ -4212,15 +4208,19 @@
+             break;
+ 
+         case WINED3DFMT_P8_UINT:
++            /* DreamGPU: P8 is always expanded on the CPU, which writes alpha
++             * zero for keyed indices (texture.c converts P8 keys even with
++             * shader color keying). Match exactly those texels: any color,
++             * alpha below half a step. */
+             float_colors[0].r = 0.0f;
+             float_colors[0].g = 0.0f;
+             float_colors[0].b = 0.0f;
+-            float_colors[0].a = (key->color_space_low_value - 0.5f) / 255.0f;
++            float_colors[0].a = 0.0f;
+ 
+-            float_colors[1].r = 0.0f;
+-            float_colors[1].g = 0.0f;
+-            float_colors[1].b = 0.0f;
+-            float_colors[1].a = (key->color_space_high_value + 0.5f) / 255.0f;
++            float_colors[1].r = 2.0f;
++            float_colors[1].g = 2.0f;
++            float_colors[1].b = 2.0f;
++            float_colors[1].a = 0.5f / 255.0f;
+             break;
+ 
+         default:
+--- a/wined3d/texture.c
++++ b/wined3d/texture.c
+@@ -498,7 +498,9 @@
+     else
+         flag = WINED3D_TEXTURE_RGB_VALID;
+ 
+-    if (!d3d_info->shader_color_key
++    /* DreamGPU: indexed textures expand on the CPU; their keys always become
++     * alpha zero there, which the shader color key then matches. */
++    if ((!d3d_info->shader_color_key || texture->resource.format->id == WINED3DFMT_P8_UINT)
+             && (!(texture->async.flags & WINED3D_TEXTURE_ASYNC_COLOR_KEY)
+             != !(texture->async.color_key_flags & WINED3D_CKEY_SRC_BLT)
+             || (texture->async.flags & WINED3D_TEXTURE_ASYNC_COLOR_KEY
+@@ -697,7 +699,7 @@
+     DWORD alloc_flag = srgb ? WINED3D_TEXTURE_SRGB_ALLOCATED : WINED3D_TEXTURE_RGB_ALLOCATED;
+     const struct wined3d_d3d_info *d3d_info = context->d3d_info;
+ 
+-    if (!d3d_info->shader_color_key
++    if ((!d3d_info->shader_color_key || texture->resource.format->id == WINED3DFMT_P8_UINT)
+             && !(texture->async.flags & WINED3D_TEXTURE_ASYNC_COLOR_KEY)
+             != !(texture->async.color_key_flags & WINED3D_CKEY_SRC_BLT))
+     {
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4238,6 +4238,10 @@
+         gl_info->gl_ops.gl.p_glDisable(GL_STENCIL_TEST);
+         gl_info->gl_ops.gl.p_glDisable(GL_BLEND);
+         gl_info->gl_ops.gl.p_glDisable(GL_FOG);
++        /* A fragment program left enabled by the last draw could discard or
++         * replace the uploaded depth; ENABLE_BIT restores it. */
++        if (gl_info->supported[ARB_FRAGMENT_PROGRAM])
++            gl_info->gl_ops.gl.p_glDisable(GL_FRAGMENT_PROGRAM_ARB);
+         for (i = 0; i < 6; ++i) gl_info->gl_ops.gl.p_glDisable(GL_CLIP_PLANE0 + i);
+         gl_info->gl_ops.gl.p_glEnable(GL_DEPTH_TEST);
+         gl_info->gl_ops.gl.p_glDepthFunc(GL_ALWAYS);
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -5681,7 +5681,9 @@
+         /* Below we assume PS2.0 specs, not extended 2.0a(GeforceFX)/2.0b(Radeon R3xx) ones */
+         caps->PS20Caps.caps = 0;
+         caps->PS20Caps.dynamic_flow_control_depth = 0; /* WINED3DVS20_MIN_DYNAMICFLOWCONTROLDEPTH = 0 */
+-        caps->PS20Caps.temp_count = max(12, adapter->gl_info.limits.arb_ps_temps);
++        /* DreamGPU: native ARB limits can exceed the D3D9 PS 2.0 range [12, 32]. */
++        caps->PS20Caps.temp_count = min(WINED3DPS20_MAX_NUMTEMPS,
++                max(12, adapter->gl_info.limits.arb_ps_temps));
+         caps->PS20Caps.static_flow_control_depth = WINED3DPS20_MIN_STATICFLOWCONTROLDEPTH; /* Minimum: 1 */
+         /* Minimum number (64 ALU + 32 Texture), a GeforceFX uses 512 */
+         caps->PS20Caps.instruction_slot_count = WINED3DPS20_MIN_NUMINSTRUCTIONSLOTS;

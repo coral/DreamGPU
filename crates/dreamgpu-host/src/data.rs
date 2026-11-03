@@ -273,6 +273,22 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         };
         return e;
     }
+    if matches!(
+        function,
+        FEnum_glProgramStringARB | FEnum_glDeleteProgramsARB
+    ) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        let result = if function == FEnum_glProgramStringARB {
+            unsafe { crate::program::string(m, state, &a, data) }
+        } else {
+            unsafe { crate::program::delete(m, state, data) }
+        };
+        return result.map_or_else(|e| e, |()| 0);
+    }
     if function == FEnum_glDeleteTextures {
         // Deleting a texture bound on any unit reverts that unit to default.
         let bindings = unsafe { crate::state::binding_slots(state) };

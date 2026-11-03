@@ -40,6 +40,7 @@ BOOL JglMultitextureAvailable(void);
 BOOL JglFixedStateAvailable(void);
 BOOL JglCompressedTexturesAvailable(void);
 BOOL JglFogCoordAvailable(void);
+BOOL JglFragmentProgramAvailable(void);
 HGLRC WINAPI wglGetCurrentContext(void);
 PROC WINAPI GetProcAddress(HINSTANCE, LPCSTR);
 void APIENTRY glColor3f(GLfloat, GLfloat, GLfloat);

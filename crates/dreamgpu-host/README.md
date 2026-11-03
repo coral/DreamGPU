@@ -30,6 +30,11 @@ The main ownership rules are:
   Backward-shift deletion keeps load/unload churn from accumulating tombstones.
   Namespace, binding, default-object and attribute-stack references are distinct;
   deleting a name does not release storage retained by another binding.
+- ARB fragment program names use a separate bounded table owned by the same
+  share group as the textures (4096 names). Native program objects are private
+  per guest name, the default object is private per share group, and every
+  load is validated and parsed into a private object before it replaces the
+  bound program. Objects and strings are charged to the texture budget.
 - Texture storage is bounded by the existing 256 MiB contract. A failed
   initialization clear still accounts allocated storage and marks its level
   undefined until a complete upload initializes it.

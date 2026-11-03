@@ -262,3 +262,83 @@ fn evaluator_mesh_observes_begin_texture_admission_before_native_draw() {
     );
     assert_eq!(state, 0);
 }
+
+unsafe extern "C" fn enable(cap: u32) {
+    note(&[300, cap as u64]);
+}
+unsafe extern "C" fn env(target: u32, index: u32, x: f32, y: f32, z: f32, w: f32) {
+    note(&[400, target as u64, index as u64]);
+    note(&[x, y, z, w].map(|v| u64::from(v.to_bits())));
+}
+#[test]
+fn fragment_program_records_route_to_state_or_native_gl() {
+    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    api.dg_glEnable = Some(enable);
+    api.dg_glDisable = Some(enable);
+    api.dg_glProgramEnvParameter4fARB = Some(env);
+    let mut state = 0;
+    // The fragment program mode is native state; vertex program modes, which
+    // the device does not implement, become a GL error in the context state.
+    run(&api, &mut state, FEnum_glEnable, &[GL_FRAGMENT_PROGRAM_ARB]).unwrap();
+    assert_eq!(take(), [300, u64::from(GL_FRAGMENT_PROGRAM_ARB)]);
+    for cap in [
+        GL_VERTEX_PROGRAM_ARB,
+        GL_VERTEX_PROGRAM_POINT_SIZE_ARB,
+        GL_VERTEX_PROGRAM_TWO_SIDE_ARB,
+    ] {
+        for function in [FEnum_glEnable, FEnum_glDisable] {
+            run(&api, &mut state, function, &[cap]).unwrap();
+            assert_eq!(take(), [200, u64::from(function)]);
+        }
+    }
+    // Bindings and locals need the context's program namespace.
+    for function in [FEnum_glBindProgramARB, FEnum_glProgramLocalParameter4fARB] {
+        run(
+            &api,
+            &mut state,
+            function,
+            &[GL_FRAGMENT_PROGRAM_ARB, 1, 0, 0, 0, 0],
+        )
+        .unwrap();
+        assert_eq!(take(), [200, u64::from(function)]);
+    }
+    // Environment parameters are native context state, bit-exact.
+    let bits = [0x7fc12345, 0x80000000, 1, 0x3f800000];
+    run(
+        &api,
+        &mut state,
+        FEnum_glProgramEnvParameter4fARB,
+        &[
+            GL_FRAGMENT_PROGRAM_ARB,
+            27,
+            bits[0],
+            bits[1],
+            bits[2],
+            bits[3],
+        ],
+    )
+    .unwrap();
+    let mut expected = vec![400, u64::from(GL_FRAGMENT_PROGRAM_ARB), 27];
+    expected.extend(bits.map(u64::from));
+    assert_eq!(take(), expected);
+    assert_eq!(
+        run(
+            &api,
+            &mut state,
+            FEnum_glProgramEnvParameter4fARB,
+            &[GL_VERTEX_PROGRAM_ARB, 0, 0, 0, 0, 0]
+        ),
+        Err(DG_GL_ERROR_UNSUPPORTED)
+    );
+    // None of them is legal inside Begin/End.
+    state = 1;
+    assert_eq!(
+        run(
+            &api,
+            &mut state,
+            FEnum_glBindProgramARB,
+            &[GL_FRAGMENT_PROGRAM_ARB, 1]
+        ),
+        Err(4)
+    );
+}

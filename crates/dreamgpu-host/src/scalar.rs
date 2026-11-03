@@ -7,6 +7,16 @@ use core::ffi::c_void;
 
 pub type ResourceHook = unsafe extern "C" fn(*mut c_void, u32, *const u8) -> u32;
 
+/// Vertex program modes: native GL implements ARB_vertex_program, the device
+/// does not. Enabling one would make every draw fail natively, so Enable and
+/// Disable report GL_INVALID_ENUM (through the context's error state) instead.
+pub(crate) fn vertex_program_cap(cap: u32) -> bool {
+    matches!(
+        cap,
+        GL_VERTEX_PROGRAM_ARB | GL_VERTEX_PROGRAM_POINT_SIZE_ARB | GL_VERTEX_PROGRAM_TWO_SIDE_ARB
+    )
+}
+
 pub(crate) fn allowed_in_begin(function: u32) -> bool {
     matches!(
         function,
@@ -69,7 +79,15 @@ unsafe fn execute(
         | FEnum_glTexParameteri
         | FEnum_glTexParameterf
         | FEnum_glTexEnvi
-        | FEnum_glTexEnvf => {
+        | FEnum_glTexEnvf
+        | FEnum_glBindProgramARB
+        | FEnum_glProgramLocalParameter4fARB => {
+            let error = unsafe { hook(opaque, function, args.as_ptr()) };
+            if error != 0 {
+                return Err(error);
+            }
+        }
+        FEnum_glEnable | FEnum_glDisable if vertex_program_cap(u(0)?) => {
             let error = unsafe { hook(opaque, function, args.as_ptr()) };
             if error != 0 {
                 return Err(error);
@@ -288,6 +306,23 @@ unsafe fn execute(
             api.dg_glMultiTexCoord4f.ok_or(3u32)?(u(0)?, f(1)?, f(2)?, f(3)?, f(4)?)
         },
         FEnum_glFogCoordf => unsafe { api.dg_glFogCoordf.ok_or(3u32)?(f(0)?) },
+        // ARB_fragment_program environment parameters belong to the context;
+        // native GL reports an index beyond its limit as GL_INVALID_VALUE.
+        FEnum_glProgramEnvParameter4fARB => {
+            if u(0)? != GL_FRAGMENT_PROGRAM_ARB {
+                return Err(DG_GL_ERROR_UNSUPPORTED);
+            }
+            unsafe {
+                api.dg_glProgramEnvParameter4fARB.ok_or(3u32)?(
+                    u(0)?,
+                    u(1)?,
+                    f(2)?,
+                    f(3)?,
+                    f(4)?,
+                    f(5)?,
+                )
+            }
+        }
         FEnum_glVertex3f => unsafe { api.dg_glVertex3f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?) },
         FEnum_glVertex4f => unsafe { api.dg_glVertex4f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?, f(3)?) },
         FEnum_glSecondaryColor3f => unsafe {
