@@ -2,7 +2,8 @@
  * GL1.1 client attribute stack: specification section6.1.11/table6.2.
  * https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf
  * With ARB_multitexture the vertex-array group adds CLIENT_ACTIVE_TEXTURE and
- * every unit's coordinate array (GL1.3 vertex-array state).
+ * every unit's coordinate array (GL1.3 vertex-array state), and with
+ * ARB_vertex_program every generic attribute array.
  * No client address or client stack mutation crosses the transport.
  */
 static void APIENTRY AliasArrayElement(GLint index) {
@@ -23,6 +24,7 @@ static void APIENTRY AliasPushClientAttrib(GLbitfield mask) {
     entry.Mask = mask;
     if (mask & 2) { // GL_CLIENT_VERTEX_ARRAY_BIT: every unit and the client-active unit
         CopyMemory(entry.Attribute, state->Attribute, sizeof(entry.Attribute));
+        CopyMemory(entry.Generic, state->Generic, sizeof(entry.Generic));
         entry.ClientTexture = state->ClientTexture;
     }
     if (mask & 1) { // GL_CLIENT_PIXEL_STORE_BIT
@@ -42,6 +44,7 @@ static void APIENTRY AliasPopClientAttrib(void) {
     JGL_CLIENT_SNAPSHOT &entry = state->ClientStack[state->ClientDepth - 1];
     if (entry.Mask & 2) {
         CopyMemory(state->Attribute, entry.Attribute, sizeof(entry.Attribute));
+        CopyMemory(state->Generic, entry.Generic, sizeof(entry.Generic));
         state->ClientTexture = entry.ClientTexture;
     }
     if (entry.Mask & 1) {

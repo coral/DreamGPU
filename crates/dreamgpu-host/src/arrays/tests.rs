@@ -402,3 +402,117 @@ fn compact_native_pointers_preserve_types_and_restore_on_draw_error() {
     );
     assert!(SEEN.with(|v| v.borrow().is_empty()));
 }
+unsafe extern "C" fn attrib_pointer(
+    index: u32,
+    size: i32,
+    kind: u32,
+    normalized: u8,
+    stride: i32,
+    data: *const core::ffi::c_void,
+) {
+    note(21, index as usize);
+    note(15, kind as usize);
+    note(16, size as usize);
+    note(22, normalized as usize);
+    note(5, stride as usize);
+    note(6, data as usize);
+}
+unsafe extern "C" fn attrib_enable(index: u32) {
+    note(23, index as usize);
+}
+unsafe extern "C" fn attrib_disable(index: u32) {
+    note(24, index as usize);
+}
+unsafe extern "C" fn attrib_get(index: u32, pname: u32, out: *mut f32) {
+    assert_eq!(pname, GL_CURRENT_VERTEX_ATTRIB_ARB);
+    note(25, index as usize);
+    for i in 0..4 {
+        unsafe { *out.add(i) = f32::from_bits(0x4000_0000 + index * 16 + i as u32) };
+    }
+}
+unsafe extern "C" fn attrib_restore(index: u32, p: *const f32) {
+    note(26, index as usize);
+    note(11, unsafe { *p.add(3) }.to_bits() as usize);
+}
+fn attrib_api() -> DreamGpuGlApi {
+    let mut a = api();
+    a.dg_glVertexAttribPointerARB = Some(attrib_pointer);
+    a.dg_glEnableVertexAttribArrayARB = Some(attrib_enable);
+    a.dg_glDisableVertexAttribArrayARB = Some(attrib_disable);
+    a.dg_glGetVertexAttribfvARB = Some(attrib_get);
+    a.dg_glVertexAttrib4fvARB = Some(attrib_restore);
+    a
+}
+#[test]
+fn attribute_draws_bind_generic_arrays_for_the_draw_alone() {
+    let api = attrib_api();
+    // Generic 0 (FLOAT 2) provokes without a vertex array; unit 0 FLOAT 2
+    // coordinates, generic 3 UNSIGNED_BYTE 4 normalized, generic 15 SHORT 1.
+    let data = raw::tests::attribute_packet();
+    let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_TEXCOORD;
+    let generic = 1 | 1 << 3 | 1 << 15;
+    let args = [GL_TRIANGLES, 0, 3, mask, generic, 0, 0, 0];
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glVertexAttribPointerARB, &args, &data) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let ops = |op: u32| {
+        seen.iter()
+            .filter(|v| v.0 == op)
+            .map(|v| v.1)
+            .collect::<Vec<_>>()
+    };
+    // Current values of attributes 1-15 are saved and restored after the
+    // pop; attribute zero has none.
+    assert_eq!(ops(25), [3, 15]);
+    assert_eq!(ops(26), [3, 15]);
+    let at = |op: u32, value: usize| seen.iter().position(|v| *v == (op, value)).unwrap();
+    assert!(at(25, 15) < at(1, GL_CLIENT_VERTEX_ARRAY_BIT as usize));
+    assert!(at(2, 0) < at(26, 3));
+    assert!(seen.contains(&(11, 0x4000_0000 + 3 * 16 + 3)));
+    // No vertex array: generic attribute 0 is the position.
+    assert!(seen.contains(&(4, GL_VERTEX_ARRAY as usize)));
+    assert!(!seen.contains(&(3, GL_VERTEX_ARRAY as usize)));
+    assert_eq!(ops(21), [0, 3, 15]);
+    assert_eq!(ops(22), [0, 1, 0]);
+    let base = data.as_ptr() as usize;
+    assert_eq!(
+        ops(6).iter().map(|p| p - base).collect::<Vec<_>>(),
+        [128, 152, 176, 188]
+    );
+    // Enabled for the draw, disabled again before the pop.
+    assert_eq!(ops(23), [0, 3, 15]);
+    assert_eq!(ops(24), [0, 3, 15]);
+    assert!(at(23, 15) < at(7, GL_TRIANGLES as usize));
+    assert!(at(9, 3) < at(24, 0) && at(24, 15) < at(2, 0));
+    // A native error is returned as the draw's GL error.
+    ERROR.with(|v| *v.borrow_mut() = GL_INVALID_OPERATION);
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glVertexAttribPointerARB, &args, &data) },
+        Ok(GL_INVALID_OPERATION)
+    );
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    // Neither a position nor generic attribute 0: malformed.
+    let without = [GL_TRIANGLES, 0, 3, mask, 1 << 3 | 1 << 15, 0, 0, 0];
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glVertexAttribPointerARB, &without, &data) },
+        Err(1)
+    );
+    // A missing generic entry point fails before any pointer is exposed.
+    let mut partial = api;
+    partial.dg_glGetVertexAttribfvARB = None;
+    assert_eq!(
+        unsafe { draw(&partial, FEnum_glVertexAttribPointerARB, &args, &data) },
+        Err(3)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
+    // The sixteen-slot function never carries generic attributes.
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArraysEXT, &args, &data) },
+        Err(1)
+    );
+}

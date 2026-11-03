@@ -131,6 +131,14 @@
     {
       "file": "0032-ddraw-sysmem-3ddevice-p8.patch",
       "sha256": "f6810918b967c29bf4b4613b35ad4930141d2ddefc1dd0cc3045eab6f556b7b1"
+    },
+    {
+      "file": "0033-arbvp-vertex-shaders.patch",
+      "sha256": "b6445a10a42a066b070e2964d72a3c5a0cae4e131ad02d2c6b82b1dff14d4866"
+    },
+    {
+      "file": "0034-geforce-fx-npot-quirk.patch",
+      "sha256": "b0c27093d21dc8a3b74973e641882023e56e63a468269b3816ba2b8736ac7fb4"
     }
   ],
   "files": {
@@ -144,7 +152,7 @@
     },
     "wined3d/directx.c": {
       "before_sha256": "3bb18ad8cf7805122c5d124cfc84707b7f495f4eec8dc36b928ee33ec2318a2e",
-      "after_sha256": "641ed10f30091c02055744e14059a15cd4a6338cd015fe365197d8181d4640fa"
+      "after_sha256": "042265f3f9f41a66581a1dc01a0802c4234471ae55af48325f03f67681c4c383"
     },
     "wined3d/resource.c": {
       "before_sha256": "bb5d96bd0ba31be8b24eaf172b5a927c6760b9e094b9ebb132d118f1447039d7",
@@ -152,7 +160,7 @@
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "ffbad2322ccf6b692932bc553349bd76ae140ac2520710fdbdb023f2e9311fb5"
+      "after_sha256": "b6e76402a5c16293a377c8c9cedb53dbee2c82e56e83e46f16407de4554be7a9"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
@@ -220,7 +228,7 @@
     },
     "wined3d/device.c": {
       "before_sha256": "0a5880a762561579c5a93c36bc32ab51f5f441e4f290f1dbbe83b8064cebf3c4",
-      "after_sha256": "33458d693fab0504f15546109b3602d06bbe36f7ff43de37716ade113a792635"
+      "after_sha256": "719e10b05c67ad6262a921c897405d72065117109339554d9ad122866cbdf7dd"
     },
     "wined3d/context.c": {
       "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
@@ -232,7 +240,7 @@
     },
     "wined3d/wined3d_private.h": {
       "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
-      "after_sha256": "fd0d3f63a99b78662bbaf83ad93db7cc0029f69a5a456979f1a2e1faaf16021d"
+      "after_sha256": "c93a31f11248012854c8165ce42a899abc33418efb68a7f7cb27d79cf60a449e"
     },
     "wined3d/texture.c": {
       "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",
@@ -264,7 +272,7 @@
     },
     "wined3d/arb_program_shader.c": {
       "before_sha256": "e817b87102cc16f41454f5925a79e7c4002cabff018cb9c28220f50977b3ae6a",
-      "after_sha256": "e64a93b4598d57fce2092e478e0522ca39e11863356e99fe9c79dd76e92ce778"
+      "after_sha256": "3a6e207e6e4d0ef784104671f7b9c1b0b73993c8fdd12c4d66927a6f14767336"
     },
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",

@@ -268,9 +268,10 @@ levels per face.
 `DG_CAP_GL_FRAGMENT_PROGRAM` adds `GL_ARB_fragment_program`, last in
 `GL_EXTENSIONS`, with nineteen ARB-named exports: Gen/Delete/Bind/IsProgram,
 ProgramString, the four Env and Local parameter variants each and their f/d
-queries, GetProgramiv and GetProgramString. Only `FRAGMENT_PROGRAM_ARB` exists:
-the vertex program target (which WineD3D's ARB backend still drives for
-applications that create vertex shaders) is a local `GL_INVALID_ENUM`, as are
+queries, GetProgramiv and GetProgramString. Unless vertex programs are
+negotiated too, only `FRAGMENT_PROGRAM_ARB` exists: the vertex program target
+(which WineD3D's ARB backend still drives for applications that create vertex
+shaders) is a local `GL_INVALID_ENUM`, as are
 an unknown format, the address-register GetProgramiv names and a GetProgramString
 pname other than `PROGRAM_STRING_ARB`; negative counts and lengths are
 `GL_INVALID_VALUE`. Bind, ProgramString and the parameters are compiled into
@@ -287,6 +288,32 @@ capability the exports fail locally with `GL_INVALID_OPERATION`, are hidden from
 `GL_INVALID_ENUM`; Enable and `MatrixMode(MATRIXi_ARB)` pass through as before.
 `tests/guest/opengl/test_fragment_program.py` covers the contract and the i686
 parameter wrappers.
+
+### ARB_vertex_program
+
+`DG_CAP_GL_VERTEX_PROGRAM` adds `GL_ARB_vertex_program`, after the fragment
+extension, and shares its program exports (exported once with either
+capability). `VERTEX_PROGRAM_ARB` becomes a program target, and
+`VERTEX_PROGRAM_POINT_SIZE_ARB`, `VERTEX_PROGRAM_TWO_SIDE_ARB`, the
+address-register GetProgramiv names and MAX_VERTEX_ATTRIBS_ARB (16) become
+valid. Forty-three more ARB-named exports cover the 36 `VertexAttrib*ARB`
+variants, `VertexAttribPointerARB`, Enable/DisableVertexAttribArrayARB,
+`GetVertexAttrib{d,f,i}vARB` and `GetVertexAttribPointervARB`. Every immediate
+variant becomes one bit-exact `VertexAttrib4fARB` record (integer `N` forms per
+GL 1.x Table 2.6, doubles narrowed), legal inside Begin/End and compiled into
+display lists; attribute 0 then provokes a vertex. Indices from 16 are
+`GL_INVALID_VALUE`. The generic array state lives in the frontend with the
+other client arrays (saved by `CLIENT_VERTEX_ARRAY_BIT`) and is answered
+locally, except the current value of attributes 1-15, a host query (attribute
+0 is `GL_INVALID_OPERATION`, as the extension specifies). An array draw with
+an enabled generic array uses the attribute draw record (function
+`VertexAttribPointerARB`, 16 conventional and 16 generic descriptors), and
+ArrayElement inside Begin/End submits the generic values as attribute records.
+Attribute 0 is the position: its array draws without a vertex array. Without
+the capability the new exports fail locally with `GL_INVALID_OPERATION`, are
+hidden from `wglGetProcAddress`, and the vertex program modes stay local
+`GL_INVALID_ENUM`. `tests/guest/opengl/test_vertex_program.py` covers the
+contract and the i686 wrappers.
 
 ## System OpenGL provider
 

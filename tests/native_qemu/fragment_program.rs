@@ -113,22 +113,22 @@ fn texture(name: u32) -> Vec<(u32, Vec<u32>)> {
     ]
 }
 
-struct Device {
-    qemu: Qemu,
+pub(super) struct Device {
+    pub(super) qemu: Qemu,
     sequence: u32,
 }
 impl Device {
-    fn submit_for(&mut self, context: u32, records: &[(u32, Vec<u32>)]) {
+    pub(super) fn submit_for(&mut self, context: u32, records: &[(u32, Vec<u32>)]) {
         self.sequence += 1;
         self.qemu
             .batch_for(self.sequence, 1, context, context, 0, records);
         self.qemu.await_completion(self.sequence);
     }
-    fn submit(&mut self, records: &[(u32, Vec<u32>)]) {
+    pub(super) fn submit(&mut self, records: &[(u32, Vec<u32>)]) {
         self.submit_for(1, records);
     }
     /// One QUERY record of `context`, through a fresh guarded result page.
-    fn query_for(&mut self, context: u32, function: u32, args: &[u32]) -> (u32, Vec<u8>) {
+    pub(super) fn query_for(&mut self, context: u32, function: u32, args: &[u32]) -> (u32, Vec<u8>) {
         self.sequence += 1;
         let mut payload = vec![function];
         payload.extend_from_slice(args);
@@ -163,13 +163,13 @@ impl Device {
         assert!(bytes[length..].iter().all(|byte| *byte == 0xcc));
         (kind, bytes[..length].to_vec())
     }
-    fn query(&mut self, function: u32, args: &[u32]) -> (u32, Vec<u8>) {
+    pub(super) fn query(&mut self, function: u32, args: &[u32]) -> (u32, Vec<u8>) {
         self.query_for(1, function, args)
     }
-    fn word_for(&mut self, context: u32, function: u32, args: &[u32]) -> u32 {
+    pub(super) fn word_for(&mut self, context: u32, function: u32, args: &[u32]) -> u32 {
         words(&self.query_for(context, function, args).1)[0]
     }
-    fn word(&mut self, function: u32, args: &[u32]) -> u32 {
+    pub(super) fn word(&mut self, function: u32, args: &[u32]) -> u32 {
         self.word_for(1, function, args)
     }
     fn program_for(&mut self, context: u32, pname: u32) -> u32 {
@@ -178,16 +178,16 @@ impl Device {
     fn program(&mut self, pname: u32) -> u32 {
         self.program_for(1, pname)
     }
-    fn error_for(&mut self, context: u32) -> u32 {
+    pub(super) fn error_for(&mut self, context: u32) -> u32 {
         self.word_for(context, GET_ERROR, &[])
     }
-    fn error(&mut self) -> u32 {
+    pub(super) fn error(&mut self) -> u32 {
         self.error_for(1)
     }
     fn enabled(&mut self) -> bool {
         self.query(IS_ENABLED, &[FP]) == (DG_GL_RESULT_BOOL, vec![1])
     }
-    fn is_program_for(&mut self, context: u32, name: u32) -> bool {
+    pub(super) fn is_program_for(&mut self, context: u32, name: u32) -> bool {
         self.query_for(context, IS_PROGRAM, &[name]) == (DG_GL_RESULT_BOOL, vec![1])
     }
     fn parameter(&mut self, function: u32, index: u32) -> [f32; 4] {
@@ -210,7 +210,7 @@ impl Device {
     /// Exactly the frontend's record (glGetString: name, 0, 0 into a
     /// DG_GL_MAX_RESULT_BYTES buffer), checked by the guest drivers' result
     /// validation before the frontend ever sees it.
-    fn error_string(&mut self) -> String {
+    pub(super) fn error_string(&mut self) -> String {
         let (kind, bytes) = self.query(GET_STRING, &[ERROR_STRING, 0, 0]);
         assert!(
             driver_accepts(kind, &bytes, 512),
@@ -218,20 +218,20 @@ impl Device {
         );
         String::from_utf8(bytes[..bytes.len() - 1].to_vec()).unwrap()
     }
-    fn pixel_for(&mut self, context: u32, x: u32, y: u32) -> [u8; 4] {
+    pub(super) fn pixel_for(&mut self, context: u32, x: u32, y: u32) -> [u8; 4] {
         let (_, result) = self.query_for(context, 0x7a4, &[x, y, 1 | (1 << 16)]);
         result[..4].try_into().unwrap()
     }
     /// Every pixel of the 8x8 drawable.
-    fn expect_for(&mut self, context: u32, rgba: [u8; 4], label: &str) {
+    pub(super) fn expect_for(&mut self, context: u32, rgba: [u8; 4], label: &str) {
         for (x, y) in [(0, 0), (7, 0), (3, 4), (0, 7), (7, 7)] {
             assert_eq!(self.pixel_for(context, x, y), rgba, "{label} at {x},{y}");
         }
     }
-    fn expect(&mut self, rgba: [u8; 4], label: &str) {
+    pub(super) fn expect(&mut self, rgba: [u8; 4], label: &str) {
         self.expect_for(1, rgba, label)
     }
-    fn generate(&mut self, count: u32) -> Vec<u32> {
+    pub(super) fn generate(&mut self, count: u32) -> Vec<u32> {
         words(&self.query(GEN_PROGRAMS, &[count]).1)
     }
 }
@@ -239,7 +239,7 @@ impl Device {
 /// DgValidateGlResult (guest/nt/include/dg-gl-result.h, shared by the NT
 /// miniport and the Win9x packet path): a STRING result is printable ASCII
 /// (32..=126) up to one final NUL; anything else fails the guest query.
-fn driver_accepts(kind: u32, bytes: &[u8], capacity: usize) -> bool {
+pub(super) fn driver_accepts(kind: u32, bytes: &[u8], capacity: usize) -> bool {
     kind == DG_GL_RESULT_STRING
         && !bytes.is_empty()
         && bytes.len() <= capacity
@@ -249,7 +249,7 @@ fn driver_accepts(kind: u32, bytes: &[u8], capacity: usize) -> bool {
             .all(|b| (32..=126).contains(b))
 }
 
-fn start(label: &str) -> (Device, GpuServer, PathBuf) {
+pub(super) fn start(label: &str) -> (Device, GpuServer, PathBuf) {
     let (_device, _queue, host) = native_gpu();
     let directory =
         std::env::temp_dir().join(format!("dg-fp-{label}-{}", uuid::Uuid::new_v4().simple()));
@@ -488,11 +488,14 @@ fn qemu_fragment_programs_sample_parameters_errors_lists_and_fallback() {
         (projected, 0)
     );
 
-    // Native GL implements vertex programs; the device does not, and enabling
-    // one natively would stop every draw. WineD3D's ARB backend does enable it
-    // for applications that create vertex shaders anyway.
-    d.submit(&[call(ENABLE, &[0x8620]), call(DISABLE, &[0x8642])]);
-    assert_eq!(d.error(), 0x0500);
+    // With ARB_vertex_program (vertex_program.rs) the vertex program modes are
+    // ordinary native state.
+    d.submit(&[
+        call(ENABLE, &[0x8620]),
+        call(DISABLE, &[0x8620]),
+        call(DISABLE, &[0x8642]),
+    ]);
+    assert!(!d.query(IS_ENABLED, &[0x8620]).1.contains(&1));
     assert_eq!(d.error(), 0);
 
     // Display lists: binds, parameters and strings compile; deletion executes

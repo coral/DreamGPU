@@ -98,6 +98,33 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                         if (data[j])
                             return 0;
                 }
+                // The attribute draw (VertexAttribPointerARB, 0xaec) adds sixteen
+                // generic attribute slots and their mask in a fifth word.
+                if (record[8] == 0xaec && args == 5) {
+                    unsigned descriptors[DG_GL_ATTRIB_SLOTS], offsets[DG_GL_ATTRIB_SLOTS], length;
+                    const unsigned char *data = (const unsigned char *)record + payload;
+                    if (data_bytes < DG_GL_ATTRIB_DESCRIPTOR_BYTES || record[10] > 9 || record[11])
+                        return 0;
+                    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i)
+                        descriptors[i] = record[payload / 4 + i];
+                    if (!DgRawAttribLayout(record[13], record[14], record[12], descriptors, offsets,
+                                           &length) ||
+                        length != data_bytes)
+                        return 0;
+                    unsigned end = DG_GL_ATTRIB_DESCRIPTOR_BYTES;
+                    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
+                        if (!descriptors[i])
+                            continue;
+                        for (unsigned j = end; j < offsets[i]; ++j)
+                            if (data[j])
+                                return 0;
+                        end = offsets[i] + record[12] * ((descriptors[i] >> 16) & 255) *
+                                               DgArrayComponentBytes(descriptors[i] & 65535);
+                    }
+                    for (unsigned j = end; j < length; ++j)
+                        if (data[j])
+                            return 0;
+                }
                 expected = size;
                 break;
             }

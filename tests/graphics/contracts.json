@@ -291,6 +291,26 @@
     "d3d-arb-constant-dirty": {
       "scope": "source",
       "path": "tests/guest/d3d/test_arb_constant_dirty.py"
+    },
+    "gl-vertex-program": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_vertex_program.py"
+    },
+    "native-vertex-program": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/vertex_program.rs"
+    },
+    "d3d-arbvp-adaptations": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_arbvp_adaptations.py"
+    },
+    "guest-vshader": {
+      "scope": "installed-api",
+      "path": "tools/d3d/vshader-probe.inc"
+    },
+    "d3d-geforce-fx-quirk": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_geforce_fx_quirk.py"
     }
   },
   "contracts": [
@@ -1417,7 +1437,29 @@
         "guest-shader",
         "d3d-arb-constant-dirty"
       ],
-      "remaining": "Negotiated by DG_CAP_GL_FRAGMENT_PROGRAM; ARB_vertex_program is not implemented (vertex program modes are GL_INVALID_ENUM, Wine reports VertexShaderVersion 0). Native pixel tests (Linux, private Mesa on Radeon) cover TEX/TXP sampling of units with fixed-function texturing disabled, env versus per-object local parameters, program matrices, parse and host-detected load failures that keep the bound program, invalid-program draws, fixed-function fallback, deletion of the bound program, ENABLE_BIT, display-list compilation and sharing/isolation between contexts. Host checks reject non-ASCII bytes and texture[n]/texcoord[n] references beyond the reported 8 units; other semantic limits are native. On Linux the private Mesa provider rejects drawing with GL_INVALID_OPERATION while a program samples a texture with supplied borders; on macOS the border sampler steps aside and CGL ignores the borders. Wine patch 0029 adapts paletted textures, colour keys, the fixed-function program grammar, NP2 fixups, vertex-shader guards and depth uploads; 0030 keeps constants set between draws (no current context after 0012); 0031 declares the fixed-function generator's sign-fixup temporary. The installed D3D8/9 shader probe (ps_1_1, ps_2_0 on D3D9, D3DTOP_BUMPENVMAP from V8U8) passes on Win2000, XP and Win98 SE (Linux host) with PixelShaderVersion 2.0 (D3D8 1.4). Shader-model ps_1_2-1_4 instructions, texbem/texbeml in shaders, ps_2_0 flow limits, macOS CGL and games using pixel shaders remain unverified."
+      "remaining": "Negotiated by DG_CAP_GL_FRAGMENT_PROGRAM; vertex programs are the separate gl.vertex-program contract. Native pixel tests (Linux, private Mesa on Radeon) cover TEX/TXP sampling of units with fixed-function texturing disabled, env versus per-object local parameters, program matrices, parse and host-detected load failures that keep the bound program, invalid-program draws, fixed-function fallback, deletion of the bound program, ENABLE_BIT, display-list compilation and sharing/isolation between contexts. Host checks reject non-ASCII bytes and texture[n]/texcoord[n] references beyond the reported 8 units; other semantic limits are native. On Linux the private Mesa provider rejects drawing with GL_INVALID_OPERATION while a program samples a texture with supplied borders; on macOS the border sampler steps aside and CGL ignores the borders. Wine patch 0029 adapts paletted textures, colour keys, the fixed-function program grammar, NP2 fixups, vertex-shader guards and depth uploads; 0030 keeps constants set between draws (no current context after 0012); 0031 declares the fixed-function generator's sign-fixup temporary. The installed D3D8/9 shader probe (ps_1_1, ps_2_0 on D3D9, D3DTOP_BUMPENVMAP from V8U8) passes on Win2000, XP and Win98 SE (Linux host) with PixelShaderVersion 2.0 (D3D8 1.4). Shader-model ps_1_2-1_4 instructions, texbem/texbeml in shaders, ps_2_0 flow limits, macOS CGL and games using pixel shaders remain unverified."
+    },
+    {
+      "id": "gl.vertex-program",
+      "area": 8,
+      "api": "OpenGL 1.1 + ARB_vertex_program (D3D8/D3D9 vertex shaders 1.1-2.0 through Wine's ARB backend)",
+      "operation": "VERTEX_PROGRAM_ARB objects in the shared program namespace, ProgramString with error position/string, env/local parameters, VERTEX_PROGRAM_ARB/POINT_SIZE/TWO_SIDE enables, generic attributes (VertexAttrib*ARB outside and inside Begin/End and in display lists, client arrays through the attribute draw), attribute 0 aliasing the position, program/attribute/limit queries, ENABLE_BIT/CURRENT_BIT/CLIENT_VERTEX_ARRAY_BIT",
+      "format": "ARBvp1.0 ASCII program strings up to DG_GL_MAX_PROGRAM_BYTES; 16 generic attributes of every GL 1.1 component type, sizes 1-4, normalized or not",
+      "resource": "vertex program object",
+      "usage": "vertex processing",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-vertex-program",
+        "native-vertex-program",
+        "native",
+        "d3d-arbvp-adaptations",
+        "d3d-geforce-fx-quirk",
+        "guest-vshader"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_VERTEX_PROGRAM; without it the extension and entry points are hidden and vertex program modes stay GL_INVALID_ENUM. Generic client arrays travel in their own DATA record (the VertexAttribPointerARB function number, 16 conventional and 16 generic descriptors), so older kernels keep their DrawArrays/DrawArraysEXT admission. Attribute 0 is the position (the non-aliasing GL 2.0 model Mesa implements): its array supersedes the vertex array and generic attributes 1-15 never alias conventional ones. Host checks reject non-ASCII bytes and vertex.attrib[n] at or beyond MAX_VERTEX_ATTRIBS_ARB (16); other semantic limits are native. Every vertex load goes into a fresh native object that replaces the program's on success (Mesa 26.1 frees a serialized program twice when one vertex object is translated three times). Native pixel tests (Linux, private Mesa on Radeon) cover env-parameter transforms, every generic array type and size, current values inside and outside Begin/End, position aliasing, program matrices and state.matrix.mvp, per-vertex point size, two-sided colours, relative addressing, parse and host-detected failures, invalid-program draws, display lists, ENABLE_BIT/CURRENT_BIT, combined vertex and fragment programs, sharing/isolation, and the vs_1_1/vs_2_0 programs WineD3D generates for the installed probe. Wine patch 0033 maps glVertexAttrib2svARB, clamps VS 2.0 NumTemps, sets VERTEX_PROGRAM_POINT_SIZE only for oPts writers, disables vertex programs for CPU depth uploads and binds the zero attribute as a client array without ARB_vertex_buffer_object. Expected caps: D3D9 VertexShaderVersion 2.0 with 256 constants, D3D8 1.1. VS 2.0 makes Wine report its NVIDIA fallback for that level, a GeForce FX 5800 (10de:0302, previously a GeForce 256), whose quirk enabled the rectangle textures DreamGPU lacks and blacked out DirectDraw/D3D6/D3D7 presentation until patch 0034. The installed D3D8/9 vertex shader probe (vs_1_1 for two constant sets, vs_2_0 on D3D9, vs_1_1 into ps_1_1) passes on Win2000, XP and Win98 SE (Linux host). Signed normalized generic arrays convert natively (c/32767) while immediate and ArrayElement 4N values follow GL 1.x; D3D point size limits, ARB_vertex_buffer_object, macOS CGL and games using vertex shaders remain unverified."
     }
   ]
 }

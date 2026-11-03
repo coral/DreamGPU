@@ -1,0 +1,127 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -4787,6 +4787,12 @@
+         /* Enable OpenGL vertex programs */
+         gl_info->gl_ops.gl.p_glEnable(GL_VERTEX_PROGRAM_ARB);
+         checkGLcall("glEnable(GL_VERTEX_PROGRAM_ARB);");
++        /* DreamGPU: a shader writing oPts sizes its points; any other uses
++         * D3DRS_POINTSIZE (an unwritten result.pointsize is undefined). */
++        if (vs->reg_maps.point_size)
++            gl_info->gl_ops.gl.p_glEnable(GL_VERTEX_PROGRAM_POINT_SIZE_ARB);
++        else
++            gl_info->gl_ops.gl.p_glDisable(GL_VERTEX_PROGRAM_POINT_SIZE_ARB);
+         TRACE("Bound vertex program %u and enabled GL_VERTEX_PROGRAM_ARB\n", priv->current_vprogram_id);
+         shader_arb_vs_local_constants(compiled, context, state);
+ 
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -5310,20 +5310,67 @@
+     device->cbzvBuffer = 0;
+ }
+ 
++/* DreamGPU: without ARB_vertex_buffer_object every vertex buffer lives in
++ * system memory, and so does the zero attribute: a client array that GL
++ * copies at draw time. One process-wide array serves every device under the
++ * wined3d mutex. czvValue counts indices, not the vertices they reach, so at
++ * least 65536 values cover every 16-bit index. NULL when it cannot exist. */
++static const GLvoid *zv_client_array(GLenum enmzvValue, GLuint czvValue,
++        GLuint czvValueElements, const GLvoid *pzvValue)
++{
++    static GLubyte *values, value[16];
++    static GLuint capacity, filled, filled_size;
++    GLuint size = zv_value_el_size(enmzvValue) * czvValueElements;
++    GLuint count = max(czvValue, 65536), i;
++
++    if (!size || czvValueElements > 4 || czvValue > 0x00ffffff)
++        return NULL;
++    if (capacity < size * count)
++    {
++        GLubyte *grown = realloc(values, size * count);
++
++        if (!grown)
++        {
++            ERR("Failed to allocate a zero attribute array of %u values.\n", count);
++            return NULL;
++        }
++        values = grown;
++        capacity = size * count;
++        filled = 0;
++    }
++    if (filled < count || filled_size != size || memcmp(value, pzvValue, size))
++    {
++        for (i = 0; i < count; ++i)
++            memcpy(values + i * size, pzvValue, size);
++        memcpy(value, pzvValue, size);
++        filled = count;
++        filled_size = size;
++    }
++    return values;
++}
++
+ void zv_bind(struct wined3d_context *context, GLenum enmzvValue, GLuint czvValue, GLuint czvValueElements, GLboolean bzvNormalized, const GLvoid *pzvValue)
+ {
+     struct wined3d_device *device = context->swapchain->device;
+     const struct wined3d_gl_info *gl_info = context->gl_info;
+ 
+-    zv_create(device, enmzvValue, czvValue, czvValueElements, pzvValue);
++    if (!gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
++    {
++        GL_EXTCALL(glVertexAttribPointerARB(0, czvValueElements, enmzvValue, bzvNormalized, 0,
++                zv_client_array(enmzvValue, czvValue, czvValueElements, pzvValue)));
++    }
++    else
++    {
++        zv_create(device, enmzvValue, czvValue, czvValueElements, pzvValue);
+ 
+-    GL_EXTCALL(glBindBufferARB(GL_ARRAY_BUFFER_ARB, device->zvBuffer));
++        GL_EXTCALL(glBindBufferARB(GL_ARRAY_BUFFER_ARB, device->zvBuffer));
+ 
+-    GL_EXTCALL(glVertexAttribPointerARB(0, czvValueElements,
+-            enmzvValue,
+-            bzvNormalized,
+-            0, /*stride*/
+-            NULL /*addr*/));
++        GL_EXTCALL(glVertexAttribPointerARB(0, czvValueElements,
++                enmzvValue,
++                bzvNormalized,
++                0, /*stride*/
++                NULL /*addr*/));
++    }
+ 
+     if (!(context->numbered_array_mask & (1 << 0)))
+     {
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -3271,6 +3271,8 @@
+     MAP_GL_FUNCTION(glVertexAttrib1fv, glVertexAttrib1fvARB);
+     MAP_GL_FUNCTION(glVertexAttrib2f, glVertexAttrib2fARB);
+     MAP_GL_FUNCTION(glVertexAttrib2fv, glVertexAttrib2fvARB);
++    /* DreamGPU: stride-zero and immediate SHORT2 attributes call this. */
++    MAP_GL_FUNCTION(glVertexAttrib2sv, glVertexAttrib2svARB);
+     MAP_GL_FUNCTION(glVertexAttrib3f, glVertexAttrib3fARB);
+     MAP_GL_FUNCTION(glVertexAttrib3fv, glVertexAttrib3fvARB);
+     MAP_GL_FUNCTION(glVertexAttrib4f, glVertexAttrib4fARB);
+@@ -5632,7 +5634,9 @@
+     {
+         caps->VS20Caps.caps = 0;
+         caps->VS20Caps.dynamic_flow_control_depth = WINED3DVS20_MIN_DYNAMICFLOWCONTROLDEPTH;
+-        caps->VS20Caps.temp_count = max(12, adapter->gl_info.limits.arb_vs_temps);
++        /* DreamGPU: native ARB limits can exceed the D3D9 VS 2.0 range [12, 32]. */
++        caps->VS20Caps.temp_count = min(WINED3DVS20_MAX_NUMTEMPS,
++                max(12, adapter->gl_info.limits.arb_vs_temps));
+         caps->VS20Caps.static_flow_control_depth = 1;
+ 
+         caps->MaxVShaderInstructionsExecuted    = 65535;
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4242,6 +4242,10 @@
+          * replace the uploaded depth; ENABLE_BIT restores it. */
+         if (gl_info->supported[ARB_FRAGMENT_PROGRAM])
+             gl_info->gl_ops.gl.p_glDisable(GL_FRAGMENT_PROGRAM_ARB);
++        /* DreamGPU: so could a vertex program the raster position (and its
++         * validity); ENABLE_BIT restores that too. */
++        if (gl_info->supported[ARB_VERTEX_PROGRAM])
++            gl_info->gl_ops.gl.p_glDisable(GL_VERTEX_PROGRAM_ARB);
+         for (i = 0; i < 6; ++i) gl_info->gl_ops.gl.p_glDisable(GL_CLIP_PLANE0 + i);
+         gl_info->gl_ops.gl.p_glEnable(GL_DEPTH_TEST);
+         gl_info->gl_ops.gl.p_glDepthFunc(GL_ALWAYS);

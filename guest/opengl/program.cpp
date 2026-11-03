@@ -1,14 +1,16 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
- * ARB_fragment_program entry points (DG_CAP_GL_FRAGMENT_PROGRAM). Only the
- * FRAGMENT_PROGRAM_ARB target exists. Everything the record itself can show to
- * be invalid (target, format, pname, length, counts) is a local GL error, never
- * a record the host would reject as malformed. Validity that depends on objects
- * or program text (wrong-target names, parse errors, non-ASCII bytes, unit
- * limits, exhausted storage) is decided by the host and reported as GL errors
- * with PROGRAM_ERROR_POSITION/STRING. Names, objects and the default object are
- * host state shared with the context's texture namespace.
+ * ARB_fragment_program and ARB_vertex_program program entry points
+ * (DG_CAP_GL_FRAGMENT_PROGRAM, DG_CAP_GL_VERTEX_PROGRAM). The FRAGMENT_PROGRAM_ARB
+ * target exists with the first, VERTEX_PROGRAM_ARB with the second. Everything
+ * the record itself can show to be invalid (target, format, pname, length,
+ * counts) is a local GL error, never a record the host would reject as
+ * malformed. Validity that depends on objects or program text (wrong-target
+ * names, parse errors, non-ASCII bytes, unit and attribute limits, exhausted
+ * storage) is decided by the host and reported as GL errors with
+ * PROGRAM_ERROR_POSITION/STRING. Names, objects and each target's default
+ * object are host state shared with the context's texture namespace.
  *
- * Without the capability every entry point fails locally with
+ * Without either capability every entry point fails locally with
  * GL_INVALID_OPERATION and submits nothing; wglGetProcAddress hides them.
  * Float parameters are copied as bits (packing.h); double variants convert to
  * the float record, as native GL does.
@@ -22,19 +24,24 @@ extern "C" {
 #define JGL_PROGRAM_LENGTH 0x8627
 #define JGL_PROGRAM_STRING 0x8628
 
-/* GetProgramivARB names of a fragment program target. The address register
- * names (0x88b0-0x88b3) exist only with ARB_vertex_program. */
-static BOOL ProgramParameter(GLenum pname) {
+/* GetProgramivARB names of a program target: the address register names
+ * (0x88b0-0x88b3) for vertex programs, the ALU/TEX/indirection counts
+ * (0x8805-0x8810) for fragment programs. */
+static BOOL ProgramParameter(GLenum target, GLenum pname) {
+    if (pname >= 0x8805 && pname <= 0x8810)
+        return target == JGL_FRAGMENT_PROGRAM;
+    if (pname >= 0x88b0 && pname <= 0x88b3)
+        return target == JGL_VERTEX_PROGRAM;
     return pname == JGL_PROGRAM_LENGTH || pname == 0x8876 /* FORMAT */ ||
            pname == 0x8677 /* BINDING */ || (pname >= 0x88a0 && pname <= 0x88af) ||
-           (pname >= 0x88b4 && pname <= 0x88b6) || (pname >= 0x8805 && pname <= 0x8810);
+           (pname >= 0x88b4 && pname <= 0x88b6);
 }
 /* Commands compiled into display lists defer their errors (CommandError); the
  * immediate ones (Gen, Delete, Is and queries) raise them at once. */
 static BOOL Ready(BOOL compiled) {
     if (!(compiled ? JglCommandReady() : JglReady()))
         return FALSE;
-    if (!JglFragmentProgramAvailable()) {
+    if (!JglProgramsAvailable()) {
         if (compiled)
             JglCommandError(GL_INVALID_OPERATION);
         else
@@ -43,8 +50,10 @@ static BOOL Ready(BOOL compiled) {
     }
     return TRUE;
 }
+/* A target of a negotiated extension. */
 static BOOL Target(GLenum target, BOOL compiled) {
-    if (target == JGL_FRAGMENT_PROGRAM)
+    if ((target == JGL_FRAGMENT_PROGRAM && JglFragmentProgramAvailable()) ||
+        (target == JGL_VERTEX_PROGRAM && JglVertexProgramAvailable()))
         return TRUE;
     if (compiled)
         JglCommandError(GL_INVALID_ENUM);
@@ -219,7 +228,7 @@ void APIENTRY glGetProgramivARB(GLenum target, GLenum pname, GLint *params) {
     GLint value;
     if (!Ready(FALSE) || !Target(target, FALSE) || !params)
         return;
-    if (!ProgramParameter(pname)) {
+    if (!ProgramParameter(target, pname)) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }

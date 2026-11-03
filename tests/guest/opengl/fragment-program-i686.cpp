@@ -11,6 +11,9 @@ BOOL JglReady(void) {
 BOOL JglFragmentProgramAvailable(void) {
     return TRUE;
 }
+BOOL JglVertexProgramAvailable(void) {
+    return FALSE;
+}
 void JglSetError(GLenum) {
     Calls = Calls + 100;
 }

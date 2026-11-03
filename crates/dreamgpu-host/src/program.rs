@@ -1,16 +1,21 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
-//! ARB_fragment_program objects. Guest program names live in a bounded table
-//! owned by the texture namespace, so wglShareLists shares programs exactly
-//! like textures and lists. Native objects belong to the host's single native
-//! share group: every guest name maps to a private native object, and the guest
-//! default object (name zero) becomes a private per-namespace object the first
-//! time it is loaded, so no program state crosses guest namespaces.
+//! ARB_fragment_program and ARB_vertex_program objects. Guest program names
+//! live in a bounded table owned by the texture namespace, so wglShareLists
+//! shares programs exactly like textures and lists. Both targets share the
+//! names; an object keeps the target of its first bind. Native objects belong
+//! to the host's single native share group: every guest name maps to a private
+//! native object, and each target's guest default object (name zero) becomes a
+//! private per-namespace object the first time it is loaded, so no program
+//! state crosses guest namespaces.
 //!
 //! Loads are checked before native GL sees them (transferred length, ASCII,
-//! texture unit and coordinate set limits) and then parsed into a private
-//! validation object. Only a string that parses there replaces the bound
-//! program: a failed native parse may otherwise disturb the previous program
-//! (Mesa clears its input/output usage before parsing).
+//! texture unit and coordinate set limits, and generic vertex attributes) and
+//! then parsed into a private validation object. Only a string that parses
+//! there replaces the bound program: a failed native parse may otherwise
+//! disturb the previous program (Mesa clears its input/output usage before
+//! parsing). A fragment load reparses into the program's own object; a vertex
+//! load's validation object becomes the program's new native object instead,
+//! so no native vertex program object ever translates a second string.
 #![allow(non_upper_case_globals)]
 use crate::{
     gl_api::*,
@@ -29,6 +34,16 @@ pub(crate) const OBJECT_BYTES: u64 = 4096;
 pub(crate) const ERROR_LENGTH: u32 = 1;
 pub(crate) const ERROR_ASCII: u32 = 2;
 pub(crate) const ERROR_UNITS: u32 = 3;
+pub(crate) const ERROR_ATTRIBS: u32 = 4;
+/// The program targets: FRAGMENT_PROGRAM_ARB is 0, VERTEX_PROGRAM_ARB 1.
+const TARGETS: usize = 2;
+fn target_slot(target: u32) -> Option<usize> {
+    match target {
+        GL_FRAGMENT_PROGRAM_ARB => Some(0),
+        GL_VERTEX_PROGRAM_ARB => Some(1),
+        _ => None,
+    }
+}
 
 #[repr(C)]
 pub struct Program {
@@ -40,6 +55,9 @@ pub struct Program {
     pub deleted: u32,
     /// Charged program string bytes, beyond `OBJECT_BYTES`.
     pub length: u32,
+    /// One past the highest local parameter ever set; a vertex load copies
+    /// these into the replacement native object.
+    pub locals: u32,
 }
 
 #[repr(C)]
@@ -57,9 +75,10 @@ const EMPTY: Entry = Entry {
 pub struct Namespace {
     count: u32,
     next: u32,
-    /// The materialized default object for every target-zero binding.
-    default: *mut Program,
-    /// Native validation object; first parse of every load.
+    /// Each target's materialized default object for every name-zero binding.
+    default: [*mut Program; TARGETS],
+    /// The fragment target's native validation object; first parse of every
+    /// fragment load (vertex loads use a fresh object each).
     scratch: u32,
     entries: [Entry; SLOTS],
 }
@@ -194,6 +213,7 @@ unsafe fn create(m: &Memory, target: u32, guest_name: u32) -> Result<*mut Progra
             refs: 1,
             deleted: 0,
             length: 0,
+            locals: 0,
         });
     }
     Ok(p)
@@ -232,7 +252,9 @@ pub(crate) unsafe fn namespace_release(m: &Memory, ns: *mut Namespace) {
         unsafe { unref(m, p) };
     }
     unsafe {
-        unref(m, (*ns).default);
+        for default in (*ns).default {
+            unref(m, default);
+        }
         if (*ns).scratch != 0 {
             (*m.api).dg_glDeleteProgramsARB.expect("complete API")(1, &(*ns).scratch);
         }
@@ -253,6 +275,16 @@ unsafe fn native_bind(api: &DreamGpuGlApi, target: u32, p: *const Program) -> Re
     Ok(())
 }
 
+/// The context's binding of a target (one reference, null for the
+/// unmaterialized default object).
+unsafe fn binding_slot(c: *mut ContextState, target: u32) -> *mut *mut Program {
+    if target == GL_VERTEX_PROGRAM_ARB {
+        unsafe { addr_of_mut!((*c).vertex_program) }
+    } else {
+        unsafe { addr_of_mut!((*c).program) }
+    }
+}
+
 /// BindProgramARB. A missing name creates an object of `target`; a name of
 /// another target is GL_INVALID_OPERATION; exhausted storage GL_OUT_OF_MEMORY.
 ///
@@ -264,9 +296,9 @@ pub(crate) unsafe fn bind(
     target: u32,
     name: u32,
 ) -> Result<(), u32> {
-    if target != GL_FRAGMENT_PROGRAM_ARB {
+    let Some(slot) = target_slot(target) else {
         return Err(DG_GL_ERROR_UNSUPPORTED);
-    }
+    };
     let api = unsafe { &*m.api };
     let textures = unsafe { (*c).textures };
     if name == 0 {
@@ -274,11 +306,11 @@ pub(crate) unsafe fn bind(
         let default = if ns.is_null() {
             null_mut()
         } else {
-            unsafe { (*ns).default }
+            unsafe { (*ns).default[slot] }
         };
         unsafe {
             native_bind(api, target, default)?;
-            rebind(m, addr_of_mut!((*c).program), default);
+            rebind(m, binding_slot(c, target), default);
         }
         return Ok(());
     }
@@ -319,7 +351,7 @@ pub(crate) unsafe fn bind(
     }
     unsafe {
         native_bind(api, target, p)?;
-        rebind(m, addr_of_mut!((*c).program), p);
+        rebind(m, binding_slot(c, target), p);
     }
     Ok(())
 }
@@ -328,7 +360,8 @@ pub(crate) unsafe fn bind(
 /// default binding materializes the share group's private default object and
 /// binds it natively. Null after a GL_OUT_OF_MEMORY guest error.
 unsafe fn bound_object(m: &Memory, c: *mut ContextState, target: u32) -> Result<*mut Program, u32> {
-    let current = unsafe { (*c).program };
+    let slot = target_slot(target).ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let current = unsafe { *binding_slot(c, target) };
     if !current.is_null() {
         return Ok(current);
     }
@@ -337,25 +370,26 @@ unsafe fn bound_object(m: &Memory, c: *mut ContextState, target: u32) -> Result<
         unsafe { error(c, GL_OUT_OF_MEMORY) };
         return Ok(null_mut());
     }
-    if unsafe { (*ns).default }.is_null() {
+    if unsafe { (*ns).default[slot] }.is_null() {
         let p = unsafe { create(m, target, 0)? };
         if p.is_null() {
             unsafe { error(c, GL_OUT_OF_MEMORY) };
             return Ok(null_mut());
         }
-        unsafe { (*ns).default = p };
+        unsafe { (*ns).default[slot] = p };
     }
-    let p = unsafe { (*ns).default };
+    let p = unsafe { (*ns).default[slot] };
     unsafe {
         native_bind(&*m.api, target, p)?;
-        rebind(m, addr_of_mut!((*c).program), p);
+        rebind(m, binding_slot(c, target), p);
     }
     Ok(p)
 }
 
 /// DeleteProgramsARB: unused names and zero are ignored. A program bound in
-/// this context reverts to the default object; other contexts keep using a
-/// deleted program until they rebind (the native object follows the same rule).
+/// this context reverts to its target's default object; other contexts keep
+/// using a deleted program until they rebind (the native object follows the
+/// same rule).
 ///
 /// # Safety
 /// Data holds `count` validated little-endian names.
@@ -382,11 +416,13 @@ pub(crate) unsafe fn delete(m: &Memory, c: *mut ContextState, data: &[u8]) -> Re
         unsafe {
             native_delete(1, &(*p).name);
             (*p).deleted = 1;
-            if (*c).program == p {
+            let target = (*p).target;
+            let binding = binding_slot(c, target);
+            if *binding == p {
                 // Native deletion bound program zero; restore the guest default.
-                let default = (*ns).default;
-                native_bind(api, (*p).target, default)?;
-                rebind(m, addr_of_mut!((*c).program), default);
+                let default = (*ns).default[target_slot(target).expect("program target")];
+                native_bind(api, target, default)?;
+                rebind(m, binding, default);
             }
             unref(m, p); // Drop namespace ownership last.
         }
@@ -441,12 +477,12 @@ pub(crate) unsafe fn is_program(c: *const ContextState, name: u32) -> bool {
         && matches!(unsafe { locate(ns, name) }, Ok(i) if !unsafe { (*ns).entries[i].program }.is_null())
 }
 
-/// The guest name of the bound fragment program (zero for the default).
+/// The guest name of the target's bound program (zero for the default).
 ///
 /// # Safety
 /// Read-only render-owned context.
-pub(crate) unsafe fn binding(c: *const ContextState) -> u32 {
-    let p = unsafe { (*c).program };
+pub(crate) unsafe fn binding(c: *const ContextState, target: u32) -> u32 {
+    let p = unsafe { *binding_slot(c.cast_mut(), target) };
     if p.is_null() {
         0
     } else {
@@ -470,6 +506,18 @@ pub(crate) unsafe fn limits(api: &DreamGpuGlApi, c: *mut ContextState) -> Result
     }
     let clamp = |v: i32| (v.max(1) as u32).min(units);
     Ok((clamp(coords), clamp(images)))
+}
+
+/// Native generic vertex attributes, clamped to the protocol's
+/// DG_GL_MAX_VERTEX_ATTRIBS.
+///
+/// # Safety
+/// Native context current.
+pub(crate) unsafe fn attrib_limit(api: &DreamGpuGlApi) -> Result<u32, u32> {
+    let get = api.dg_glGetIntegerv.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let mut attribs = 0;
+    unsafe { get(GL_MAX_VERTEX_ATTRIBS_ARB, &mut attribs) };
+    Ok((attribs.max(1) as u32).min(DG_GL_MAX_VERTEX_ATTRIBS))
 }
 
 fn identifier_start(b: u8) -> bool {
@@ -497,11 +545,14 @@ fn skip(s: &[u8], mut i: usize) -> usize {
 pub(crate) fn non_ascii(s: &[u8]) -> Option<usize> {
     s.iter().position(|&b| b == 0 || b >= 0x80)
 }
-/// Offset of the first `texture[n]` image unit (a TEX instruction operand)
-/// with n >= `images`, or `.texcoord[n]` coordinate set with n >= `coords`.
+/// The first reference beyond the reported limits and its error kind: a
+/// `texture[n]` image unit (a TEX instruction operand) with n >= `images` or a
+/// `.texcoord[n]` coordinate set with n >= `coords` (`ERROR_UNITS`), or a
+/// `.attrib[n]` generic vertex attribute with n >= `attribs` (`ERROR_ATTRIBS`).
 /// Comments are skipped; `state.matrix.texture[n]` is a coordinate set.
-/// Native GL may accept more of either than the device reports.
-pub(crate) fn unit_beyond(s: &[u8], coords: u32, images: u32) -> Option<usize> {
+/// `u32::MAX` leaves a kind unchecked. Native GL may accept more of each than
+/// the device reports.
+pub(crate) fn beyond(s: &[u8], coords: u32, images: u32, attribs: u32) -> Option<(usize, u32)> {
     let mut i = 0;
     let mut member = false;
     loop {
@@ -526,11 +577,12 @@ pub(crate) fn unit_beyond(s: &[u8], coords: u32, images: u32) -> Option<usize> {
             i += 1;
         }
         let word = &s[start..i];
-        let limit = match word {
-            b"texture" if member => coords,
-            b"texture" => images,
-            b"texcoord" if member => coords,
-            _ => u32::MAX,
+        let (limit, kind) = match word {
+            b"texture" if member => (coords, ERROR_UNITS),
+            b"texture" => (images, ERROR_UNITS),
+            b"texcoord" if member => (coords, ERROR_UNITS),
+            b"attrib" if member => (attribs, ERROR_ATTRIBS),
+            _ => (u32::MAX, 0),
         };
         member = false;
         if limit == u32::MAX {
@@ -548,7 +600,7 @@ pub(crate) fn unit_beyond(s: &[u8], coords: u32, images: u32) -> Option<usize> {
             end += 1;
         }
         if end > digits && value >= u64::from(limit) {
-            return Some(digits);
+            return Some((digits, kind));
         }
         i = open + 1;
     }
@@ -575,7 +627,7 @@ pub(crate) unsafe fn string(
 ) -> Result<(), u32> {
     let api = unsafe { &*m.api };
     let (target, format, length) = (a[0], a[1], a[2]);
-    if target != GL_FRAGMENT_PROGRAM_ARB || format != GL_PROGRAM_FORMAT_ASCII_ARB {
+    if target_slot(target).is_none() || format != GL_PROGRAM_FORMAT_ASCII_ARB {
         return Err(DG_GL_ERROR_UNSUPPORTED);
     }
     let load = api.dg_glProgramStringARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
@@ -589,8 +641,15 @@ pub(crate) unsafe fn string(
         return Ok(());
     }
     let (coords, images) = unsafe { limits(api, c)? };
-    if let Some(at) = unit_beyond(data, coords, images) {
-        unsafe { fail(c, ERROR_UNITS, at) };
+    // A vertex program samples no image units (ARBvp1.0 has no TEX); its
+    // coordinate sets and generic attributes are checked.
+    let found = if target == GL_VERTEX_PROGRAM_ARB {
+        beyond(data, coords, u32::MAX, unsafe { attrib_limit(api)? })
+    } else {
+        beyond(data, coords, images, u32::MAX)
+    };
+    if let Some((at, kind)) = found {
+        unsafe { fail(c, kind, at) };
         return Ok(());
     }
     let p = unsafe { bound_object(m, c, target)? };
@@ -614,6 +673,11 @@ pub(crate) unsafe fn string(
             uncharge(m, u64::from(length - old));
         }
     };
+    if target == GL_VERTEX_PROGRAM_ARB {
+        let loaded = unsafe { replace_vertex(m, c, p, data) };
+        settle(loaded == Ok(true));
+        return loaded.map(|_| ());
+    }
     unsafe {
         if (*ns).scratch == 0 {
             api.dg_glGenProgramsARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?(1, addr_of_mut!((*ns).scratch));
@@ -649,6 +713,86 @@ unsafe fn native_bind_name(api: &DreamGpuGlApi, target: u32, name: u32) -> Resul
     Ok(())
 }
 
+/// A vertex load into a fresh native object, bound (natively and in the
+/// context) program `p` keeping its object on failure. Mesa 26.1's
+/// st_translate_vertex_program frees `base_serialized_nir` without clearing
+/// it, so the third string translated in one native vertex program object
+/// frees it twice (and the second leaves it dangling). On success the fresh
+/// object, with `p`'s local parameters copied, replaces `p`'s native object.
+/// True when the string loaded.
+unsafe fn replace_vertex(
+    m: &Memory,
+    c: *mut ContextState,
+    p: *mut Program,
+    data: &[u8],
+) -> Result<bool, u32> {
+    let api = unsafe { &*m.api };
+    let target = GL_VERTEX_PROGRAM_ARB;
+    let gen = api.dg_glGenProgramsARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let native_delete = api.dg_glDeleteProgramsARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let load = api.dg_glProgramStringARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let get_error = api.dg_glGetError.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let get_local = api
+        .dg_glGetProgramLocalParameterfvARB
+        .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let set_local = api
+        .dg_glProgramLocalParameter4fARB
+        .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let get_iv = api.dg_glGetProgramivARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    unsafe {
+        query::remember(api, addr_of_mut!((*c).guest_errors))?;
+        // Native GL now owns the error position and string again.
+        (*c).program_error_kind = 0;
+    }
+    // The locals of the bound (old) object, read while it is still bound:
+    // a deleted program's native name no longer reaches it.
+    let mut limit = 0;
+    unsafe { get_iv(target, GL_MAX_PROGRAM_LOCAL_PARAMETERS_ARB, &mut limit) };
+    let count = (unsafe { (*p).locals } as usize).min(limit.max(0) as usize);
+    let Some(locals) = (unsafe { crate::resource::OwnedBytes::zeroed(m, count.max(1) * 16) })
+    else {
+        unsafe { error(c, GL_OUT_OF_MEMORY) };
+        return Ok(false);
+    };
+    let saved = locals.p.cast::<f32>();
+    for i in 0..count {
+        unsafe { get_local(target, i as u32, saved.add(i * 4)) };
+    }
+    let mut fresh = 0;
+    unsafe { gen(1, &mut fresh) };
+    if fresh == 0 {
+        unsafe { error(c, GL_OUT_OF_MEMORY) };
+        return Ok(false);
+    }
+    unsafe {
+        native_bind_name(api, target, fresh)?;
+        load(target, GL_PROGRAM_FORMAT_ASCII_ARB, data.len() as i32, data.as_ptr().cast());
+    }
+    let code = unsafe { get_error() };
+    if code != GL_NO_ERROR {
+        unsafe {
+            native_bind(api, target, p)?;
+            native_delete(1, &fresh);
+            error(c, code);
+        }
+        return Ok(false);
+    }
+    unsafe {
+        for i in 0..count {
+            let v = saved.add(i * 4);
+            set_local(target, i as u32, *v, *v.add(1), *v.add(2), *v.add(3));
+        }
+        // A deleted program's native name is gone already; the fresh object
+        // is owned again and deleted with the program.
+        if (*p).deleted == 0 {
+            native_delete(1, &(*p).name);
+        }
+        (*p).name = fresh;
+        (*p).deleted = 0;
+    }
+    Ok(true)
+}
+
 /// ProgramLocalParameter4fARB on the bound object (materializing the default).
 ///
 /// # Safety
@@ -660,14 +804,19 @@ pub(crate) unsafe fn local(
     index: u32,
     v: [f32; 4],
 ) -> Result<(), u32> {
-    if target != GL_FRAGMENT_PROGRAM_ARB {
+    if target_slot(target).is_none() {
         return Err(DG_GL_ERROR_UNSUPPORTED);
     }
     let set = unsafe { (*m.api).dg_glProgramLocalParameter4fARB }.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
-    if unsafe { bound_object(m, c, target)? }.is_null() {
+    let p = unsafe { bound_object(m, c, target)? };
+    if p.is_null() {
         return Ok(());
     }
-    unsafe { set(target, index, v[0], v[1], v[2], v[3]) };
+    unsafe {
+        set(target, index, v[0], v[1], v[2], v[3]);
+        // Bounded by the largest native limit a load ever copies.
+        (*p).locals = (*p).locals.max(index.saturating_add(1)).min(1 << 16);
+    }
     Ok(())
 }
 
@@ -714,6 +863,7 @@ pub(crate) unsafe fn error_string(
         }
         ERROR_ASCII => b"DreamGPU: program string byte outside ASCII 1-127",
         ERROR_UNITS => b"DreamGPU: texture unit or coordinate set beyond the supported limit",
+        ERROR_ATTRIBS => b"DreamGPU: generic vertex attribute beyond MAX_VERTEX_ATTRIBS_ARB",
         _ => b"",
     };
     let mut n = 0;

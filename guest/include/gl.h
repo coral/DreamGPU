@@ -90,6 +90,27 @@
 #define DG_GL_MAX_PROGRAM_BYTES 0xff00
 #define DG_GL_MAX_PROGRAMS 4096
 #define DG_GL_PROGRAM_NAME_BATCH 128
+/* Vertex programs: ARB_vertex_program. The program records above also accept
+ * target VERTEX_PROGRAM_ARB (with either capability the program functions
+ * exist): both targets share one namespace, a name keeps the target of its
+ * first bind, and each target has its own binding and default object. A vertex
+ * program load also fails on the host for a vertex.attrib[n] reference with n
+ * at or beyond the reported MAX_VERTEX_ATTRIBS_ARB (position its offset).
+ * PROGRAM_ERROR_POSITION/STRING belong to the last load of either target.
+ * GetProgramivARB of the vertex target adds the address register names and
+ * excludes the fragment-only ALU/TEX/indirection names. VertexAttrib4fARB
+ * (index below DG_GL_MAX_VERTEX_ATTRIBS, four float words) is a CALL record,
+ * legal inside Begin/End, where index 0 provokes a vertex like Vertex4f, and in
+ * display lists. QUERY GetVertexAttribfvARB (index 1..DG_GL_MAX_VERTEX_ATTRIBS-1,
+ * CURRENT_VERTEX_ATTRIB_ARB) returns four RESULT_FLOAT; attribute array state is
+ * client state. Enable/IsEnabled of VERTEX_PROGRAM_ARB, VERTEX_PROGRAM_POINT_SIZE
+ * and VERTEX_PROGRAM_TWO_SIDE (ENABLE_BIT) and MAX_VERTEX_ATTRIBS_ARB (at most
+ * DG_GL_MAX_VERTEX_ATTRIBS) use existing records. Generic attribute arrays use
+ * the attribute draw below. Generic and conventional attributes do not alias,
+ * except that generic attribute 0 is the vertex position: its array supersedes
+ * the vertex array and provokes drawing. */
+#define DG_CAP_GL_VERTEX_PROGRAM 0x400000
+#define DG_GL_MAX_VERTEX_ATTRIBS 16
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104
@@ -346,6 +367,22 @@
 #define DG_GL_ARRAY_EXT_MASK 0x7fff
 #define DG_GL_ARRAY_EXT_SLOTS 16
 #define DG_GL_ARRAY_EXT_DESCRIPTOR_BYTES 64
+/* With DG_CAP_GL_VERTEX_PROGRAM, the attribute draw is DATA function
+ * VertexAttribPointerARB with five scalar words: mode, first (0), vertex count,
+ * the DrawArraysEXT mask with ARRAY_RAW, and a generic attribute mask (bit n
+ * for attribute n, DG_GL_ATTRIB_MASK). Its payload has thirty-two descriptors,
+ * the sixteen DrawArraysEXT slots then generic attributes 0-15, followed by the
+ * enabled sections in slot order under the RAW alignment and padding rules.
+ * Slots 0-15 keep the DrawArraysEXT rules, except that the position bit may be
+ * clear while generic attribute 0 is enabled (one of them must be). A generic
+ * descriptor is a GL type BYTE..DOUBLE (not 2_BYTES..4_BYTES) | component count
+ * 1-4 << 16, plus DG_GL_ATTRIB_NORMALIZED for a normalized integer type; native
+ * GL converts. A distinct function keeps older kernels' sixteen-slot
+ * DrawArraysEXT admission intact. */
+#define DG_GL_ATTRIB_NORMALIZED 0x01000000U
+#define DG_GL_ATTRIB_MASK 0xffff
+#define DG_GL_ATTRIB_SLOTS 32
+#define DG_GL_ATTRIB_DESCRIPTOR_BYTES 128
 #define DG_GL_MAX_VERTICES 65536
 #define DG_GL_MAX_EVAL_ORDER 8
 #define DG_GL_MAX_CAPTURE_VALUES 16384

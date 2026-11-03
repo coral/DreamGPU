@@ -313,7 +313,8 @@ blitter instead of the fixed-function pipeline and blitter:
 - Vertex shaders never compile, bind or enable a vertex program without
   `GL_ARB_vertex_program` (VertexShaderVersion stays 0, so the vertex constant
   arrays are empty); the backend otherwise wrote past them and enabled a
-  vertex program mode DreamGPU does not implement.
+  vertex program mode DreamGPU rejects unless `DG_CAP_GL_VERTEX_PROGRAM` is
+  negotiated (see 0033).
 - The fixed-function replacement program declares its colour key after the
   fog `OPTION`: ARBfp accepts options only before any statement, so colour key
   plus fog (common in Direct3D 7) failed to compile.
@@ -356,3 +357,50 @@ could be a render target. Without FBOs that check requires a matching WGL pixel
 format, so it also refused RGB565 system-memory targets (the installed D3D6
 probe's legacy RGB device failed). `test_system_memory_targets.py` covers
 palettized, FOURCC, RGB, texture and depth cases.
+
+`0033-arbvp-vertex-shaders.patch` adapts WineD3D to `GL_ARB_vertex_program`.
+With 256 native vertex env parameters the ARB backend compiles D3D8/9 vertex
+shaders (VertexShaderVersion 2.0, D3D8 1.1), and paths 0029 left dormant run:
+
+- `glVertexAttrib2sv` maps to its ARB name. ARB_vertex_program exports only
+  `glVertexAttrib2svARB`, so the core-name pointer stayed NULL and a stride-zero
+  or immediate SHORT2 attribute called it.
+- VS 2.0 `NumTemps` is clamped to the D3D9 range (native ARB reports more).
+- `VERTEX_PROGRAM_POINT_SIZE_ARB` is enabled only for shaders that write `oPts`.
+  Wine never touched it, so every other shader had GL's fixed point size
+  instead of `D3DRS_POINTSIZE`, and one writing `oPts` was ignored.
+- CPU depth uploads disable a vertex program left enabled by the last draw, as
+  0029 does for fragment programs: the program would otherwise transform the
+  raster position. `ENABLE_BIT` (0022) restores it.
+- Without `ARB_vertex_buffer_object` the zero vertex attribute
+  (`VBOX_WITH_WINE_FIX_ZEROVERTATTR`, bound whenever a declaration leaves
+  attribute 0 unused or gives it stride zero, since attribute 0 provokes the
+  vertices) is a process-wide client array repeating the value, at least 65536
+  entries so every 16-bit index is covered. Wine called the NULL
+  `glGenBuffersARB` to create a VBO instead.
+
+`test_arbvp_adaptations.py` checks each change in the prepared source, executes
+the client array helper under ASan/UBSan, and checks that the generator still
+emits the line templates of the vs_1_1/vs_2_0 programs
+`tests/native_qemu/vertex_program.rs` loads on Mesa. The diagnostic stack is
+rebased onto it with its call-site line numbers renumbered.
+
+`0034-geforce-fx-npot-quirk.patch` keeps the GeForce FX quirk from enabling
+`GL_ARB_texture_rectangle` on an implementation that never reported it.
+WineD3D does not recognize DreamGPU's GL vendor, so it reports the NVIDIA
+fallback card for the device's D3D level. With fragment programs alone that
+was a GeForce 256 (`10de:0100`). With 0033's VS 2.0 it is a GeForce FX 5800
+(`10de:0302`), which matches the "Geforce 5 NP2 disable" quirk. The quirk
+cleared NPOT and set rectangles supported unconditionally, on the assumption
+that the driver had reported them and Wine had only hidden them behind NPOT.
+DreamGPU reports neither extension, so Wine sent every NPOT surface (front
+buffer, backbuffer) through `GL_TEXTURE_RECTANGLE_ARB`. The frontend rejected
+that target, and DirectDraw, D3D6 and D3D7 presented black. Detection now
+records whether full NPOT support hid a reported rectangle extension. The
+quirk does nothing without NPOT and restores rectangles only when they were
+hidden, so real FX drivers behave as before. No other quirk depends on the
+NVIDIA device. The reported identity is otherwise the table's: "NVIDIA GeForce
+FX 5800", `nv4_disp.dll` 6.14.11.7516 on NT (4.14.11.7516 on Win9x), with
+DreamGPU's fixed 64 MiB of video memory (0001). `test_geforce_fx_quirk.py`
+runs the prepared card guess, the NPOT bookkeeping and the quirk under
+ASan/UBSan. The diagnostic stack is rebased onto it.

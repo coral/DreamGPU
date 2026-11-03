@@ -400,6 +400,7 @@ fn context_state_c_abi_layout() {
             + 16 * 8 * pointer
             + 2 * pointer
             + 8
+            + pointer
     );
     // Appended ARB_fragment_program state: void *, int32_t, uint32_t in C.
     assert_eq!(
@@ -409,6 +410,11 @@ fn context_state_c_abi_layout() {
     assert_eq!(
         core::mem::offset_of!(ContextState, program_error_kind),
         core::mem::offset_of!(ContextState, program) + pointer + 4
+    );
+    // Then the ARB_vertex_program binding: void * in C.
+    assert_eq!(
+        core::mem::offset_of!(ContextState, vertex_program),
+        core::mem::offset_of!(ContextState, program_error_kind) + 4
     );
     // Appended cube map state mirrors the C tail field for field.
     assert_eq!(

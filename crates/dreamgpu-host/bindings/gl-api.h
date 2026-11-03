@@ -291,6 +291,12 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glGetProgramivARB : glGetProgramivARB) dg_glGetProgramivARB;
     __typeof__(1 ? glGetProgramStringARB : glGetProgramStringARB) dg_glGetProgramStringARB;
     __typeof__(1 ? glGetString : glGetString) dg_glGetString;
+    __typeof__(1 ? glVertexAttrib4fARB : glVertexAttrib4fARB) dg_glVertexAttrib4fARB;
+    __typeof__(1 ? glVertexAttrib4fvARB : glVertexAttrib4fvARB) dg_glVertexAttrib4fvARB;
+    __typeof__(1 ? glVertexAttribPointerARB : glVertexAttribPointerARB) dg_glVertexAttribPointerARB;
+    __typeof__(1 ? glEnableVertexAttribArrayARB : glEnableVertexAttribArrayARB) dg_glEnableVertexAttribArrayARB;
+    __typeof__(1 ? glDisableVertexAttribArrayARB : glDisableVertexAttribArrayARB) dg_glDisableVertexAttribArrayARB;
+    __typeof__(1 ? glGetVertexAttribfvARB : glGetVertexAttribfvARB) dg_glGetVertexAttribfvARB;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -429,5 +435,11 @@ typedef struct DreamGpuGlApi {
     .dg_glGetProgramLocalParameterfvARB = glGetProgramLocalParameterfvARB,                          \
     .dg_glGetProgramivARB = glGetProgramivARB,                                                      \
     .dg_glGetProgramStringARB = glGetProgramStringARB,                                              \
-    .dg_glGetString = glGetString
+    .dg_glGetString = glGetString,                                                                  \
+    .dg_glVertexAttrib4fARB = glVertexAttrib4fARB,                                                  \
+    .dg_glVertexAttrib4fvARB = glVertexAttrib4fvARB,                                                \
+    .dg_glVertexAttribPointerARB = glVertexAttribPointerARB,                                        \
+    .dg_glEnableVertexAttribArrayARB = glEnableVertexAttribArrayARB,                                \
+    .dg_glDisableVertexAttribArrayARB = glDisableVertexAttribArrayARB,                              \
+    .dg_glGetVertexAttribfvARB = glGetVertexAttribfvARB
 #endif

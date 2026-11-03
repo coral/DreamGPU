@@ -49,9 +49,15 @@ unsafe fn stage_arrays<'a>(
     let attributes = a[if elements { 4 } else { 3 }];
     if attributes & DG_GL_ARRAY_RAW != 0 {
         let input = unsafe { core::slice::from_raw_parts(data, bytes as usize) };
-        let mut layout = [crate::arrays::raw::Attribute::default(); 16];
-        if fnc == FEnum_glDrawArraysEXT {
-            layout = crate::arrays::raw::layout_extended(attributes, vertices as u32, input)?;
+        let mut layout = [crate::arrays::raw::Attribute::default(); 32];
+        if fnc == FEnum_glVertexAttribPointerARB {
+            layout = crate::arrays::raw::layout_attribs(attributes, a[4], vertices as u32, input)?;
+        } else if fnc == FEnum_glDrawArraysEXT {
+            layout[..16].copy_from_slice(&crate::arrays::raw::layout_extended(
+                attributes,
+                vertices as u32,
+                input,
+            )?);
         } else {
             layout[..7].copy_from_slice(&crate::arrays::raw::layout(
                 attributes,
@@ -232,7 +238,10 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
     }
     if matches!(
         function,
-        FEnum_glDrawArrays | FEnum_glDrawArraysEXT | FEnum_glDrawElements
+        FEnum_glDrawArrays
+            | FEnum_glDrawArraysEXT
+            | FEnum_glDrawElements
+            | FEnum_glVertexAttribPointerARB
     ) {
         let elements = function == FEnum_glDrawElements;
         if a[if elements { 3 } else { 2 }] == 0 || (elements && a[1] == 0) {
@@ -271,7 +280,14 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
             crate::texture::border::finish(m, state);
             query::store(errors, gl_error)
         };
-        return e;
+        // A native error of a validated draw depends on GL state (an enabled
+        // program that failed to load, a provider sampling rule) and is the
+        // guest's GL error, as for immediate mode; it never fails the batch.
+        return if e == DG_GL_ERROR_HOST && gl_error != 0 {
+            0
+        } else {
+            e
+        };
     }
     if matches!(
         function,

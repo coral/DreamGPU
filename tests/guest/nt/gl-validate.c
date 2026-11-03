@@ -20,6 +20,8 @@ static ULONG FunctionWords(void *context, ULONG function) {
         case 469:
         case 0x1d6: /* DrawArraysEXT */
             return DG_GL_FUNCTION_INLINE_DATA | 4;
+        case 0xaec: /* the attribute draw (VertexAttribPointerARB) */
+            return DG_GL_FUNCTION_INLINE_DATA | 5;
         case 20:
             return DG_GL_FUNCTION_INLINE_DATA | 8;
         default:
@@ -86,6 +88,43 @@ int main(void) {
         ext[13] |= DG_GL_ARRAY_RAW;
         ext[36] = 1; /* nonzero final section byte is data, not padding: still valid */
         assert(DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* The attribute draw: two vertices of generic attribute 0 (FLOAT 2, at
+         * 128) and generic 3 (UNSIGNED_BYTE 4 normalized, at 144), no vertex
+         * array; descriptors at word 15. */
+        ULONG attrib[53] = {DG_GL_DATA_CALL, 212,        0, 1, 1, 0, 0, 0, 0xaec, 152, 5, 0, 2,
+                            DG_GL_ARRAY_RAW, 1 | 1U << 3};
+        attrib[15 + 16] = 0x1406 | (2U << 16);
+        attrib[15 + 19] = 0x1401 | (4U << 16) | DG_GL_ATTRIB_NORMALIZED;
+        assert(DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[14] = 1U << 3; /* neither a position nor generic attribute 0 */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[14] = 1 | 1U << 3 | 1U << 16; /* reserved generic mask bit */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[14] = 1 | 1U << 3;
+        attrib[15 + 16] |= DG_GL_ATTRIB_NORMALIZED; /* normalized floats */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[15 + 16] = 0x1406 | (5U << 16); /* five components */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[15 + 16] = 0x1406 | (2U << 16) | 1U << 25; /* reserved descriptor bit */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[15 + 16] = 0x1406 | (2U << 16);
+        attrib[15 + 20] = 0x1406 | (1U << 16); /* a disabled generic descriptor */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[15 + 20] = 0;
+        attrib[11] = 1; /* first is always zero */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[11] = 0;
+        attrib[13] |= DG_GL_ARRAY_POSITION; /* a position without its descriptor */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[13] = DG_GL_ARRAY_RAW;
+        attrib[10] = 10; /* beyond GL_POLYGON */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[10] = 0;
+        assert(DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+        attrib[8] = 0x1d6; /* the sixteen-slot layout has no generic slots */
+        assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
     }
     {
         /* Fog coordinates (slot 14): float2 positions at 64, one FLOAT each at 80. */

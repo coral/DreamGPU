@@ -79,6 +79,7 @@ typedef unsigned char GLboolean, BYTE;
 #define GL_INVALID_OPERATION 0x502
 #define GL_FALSE 0
 #define JGL_FRAGMENT_PROGRAM 0x8804
+#define JGL_VERTEX_PROGRAM 0x8620
 #define CopyMemory(d, s, n) __builtin_memcpy(d, s, n)
 BOOL JglFragmentProgramAvailable(void);
 BOOL JglQuery(ULONG, const ULONG[3], ULONG, void *, ULONG, ULONG *);

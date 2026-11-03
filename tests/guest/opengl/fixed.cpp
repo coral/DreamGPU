@@ -28,6 +28,9 @@ BOOL JglTextureCubeMapAvailable(void) {
 BOOL JglFragmentProgramAvailable(void) {
     return FALSE;
 }
+BOOL JglVertexProgramAvailable(void) {
+    return FALSE;
+}
 GLubyte *JglProgramErrorBuffer(void) {
     return NULL;
 }

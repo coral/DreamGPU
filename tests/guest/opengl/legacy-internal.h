@@ -27,6 +27,10 @@ BOOL JglFixedStateAvailable(void);
 BOOL JglCompressedTexturesAvailable(void);
 BOOL JglFogCoordAvailable(void);
 BOOL JglFragmentProgramAvailable(void);
+BOOL JglVertexProgramAvailable(void);
+static inline BOOL JglProgramsAvailable(void) {
+    return JglFragmentProgramAvailable() || JglVertexProgramAvailable();
+}
 HGLRC wglGetCurrentContext(void);
 PROC GetProcAddress(HINSTANCE, LPCSTR);
 void glVertex3f(GLfloat, GLfloat, GLfloat);

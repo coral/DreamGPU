@@ -18,18 +18,21 @@ typedef struct {
 #define JGL_FOG_SLOT 14
 #define JGL_TEXTURE0 0x84c0 /* GL_TEXTURE0 */
 /* CPU client pointers are local to their owning WGL context. Draw commands
- * snapshot them into the existing immutable packed-vertex ABI. */
+ * snapshot them into the existing immutable packed-vertex ABI. Normalized is
+ * the generic attribute arrays' flag (ARB_vertex_program); conventional
+ * arrays leave it zero. */
 typedef struct {
     GLint Size, Stride;
     GLenum Type;
     const void *Pointer;
-    BOOL Enabled;
+    BOOL Enabled, Normalized;
 } JGL_ARRAY;
 /* Stack entries borrow the same application-owned client pointers as the live
  * descriptor; snapshots never own/free array storage or copy vertex data. */
 typedef struct {
     GLbitfield Mask;
     JGL_ARRAY Attribute[JGL_ARRAY_SLOTS];
+    JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     ULONG ClientTexture;
     JGL_UNPACK Pack, Unpack;
 } JGL_CLIENT_SNAPSHOT;
@@ -43,6 +46,9 @@ typedef struct {
     /* position, color, normal, texture coordinate (unit 0), secondary color,
      * index, edge, texture coordinates of units 1-7, fog coordinate */
     JGL_ARRAY Attribute[JGL_ARRAY_SLOTS];
+    /* ARB_vertex_program generic attribute arrays 0-15; never aliased with
+     * the conventional arrays, except that array 0 is the position. */
+    JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     ULONG ClientTexture; /* client-active unit, 0-7 */
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
 } JGL_ARRAY_STATE;
@@ -116,22 +122,43 @@ static inline BOOL JglCubeMapQueryRejected(GLenum name) {
  * the FRAGMENT_PROGRAM_ARB enable and its state queries. */
 BOOL JglFragmentProgramAvailable(void);
 #define JGL_FRAGMENT_PROGRAM 0x8804
-/* State names ARB_fragment_program adds to Get*v and IsEnabled: FRAGMENT_PROGRAM,
- * PROGRAM_ERROR_POSITION, CURRENT_MATRIX(_STACK_DEPTH), TRANSPOSE_CURRENT_MATRIX,
- * MAX_PROGRAM_MATRICES/_STACK_DEPTH and MAX_TEXTURE_COORDS/IMAGE_UNITS. Without
- * negotiation they stay the local GL_INVALID_ENUM the host returned before. */
-static inline BOOL JglFragmentProgramQueryRejected(GLenum name) {
+/* ARB_vertex_program: the same program functions for the VERTEX_PROGRAM_ARB
+ * target, generic vertex attributes, the vertex program modes and queries. */
+BOOL JglVertexProgramAvailable(void);
+#define JGL_VERTEX_PROGRAM 0x8620
+/* Either program extension: the shared program object entry points. */
+static inline BOOL JglProgramsAvailable(void) {
+    return JglFragmentProgramAvailable() || JglVertexProgramAvailable();
+}
+/* The modes ARB_vertex_program adds to Enable/Disable/IsEnabled:
+ * VERTEX_PROGRAM, VERTEX_PROGRAM_POINT_SIZE and VERTEX_PROGRAM_TWO_SIDE. */
+static inline BOOL JglVertexProgramMode(GLenum cap) {
+    return cap == JGL_VERTEX_PROGRAM || cap == 0x8642 || cap == 0x8643;
+}
+/* State names the program extensions add to Get*v and IsEnabled. Fragment
+ * only: FRAGMENT_PROGRAM and MAX_TEXTURE_COORDS/IMAGE_UNITS. Vertex only: the
+ * vertex program modes and MAX_VERTEX_ATTRIBS. Either: PROGRAM_ERROR_POSITION,
+ * CURRENT_MATRIX(_STACK_DEPTH), TRANSPOSE_CURRENT_MATRIX and
+ * MAX_PROGRAM_MATRICES/_STACK_DEPTH. Without negotiation they stay the local
+ * GL_INVALID_ENUM the host returned before. */
+static inline BOOL JglProgramQueryRejected(GLenum name) {
     switch (name) {
         case JGL_FRAGMENT_PROGRAM:
+        case 0x8871:
+        case 0x8872:
+            return !JglFragmentProgramAvailable();
+        case JGL_VERTEX_PROGRAM:
+        case 0x8642:
+        case 0x8643:
+        case 0x8869:
+            return !JglVertexProgramAvailable();
         case 0x864b:
         case 0x8641:
         case 0x8640:
         case 0x88b7:
         case 0x862f:
         case 0x862e:
-        case 0x8871:
-        case 0x8872:
-            return !JglFragmentProgramAvailable();
+            return !JglProgramsAvailable();
         default:
             return FALSE;
     }

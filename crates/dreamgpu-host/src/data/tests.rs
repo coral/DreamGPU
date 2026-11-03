@@ -216,3 +216,48 @@ fn compact_array_endian_staging_preserves_descriptors_and_byte_attributes() {
     drop(storage);
     LIVE.with(|v| assert_eq!(v.get(), 0));
 }
+#[test]
+fn attribute_draw_endian_staging_swaps_generic_components_only() {
+    let api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    let m = memory(&api);
+    let mut source = crate::arrays::raw::tests::attribute_packet();
+    source[152..156].copy_from_slice(&0x3f80_0001u32.to_le_bytes());
+    source[176..180].copy_from_slice(&[1, 2, 3, 4]);
+    source[188..190].copy_from_slice(&0x8001u16.to_le_bytes());
+    let generic = 1 | 1 << 3 | 1 << 15;
+    let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_TEXCOORD;
+    let args = [GL_TRIANGLES, 0, 3, mask, generic, 0, 0, 0];
+    let storage = unsafe {
+        stage_arrays(
+            &m,
+            FEnum_glVertexAttribPointerARB,
+            &args,
+            source.as_ptr(),
+            196,
+            true,
+        )
+    }
+    .unwrap();
+    let bytes = unsafe { core::slice::from_raw_parts(storage.p, 196) };
+    // Descriptors stay little endian; FLOAT and SHORT components swap,
+    // unsigned bytes do not.
+    assert_eq!(&bytes[..128], &source[..128]);
+    assert_eq!(&bytes[152..156], &0x3f80_0001u32.to_be_bytes());
+    assert_eq!(&bytes[176..180], &[1, 2, 3, 4]);
+    assert_eq!(&bytes[188..190], &0x8001u16.to_be_bytes());
+    // A malformed generic mask stages nothing.
+    let bad = [GL_TRIANGLES, 0, 3, mask, generic | 1 << 4, 0, 0, 0];
+    assert!(unsafe {
+        stage_arrays(
+            &m,
+            FEnum_glVertexAttribPointerARB,
+            &bad,
+            source.as_ptr(),
+            196,
+            true,
+        )
+    }
+    .is_none());
+    drop(storage);
+    LIVE.with(|v| assert_eq!(v.get(), 0));
+}

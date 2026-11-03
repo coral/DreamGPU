@@ -97,6 +97,9 @@ pub struct ContextState {
     pub program: *mut crate::program::Program,
     pub program_error: i32,
     pub program_error_kind: u32,
+    /// The bound VERTEX_PROGRAM_ARB object (ARB_vertex_program), with the
+    /// fragment binding's ownership; the error state above is shared.
+    pub vertex_program: *mut crate::program::Program,
 }
 impl ContextState {
     /// Every unit's (2D, 1D, cube map) binding, including the active unit's.
@@ -151,6 +154,7 @@ impl ContextState {
         program: null_mut(),
         program_error: -1,
         program_error_kind: 0,
+        vertex_program: null_mut(),
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
@@ -313,7 +317,10 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
         unsafe { dreamgpu_texture_unref(memory, *texture) };
     }
     // Before the namespace: the last context's release frees its programs.
-    unsafe { crate::program::release_binding(&*memory, old.program) };
+    unsafe {
+        crate::program::release_binding(&*memory, old.program);
+        crate::program::release_binding(&*memory, old.vertex_program);
+    }
     unsafe {
         dreamgpu_texture_unref(memory, old.bound_texture);
         dreamgpu_texture_unref(memory, old.default_texture);
@@ -777,10 +784,6 @@ unsafe fn scalar(
         FEnum_glBindProgramARB => {
             return unsafe { crate::program::bind(&*memory, state, word(0), word(1)) };
         }
-        // Only the vertex program modes the device does not implement.
-        FEnum_glEnable | FEnum_glDisable if crate::scalar::vertex_program_cap(word(0)) => unsafe {
-            error(state, GL_INVALID_ENUM)
-        },
         FEnum_glProgramLocalParameter4fARB => {
             let v = [2, 3, 4, 5].map(|i| f32::from_bits(word(i)));
             return unsafe { crate::program::local(&*memory, state, word(0), word(1), v) };

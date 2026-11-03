@@ -25,12 +25,16 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glCompressedTex", JglCompressedTexturesAvailable},
                     {"glGetCompressedTex", JglCompressedTexturesAvailable},
                     {"glFogCoord", JglFogCoordAvailable},
-                    {"glGenProgramsARB", JglFragmentProgramAvailable},
-                    {"glDeleteProgramsARB", JglFragmentProgramAvailable},
-                    {"glBindProgramARB", JglFragmentProgramAvailable},
-                    {"glIsProgramARB", JglFragmentProgramAvailable},
-                    {"glProgram", JglFragmentProgramAvailable},
-                    {"glGetProgram", JglFragmentProgramAvailable}};
+                    {"glGenProgramsARB", JglProgramsAvailable},
+                    {"glDeleteProgramsARB", JglProgramsAvailable},
+                    {"glBindProgramARB", JglProgramsAvailable},
+                    {"glIsProgramARB", JglProgramsAvailable},
+                    {"glProgram", JglProgramsAvailable},
+                    {"glGetProgram", JglProgramsAvailable},
+                    {"glVertexAttrib", JglVertexProgramAvailable},
+                    {"glEnableVertexAttribArray", JglVertexProgramAvailable},
+                    {"glDisableVertexAttribArray", JglVertexProgramAvailable},
+                    {"glGetVertexAttrib", JglVertexProgramAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {

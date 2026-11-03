@@ -277,18 +277,17 @@ fn fragment_program_records_route_to_state_or_native_gl() {
     api.dg_glDisable = Some(enable);
     api.dg_glProgramEnvParameter4fARB = Some(env);
     let mut state = 0;
-    // The fragment program mode is native state; vertex program modes, which
-    // the device does not implement, become a GL error in the context state.
-    run(&api, &mut state, FEnum_glEnable, &[GL_FRAGMENT_PROGRAM_ARB]).unwrap();
-    assert_eq!(take(), [300, u64::from(GL_FRAGMENT_PROGRAM_ARB)]);
+    // Program modes, fragment and vertex (ARB_vertex_program), are native
+    // state; ENABLE_BIT saves them natively.
     for cap in [
+        GL_FRAGMENT_PROGRAM_ARB,
         GL_VERTEX_PROGRAM_ARB,
         GL_VERTEX_PROGRAM_POINT_SIZE_ARB,
         GL_VERTEX_PROGRAM_TWO_SIDE_ARB,
     ] {
         for function in [FEnum_glEnable, FEnum_glDisable] {
             run(&api, &mut state, function, &[cap]).unwrap();
-            assert_eq!(take(), [200, u64::from(function)]);
+            assert_eq!(take(), [300, u64::from(cap)]);
         }
     }
     // Bindings and locals need the context's program namespace.
@@ -321,12 +320,23 @@ fn fragment_program_records_route_to_state_or_native_gl() {
     let mut expected = vec![400, u64::from(GL_FRAGMENT_PROGRAM_ARB), 27];
     expected.extend(bits.map(u64::from));
     assert_eq!(take(), expected);
+    // Each program target has its own environment parameters.
+    run(
+        &api,
+        &mut state,
+        FEnum_glProgramEnvParameter4fARB,
+        &[GL_VERTEX_PROGRAM_ARB, 255, bits[3], bits[2], bits[1], bits[0]],
+    )
+    .unwrap();
+    let mut expected = vec![400, u64::from(GL_VERTEX_PROGRAM_ARB), 255];
+    expected.extend([bits[3], bits[2], bits[1], bits[0]].map(u64::from));
+    assert_eq!(take(), expected);
     assert_eq!(
         run(
             &api,
             &mut state,
             FEnum_glProgramEnvParameter4fARB,
-            &[GL_VERTEX_PROGRAM_ARB, 0, 0, 0, 0, 0]
+            &[GL_TEXTURE_2D, 0, 0, 0, 0, 0]
         ),
         Err(DG_GL_ERROR_UNSUPPORTED)
     );
@@ -341,4 +351,50 @@ fn fragment_program_records_route_to_state_or_native_gl() {
         ),
         Err(4)
     );
+}
+
+unsafe extern "C" fn attrib(index: u32, x: f32, y: f32, z: f32, w: f32) {
+    note(&[500, index as u64]);
+    note(&[x, y, z, w].map(|v| u64::from(v.to_bits())));
+}
+#[test]
+fn generic_attributes_are_bit_exact_and_legal_inside_begin() {
+    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
+    api.dg_glVertexAttrib4fARB = Some(attrib);
+    api.dg_glBegin = Some(begin);
+    api.dg_glEnd = Some(end);
+    let mut state = 0;
+    let bits = [0x7fc12345, 0x80000000, 1, 0x3f800000];
+    run(
+        &api,
+        &mut state,
+        FEnum_glVertexAttrib4fARB,
+        &[3, bits[0], bits[1], bits[2], bits[3]],
+    )
+    .unwrap();
+    let mut expected = vec![500, 3];
+    expected.extend(bits.map(u64::from));
+    assert_eq!(take(), expected);
+    // Inside Begin/End attribute zero provokes the vertex natively.
+    run(&api, &mut state, FEnum_glBegin, &[GL_POINTS]).unwrap();
+    assert_eq!(state, 1);
+    take();
+    run(
+        &api,
+        &mut state,
+        FEnum_glVertexAttrib4fARB,
+        &[0, bits[3], bits[2], bits[1], bits[0]],
+    )
+    .unwrap();
+    let mut expected = vec![500, 0];
+    expected.extend([bits[3], bits[2], bits[1], bits[0]].map(u64::from));
+    assert_eq!(take(), expected);
+    run(&api, &mut state, FEnum_glEnd, &[]).unwrap();
+    take();
+    // An index the protocol does not have never reaches native GL.
+    assert_eq!(
+        run(&api, &mut state, FEnum_glVertexAttrib4fARB, &[16, 0, 0, 0, 0]),
+        Err(DG_GL_ERROR_UNSUPPORTED)
+    );
+    assert!(take().is_empty());
 }

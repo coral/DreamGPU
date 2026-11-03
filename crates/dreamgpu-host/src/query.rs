@@ -282,6 +282,7 @@ unsafe fn execute(
             | FEnum_glGetProgramEnvParameterfvARB
             | FEnum_glGetProgramLocalParameterfvARB
             | FEnum_glGetProgramStringARB
+            | FEnum_glGetVertexAttribfvARB
     ) || (function == FEnum_glGetString && a == GL_PROGRAM_ERROR_STRING_ARB)
     {
         if state.context.is_null() || state.memory.is_null() {
@@ -429,6 +430,10 @@ unsafe fn execute(
                 }
                 GL_MAX_LIGHTS => integers[0] = 8,
                 GL_MAX_CLIP_PLANES => integers[0] = 6,
+                // ARB_vertex_program: never more attributes than the protocol.
+                GL_MAX_VERTEX_ATTRIBS_ARB => {
+                    integers[0] = unsafe { crate::program::attrib_limit(api)? } as i32;
+                }
                 // ARB_fragment_program: host-detected load failures override
                 // the native position; units never exceed the logical table.
                 GL_PROGRAM_ERROR_POSITION_ARB
@@ -518,8 +523,8 @@ unsafe fn execute(
     Ok(())
 }
 
-/// ARB_fragment_program queries answered from the context's program state, or
-/// natively for the bound object. `required` is the validated result size and
+/// ARB program queries answered from the context's program state, or natively
+/// for the bound object of the target. `required` is the validated result size and
 /// the returned byte count, except for the error string, which ends at its
 /// terminator.
 unsafe fn program(
@@ -541,7 +546,7 @@ unsafe fn program(
         },
         FEnum_glGetProgramivARB => {
             let value = if b == GL_PROGRAM_BINDING_ARB {
-                unsafe { crate::program::binding(c) }
+                unsafe { crate::program::binding(c, a) }
             } else {
                 let mut value = 0;
                 unsafe {
@@ -566,6 +571,20 @@ unsafe fn program(
         FEnum_glGetProgramStringARB => unsafe {
             crate::program::read_string(&*state.memory, a, b, d, result)?;
         },
+        // The current value of generic attribute a (1-15).
+        FEnum_glGetVertexAttribfvARB => {
+            let mut values = [0f32; 4];
+            unsafe {
+                api.dg_glGetVertexAttribfvARB.ok_or(DG_GL_ERROR_UNSUPPORTED)?(
+                    a,
+                    b,
+                    values.as_mut_ptr(),
+                )
+            };
+            for (i, v) in values.into_iter().enumerate() {
+                put(i, v.to_bits());
+            }
+        }
         _ => return unsafe { crate::program::error_string(api, c, result, required as usize) },
     }
     Ok(required)

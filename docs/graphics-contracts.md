@@ -116,14 +116,14 @@ and disposable-VM acceptance cycle:
   into display lists, Gen/Delete/Is execute immediately. MAX_TEXTURE_COORDS and
   MAX_TEXTURE_IMAGE_UNITS clamp to the logical units (8); other limits are
   native. Objects and strings are charged to the 256 MiB resource budget.
-  Native vertex program modes are GL_INVALID_ENUM: the device implements no
-  ARB_vertex_program. An enabled program samples bound textures whatever their
+  Vertex program modes are GL_INVALID_ENUM unless vertex programs are
+  negotiated as well (next item). An enabled program samples bound textures whatever their
   fixed-function enables, so undefined-level admission covers every unit. On
   macOS the border sampler steps aside while a program is enabled (CGL then
   ignores supplied borders); on Linux the private Mesa provider rejects drawing
   while a program samples a bordered image (GL_INVALID_OPERATION). From the
   Wine source, Wine then selects its ARB shader backend, arbfp fragment pipeline
-  and arbfp blitter; VertexShaderVersion stays 0. Wine patches 0029–0031 adapt
+  and arbfp blitter; without vertex programs VertexShaderVersion stays 0. Wine patches 0029–0031 adapt
   it (see the patch README). Installed on Win2000, XP and Win98 SE (Linux
   host), D3D9 reports PixelShaderVersion 2.0 (D3D8 1.4), PixelShader1xMaxValue
   8, PS20 NumTemps 32, TextureOpCaps `0x03feffff` (adding BUMPENVMAP,
@@ -133,6 +133,38 @@ and disposable-VM acceptance cycle:
   `D3DTOP_BUMPENVMAP` stage from a V8U8 map exactly for an identity and a zero
   matrix. The thirteen stage cases, DXT, fog and cube probes, now running through
   the arbfp pipeline, still pass.
+- Vertex programs (`DG_CAP_GL_VERTEX_PROGRAM`) add ARB_vertex_program
+  (`VERTEX_PROGRAM_ARB`) to the same program namespace: each target has its own
+  binding and default object, a name keeps the target it was first bound to,
+  and the extension string and entry points exist only when negotiated. The
+  host applies the fragment checks with `vertex.attrib[n]` below
+  MAX_VERTEX_ATTRIBS_ARB (16) instead of the texture limits, and loads every
+  vertex string into a fresh native object that replaces the program's object
+  only on success, copying its local parameters (Mesa 26.1 frees a serialized
+  program twice once one vertex object is translated a third time). Env and
+  local parameters, VERTEX_PROGRAM_POINT_SIZE/TWO_SIDE (ENABLE_BIT), program
+  matrices, GetProgram*, GetVertexAttrib{d,f,i}v and GetVertexAttribPointerv
+  follow. `VertexAttrib*ARB` are bit-exact scalar records, legal inside
+  Begin/End and in display lists; attribute 0 provokes a vertex there. Generic
+  client arrays use a third array draw, the DATA record numbered
+  `VertexAttribPointerARB`: the DrawArraysEXT scalars plus a generic mask and 32
+  descriptors (16 conventional, then generic 0-15 with
+  `DG_GL_ATTRIB_NORMALIZED` for integer types). A distinct function keeps the
+  DrawArrays (7 slots) and DrawArraysEXT (16 slots) shapes older kernels and
+  hosts admit unchanged. Attribute 0 is the position, as in GL 2.0 and Mesa's
+  non-aliasing mode: its array supersedes the vertex array, and generic
+  attributes 1-15 never alias conventional ones; CURRENT_BIT and
+  CLIENT_VERTEX_ARRAY_BIT save them. Native array-draw errors are GL errors.
+  Wine's ARB backend then compiles D3D vertex shaders: 256 native env
+  parameters give VertexShaderVersion 2.0 with 256 constants (D3D8 1.1). Wine
+  patch 0033 adapts it (see the patch README). VS 2.0 also changes the card
+  Wine reports for the unknown vendor from a GeForce 256 to its D3D9 fallback,
+  a GeForce FX 5800 (`10de:0302`). That card's quirk enabled rectangle
+  textures, so DirectDraw/D3D6/D3D7 presented black until patch 0034. The
+  installed probe renders a vs_1_1 shader for two constant sets, a vs_2_0
+  shader on D3D9 and vs_1_1 into ps_1_1 exactly on Win2000, XP and Win98 SE
+  (Linux host). On macOS, CGL's aliasing and the border sampler under a vertex
+  program are unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

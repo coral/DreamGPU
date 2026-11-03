@@ -213,52 +213,52 @@
                  dst_surface->container->resource.draw_binding)))
              goto done;
      }
-@@ -4586,7 +4591,7 @@
+@@ -4590,7 +4595,7 @@
  
      if (surface->locations & (WINED3D_LOCATION_RB_MULTISAMPLE | WINED3D_LOCATION_RB_RESOLVED))
      {
 -        if (FAILED(hr = surface_load_location(surface, context, WINED3D_LOCATION_TEXTURE_RGB)))
-+        if (FAILED(hr = dg_surface_load_location(21, 4589, surface, context, WINED3D_LOCATION_TEXTURE_RGB)))
++        if (FAILED(hr = dg_surface_load_location(21, 4593, surface, context, WINED3D_LOCATION_TEXTURE_RGB)))
              return hr;
      }
  
-@@ -4693,7 +4698,7 @@
+@@ -4697,7 +4702,7 @@
              /* Performance warning... */
              FIXME("Downloading RGB surface %p to reload it as sRGB.\n", surface);
              surface_prepare_map_memory(surface);
 -            surface_load_location(surface, context, surface->resource.map_binding);
-+            dg_surface_load_location(21, 4696, surface, context, surface->resource.map_binding);
++            dg_surface_load_location(21, 4700, surface, context, surface->resource.map_binding);
          }
      }
      else
-@@ -4704,7 +4709,7 @@
+@@ -4708,7 +4713,7 @@
              /* Performance warning... */
              FIXME("Downloading sRGB surface %p to reload it as RGB.\n", surface);
              surface_prepare_map_memory(surface);
 -            surface_load_location(surface, context, surface->resource.map_binding);
-+            dg_surface_load_location(21, 4707, surface, context, surface->resource.map_binding);
++            dg_surface_load_location(21, 4711, surface, context, surface->resource.map_binding);
          }
      }
  
-@@ -4713,7 +4718,7 @@
+@@ -4717,7 +4722,7 @@
          WARN("Trying to load a texture from sysmem, but no simple location is valid.\n");
          /* Lets hope we get it from somewhere... */
          //surface_prepare_system_memory(surface);
 -        //surface_load_location(surface, context, WINED3D_LOCATION_SYSMEM);
-+        //dg_surface_load_location(21, 4716, surface, context, WINED3D_LOCATION_SYSMEM);
++        //dg_surface_load_location(21, 4720, surface, context, WINED3D_LOCATION_SYSMEM);
          // JHFIX: doesn't work, only causes stack overflow
          return WINED3DERR_INVALIDCALL;
      }
-@@ -4741,7 +4746,7 @@
+@@ -4745,7 +4750,7 @@
              surface->resource.map_binding = WINED3D_LOCATION_SYSMEM;
  
          surface_prepare_map_memory(surface);
 -        surface_load_location(surface, context, surface->resource.map_binding);
-+        dg_surface_load_location(21, 4744, surface, context, surface->resource.map_binding);
++        dg_surface_load_location(21, 4748, surface, context, surface->resource.map_binding);
          surface_remove_pbo(surface, gl_info);
      }
  
-@@ -5270,6 +5275,7 @@
+@@ -5274,6 +5279,7 @@
          struct wined3d_surface *src_surface, const RECT *src_rect, DWORD flags,
          const WINEDDBLTFX *fx, enum wined3d_texture_filter_type filter)
  {
@@ -266,12 +266,12 @@
      const struct wined3d_box dst_box = {dst_rect->left, dst_rect->top, dst_rect->right, dst_rect->bottom, 0, 1};
      int bpp, srcheight, srcwidth, dstheight, dstwidth, width;
      const struct wined3d_format *src_format, *dst_format;
-@@ -6113,7 +6119,7 @@
+@@ -6117,7 +6123,7 @@
                          if (!wined3d_resource_is_offscreen(&dst_surface->container->resource))
                          {
                              struct wined3d_context *context = context_acquire(device, dst_surface);
 -                            surface_load_location(dst_surface, context, dst_surface->container->resource.draw_binding);
-+                            dg_surface_load_location(21, 6116, dst_surface, context, dst_surface->container->resource.draw_binding);
++                            dg_surface_load_location(21, 6120, dst_surface, context, dst_surface->container->resource.draw_binding);
                              context_release(context);
                          }
                          return WINED3D_OK;
@@ -333,7 +333,7 @@
  }
 --- a/wined3d/wined3d_private.h
 +++ b/wined3d/wined3d_private.h
-@@ -3436,3 +3436,6 @@
+@@ -3438,3 +3438,6 @@
  BOOL EnumDisplaySettingsA95(LPCSTR lpszDeviceName, DWORD iModeNum, DEVMODEA *lpDevMode);
  
  #endif

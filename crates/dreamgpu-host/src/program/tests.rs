@@ -40,13 +40,17 @@ unsafe extern "C" fn free(p: *mut c_void, object: *mut c_void) {
 unsafe extern "C" fn forget(_: *mut c_void, _: *mut Texture) {}
 
 /// A native ARB program model: names, per-name strings and locals, one
-/// binding, an error queue and the error position/string.
+/// binding per target (`bound` fragment, `vertex` vertex), each name's target
+/// from its first bind, an error queue and the error position/string.
 #[derive(Default)]
 struct Native {
     next: u32,
     live: BTreeSet<u32>,
     deleted: Vec<u32>,
     bound: u32,
+    vertex: u32,
+    targets: BTreeMap<u32, u32>,
+    attribs: i32,
     strings: BTreeMap<u32, Vec<u8>>,
     loads: Vec<(u32, Vec<u8>)>,
     locals: BTreeMap<(u32, u32), [f32; 4]>,
@@ -59,10 +63,20 @@ struct Native {
     gen_fails: bool,
 }
 std::thread_local! {static N: RefCell<Native> = RefCell::new(Native {
-    position: -1, message: b"\0".to_vec(), units: 8, coords: 8, images: 32, ..Native::default()
+    position: -1, message: b"\0".to_vec(), units: 8, coords: 8, images: 32, attribs: 16,
+    ..Native::default()
 });}
 fn native<R>(f: impl FnOnce(&mut Native) -> R) -> R {
     N.with(|n| f(&mut n.borrow_mut()))
+}
+impl Native {
+    fn binding(&mut self, target: u32) -> &mut u32 {
+        match target {
+            GL_FRAGMENT_PROGRAM_ARB => &mut self.bound,
+            GL_VERTEX_PROGRAM_ARB => &mut self.vertex,
+            other => panic!("native program target {other:#x}"),
+        }
+    }
 }
 unsafe extern "C" fn fake_get_error() -> u32 {
     native(|n| n.errors.pop_front().unwrap_or(0))
@@ -85,35 +99,46 @@ unsafe extern "C" fn fake_delete(count: i32, names: *const u32) {
     native(|n| {
         assert!(n.live.remove(&name), "native double delete {name}");
         n.deleted.push(name);
+        n.targets.remove(&name);
         if n.bound == name {
             n.bound = 0;
+        }
+        if n.vertex == name {
+            n.vertex = 0;
         }
     })
 }
 unsafe extern "C" fn fake_bind(target: u32, name: u32) {
-    assert_eq!(target, GL_FRAGMENT_PROGRAM_ARB);
     native(|n| {
         assert!(
             name == 0 || n.live.contains(&name),
             "bind of a dead name {name}"
         );
-        n.bound = name;
+        // Natively a name keeps its first target; the host never rebinds it.
+        if name != 0 {
+            assert_eq!(*n.targets.entry(name).or_insert(target), target, "{name}");
+        }
+        *n.binding(target) = name;
     })
 }
-/// Accepts "!!ARBfp1.0 ... END" without '@'; anything else fails at the first '@'.
+/// Accepts "!!ARBfp1.0 ... END" (fragment) or "!!ARBvp1.0 ... END" (vertex)
+/// without '@'; anything else fails at the first '@'.
 unsafe extern "C" fn fake_load(target: u32, format: u32, length: i32, string: *const c_void) {
-    assert_eq!(
-        (target, format),
-        (GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_FORMAT_ASCII_ARB)
-    );
+    assert_eq!(format, GL_PROGRAM_FORMAT_ASCII_ARB);
+    let header: &[u8] = if target == GL_VERTEX_PROGRAM_ARB {
+        b"!!ARBvp1.0"
+    } else {
+        b"!!ARBfp1.0"
+    };
     let bytes =
         unsafe { core::slice::from_raw_parts(string.cast::<u8>(), length as usize) }.to_vec();
     native(|n| {
-        n.loads.push((n.bound, bytes.clone()));
-        if bytes.starts_with(b"!!ARBfp1.0") && bytes.ends_with(b"END") && !bytes.contains(&b'@') {
+        let bound = *n.binding(target);
+        n.loads.push((bound, bytes.clone()));
+        if bytes.starts_with(header) && bytes.ends_with(b"END") && !bytes.contains(&b'@') {
             n.position = -1;
             n.message = b"\0".to_vec();
-            n.strings.insert(n.bound, bytes);
+            n.strings.insert(bound, bytes);
         } else {
             n.position = bytes.iter().position(|&b| b == b'@').unwrap_or(bytes.len()) as i32;
             n.message = b"line 1:\nsyntax error \xff\0".to_vec();
@@ -122,10 +147,16 @@ unsafe extern "C" fn fake_load(target: u32, format: u32, length: i32, string: *c
     })
 }
 unsafe extern "C" fn fake_local(target: u32, index: u32, x: f32, y: f32, z: f32, w: f32) {
-    assert_eq!(target, GL_FRAGMENT_PROGRAM_ARB);
     native(|n| {
-        let bound = n.bound;
+        let bound = *n.binding(target);
         n.locals.insert((bound, index), [x, y, z, w]);
+    })
+}
+unsafe extern "C" fn fake_get_local(target: u32, index: u32, out: *mut f32) {
+    native(|n| {
+        let bound = *n.binding(target);
+        let v = n.locals.get(&(bound, index)).copied().unwrap_or_default();
+        unsafe { core::ptr::copy_nonoverlapping(v.as_ptr(), out, 4) };
     })
 }
 unsafe extern "C" fn fake_get_integer(pname: u32, out: *mut i32) {
@@ -135,28 +166,29 @@ unsafe extern "C" fn fake_get_integer(pname: u32, out: *mut i32) {
             GL_MAX_TEXTURE_COORDS_ARB => n.coords,
             GL_MAX_TEXTURE_IMAGE_UNITS_ARB => n.images,
             GL_PROGRAM_ERROR_POSITION_ARB => n.position,
+            GL_MAX_VERTEX_ATTRIBS_ARB => n.attribs,
             other => panic!("unexpected integer {other:#x}"),
         }
     })
 }
 unsafe extern "C" fn fake_get_program(target: u32, pname: u32, out: *mut i32) {
-    assert_eq!(target, GL_FRAGMENT_PROGRAM_ARB);
     native(|n| unsafe {
+        let bound = *n.binding(target);
         *out = match pname {
-            GL_PROGRAM_LENGTH_ARB => n.strings.get(&n.bound).map_or(0, Vec::len) as i32,
+            GL_PROGRAM_LENGTH_ARB => n.strings.get(&bound).map_or(0, Vec::len) as i32,
             _ => 7,
         }
     })
 }
 unsafe extern "C" fn fake_get_program_string(target: u32, pname: u32, out: *mut c_void) {
-    assert_eq!(
-        (target, pname),
-        (GL_FRAGMENT_PROGRAM_ARB, GL_PROGRAM_STRING_ARB)
-    );
-    native(|n| match n.strings.get(&n.bound) {
-        Some(s) => unsafe { core::ptr::copy_nonoverlapping(s.as_ptr(), out.cast(), s.len()) },
-        // Like Mesa, an empty string writes one terminator.
-        None => unsafe { *out.cast::<u8>() = 0 },
+    assert_eq!(pname, GL_PROGRAM_STRING_ARB);
+    native(|n| {
+        let bound = *n.binding(target);
+        match n.strings.get(&bound) {
+            Some(s) => unsafe { core::ptr::copy_nonoverlapping(s.as_ptr(), out.cast(), s.len()) },
+            // Like Mesa, an empty string writes one terminator.
+            None => unsafe { *out.cast::<u8>() = 0 },
+        }
     })
 }
 unsafe extern "C" fn fake_get_string(name: u32) -> *const u8 {
@@ -172,6 +204,7 @@ fn api() -> DreamGpuGlApi {
     a.dg_glBindProgramARB = Some(fake_bind);
     a.dg_glProgramStringARB = Some(fake_load);
     a.dg_glProgramLocalParameter4fARB = Some(fake_local);
+    a.dg_glGetProgramLocalParameterfvARB = Some(fake_get_local);
     a.dg_glGetIntegerv = Some(fake_get_integer);
     a.dg_glGetProgramivARB = Some(fake_get_program);
     a.dg_glGetProgramStringARB = Some(fake_get_program_string);
@@ -234,6 +267,10 @@ fn args(length: u32) -> [u32; 8] {
 fn load_string(m: &Memory, c: *mut ContextState, s: &[u8]) {
     unsafe { string(m, c, &args(s.len() as u32), s) }.unwrap();
 }
+/// The fragment program scan: image units and coordinate sets only.
+fn unit_beyond(s: &[u8], coords: u32, images: u32) -> Option<usize> {
+    beyond(s, coords, images, u32::MAX).map(|(at, _)| at)
+}
 fn reset_native() {
     native(|n| {
         *n = Native {
@@ -242,6 +279,7 @@ fn reset_native() {
             units: 8,
             coords: 8,
             images: 32,
+            attribs: 16,
             ..Native::default()
         }
     });
@@ -275,7 +313,7 @@ fn names_objects_and_default_bindings_follow_the_arb_object_model() {
     let native_two = native(|n| n.bound);
     assert_ne!(native_two, 0);
     assert!(unsafe { is_program(c, 2) } && !unsafe { is_program(c, 1) });
-    assert_eq!(unsafe { binding(c) }, 2);
+    assert_eq!(unsafe { binding(c, FP) }, 2);
     unsafe { bind(m, c, FP, 0) }.unwrap();
     unsafe { bind(m, c, FP, 2) }.unwrap();
     assert_eq!(native(|n| (n.bound, n.live.len())), (native_two, 1));
@@ -291,7 +329,7 @@ fn names_objects_and_default_bindings_follow_the_arb_object_model() {
     unsafe { (*p).target = GL_VERTEX_PROGRAM_ARB };
     assert_eq!(unsafe { bind(m, c, FP, 77) }, Ok(()));
     assert_eq!(take_errors(c), INVALID_OPERATION);
-    assert_eq!(unsafe { binding(c) }, 77);
+    assert_eq!(unsafe { binding(c, FP) }, 77);
     unsafe { (*p).target = FP };
     // Deletion: reserved and unused names vanish, zero is ignored.
     let delete_names =
@@ -301,7 +339,7 @@ fn names_objects_and_default_bindings_follow_the_arb_object_model() {
     assert_eq!(unsafe { (*ns).count }, 2);
     // Deleting the bound object reverts this context to the default.
     unsafe { delete(m, c, &delete_names(&[77])) }.unwrap();
-    assert_eq!((unsafe { binding(c) }, native(|n| n.bound)), (0, 0));
+    assert_eq!((unsafe { binding(c, FP) }, native(|n| n.bound)), (0, 0));
     assert!(unsafe { (*c).program }.is_null());
     assert_eq!(native(|n| n.deleted.len()), 1);
     release(m, boxed);
@@ -335,7 +373,7 @@ fn shared_namespaces_keep_deleted_programs_bound_in_other_contexts() {
     // context's binding (and charge) survive until it rebinds.
     unsafe { delete(m, a, &5u32.to_le_bytes()) }.unwrap();
     assert!(!unsafe { is_program(a, 5) } && !unsafe { is_program(b, 5) });
-    assert_eq!(unsafe { binding(b) }, 5);
+    assert_eq!(unsafe { binding(b, FP) }, 5);
     let p = unsafe { (*b).program };
     assert_eq!(unsafe { ((*p).refs, (*p).deleted) }, (1, 1));
     let charged = *f.bytes;
@@ -472,7 +510,7 @@ fn the_default_object_is_private_to_its_share_group_and_materialized_once() {
     load_string(m, a, b"!!ARBfp1.0 END");
     let default = native(|n| n.bound);
     assert_ne!(default, 0);
-    assert_eq!(unsafe { binding(a) }, 0);
+    assert_eq!(unsafe { binding(a, FP) }, 0);
     unsafe { local(m, a, FP, 3, [1., 2., 3., 4.]) }.unwrap();
     assert_eq!(native(|n| n.locals[&(default, 3)]), [1., 2., 3., 4.]);
     unsafe { bind(m, a, FP, 0) }.unwrap();
@@ -566,6 +604,147 @@ fn texture_limits_are_clamped_to_the_logical_units() {
     release(&f.memory, boxed);
 }
 
+const VP: u32 = GL_VERTEX_PROGRAM_ARB;
+fn load_vertex(m: &Memory, c: *mut ContextState, s: &[u8]) {
+    let a = [VP, GL_PROGRAM_FORMAT_ASCII_ARB, s.len() as u32, 0, 0, 0, 0, 0];
+    unsafe { string(m, c, &a, s) }.unwrap();
+}
+
+#[test]
+fn vertex_programs_share_names_but_keep_their_own_bindings_and_defaults() {
+    reset_native();
+    let f = fixture();
+    let m = &f.memory;
+    let mut boxed = context(m, null_mut());
+    let c = boxed.as_mut_ptr();
+    // One namespace: a name keeps the target of its first bind.
+    unsafe { bind(m, c, VP, 3) }.unwrap();
+    let three = native(|n| n.vertex);
+    assert!(three != 0 && native(|n| n.bound) == 0);
+    unsafe { bind(m, c, FP, 3) }.unwrap();
+    assert_eq!(take_errors(c), INVALID_OPERATION);
+    assert_eq!(unsafe { (binding(c, FP), binding(c, VP)) }, (0, 3));
+    unsafe { bind(m, c, FP, 4) }.unwrap();
+    assert_eq!(unsafe { (binding(c, FP), binding(c, VP)) }, (4, 3));
+    assert!(unsafe { is_program(c, 3) && is_program(c, 4) });
+    // A vertex load parses once, into a fresh native object, which then
+    // replaces the program's object with its locals copied: Mesa must never
+    // translate a second string in one native vertex program object.
+    unsafe { local(m, c, VP, 1, [1., 2., 3., 4.]) }.unwrap();
+    let good = b"!!ARBvp1.0 MOV result.position, vertex.attrib[15]; END";
+    native(|n| n.loads.clear());
+    load_vertex(m, c, good);
+    let ns = unsafe { (*(*c).textures).programs };
+    assert_eq!(unsafe { (*ns).scratch }, 0, "no fragment validation object");
+    let first = native(|n| n.vertex);
+    assert!(first != three && native(|n| n.deleted.contains(&three)));
+    assert_eq!(native(|n| n.loads.iter().map(|(name, _)| *name).collect::<Vec<_>>()), [first]);
+    assert_eq!(unsafe { (*(*c).vertex_program).name }, first);
+    assert_eq!(native(|n| n.locals[&(first, 1)]), [1., 2., 3., 4.]);
+    assert_eq!(take_errors(c), 0);
+    assert_eq!(unsafe { (*(*c).vertex_program).length }, good.len() as u32);
+    // Reloading replaces the object again; a failed reload keeps it.
+    load_vertex(m, c, good);
+    let second = native(|n| n.vertex);
+    assert!(second != first && native(|n| n.deleted.contains(&first)));
+    load_vertex(m, c, b"!!ARBvp1.0 @ END");
+    assert_eq!(take_errors(c), INVALID_OPERATION);
+    assert_eq!(native(|n| n.vertex), second);
+    assert_eq!(unsafe { (*(*c).vertex_program).name }, second);
+    assert_eq!(unsafe { (*(*c).vertex_program).length }, good.len() as u32);
+    let three = second;
+    let mut out = [0xccu8; 8];
+    unsafe { read_string(m, VP, 2, 0, out.as_mut_ptr()) }.unwrap();
+    assert_eq!(&out, &good[..8]);
+    // A generic attribute beyond MAX_VERTEX_ATTRIBS fails on the host, at its
+    // offset, before native GL sees it; the bound program stays.
+    native(|n| n.loads.clear());
+    let beyond = b"!!ARBvp1.0 ATTRIB a = vertex.attrib[16]; END";
+    load_vertex(m, c, beyond);
+    assert_eq!(take_errors(c), INVALID_OPERATION);
+    assert_eq!(native(|n| n.loads.len()), 0);
+    assert_eq!(
+        unsafe { ((*c).program_error_kind, error_position(&*m.api, c)) },
+        (ERROR_ATTRIBS, Ok(36))
+    );
+    let mut text = [0u8; 128];
+    let n = unsafe { error_string(&*m.api, c, text.as_mut_ptr(), 128) }.unwrap() as usize;
+    assert_eq!(
+        &text[..n],
+        b"DreamGPU: generic vertex attribute beyond MAX_VERTEX_ATTRIBS_ARB\0"
+    );
+    assert_eq!(native(|n| n.strings[&three].clone()), good.to_vec());
+    // A narrower native limit is the one reported and checked.
+    native(|n| n.attribs = 12);
+    assert_eq!(unsafe { attrib_limit(&*m.api) }, Ok(12));
+    load_vertex(m, c, b"!!ARBvp1.0 MOV result.color, vertex.attrib[12]; END");
+    assert_eq!(take_errors(c), INVALID_OPERATION);
+    native(|n| n.attribs = 32);
+    assert_eq!(unsafe { attrib_limit(&*m.api) }, Ok(16));
+    // Coordinate sets are checked; image units do not exist in ARBvp1.0.
+    load_vertex(m, c, b"!!ARBvp1.0 MOV result.texcoord[8], vertex.texcoord[0]; END");
+    assert_eq!(
+        (take_errors(c), unsafe { (*c).program_error_kind }),
+        (INVALID_OPERATION, ERROR_UNITS)
+    );
+    native(|n| n.loads.clear());
+    load_vertex(m, c, b"!!ARBvp1.0 PARAM texture[9] = { program.env[0..8] }; END");
+    assert_eq!((take_errors(c), native(|n| n.loads.len())), (0, 1));
+    // Fragment loads never accept generic attributes beyond the limit either
+    // way: the fragment scan leaves .attrib unchecked (natively invalid).
+    unsafe { bind(m, c, FP, 0) }.unwrap();
+    load_string(m, c, b"!!ARBfp1.0 MOV result.color, vertex.attrib[40]; END");
+    assert_eq!(take_errors(c), 0);
+    // Each target's default object is separate and materialized on first use.
+    unsafe { bind(m, c, VP, 0) }.unwrap();
+    assert_eq!(native(|n| n.vertex), 0);
+    unsafe { local(m, c, VP, 1, [1., 2., 3., 4.]) }.unwrap();
+    let vertex_default = native(|n| n.vertex);
+    let fragment_default = native(|n| n.bound);
+    assert!(vertex_default != 0 && fragment_default != 0 && vertex_default != fragment_default);
+    assert_eq!(
+        native(|n| n.locals[&(vertex_default, 1)]),
+        [1., 2., 3., 4.]
+    );
+    assert_eq!(unsafe { binding(c, VP) }, 0);
+    // Deleting the bound vertex program reverts only the vertex binding.
+    unsafe { bind(m, c, VP, 3) }.unwrap();
+    unsafe { bind(m, c, FP, 4) }.unwrap();
+    unsafe { delete(m, c, &3u32.to_le_bytes()) }.unwrap();
+    assert_eq!(unsafe { (binding(c, FP), binding(c, VP)) }, (4, 0));
+    assert_eq!(native(|n| n.vertex), vertex_default);
+    assert!(!unsafe { is_program(c, 3) });
+    // The freed name may become a fragment program now.
+    unsafe { bind(m, c, FP, 3) }.unwrap();
+    assert_eq!(take_errors(c), 0);
+    release(m, boxed);
+    assert_eq!(native(|n| n.live.len()), 0, "both defaults and scratches");
+    assert_eq!(*f.bytes, 0);
+    assert!(f.allocator.live.is_empty());
+}
+
+#[test]
+fn attribute_scanning_checks_member_attrib_indices_only() {
+    let scan = |s: &[u8]| beyond(s, 8, u32::MAX, 16);
+    assert_eq!(scan(b"ATTRIB a = vertex.attrib[15];"), None);
+    assert_eq!(scan(b"ATTRIB a = vertex.attrib[16];"), Some((25, ERROR_ATTRIBS)));
+    assert_eq!(scan(b"ATTRIB a = vertex . attrib [ 99 ];"), Some((29, ERROR_ATTRIBS)));
+    assert_eq!(scan(b"# vertex.attrib[16]\nMOV r, vertex.attrib[1];"), None);
+    assert_eq!(scan(b"PARAM attrib[20] = { program.env[0..19] };"), None);
+    assert_eq!(scan(b"MOV r, vertex.attribs[20];"), None);
+    assert_eq!(scan(b"MOV r, vertex.texcoord[8];"), Some((23, ERROR_UNITS)));
+    // The first offending reference decides the kind.
+    assert_eq!(
+        scan(b"MOV result.texcoord[9], vertex.attrib[16];"),
+        Some((20, ERROR_UNITS))
+    );
+    assert_eq!(
+        beyond(b"MOV r, vertex.attrib[16];", 8, 8, u32::MAX),
+        None,
+        "fragment scans leave attributes unchecked"
+    );
+}
+
 #[test]
 fn unit_scanning_finds_only_real_references_beyond_the_limits() {
     let scan = |s: &[u8]| unit_beyond(s, 8, 8);
@@ -651,14 +830,16 @@ fn record_shapes_follow_the_protocol() {
     ] {
         assert_eq!(dreamgpu_gl_function_words(f), u32::MAX);
     }
+    // Both program targets exist; anything else is a malformed record.
     for f in [
         FEnum_glBindProgramARB,
         FEnum_glProgramEnvParameter4fARB,
         FEnum_glProgramLocalParameter4fARB,
     ] {
         assert_eq!(call(f, &[FP, 1, 0, 0, 0, 0]), 0);
+        assert_eq!(call(f, &[GL_VERTEX_PROGRAM_ARB, 1, 0, 0, 0, 0]), 0);
         assert_eq!(
-            call(f, &[GL_VERTEX_PROGRAM_ARB, 1, 0, 0, 0, 0]),
+            call(f, &[GL_TEXTURE_2D, 1, 0, 0, 0, 0]),
             DG_GL_ERROR_UNSUPPORTED
         );
     }
@@ -684,6 +865,10 @@ fn record_shapes_follow_the_protocol() {
             &[GL_VERTEX_PROGRAM_ARB, fmt, 3],
             b"abc"
         ),
+        0
+    );
+    assert_eq!(
+        validate(FEnum_glProgramStringARB, &[GL_TEXTURE_2D, fmt, 3], b"abc"),
         DG_GL_ERROR_BATCH
     );
     assert_eq!(
@@ -754,13 +939,51 @@ fn record_shapes_follow_the_protocol() {
             DG_GL_ERROR_UNSUPPORTED
         );
     }
+    // The vertex target adds the address register names and has no
+    // fragment-only ALU, TEX or indirection counts.
+    for pname in [
+        GL_PROGRAM_LENGTH_ARB,
+        GL_PROGRAM_ADDRESS_REGISTERS_ARB,
+        GL_MAX_PROGRAM_NATIVE_ADDRESS_REGISTERS_ARB,
+        GL_MAX_PROGRAM_ENV_PARAMETERS_ARB,
+        GL_PROGRAM_BINDING_ARB,
+    ] {
+        assert_eq!(
+            query(FEnum_glGetProgramivARB, [GL_VERTEX_PROGRAM_ARB, pname, 0]),
+            (0, 1, DG_GL_RESULT_INT)
+        );
+    }
+    for pname in [
+        GL_PROGRAM_ALU_INSTRUCTIONS_ARB,
+        GL_MAX_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB,
+        GL_PROGRAM_STRING_ARB,
+    ] {
+        assert_eq!(
+            query(FEnum_glGetProgramivARB, [GL_VERTEX_PROGRAM_ARB, pname, 0]).0,
+            DG_GL_ERROR_UNSUPPORTED
+        );
+    }
     assert_eq!(
         query(
             FEnum_glGetProgramivARB,
-            [GL_VERTEX_PROGRAM_ARB, GL_PROGRAM_LENGTH_ARB, 0]
+            [GL_TEXTURE_2D, GL_PROGRAM_LENGTH_ARB, 0]
         )
         .0,
         DG_GL_ERROR_UNSUPPORTED
+    );
+    assert_eq!(
+        query(
+            FEnum_glGetProgramEnvParameterfvARB,
+            [GL_VERTEX_PROGRAM_ARB, 255, 0]
+        ),
+        (0, 4, DG_GL_RESULT_FLOAT)
+    );
+    assert_eq!(
+        query(
+            FEnum_glGetProgramStringARB,
+            [GL_VERTEX_PROGRAM_ARB, 4, 0]
+        ),
+        (0, 4, DG_GL_RESULT_INT)
     );
     assert_eq!(
         query(FEnum_glGetProgramLocalParameterfvARB, [FP, 4000, 0]),

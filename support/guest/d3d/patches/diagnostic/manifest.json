@@ -6,7 +6,7 @@
   "patches": [
     {
       "file": "0001-bounded-copy-diagnostics.patch",
-      "sha256": "84a4ef920ab2ea3623ec34fd42679d2b6b4599a3a7b024407d3eef0cacb5eeb6"
+      "sha256": "75132447e9dab765b12adaf0607b877b405af23f91da06eec2478a293beb197f"
     }
   ],
   "files": {
@@ -15,16 +15,16 @@
       "after_sha256": "cb7b3f282b26674dcbde27f37ffe7362618112f3aa65da148a4da93bcd580420"
     },
     "wined3d/device.c": {
-      "before_sha256": "33458d693fab0504f15546109b3602d06bbe36f7ff43de37716ade113a792635",
-      "after_sha256": "45da948b1185205170108d3e266a2bf9c8d6871af4d4ccc29b856e4023941c0c"
+      "before_sha256": "719e10b05c67ad6262a921c897405d72065117109339554d9ad122866cbdf7dd",
+      "after_sha256": "712542a61caa5430df4dba039d860fa6e0cf397fffcea9f9d3cb899784eabe07"
     },
     "wined3d/drawprim.c": {
       "before_sha256": "f27a19fa8aa16399846ddf1f6fb5a21ad4c71846d82174274914e805051791a2",
       "after_sha256": "c06b0331049d91b344fc940517693a146352599134f2a55938e12e452874c187"
     },
     "wined3d/surface.c": {
-      "before_sha256": "ffbad2322ccf6b692932bc553349bd76ae140ac2520710fdbdb023f2e9311fb5",
-      "after_sha256": "b4809726ea1262e83483a7313afda24b8f7de7c4f072b0cae037d151ae755c09"
+      "before_sha256": "b6e76402a5c16293a377c8c9cedb53dbee2c82e56e83e46f16407de4554be7a9",
+      "after_sha256": "5b8b78ca9df4d0bf8514bf4ecae55813df657183c0ae6c6dd2f9fb055ac04e4c"
     },
     "wined3d/swapchain.c": {
       "before_sha256": "02df706b44c6b28003ca8cde5883dd1e8601923d1cf793efde2fbb013b558172",
@@ -35,8 +35,8 @@
       "after_sha256": "6cd1e42a29f6dc12624f74d555ff9c4a6373c7d83340a8298a630fb915293284"
     },
     "wined3d/wined3d_private.h": {
-      "before_sha256": "fd0d3f63a99b78662bbaf83ad93db7cc0029f69a5a456979f1a2e1faaf16021d",
-      "after_sha256": "b3bbc489ae75e820db39b14eb6417ea9cd2ab68f05dec88c935fc935d6626945"
+      "before_sha256": "c93a31f11248012854c8165ce42a899abc33418efb68a7f7cb27d79cf60a449e",
+      "after_sha256": "e890c5beed24b2af8adf9df938e92c3598283c787042779545481afec5cd0b08"
     }
   },
   "source_ids": {

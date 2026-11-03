@@ -106,6 +106,9 @@ BOOL JglTextureCubeMapAvailable(void) {
 BOOL JglFragmentProgramAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_FRAGMENT_PROGRAM);
 }
+BOOL JglVertexProgramAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -127,12 +130,14 @@ BOOL JglFragmentProgramAvailable(void) {
 #define JGL_FOG_COORD_EXTENSIONS "GL_EXT_fog_coord"
 #define JGL_CUBE_MAP_EXTENSIONS "GL_ARB_texture_cube_map GL_EXT_texture_cube_map"
 #define JGL_FRAGMENT_PROGRAM_EXTENSIONS "GL_ARB_fragment_program"
+#define JGL_VERTEX_PROGRAM_EXTENSIONS "GL_ARB_vertex_program"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
                        sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
                        sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS) +
-                       sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS)];
+                       sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
+                       sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -157,8 +162,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_CUBE_MAP_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_FRAGMENT_PROGRAM)
         AppendExtensions(&at, JGL_FRAGMENT_PROGRAM_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM)
+        AppendExtensions(&at, JGL_VERTEX_PROGRAM_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_VERTEX_PROGRAM_EXTENSIONS
 #undef JGL_FRAGMENT_PROGRAM_EXTENSIONS
 #undef JGL_CUBE_MAP_EXTENSIONS
 #undef JGL_FOG_COORD_EXTENSIONS
@@ -336,11 +344,12 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
         function != FEnum_glColor4f && function != FEnum_glSecondaryColor3f &&
         function != FEnum_glNormal3f && function != FEnum_glTexCoord2f &&
         function != FEnum_glTexCoord4f && function != FEnum_glMultiTexCoord4f &&
-        function != FEnum_glFogCoordf && function != FEnum_glMaterialf &&
-        function != FEnum_glEvalCoord1d && function != FEnum_glEvalCoord2d &&
-        function != FEnum_glEvalPoint1 && function != FEnum_glEvalPoint2 &&
-        function != FEnum_glIndexd && function != FEnum_glEdgeFlag &&
-        function != FEnum_glCallList && function != DG_GL_RECORD_ERROR) {
+        function != FEnum_glFogCoordf && function != FEnum_glVertexAttrib4fARB &&
+        function != FEnum_glMaterialf && function != FEnum_glEvalCoord1d &&
+        function != FEnum_glEvalCoord2d && function != FEnum_glEvalPoint1 &&
+        function != FEnum_glEvalPoint2 && function != FEnum_glIndexd &&
+        function != FEnum_glEdgeFlag && function != FEnum_glCallList &&
+        function != DG_GL_RECORD_ERROR) {
         if (function == FEnum_glFlush || function == FEnum_glFinish)
             Error(c, GL_INVALID_OPERATION);
         else
@@ -374,6 +383,26 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
     /* The fog coordinate record does not exist without negotiation. */
     if (function == FEnum_glFogCoordf && !(HostCapabilities & DG_CAP_GL_FOG_COORD)) {
         CommandError(c, GL_INVALID_OPERATION);
+        return;
+    }
+    /* Generic attributes exist only with ARB_vertex_program, and only below
+     * DG_GL_MAX_VERTEX_ATTRIBS; the host rejects any other index as malformed. */
+    if (function == FEnum_glVertexAttrib4fARB) {
+        if (!(HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM)) {
+            CommandError(c, GL_INVALID_OPERATION);
+            return;
+        }
+        if (*(const ULONG *)arguments >= DG_GL_MAX_VERTEX_ATTRIBS) {
+            CommandError(c, GL_INVALID_VALUE);
+            return;
+        }
+    }
+    /* Without ARB_vertex_program its modes stay the GL_INVALID_ENUM that
+     * fragment-program hosts reported (older hosts would enable them natively). */
+    if ((function == FEnum_glEnable || function == FEnum_glDisable) &&
+        !(HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM) &&
+        JglVertexProgramMode(*(const ULONG *)arguments)) {
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
     /* Fixed-state records do not exist without negotiation; the host
@@ -617,7 +646,7 @@ static BOOL CaptureData(ULONG function, const ULONG *arguments, ULONG words, con
     if (c->Arrays.ListMode != GL_COMPILE &&
         (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
         (function == FEnum_glDrawArrays || function == FEnum_glDrawArraysEXT ||
-         function == FEnum_glDrawElements ||
+         function == FEnum_glVertexAttribPointerARB || function == FEnum_glDrawElements ||
          (words == 8 &&
           (function == FEnum_glBitmap ||
            (function == FEnum_glDrawPixels && arguments[2] != GL_DEPTH_COMPONENT &&
@@ -864,6 +893,11 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
             continue;
         c->Arrays.Attribute[i].Size = i == JGL_FOG_SLOT ? 1 : i == 2 || i == 4 ? 3 : 4;
         c->Arrays.Attribute[i].Type = 0x1406; /* GL_FLOAT */
+    }
+    /* Generic attribute arrays start as four unnormalized floats. */
+    for (i = 0; i < DG_GL_MAX_VERTEX_ATTRIBS; ++i) {
+        c->Arrays.Generic[i].Size = 4;
+        c->Arrays.Generic[i].Type = 0x1406; /* GL_FLOAT */
     }
     for (i = 0; i < MAX_JGL_CONTEXTS && Contexts[i]; ++i) {
     }

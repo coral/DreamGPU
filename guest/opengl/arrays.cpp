@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
- * GL 1.1 client arrays, plus negotiated per-unit texture coordinates and the
- * EXT_fog_coord array. Only guest-local descriptors retain client pointers;
- * immutable draw packets contain packed vertices, never an address. */
+ * GL 1.1 client arrays, plus negotiated per-unit texture coordinates, the
+ * EXT_fog_coord array and ARB_vertex_program generic attribute arrays (state in
+ * attrib.cpp). Only guest-local descriptors retain client pointers; immutable
+ * draw packets contain packed vertices, never an address. */
 #include "internal.h"
 #include "gl-arrays.h"
 
@@ -379,16 +380,31 @@ void JglArrayElement(GLint index) {
         return;
     }
     GLfloat values[JGL_ARRAY_SLOTS][4] = {};
+    GLfloat generic[DG_GL_MAX_VERTEX_ATTRIBS][4] = {};
     // Validate and snapshot every enabled client range before any scalar can
     // flush the transport. An invalid later range must not partially set state.
-    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
-        const JGL_ARRAY *a = &state->Attribute[i];
+    for (ULONG i = 0; i < JGL_ARRAY_SLOTS + DG_GL_MAX_VERTEX_ATTRIBS; ++i) {
+        const JGL_ARRAY *a =
+            i < JGL_ARRAY_SLOTS ? &state->Attribute[i] : &state->Generic[i - JGL_ARRAY_SLOTS];
         if (!a->Enabled)
             continue;
         if (!ArrayRange(a, (ULONG)index)) {
             JglCommandError(GL_INVALID_VALUE);
             return;
         }
+    }
+    /* Generic attributes (ARB_vertex_program) normalize only when asked,
+     * like VertexAttrib4N*vARB; missing components are (0, 0, 0, 1). */
+    for (ULONG i = 0; i < DG_GL_MAX_VERTEX_ATTRIBS; ++i) {
+        const JGL_ARRAY *a = &state->Generic[i];
+        if (!a->Enabled)
+            continue;
+        ULONG unit = TypeBytes(a->Type);
+        ULONG stride = a->Stride ? (ULONG)a->Stride : unit * a->Size;
+        const BYTE *p = (const BYTE *)a->Pointer + (ULONG_PTR)(ULONG)index * stride;
+        generic[i][3] = 1.0f;
+        for (GLint n = 0; n < a->Size; ++n)
+            generic[i][n] = Component(p + n * unit, a->Type, a->Normalized);
     }
     for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &state->Attribute[i];
@@ -433,8 +449,16 @@ void JglArrayElement(GLint index) {
     const ULONG functions[5] = {FEnum_glVertex4f, FEnum_glColor4f, FEnum_glNormal3f,
                                 FEnum_glTexCoord4f, FEnum_glSecondaryColor3f};
     // Vertex last: the preceding setters establish this vertex's attributes.
+    // Generic attribute 0 is the position and supersedes the vertex array.
     for (ULONG n = 1; n <= 5; ++n) {
         if (n == 5) {
+            for (ULONG i = 1; i < DG_GL_MAX_VERTEX_ATTRIBS; ++i) {
+                if (!state->Generic[i].Enabled)
+                    continue;
+                ULONG words[5] = {i};
+                CopyMemory(words + 1, generic[i], sizeof(generic[i]));
+                JglScalarVector(FEnum_glVertexAttrib4fARB, 5, words);
+            }
             // Units 1-7 (slots 7-13) use the canonical target-first record.
             for (ULONG i = 7; i < JGL_FOG_SLOT; ++i) {
                 if (!state->Attribute[i].Enabled)
@@ -451,8 +475,13 @@ void JglArrayElement(GLint index) {
                 JglScalarVector(FEnum_glEdgeFlag, 1, &edge);
         }
         ULONG i = n % 5;
-        if (state->Attribute[i].Enabled)
+        if (!i && state->Generic[0].Enabled) {
+            ULONG words[5] = {0};
+            CopyMemory(words + 1, generic[0], sizeof(generic[0]));
+            JglScalarVector(FEnum_glVertexAttrib4fARB, 5, words);
+        } else if (state->Attribute[i].Enabled) {
             JglScalarVector(functions[i], i == 2 || i == 4 ? 3 : 4, values[i]);
+        }
     }
 }
 void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
@@ -526,22 +555,38 @@ static GLenum ArrayWireType(ULONG index, const JGL_ARRAY *a) {
     return a->Type;
 }
 /* Seven descriptors (DrawArrays) unless a unit 1-7 or the fog coordinate
- * array is enabled; then sixteen (DrawArraysEXT), with reserved slot 15 zero. */
+ * array is enabled; then sixteen (DrawArraysEXT), with reserved slot 15 zero.
+ * Any generic attribute array selects the attribute draw: thirty-two, the
+ * sixteen DrawArraysEXT slots then generic attributes 0-15. */
 struct RawCapture {
     JGL_ARRAY_STATE *state;
     const BYTE *indices;
-    ULONG index_size, first, at, count, mask, slots;
+    ULONG index_size, first, at, count, mask, generic, slots;
     unsigned bytes;
     BOOL fan;
-    unsigned descriptors[DG_GL_ARRAY_EXT_SLOTS], offsets[DG_GL_ARRAY_EXT_SLOTS];
+    unsigned descriptors[DG_GL_ATTRIB_SLOTS], offsets[DG_GL_ATTRIB_SLOTS];
 };
+/* The enabled array of a descriptor slot, or NULL. */
+static const JGL_ARRAY *CaptureSlot(const RawCapture *c, ULONG slot) {
+    if (slot >= DG_GL_ARRAY_EXT_SLOTS)
+        return c->generic & (1U << (slot - DG_GL_ARRAY_EXT_SLOTS))
+                   ? &c->state->Generic[slot - DG_GL_ARRAY_EXT_SLOTS]
+                   : NULL;
+    return slot < JGL_ARRAY_SLOTS && (c->mask & (1U << slot)) ? &c->state->Attribute[slot] : NULL;
+}
+static BOOL CaptureLayout(RawCapture *c, ULONG count) {
+    return c->slots == DG_GL_ATTRIB_SLOTS ? DgRawAttribLayout(c->mask, c->generic, count,
+                                                              c->descriptors, c->offsets, &c->bytes)
+                                          : DgRawArrayLayoutSlots(c->mask, count, c->descriptors,
+                                                                  c->offsets, &c->bytes, c->slots);
+}
 static void CaptureVertices(void *opaque, BYTE *out) {
     const RawCapture *c = (const RawCapture *)opaque;
     CopyMemory(out, c->descriptors, c->slots * 4);
     ULONG end = c->slots * 4;
-    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
-        const JGL_ARRAY *a = &c->state->Attribute[i];
-        if (!(c->mask & (1U << i)))
+    for (ULONG i = 0; i < c->slots; ++i) {
+        const JGL_ARRAY *a = CaptureSlot(c, i);
+        if (!a)
             continue;
         ULONG unit = TypeBytes(a->Type);
         ULONG input_bytes = unit * a->Size;
@@ -608,7 +653,12 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     if (!count)
         return;
     state = JglArrays();
-    if (!state->Attribute[0].Enabled)
+    ULONG generic = 0;
+    for (i = 0; i < DG_GL_MAX_VERTEX_ATTRIBS; ++i)
+        if (state->Generic[i].Enabled)
+            generic |= 1U << i;
+    // The vertex array or generic attribute array 0 provokes drawing.
+    if (!state->Attribute[0].Enabled && !(generic & 1))
         return;
     if (elements &&
         (!indices || (ULONG)count * (unsigned long long)index_size > ~(ULONG_PTR)0 ||
@@ -632,41 +682,52 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     }
     /* Validate all ranges before emitting any piece of the draw. Caller
      * address validity itself remains the application's GL responsibility. */
-    for (i = 0; i < JGL_ARRAY_SLOTS; ++i)
-        if (state->Attribute[i].Enabled) {
-            const JGL_ARRAY *a = &state->Attribute[i];
-            if (!ArrayRange(a, max_index)) {
-                JglCommandError(GL_INVALID_VALUE);
-                return;
-            }
-            mask |= 1U << i;
+    for (i = 0; i < JGL_ARRAY_SLOTS + DG_GL_MAX_VERTEX_ATTRIBS; ++i) {
+        const JGL_ARRAY *a =
+            i < JGL_ARRAY_SLOTS ? &state->Attribute[i] : &state->Generic[i - JGL_ARRAY_SLOTS];
+        if (!a->Enabled)
+            continue;
+        if (!ArrayRange(a, max_index)) {
+            JglCommandError(GL_INVALID_VALUE);
+            return;
         }
+        if (i < JGL_ARRAY_SLOTS)
+            mask |= 1U << i;
+    }
     RawCapture capture = {};
     capture.state = state;
     capture.indices = indices;
     capture.index_size = index_size;
     capture.first = (ULONG)first;
     capture.mask = mask | DG_GL_ARRAY_RAW;
+    capture.generic = generic;
     // Unit 0 alone keeps the legacy record that every host admits. Elements
     // and ranges expand into these same packed vertices, fog included.
-    capture.slots = (mask & ~DG_GL_ARRAY_MASK) ? DG_GL_ARRAY_EXT_SLOTS : 7;
-    const ULONG function = capture.slots == 7 ? FEnum_glDrawArrays : FEnum_glDrawArraysEXT;
+    capture.slots = generic                      ? DG_GL_ATTRIB_SLOTS
+                    : (mask & ~DG_GL_ARRAY_MASK) ? DG_GL_ARRAY_EXT_SLOTS
+                                                 : 7;
+    const ULONG function = capture.slots == DG_GL_ATTRIB_SLOTS ? FEnum_glVertexAttribPointerARB
+                           : capture.slots == 7                ? FEnum_glDrawArrays
+                                                               : FEnum_glDrawArraysEXT;
+    const ULONG words = function == FEnum_glVertexAttribPointerARB ? 5 : 4;
     vertex_bytes = 0;
-    for (i = 0; i < JGL_ARRAY_SLOTS; ++i) {
-        const JGL_ARRAY *a = &state->Attribute[i];
-        if (a->Enabled) {
-            capture.descriptors[i] = ArrayWireType(i, a) | ((ULONG)a->Size << 16);
-            vertex_bytes += TypeBytes(ArrayWireType(i, a)) * a->Size;
-        }
+    for (i = 0; i < capture.slots; ++i) {
+        const JGL_ARRAY *a = CaptureSlot(&capture, i);
+        if (!a)
+            continue;
+        const GLenum type = ArrayWireType(i, a);
+        capture.descriptors[i] = type | ((ULONG)a->Size << 16);
+        /* GL ignores normalization of floating-point generic arrays. */
+        if (i >= DG_GL_ARRAY_EXT_SLOTS && a->Normalized && type != GL_FLOAT && type != GL_DOUBLE)
+            capture.descriptors[i] |= DG_GL_ATTRIB_NORMALIZED;
+        vertex_bytes += TypeBytes(type) * a->Size;
     }
-    ULONG limit = JglMaxDataBytes(4);
+    ULONG limit = JglMaxDataBytes(words);
     capacity = limit > capture.slots * 4 ? (limit - capture.slots * 4) / vertex_bytes : 0;
     if (capacity > DG_GL_MAX_VERTICES)
         capacity = DG_GL_MAX_VERTICES;
     // At most alignment padding needs trimming; no payload memory is touched.
-    while (capacity && (!DgRawArrayLayoutSlots(capture.mask, capacity, capture.descriptors,
-                                               capture.offsets, &capture.bytes, capture.slots) ||
-                        capture.bytes > limit))
+    while (capacity && (!CaptureLayout(&capture, capacity) || capture.bytes > limit))
         --capacity;
     if (capacity < 4 || ((mode == GL_LINE_LOOP || mode == GL_POLYGON) && (ULONG)count > capacity)) {
         JglCommandError(GL_OUT_OF_MEMORY);
@@ -686,7 +747,7 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
         }
     }
     while (at < (ULONG)count) {
-        ULONG n = (ULONG)count - at, args[4] = {mode, 0, 0, mask | DG_GL_ARRAY_RAW};
+        ULONG n = (ULONG)count - at, args[5] = {mode, 0, 0, mask | DG_GL_ARRAY_RAW, generic};
         BOOL fan = mode == GL_TRIANGLE_FAN && at != 0;
         if (fan)
             n += 2;
@@ -703,9 +764,8 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
         capture.at = at;
         capture.count = n;
         capture.fan = fan;
-        DgRawArrayLayoutSlots(capture.mask, n, capture.descriptors, capture.offsets, &capture.bytes,
-                              capture.slots);
-        if (!JglCaptureData(function, args, 4, capture.bytes, CaptureVertices, &capture))
+        CaptureLayout(&capture, n);
+        if (!JglCaptureData(function, args, words, capture.bytes, CaptureVertices, &capture))
             return;
         at += fan ? n - 2 : n;
         if (at >= (ULONG)count)

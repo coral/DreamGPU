@@ -161,7 +161,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_MAX_PROGRAM_MATRIX_STACK_DEPTH_ARB
         | GL_PROGRAM_ERROR_POSITION_ARB
         | GL_MAX_TEXTURE_COORDS_ARB
-        | GL_MAX_TEXTURE_IMAGE_UNITS_ARB => 1,
+        | GL_MAX_TEXTURE_IMAGE_UNITS_ARB
+        | GL_MAX_VERTEX_ATTRIBS_ARB => 1,
         GL_BLEND_COLOR | GL_COMPRESSED_TEXTURE_FORMATS => 4,
         GL_POINT_DISTANCE_ATTENUATION => 3,
         GL_CURRENT_RASTER_COLOR
@@ -413,6 +414,11 @@ pub(crate) fn function_words(function: u32) -> u32 {
         | FEnum_glGetProgramEnvParameterfvARB
         | FEnum_glGetProgramLocalParameterfvARB => DG_GL_FUNCTION_QUERY | 2,
         FEnum_glGetProgramStringARB => DG_GL_FUNCTION_QUERY | 3,
+        // ARB_vertex_program (DG_CAP_GL_VERTEX_PROGRAM): the current generic
+        // attribute, the attribute draw and its current-value query.
+        FEnum_glVertexAttrib4fARB => 5,
+        FEnum_glVertexAttribPointerARB => DG_GL_FUNCTION_INLINE_DATA | 5,
+        FEnum_glGetVertexAttribfvARB => DG_GL_FUNCTION_QUERY | 2,
         // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
         FEnum_glActiveTexture => 1,
         FEnum_glMultiTexCoord4f => 5,
@@ -550,28 +556,41 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_TEXTURE_GEN_Q
             | GL_POINT_SPRITE
             | GL_FRAGMENT_PROGRAM_ARB
+            | GL_VERTEX_PROGRAM_ARB
+            | GL_VERTEX_PROGRAM_POINT_SIZE_ARB
+            | GL_VERTEX_PROGRAM_TWO_SIDE_ARB
     )
 }
 
-/// GetProgramivARB names of a fragment program target. The address register
-/// names exist only with ARB_vertex_program.
-pub(crate) fn program_parameter(pname: u32) -> bool {
-    matches!(
-        pname,
+/// The program targets: ARB_fragment_program and ARB_vertex_program.
+pub(crate) fn program_target(target: u32) -> bool {
+    matches!(target, GL_FRAGMENT_PROGRAM_ARB | GL_VERTEX_PROGRAM_ARB)
+}
+/// GetProgramivARB names of a program target. The address register names exist
+/// only for vertex programs, the ALU/TEX/indirection names only for fragment
+/// programs.
+pub(crate) fn program_parameter(target: u32, pname: u32) -> bool {
+    match pname {
         GL_PROGRAM_LENGTH_ARB
-            | GL_PROGRAM_FORMAT_ARB
-            | GL_PROGRAM_BINDING_ARB
-            | GL_PROGRAM_INSTRUCTIONS_ARB..=GL_MAX_PROGRAM_NATIVE_ATTRIBS_ARB
-            | GL_MAX_PROGRAM_LOCAL_PARAMETERS_ARB
-            | GL_MAX_PROGRAM_ENV_PARAMETERS_ARB
-            | GL_PROGRAM_UNDER_NATIVE_LIMITS_ARB
-            | GL_PROGRAM_ALU_INSTRUCTIONS_ARB..=GL_MAX_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB
-    )
+        | GL_PROGRAM_FORMAT_ARB
+        | GL_PROGRAM_BINDING_ARB
+        | GL_PROGRAM_INSTRUCTIONS_ARB..=GL_MAX_PROGRAM_NATIVE_ATTRIBS_ARB
+        | GL_MAX_PROGRAM_LOCAL_PARAMETERS_ARB
+        | GL_MAX_PROGRAM_ENV_PARAMETERS_ARB
+        | GL_PROGRAM_UNDER_NATIVE_LIMITS_ARB => program_target(target),
+        GL_PROGRAM_ALU_INSTRUCTIONS_ARB..=GL_MAX_PROGRAM_NATIVE_TEX_INDIRECTIONS_ARB => {
+            target == GL_FRAGMENT_PROGRAM_ARB
+        }
+        GL_PROGRAM_ADDRESS_REGISTERS_ARB..=GL_MAX_PROGRAM_NATIVE_ADDRESS_REGISTERS_ARB => {
+            target == GL_VERTEX_PROGRAM_ARB
+        }
+        _ => false,
+    }
 }
 /// The validated ProgramStringARB record: exactly `length` payload bytes within
 /// the protocol bound, or none for a nonzero length the frontend could not send.
 fn program_string(a: &[u32; 8], data: &[u8]) -> bool {
-    a[0] == GL_FRAGMENT_PROGRAM_ARB
+    program_target(a[0])
         && a[1] == GL_PROGRAM_FORMAT_ASCII_ARB
         && a[2] <= i32::MAX as u32
         && ((data.len() as u64 == u64::from(a[2]) && a[2] <= DG_GL_MAX_PROGRAM_BYTES)
@@ -629,7 +648,14 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
             | FEnum_glProgramEnvParameter4fARB
             | FEnum_glProgramLocalParameter4fARB
     ) {
-        return if a[0] == GL_FRAGMENT_PROGRAM_ARB {
+        return if program_target(a[0]) {
+            0
+        } else {
+            DG_GL_ERROR_UNSUPPORTED
+        };
+    }
+    if function == FEnum_glVertexAttrib4fARB {
+        return if a[0] < DG_GL_MAX_VERTEX_ATTRIBS {
             0
         } else {
             DG_GL_ERROR_UNSUPPORTED
@@ -694,6 +720,18 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
     }
 }
 fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
+    if function == FEnum_glVertexAttribPointerARB {
+        // The attribute draw: compact only, with the generic mask in a[4].
+        return if a[3] & DG_GL_ARRAY_RAW != 0
+            && a[0] <= GL_POLYGON
+            && a[1] == 0
+            && crate::arrays::raw::layout_attribs(a[3], a[4], a[2], data).is_some()
+        {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     if function == FEnum_glDrawArraysEXT {
         // Multitexture arrays exist only in the compact sixteen-slot layout.
         return if a[3] & DG_GL_ARRAY_RAW != 0
@@ -813,7 +851,10 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     }
     if matches!(
         function,
-        FEnum_glDrawArrays | FEnum_glDrawArraysEXT | FEnum_glDrawElements
+        FEnum_glDrawArrays
+            | FEnum_glDrawArraysEXT
+            | FEnum_glDrawElements
+            | FEnum_glVertexAttribPointerARB
     ) {
         return validate_arrays(function, a, data);
     }
@@ -1100,12 +1141,19 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             kind = DG_GL_RESULT_BOOL;
             u32::from(b == 0 && d == 0)
         }
-        FEnum_glGetProgramivARB => {
-            u32::from(a == GL_FRAGMENT_PROGRAM_ARB && program_parameter(b) && d == 0)
-        }
+        FEnum_glGetProgramivARB => u32::from(program_parameter(a, b) && d == 0),
         FEnum_glGetProgramEnvParameterfvARB | FEnum_glGetProgramLocalParameterfvARB => {
             kind = DG_GL_RESULT_FLOAT;
-            if a == GL_FRAGMENT_PROGRAM_ARB && d == 0 {
+            if program_target(a) && d == 0 {
+                4
+            } else {
+                0
+            }
+        }
+        // A current generic attribute; attribute zero has none (ARB_vertex_program).
+        FEnum_glGetVertexAttribfvARB => {
+            kind = DG_GL_RESULT_FLOAT;
+            if (1..DG_GL_MAX_VERTEX_ATTRIBS).contains(&a) && b == GL_CURRENT_VERTEX_ATTRIB_ARB {
                 4
             } else {
                 0
@@ -1113,7 +1161,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
         }
         // target, words, first word of the program string.
         FEnum_glGetProgramStringARB => {
-            if a == GL_FRAGMENT_PROGRAM_ARB
+            if program_target(a)
                 && (1..=DG_GL_MAX_READBACK_BYTES / 4).contains(&b)
                 && d <= DG_GL_MAX_PROGRAM_BYTES / 4
             {
@@ -1326,6 +1374,7 @@ pub unsafe extern "C" fn dreamgpu_gl_call_validate(function: u32, args: *const u
             | FEnum_glBindProgramARB
             | FEnum_glProgramEnvParameter4fARB
             | FEnum_glProgramLocalParameter4fARB
+            | FEnum_glVertexAttrib4fARB
     ) {
         return 0;
     }

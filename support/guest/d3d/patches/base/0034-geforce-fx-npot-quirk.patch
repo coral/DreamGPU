@@ -1,0 +1,45 @@
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -994,9 +994,15 @@
+      *  This fixup removes performance problems on both the FX 5900 and FX 5700 (e.g. for framebuffer
+      *  post-processing effects in the game "Max Payne 2").
+      *  The behaviour can be verified through a simple test app attached in bugreport #14724. */
++    /* DreamGPU: any DX9-level GL with an unrecognized vendor is reported as
++     * the fallback GeForce FX 5800, so this also matches implementations
++     * without either extension. Rectangles come back only if the driver
++     * reported them, and without NPOT there is nothing to remove. */
++    if (!gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO])
++        return;
+     TRACE("GL_ARB_texture_non_power_of_two advertised through OpenGL 2.0 on NV FX card, removing.\n");
+     gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO] = FALSE;
+-    gl_info->supported[ARB_TEXTURE_RECTANGLE] = TRUE;
++    gl_info->supported[ARB_TEXTURE_RECTANGLE] = gl_info->texture_rectangle_hidden;
+ }
+ 
+ static void quirk_texcoord_w(struct wined3d_gl_info *gl_info)
+@@ -3793,11 +3799,14 @@
+             gl_info->supported[ATI_FRAGMENT_SHADER] = FALSE;
+         }
+     }
++    gl_info->texture_rectangle_hidden = FALSE;
+     if (gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO])
+     {
+         /* If we have full NP2 texture support, disable
+          * GL_ARB_texture_rectangle because we will never use it.
+          * This saves a few redundant glDisable calls. */
++        /* DreamGPU: quirk_no_np2 restores only a rectangle extension hidden here. */
++        gl_info->texture_rectangle_hidden = gl_info->supported[ARB_TEXTURE_RECTANGLE];
+         gl_info->supported[ARB_TEXTURE_RECTANGLE] = FALSE;
+     }
+     if (gl_info->supported[ATI_FRAGMENT_SHADER])
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1759,6 +1759,8 @@
+     DWORD reserved_glsl_constants, reserved_arb_constants;
+     DWORD quirks;
+     BOOL supported[WINED3D_GL_EXT_COUNT];
++    /* DreamGPU: GL_ARB_texture_rectangle was reported but hidden by full NPOT support. */
++    BOOL texture_rectangle_hidden;
+     GLint wrap_lookup[WINED3D_TADDRESS_MIRROR_ONCE - WINED3D_TADDRESS_WRAP + 1];
+     float fixed_polyoffset_scale, float_polyoffset_scale;
+ 

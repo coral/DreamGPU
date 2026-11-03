@@ -38,6 +38,8 @@ mod secondary;
 mod texture_control;
 #[path = "native_qemu/textures.rs"]
 mod textures;
+#[path = "native_qemu/vertex_program.rs"]
+mod vertex_program;
 
 use dreamgpu::shmem::ShmemServer;
 use dreamgpu::transport::*;

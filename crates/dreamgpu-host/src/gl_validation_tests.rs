@@ -5,8 +5,9 @@ fn programmable_shader_catalog_entries_are_not_host_command_capabilities() {
     // The private provider's 1D border implementation targets fixed-function
     // GL1.1. A guest bypassing the ICD cannot gain shader access just because
     // the preserved upstream enumeration contains programmable API names.
-    // ARB_fragment_program assembly is negotiated separately and accepts only
-    // the fragment target (program::tests::record_shapes_follow_the_protocol).
+    // ARB_fragment_program and ARB_vertex_program assembly are negotiated
+    // separately and accept only their two targets
+    // (program::tests::record_shapes_follow_the_protocol).
     for function in [
         FEnum_glCreateShader,
         FEnum_glCreateShaderObjectARB,
@@ -887,5 +888,103 @@ fn cube_map_targets_faces_and_proxies_have_exact_record_shapes() {
         GL_MAX_CUBE_MAP_TEXTURE_SIZE,
     ] {
         assert_eq!(query_state_count(pname), 1, "{pname:#x}");
+    }
+}
+
+#[test]
+fn vertex_attribute_records_draws_and_queries_have_exact_shapes() {
+    let word_bytes = |a: &[u32]| a.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+    // VertexAttrib4fARB: index and four float words, index below 16.
+    assert_eq!(function_words(FEnum_glVertexAttrib4fARB), 5);
+    for (index, expected) in [(0, 0), (15, 0), (16, DG_GL_ERROR_UNSUPPORTED)] {
+        let args = word_bytes(&[index, 0, 0, 0, 0x3f80_0000]);
+        assert_eq!(
+            unsafe { dreamgpu_gl_call_validate(FEnum_glVertexAttrib4fARB, args.as_ptr()) },
+            expected
+        );
+    }
+    // Only the ARB float form exists on the wire.
+    for f in [
+        FEnum_glVertexAttrib4f,
+        FEnum_glVertexAttrib4fvARB,
+        FEnum_glVertexAttrib4NubvARB,
+        FEnum_glEnableVertexAttribArrayARB,
+        FEnum_glGetVertexAttribivARB,
+        FEnum_glGetVertexAttribPointervARB,
+    ] {
+        assert_eq!(function_words(f), u32::MAX);
+    }
+    // The attribute draw: five scalar words, compact only.
+    assert_eq!(
+        function_words(FEnum_glVertexAttribPointerARB),
+        DG_GL_FUNCTION_INLINE_DATA | 5
+    );
+    let data = crate::arrays::raw::tests::attribute_packet();
+    let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_TEXCOORD;
+    let generic = 1 | 1 << 3 | 1 << 15;
+    let validate = |a: &[u32], data: &[u8]| {
+        let args = word_bytes(a);
+        unsafe {
+            dreamgpu_gl_data_validate(
+                FEnum_glVertexAttribPointerARB,
+                args.as_ptr(),
+                data.as_ptr(),
+                data.len() as u32,
+            )
+        }
+    };
+    assert_eq!(validate(&[GL_TRIANGLES, 0, 3, mask, generic], &data), 0);
+    for bad in [
+        [GL_POLYGON + 1, 0, 3, mask, generic],
+        [GL_TRIANGLES, 1, 3, mask, generic],
+        [GL_TRIANGLES, 0, 3, mask & !DG_GL_ARRAY_RAW, generic],
+        [GL_TRIANGLES, 0, 3, mask, generic & !1],
+        [GL_TRIANGLES, 0, 2, mask, generic],
+    ] {
+        assert_eq!(validate(&bad, &data), DG_GL_ERROR_BATCH, "{bad:x?}");
+    }
+    // Queries: the current value of attributes 1-15, the limit and the modes.
+    let query = |f: u32, a: [u32; 3]| (query_validate(f, a), query_shape(f, a));
+    assert_eq!(
+        query(
+            FEnum_glGetVertexAttribfvARB,
+            [15, GL_CURRENT_VERTEX_ATTRIB_ARB, 0]
+        ),
+        (0, (4, DG_GL_RESULT_FLOAT))
+    );
+    for a in [
+        [0, GL_CURRENT_VERTEX_ATTRIB_ARB, 0],
+        [16, GL_CURRENT_VERTEX_ATTRIB_ARB, 0],
+        [1, GL_VERTEX_ATTRIB_ARRAY_SIZE_ARB, 0],
+    ] {
+        assert_eq!(
+            query_validate(FEnum_glGetVertexAttribfvARB, a),
+            DG_GL_ERROR_UNSUPPORTED
+        );
+    }
+    assert_eq!(
+        query_validate(
+            FEnum_glGetVertexAttribfvARB,
+            [1, GL_CURRENT_VERTEX_ATTRIB_ARB, 1]
+        ),
+        DG_GL_ERROR_BATCH
+    );
+    assert_eq!(
+        query(FEnum_glGetIntegerv, [GL_MAX_VERTEX_ATTRIBS_ARB, 0, 0]),
+        (0, (1, DG_GL_RESULT_INT))
+    );
+    for cap in [
+        GL_VERTEX_PROGRAM_ARB,
+        GL_VERTEX_PROGRAM_POINT_SIZE_ARB,
+        GL_VERTEX_PROGRAM_TWO_SIDE_ARB,
+    ] {
+        assert_eq!(
+            query(FEnum_glIsEnabled, [cap, 0, 0]),
+            (0, (1, DG_GL_RESULT_BOOL))
+        );
+        assert_eq!(
+            query(FEnum_glGetBooleanv, [cap, 0, 0]),
+            (0, (1, DG_GL_RESULT_BOOL))
+        );
     }
 }

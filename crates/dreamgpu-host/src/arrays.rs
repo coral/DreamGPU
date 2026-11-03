@@ -10,29 +10,36 @@ unsafe fn draw(
     data: &[u8],
 ) -> Result<u32, u32> {
     let elements = function == FEnum_glDrawElements;
+    // The attribute draw (ARB_vertex_program) adds generic attributes 0-15
+    // (slots 16-31) to the DrawArraysEXT slots, with their mask in args[4].
+    let attribs = function == FEnum_glVertexAttribPointerARB;
     // DrawArraysEXT is the compact layout with texture units 1-7 (slots 7-13).
-    let units = function == FEnum_glDrawArraysEXT;
+    let units = function == FEnum_glDrawArraysEXT || attribs;
     if !elements && !units && function != FEnum_glDrawArrays {
         return Err(3);
     }
     let vertices = args[if elements { 3 } else { 2 }];
     let wire_attributes = args[if elements { 4 } else { 3 }];
+    let generic = if attribs { args[4] } else { 0 };
     let compact = wire_attributes & DG_GL_ARRAY_RAW != 0;
     if units && !compact {
         return Err(1);
     }
-    let raw: Option<[raw::Attribute; 16]> = if compact {
+    let raw: Option<[raw::Attribute; 32]> = if compact {
         if elements {
             return Err(1);
         }
-        Some(if units {
-            raw::layout_extended(wire_attributes, vertices, data).ok_or(1u32)?
+        let mut all = [raw::Attribute::default(); 32];
+        if attribs {
+            all = raw::layout_attribs(wire_attributes, generic, vertices, data).ok_or(1u32)?;
+        } else if units {
+            let sixteen = raw::layout_extended(wire_attributes, vertices, data).ok_or(1u32)?;
+            all[..16].copy_from_slice(&sixteen);
         } else {
             let seven = raw::layout(wire_attributes, vertices, data).ok_or(1u32)?;
-            let mut all = [raw::Attribute::default(); 16];
             all[..7].copy_from_slice(&seven);
-            all
-        })
+        }
+        Some(all)
     } else {
         None
     };
@@ -61,11 +68,13 @@ unsafe fn draw(
         0
     };
     let indices = if elements { args[1] } else { 0 };
+    // Generic attribute 0 is the position: it provokes drawing without one.
+    let position = attributes & DG_GL_ARRAY_POSITION != 0;
     if args[0] > GL_POLYGON
         || vertices > DG_GL_MAX_VERTICES
         || indices > DG_GL_MAX_INDICES
         || attributes & !allowed != 0
-        || attributes & DG_GL_ARRAY_POSITION == 0
+        || (!position && generic & 1 == 0)
         || (!elements && args[1] != 0)
         || (!compact
             && u64::from(vertices) * stride + u64::from(indices) * index_size != data.len() as u64)
@@ -124,6 +133,15 @@ unsafe fn draw(
     if fog && (api.dg_glFogCoordPointer.is_none() || api.dg_glFogCoordf.is_none()) {
         return Err(3);
     }
+    if generic != 0
+        && (api.dg_glVertexAttribPointerARB.is_none()
+            || api.dg_glEnableVertexAttribArrayARB.is_none()
+            || api.dg_glDisableVertexAttribArrayARB.is_none()
+            || api.dg_glGetVertexAttribfvARB.is_none()
+            || api.dg_glVertexAttrib4fvARB.is_none())
+    {
+        return Err(3);
+    }
     if extended
         && (api.dg_glGetDoublev.is_none()
             || api.dg_glGetBooleanv.is_none()
@@ -150,6 +168,7 @@ unsafe fn draw(
     let mut active = GL_TEXTURE0 as i32;
     let mut secondary = [0.0f32; 4];
     let mut fog_coordinate = 0.0f32;
+    let mut currents = [[0.0f32; 4]; DG_GL_MAX_VERTEX_ATTRIBS as usize];
     unsafe {
         // GL modifies current values only for enabled arrays. Preserve those
         // values; disabled packet attributes require no native query or restore.
@@ -183,13 +202,27 @@ unsafe fn draw(
         if attributes & DG_GL_ARRAY_EDGE != 0 {
             api.dg_glGetBooleanv.unwrap()(GL_EDGE_FLAG, &mut edge);
         }
+        // Generic attribute zero has no current value (ARB_vertex_program).
+        for (n, saved) in currents.iter_mut().enumerate().skip(1) {
+            if generic & 1 << n != 0 {
+                api.dg_glGetVertexAttribfvARB.unwrap()(
+                    n as u32,
+                    GL_CURRENT_VERTEX_ATTRIB_ARB,
+                    saved.as_mut_ptr(),
+                );
+            }
+        }
         api.dg_glPushClientAttrib.unwrap()(GL_CLIENT_VERTEX_ARRAY_BIT);
         if units {
             api.dg_glClientActiveTexture.unwrap()(GL_TEXTURE0);
         }
-        api.dg_glEnableClientState.unwrap()(GL_VERTEX_ARRAY);
-        let (size, kind, step, offset) = attribute(0, 4, GL_FLOAT, 0);
-        api.dg_glVertexPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
+        if position {
+            api.dg_glEnableClientState.unwrap()(GL_VERTEX_ARRAY);
+            let (size, kind, step, offset) = attribute(0, 4, GL_FLOAT, 0);
+            api.dg_glVertexPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
+        } else {
+            api.dg_glDisableClientState.unwrap()(GL_VERTEX_ARRAY);
+        }
         for (bit, cap) in [
             (DG_GL_ARRAY_COLOR, GL_COLOR_ARRAY),
             (DG_GL_ARRAY_SECONDARY, GL_SECONDARY_COLOR_ARRAY),
@@ -277,6 +310,23 @@ unsafe fn draw(
                 api.dg_glEdgeFlagPointer.unwrap()(step, data.as_ptr().add(offset).cast());
             }
         }
+        // Generic arrays are enabled only for this draw: native GL never holds
+        // one between records, so none needs disabling here.
+        for n in 0..DG_GL_MAX_VERTEX_ATTRIBS as usize {
+            if generic & 1 << n == 0 {
+                continue;
+            }
+            let a = raw.as_ref().expect("attributes are compact")[16 + n];
+            api.dg_glVertexAttribPointerARB.unwrap()(
+                n as u32,
+                a.size as i32,
+                a.kind,
+                u8::from(a.normalized),
+                0,
+                data.as_ptr().add(a.offset).cast(),
+            );
+            api.dg_glEnableVertexAttribArrayARB.unwrap()(n as u32);
+        }
         if elements {
             api.dg_glDrawElements.unwrap()(
                 args[0],
@@ -290,6 +340,13 @@ unsafe fn draw(
             api.dg_glDrawArrays.unwrap()(args[0], 0, vertices as i32);
         }
         let error = api.dg_glGetError.unwrap()();
+        // CLIENT_VERTEX_ARRAY_BIT covers generic arrays too; disable them
+        // explicitly so no native array outlives the draw on any provider.
+        for n in 0..DG_GL_MAX_VERTEX_ATTRIBS {
+            if generic & 1 << n != 0 {
+                api.dg_glDisableVertexAttribArrayARB.unwrap()(n);
+            }
+        }
         api.dg_glPopClientAttrib.unwrap()();
         if attributes & DG_GL_ARRAY_COLOR != 0 {
             api.dg_glColor4fv.unwrap()(color.as_ptr());
@@ -313,6 +370,11 @@ unsafe fn draw(
         }
         if attributes & DG_GL_ARRAY_EDGE != 0 {
             api.dg_glEdgeFlag.unwrap()(edge);
+        }
+        for (n, saved) in currents.iter().enumerate().skip(1) {
+            if generic & 1 << n != 0 {
+                api.dg_glVertexAttrib4fvARB.unwrap()(n as u32, saved.as_ptr());
+            }
         }
         Ok(error)
     }

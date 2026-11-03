@@ -67,6 +67,9 @@ BOOL JglTextureCubeMapAvailable(void) {
 BOOL JglFragmentProgramAvailable(void) {
     return FALSE;
 }
+BOOL JglVertexProgramAvailable(void) {
+    return FALSE;
+}
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
     assert(module == (HINSTANCE)1);
     if (!((ULONG_PTR)name >> 16))

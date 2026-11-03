@@ -2166,6 +2166,7 @@ pub const DG_GL_MAX_TEXTURE_LEVEL: u32 = 11;
 pub const DG_GL_MAX_PROGRAM_BYTES: u32 = 65280;
 pub const DG_GL_MAX_PROGRAMS: u32 = 4096;
 pub const DG_GL_PROGRAM_NAME_BATCH: u32 = 128;
+pub const DG_GL_MAX_VERTEX_ATTRIBS: u32 = 16;
 pub const DG_GL_VERTEX_BYTES: u32 = 64;
 pub const DG_GL_VERTEX_POSITION: u32 = 0;
 pub const DG_GL_VERTEX_COLOR: u32 = 16;
@@ -2192,6 +2193,10 @@ pub const DG_GL_ARRAY_EXT_MASK: u32 = 32767;
 pub const DG_GL_ARRAY_FOG_COORD: u32 = 16384;
 pub const DG_GL_ARRAY_EXT_SLOTS: u32 = 16;
 pub const DG_GL_ARRAY_EXT_DESCRIPTOR_BYTES: u32 = 64;
+pub const DG_GL_ATTRIB_NORMALIZED: u32 = 16777216;
+pub const DG_GL_ATTRIB_MASK: u32 = 65535;
+pub const DG_GL_ATTRIB_SLOTS: u32 = 32;
+pub const DG_GL_ATTRIB_DESCRIPTOR_BYTES: u32 = 128;
 pub const DG_GL_ARRAY_DESCRIPTOR_BYTES: u32 = 28;
 pub const DG_GL_MAX_VERTICES: u32 = 65536;
 pub const DG_GL_MAX_EVAL_ORDER: u32 = 8;
@@ -6395,4 +6400,26 @@ pub struct DreamGpuGlApi {
     >,
     pub dg_glGetString:
         ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint) -> *const u8>,
+    pub dg_glVertexAttrib4fARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32, arg3: f32, arg4: f32, arg5: f32),
+    >,
+    pub dg_glVertexAttrib4fvARB:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *const f32)>,
+    pub dg_glVertexAttribPointerARB: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_uchar,
+            arg5: ::core::ffi::c_int,
+            arg6: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glEnableVertexAttribArrayARB:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glDisableVertexAttribArrayARB:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glGetVertexAttribfvARB: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint, arg3: *mut f32),
+    >,
 }

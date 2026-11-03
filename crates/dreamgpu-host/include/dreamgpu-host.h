@@ -95,6 +95,8 @@ typedef struct DreamGpuContextState {
     void *program;
     int32_t program_error;
     uint32_t program_error_kind;
+    /* Rust-owned ARB_vertex_program binding. */
+    void *vertex_program;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the

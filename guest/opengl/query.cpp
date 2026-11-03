@@ -46,7 +46,7 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
             *output = kind == DG_GL_RESULT_BOOL ? (type)(local != 0) : (type)local;                \
             return;                                                                                \
         }                                                                                          \
-        if (JglCubeMapQueryRejected(pname) || JglFragmentProgramQueryRejected(pname)) {            \
+        if (JglCubeMapQueryRejected(pname) || JglProgramQueryRejected(pname)) {                    \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -112,7 +112,7 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
          cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e || cap == 0x8457) &&
         JglArrayQuery(cap, &local))
         return local != 0;
-    if (JglCubeMapQueryRejected(cap) || JglFragmentProgramQueryRejected(cap)) {
+    if (JglCubeMapQueryRejected(cap) || JglProgramQueryRejected(cap)) {
         JglSetError(GL_INVALID_ENUM);
         return GL_FALSE;
     }
@@ -152,8 +152,8 @@ const GLubyte *APIENTRY glGetString(GLenum name) {
          * that this evolving frontend implements a complete OpenGL version. */
         case GL_VERSION:
             return version;
-        case 0x8874: /* PROGRAM_ERROR_STRING_ARB */
-            if (JglFragmentProgramAvailable())
+        case 0x8874: /* PROGRAM_ERROR_STRING_ARB, of either program extension */
+            if (JglProgramsAvailable())
                 return ProgramErrorString();
             JglSetError(GL_INVALID_ENUM);
             return NULL;
