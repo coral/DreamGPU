@@ -21,6 +21,17 @@
  * - update: a managed WRITEONLY buffer drawn, checked and presented, then
  *   rewritten whole by Lock(0, 0, 0) and in part by a Lock at vertex 4 with
  *   flags 0. The next frame shows each change, and no earlier quad remains.
+ * - fog: vertex fog from the specular alpha (FOGVERTEXMODE and FOGTABLEMODE
+ *   NONE) of untransformed XYZ | DIFFUSE | SPECULAR vertices. Default-pool
+ *   vertex and index buffers drawn by DrawIndexedPrimitive with base vertex 4
+ *   and start index 6, and by DrawPrimitive from vertex 12, then one
+ *   DrawPrimitiveUP quad. Each quad has its own constant alpha a, so red
+ *   diffuse fogged toward blue is exactly (a, 0, 255 - a); a fog coordinate
+ *   read from the wrong vertex (the decoy below the base vertex has a = 255)
+ *   shows as another colour. Wine draws the buffer quads from arrays with a
+ *   fog coordinate array (Wine 0041) and the UP quad in immediate mode; its
+ *   former emulation gives the same pixels, so this checks the result, not
+ *   which path drew it.
  */
 #if DG_D3D_VERSION == 8
 typedef IDirect3DVertexBuffer8 VertexBuffer;
@@ -447,6 +458,89 @@ static void UpdateCase(Device *dev, Surface *target) {
         VBUFFER(Release, vb);
 }
 
+struct FogVertex {
+    float x, y, z;
+    DWORD diffuse, specular;
+};
+static_assert(sizeof(FogVertex) == 20);
+static constexpr DWORD XyzFog = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_SPECULAR;
+
+/* Strip-ordered clip-space corners with red diffuse and fog factor alpha. */
+static void FogCorners(FogVertex *out, const Area &area, BYTE alpha) {
+    Vertex corners[4];
+    Corners(corners, area);
+    for (UINT i = 0; i < 4; ++i)
+        out[i] = {corners[i].x, corners[i].y, corners[i].z, 0xffff0000, (DWORD)alpha << 24};
+}
+/* Linear fog from 255 (clear) to 0 (fog colour): f = alpha / 255 of red
+ * diffuse and (1 - f) of blue fog, exact for a constant alpha. */
+static constexpr DWORD Fogged(BYTE alpha) {
+    return 0xff000000 | (DWORD)alpha << 16 | (DWORD)(255 - alpha);
+}
+
+static void FogCase(Device *dev, Surface *target) {
+    /* Vertices 0-3: a decoy below base vertex 4, fog factor 1; then quads
+     * 0, 1 (indexed) and 2 (DrawPrimitive); quad 3 comes from user memory. */
+    static const BYTE decoy_alpha = 0xff, alphas[4] = {0x40, 0xc0, 0x80, 0x20};
+    static const Area decoy = {20, 140, 100, 220, Decoy};
+    static const Area quads[4] = {{20, 30, 100, 110, Fogged(0x40)},
+                                  {120, 30, 200, 110, Fogged(0xc0)},
+                                  {220, 30, 300, 110, Fogged(0x80)},
+                                  {220, 140, 300, 220, Fogged(0x20)}};
+    /* Relative to the base vertex: start 6 draws quads 0 and 1; ignoring it
+     * would draw quad 2 and quad 0 instead. */
+    static const WORD indices[18] = {
+        8, 9, 10, 10, 9, 11, /* decoy */
+        0, 1, 2,  2,  1, 3,  /* quad 0 */
+        4, 5, 6,  6,  5, 7,  /* quad 1 */
+    };
+    FogVertex vertices[16], user[4];
+    VertexBuffer *vb = NULL;
+    IndexBuffer *ib = NULL;
+    BufferPointer pointer = NULL;
+    Log("STAGE vertex buffer fog");
+    FogCorners(vertices, decoy, decoy_alpha);
+    for (UINT i = 0; i < 3; ++i)
+        FogCorners(vertices + 4 + 4 * i, quads[i], alphas[i]);
+    FogCorners(user, quads[3], alphas[3]);
+    BOOL ok =
+        HR(VBUFFER_CREATE(dev, sizeof(vertices), D3DUSAGE_WRITEONLY, XyzFog, D3DPOOL_DEFAULT, &vb),
+           "FAIL fog vertex buffer creation") &&
+        HR(IBUFFER_CREATE(dev, sizeof(indices), D3DUSAGE_WRITEONLY, D3DPOOL_DEFAULT, &ib),
+           "FAIL fog index buffer creation") &&
+        Write(vb, 0, 0, vertices, sizeof(vertices), 0, "FAIL fog vertex buffer lock") &&
+        HR(IBUFFER(Lock, ib, 0, 0, &pointer, 0), "FAIL fog index buffer lock");
+    if (ok) {
+        const BOOL mapped = Check(pointer != NULL, "FAIL fog index buffer pointer", 0);
+        if (mapped)
+            Copy(pointer, indices, sizeof(indices));
+        ok = HR(IBUFFER(Unlock, ib), "FAIL fog index buffer unlock") && mapped;
+    }
+    ok =
+        ok && Fixed(dev, XyzFog) &&
+        HR(DEVICE(SetRenderState, dev, D3DRS_FOGCOLOR, 0xff0000ff), "FAIL fog colour") &&
+        HR(DEVICE(SetRenderState, dev, D3DRS_FOGTABLEMODE, D3DFOG_NONE), "FAIL fog table mode") &&
+        HR(DEVICE(SetRenderState, dev, D3DRS_FOGVERTEXMODE, D3DFOG_NONE), "FAIL fog vertex mode") &&
+        HR(DEVICE(SetRenderState, dev, D3DRS_FOGENABLE, TRUE), "FAIL fog enable") &&
+        HR(VBUFFER_STREAM(dev, vb, sizeof(FogVertex)), "FAIL fog stream source") &&
+        Frame(dev, target, "fog: base vertex 4, start index 6, start vertex 12 and a UP quad",
+              quads, 4, [&]() -> BOOL {
+                  return DrawIndexed(dev, ib, 4, 0, 8, 6, 4) && Strip(dev, 12) &&
+                         HR(DEVICE(DrawPrimitiveUP, dev, D3DPT_TRIANGLESTRIP, 2, user,
+                                   sizeof(FogVertex)),
+                            "FAIL fog UP draw");
+              });
+    DEVICE(SetRenderState, dev, D3DRS_FOGENABLE, FALSE);
+    if (ok)
+        Log("PASS vertex buffer fog: specular-alpha fog of indexed, base-vertex, start-vertex "
+            "and UP quads exact, decoy unseen");
+    Unbind(dev);
+    if (ib)
+        IBUFFER(Release, ib);
+    if (vb)
+        VBUFFER(Release, vb);
+}
+
 /* Every case runs and logs its own result; any failure fails the probe. */
 static void Run(Device *dev, Surface *target) {
     StageCaps caps = {};
@@ -464,6 +558,7 @@ static void Run(Device *dev, Surface *target) {
     TransformedCase(dev, target);
     DynamicCase(dev, target);
     UpdateCase(dev, target);
+    FogCase(dev, target);
     STAGE_FVF(dev, D3DFVF_XYZRHW | D3DFVF_DIFFUSE);
 }
 

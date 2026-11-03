@@ -1,0 +1,264 @@
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -610,6 +610,205 @@
+     }
+ }
+ 
++/* DreamGPU: D3D vertex fog in the specular alpha ("manual fog coordinates",
++ * linear from 255 to 0) sent every fixed-function array draw to
++ * drawStridedSlow, since glFogCoordPointerEXT takes no unsigned bytes. Such a
++ * draw now takes a client array of the floats drawStridedSlow passes to
++ * glFogCoordfEXT, (float)(specular >> 24) of each vertex it reads. Buffer
++ * objects are read through their system memory copy (0037), as
++ * drawStridedSlow reads them; conversion never writes that copy, and its
++ * D3DCOLOR swizzle keeps the alpha byte in place anyway. */
++#define DG_FOG_LOCAL_COORDS 256
++
++struct dg_fog_coords
++{
++    float *values; /* NULL: the draw takes no fog coordinate array */
++    ULONG_PTR pointer; /* values - first: GL array index j reads values[j - first] */
++    float final; /* the coordinate of the last vertex in draw order */
++    float local[DG_FOG_LOCAL_COORDS];
++};
++
++/* The GL array indices an array draw reads, first..last, and the one it
++ * reads last: start..start + count - 1, or each index plus GL's base vertex. */
++static BOOL dg_fog_coord_range(const void *indices, UINT index_size, UINT start, UINT count,
++        INT index_base, int64_t *first, int64_t *last, int64_t *final)
++{
++    int64_t low, high, index;
++    UINT i;
++
++    if (!count)
++        return FALSE;
++    if (!indices)
++    {
++        low = start;
++        high = index = (int64_t)start + count - 1;
++    }
++    else
++    {
++        for (i = 0, low = high = index = 0; i < count; ++i)
++        {
++            /* drawStridedSlow's index loads. */
++            if (index_size == 2)
++                index = ((const WORD *)indices)[(size_t)start + i];
++            else
++                index = ((const DWORD *)indices)[(size_t)start + i];
++            if (!i || index < low)
++                low = index;
++            if (!i || index > high)
++                high = index;
++        }
++        low += index_base;
++        high += index_base;
++        index += index_base;
++    }
++    if (low < 0)
++        return FALSE;
++    *first = low;
++    *last = high;
++    *final = index;
++    return TRUE;
++}
++
++/* values[j - first] for GL array indices first..last: the specular alpha of
++ * vertex vertex_base + j, whose D3DCOLOR lies at offset + vertex * stride in
++ * size bytes of memory. Nothing is written unless every vertex lies within. */
++static BOOL dg_fog_coord_fill(float *values, int64_t first, int64_t last, const BYTE *memory,
++        UINT size, ULONG_PTR offset, UINT stride, INT vertex_base)
++{
++    int64_t vertex = vertex_base + first, end = vertex_base + last;
++
++    if (!memory || !stride || vertex < 0 || offset > size || size - offset < sizeof(DWORD)
++            || (uint64_t)end > (size - offset - sizeof(DWORD)) / stride)
++        return FALSE;
++    for (; vertex <= end; ++vertex)
++    {
++        DWORD color;
++
++        memcpy(&color, memory + offset + (ULONG_PTR)vertex * stride, sizeof(color));
++        *values++ = (float)(color >> 24);
++    }
++    return TRUE;
++}
++
++/* Prepare a fixed-function array draw that fog_coord fogs. FALSE keeps
++ * drawStridedSlow; TRUE with no values needs no coordinate array, since
++ * drawStridedSlow would set none either and every vertex keeps the current
++ * coordinate. */
++static BOOL dg_fog_coords_prepare(struct dg_fog_coords *fog, struct wined3d_context *context,
++        const struct wined3d_state *state, const struct wined3d_stream_info *si,
++        const void *idx_data, UINT idx_size, UINT start_idx, UINT index_count, BOOL indexed,
++        UINT instance_count)
++{
++    const struct wined3d_gl_info *gl_info = context->gl_info;
++    const struct wined3d_stream_info_element *e = &si->elements[WINED3D_FFP_SPECULAR];
++    int64_t first, last, final, count;
++    struct wined3d_buffer *buffer;
++    const void *indices = NULL;
++    const BYTE *memory;
++    INT index_base = 0;
++    ULONG_PTR offset;
++    float *values;
++    unsigned int i;
++
++    fog->values = NULL;
++    /* gl_compat.c's emulated fog coordinates exist only in immediate mode.
++     * Generic attributes and instancing keep their own paths. */
++    if (!gl_info->gl_ops.ext.p_glFogCoordPointerEXT || context->d3d_info->ffp_generic_attributes
++            || instance_count || !(si->use_map & (1u << WINED3D_FFP_POSITION)))
++        return FALSE;
++    /* drawStridedSlow repeats a stride zero vertex; named arrays read it packed. */
++    for (i = 0; i < sizeof(si->elements) / sizeof(*si->elements); ++i)
++    {
++        if ((si->use_map & (1u << i)) && !si->elements[i].stride)
++            return FALSE;
++    }
++    /* drawStridedSlow reads vertex start + i, or index + base_vertex_index;
++     * an array draw reads load_base_vertex_index + j at GL array index j. */
++    if (indexed)
++    {
++        if (gl_info->supported[ARB_DRAW_ELEMENTS_BASE_VERTEX])
++            index_base = state->base_vertex_index;
++        if (state->load_base_vertex_index + index_base != state->base_vertex_index)
++            return FALSE;
++    }
++    else if (state->load_base_vertex_index)
++    {
++        return FALSE;
++    }
++
++    /* drawStridedSlow's condition for setting fog coordinates. */
++    if (!(si->use_map & (1u << WINED3D_FFP_SPECULAR))
++            || !state->render_states[WINED3D_RS_FOGENABLE]
++            || (state->render_states[WINED3D_RS_FOGVERTEXMODE] != WINED3D_FOG_NONE
++                    && si->elements[WINED3D_FFP_POSITION].format->id != WINED3DFMT_R32G32B32A32_FLOAT)
++            || state->render_states[WINED3D_RS_FOGTABLEMODE] != WINED3D_FOG_NONE
++            || !gl_info->supported[EXT_FOG_COORD] || e->format->id != WINED3DFMT_B8G8R8A8_UNORM)
++        return TRUE;
++
++    if (indexed)
++    {
++        /* The index buffer's system memory copy (0037) holds every index. */
++        UINT entries = state->index_buffer->resource.size / idx_size;
++
++        indices = idx_data ? idx_data : buffer_get_sysmem(state->index_buffer, context);
++        if (!indices || start_idx > entries || index_count > entries - start_idx)
++            return FALSE;
++    }
++    if (!dg_fog_coord_range(indices, idx_size, start_idx, index_count, index_base, &first, &last, &final))
++        return FALSE;
++
++    buffer = state->streams[e->stream_idx].buffer;
++    memory = buffer_get_sysmem(buffer, context);
++    /* A buffer object element holds its offset, a system memory one its address. */
++    offset = (ULONG_PTR)e->data.addr - (e->data.buffer_object ? 0 : (ULONG_PTR)memory);
++    count = last - first + 1;
++    /* An upper bound of what fits the buffer, checked exactly by the fill. */
++    if (count > buffer->resource.size / (UINT)e->stride + 1
++            || (uint64_t)count > ~(size_t)0 / sizeof(*values))
++        return FALSE;
++    values = count <= DG_FOG_LOCAL_COORDS ? fog->local : malloc((size_t)count * sizeof(*values));
++    if (!values)
++        return FALSE;
++    /* The pointer biased below values must not wrap. */
++    if (!dg_fog_coord_fill(values, first, last, memory, buffer->resource.size, offset, e->stride,
++            state->load_base_vertex_index) || (uint64_t)first > (ULONG_PTR)values / sizeof(*values))
++    {
++        if (values != fog->local)
++            free(values);
++        return FALSE;
++    }
++    fog->values = values;
++    fog->pointer = (ULONG_PTR)values - (ULONG_PTR)first * sizeof(*values);
++    fog->final = values[final - first];
++    return TRUE;
++}
++
++/* Context activation is done by the caller. */
++static void dg_fog_coords_bind(const struct wined3d_gl_info *gl_info, const struct dg_fog_coords *fog)
++{
++    /* A client array: Wine's array loaders leave a buffer object bound. */
++    if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
++        GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
++    GL_EXTCALL(glFogCoordPointerEXT(GL_FLOAT, 0, (const void *)fog->pointer));
++    gl_info->gl_ops.gl.p_glEnableClientState(GL_FOG_COORDINATE_ARRAY_EXT);
++    checkGLcall("fog coordinate array");
++}
++
++/* Context activation is done by the caller. */
++static void dg_fog_coords_unbind(const struct wined3d_gl_info *gl_info, struct dg_fog_coords *fog)
++{
++    gl_info->gl_ops.gl.p_glDisableClientState(GL_FOG_COORDINATE_ARRAY_EXT);
++    /* No client descriptor may keep this storage. drawStridedSlow leaves its
++     * last vertex's coordinate current, which a later draw without
++     * coordinates uses; an array draw leaves it undefined. */
++    GL_EXTCALL(glFogCoordPointerEXT(GL_FLOAT, 0, NULL));
++    GL_EXTCALL(glFogCoordfEXT(fog->final));
++    checkGLcall("fog coordinate array release");
++    if (fog->values != fog->local)
++        free(fog->values);
++    fog->values = NULL;
++}
++
+ /* Routine common to the draw primitive and draw indexed primitive routines */
+ void draw_primitive(struct wined3d_device *device, UINT start_idx, UINT index_count,
+         UINT start_instance, UINT instance_count, BOOL indexed)
+@@ -620,12 +819,14 @@
+     struct wined3d_stream_info si_emulated;
+     const struct wined3d_gl_info *gl_info;
+     struct wined3d_context *context;
++    struct dg_fog_coords fog;
+     BOOL emulation = FALSE;
+     const void *idx_data = NULL;
+     UINT idx_size = 0;
+     unsigned int i;
+ 
+     if (!index_count) return;
++    fog.values = NULL;
+ 
+     context = context_acquire(device, wined3d_rendertarget_view_get_surface(device->fb.render_targets[0]));
+     if (!context->valid)
+@@ -778,7 +979,13 @@
+                 WARN_(d3d_perf)("Using software emulation because not all material properties could be tracked.\n");
+             emulation = TRUE;
+         }
+-        else if (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE])
++        /* DreamGPU: immediate mode already feeds fog coordinates from memory,
++         * and an array draw takes a float fog coordinate array, so only a
++         * draw whose coordinates cannot be read is emulated. */
++        else if (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE]
++                && !context->use_immediate_mode_draw
++                && !dg_fog_coords_prepare(&fog, context, state, stream_info, idx_data, idx_size,
++                        start_idx, index_count, indexed, instance_count))
+         {
+             static BOOL warned;
+ 
+@@ -849,8 +1056,12 @@
+     }
+     else
+     {
++        if (fog.values)
++            dg_fog_coords_bind(gl_info, &fog);
+         drawStridedFast(gl_info, state->gl_primitive_type, index_count, idx_size, idx_data,
+                 start_idx, state->base_vertex_index, start_instance, instance_count);
++        if (fog.values)
++            dg_fog_coords_unbind(gl_info, &fog);
+     }
+ 
+     if (ib_query)
+--- a/wined3d/gl_compat.c
++++ b/wined3d/gl_compat.c
+@@ -462,6 +462,10 @@
+             gl_info->gl_ops.ext.p_glFogCoordfvEXT = wine_glFogCoordfvEXT;
+             gl_info->gl_ops.ext.p_glFogCoorddEXT = wine_glFogCoorddEXT;
+             gl_info->gl_ops.ext.p_glFogCoorddvEXT = wine_glFogCoorddvEXT;
++            /* DreamGPU: these coordinates exist only in immediate mode. The
++             * driver's array entry point, loaded regardless of its extension
++             * string, would draw without them. */
++            gl_info->gl_ops.ext.p_glFogCoordPointerEXT = NULL;
+             gl_info->supported[EXT_FOG_COORD] = TRUE;
+             return;
+ 

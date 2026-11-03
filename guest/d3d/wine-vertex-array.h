@@ -24,8 +24,10 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     BOOL secondary = !!(si->use_map & (1u << WINED3D_FFP_SPECULAR));
     /* drawStridedSlow takes each fog coordinate from specular alpha exactly
      * here (the position is always XYZRHW float4 on this path). Any other
-     * fog-coordinate state keeps Wine's own drawing. */
+     * fog-coordinate state keeps Wine's own drawing, as do gl_compat.c's
+     * emulated coordinates (no array entry point: immediate mode only). */
     BOOL fog = secondary && gl_info->supported[EXT_FOG_COORD] &&
+               gl_info->gl_ops.ext.p_glFogCoordPointerEXT &&
                state->render_states[WINED3D_RS_FOGENABLE] &&
                state->render_states[WINED3D_RS_FOGTABLEMODE] == WINED3D_FOG_NONE;
 

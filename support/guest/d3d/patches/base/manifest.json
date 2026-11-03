@@ -163,6 +163,10 @@
     {
       "file": "0040-vbo-zero-attribute.patch",
       "sha256": "b644851bda9afee50ca4da1c327e4f3b992956dc0b618c0682f117cfb69e6ce3"
+    },
+    {
+      "file": "0041-fog-coordinate-arrays.patch",
+      "sha256": "e5b68269a94c0d8fba1e7e3ec4af2eec1cb2a0163f112b6da7ef6caafdc8b84d"
     }
   ],
   "files": {
@@ -240,7 +244,7 @@
     },
     "wined3d/drawprim.c": {
       "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
-      "after_sha256": "ce5aa9a55896a91ef2405f0b58f32f45b26a56a1a46cd133172b2e8859b8b455"
+      "after_sha256": "9d10561ad47e325471db97318d028c355ad226ba0b7a57593a132956b1c243bf"
     },
     "ddraw/ddraw.c": {
       "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",
@@ -305,6 +309,10 @@
     "wined3d/volume.c": {
       "before_sha256": "1c0abf7585df1f8282b26226553aa3943ff13266ee4f34c535655e8095061c7e",
       "after_sha256": "5e33c012e949df92a0c278f1d5c60ab58b840d0791abc9bf8a8aba8166f17d2a"
+    },
+    "wined3d/gl_compat.c": {
+      "before_sha256": "ed152cb9a22448eab4186be94ea9b4b0eac3869679df62e142770e4c9b6031c9",
+      "after_sha256": "e3e48e9b8fde3bc0702121546eb3b4e590b9ab1f8ca8f43e20959937aaaaa321"
     }
   }
 }

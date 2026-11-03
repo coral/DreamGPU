@@ -496,3 +496,50 @@ that in immediate mode) and binds `ARRAY_BUFFER` zero for its client arrays.
 runs 0038's converted-attribute bookkeeping under ASan/UBSan;
 `test_vertex_arrays.py` covers the packed path. The diagnostic stack is
 rebased onto 0040 with its call-site line numbers renumbered.
+
+`0041-fog-coordinate-arrays.patch` draws D3D vertex fog supplied in the
+specular alpha ("manual fog coordinates": FOGTABLEMODE NONE with FOGVERTEXMODE
+NONE or pretransformed vertices, linear from 255 to 0) from arrays. Wine sent
+every such fixed-function array draw to `drawStridedSlow`, one immediate-mode
+call per attribute and vertex, because `glFogCoordPointerEXT` takes no
+unsigned bytes. The array draw now gets a client float fog coordinate array
+holding exactly what `drawStridedSlow` passes to `glFogCoordfEXT`:
+`(float)(specular >> 24)` of each vertex it reads, under its own condition
+(fog enabled, table fog off, untransformed vertex fog off or an XYZRHW position,
+a D3DCOLOR specular). The array covers the GL array indices the draw reads:
+`start..start + count - 1`, or the referenced index range (indices from memory
+or an index buffer's system memory copy) plus GL's base vertex. Vertex
+`load_base_vertex_index + j` backs array index `j`, which is
+`drawStridedSlow`'s index plus `base_vertex_index`. Buffer objects are read
+through their system memory copy (0037), which conversion never writes (its
+D3DCOLOR swizzle keeps alpha in place anyway); system memory streams are read
+in place. Afterwards the last vertex's coordinate is current again, as
+`drawStridedSlow` leaves it for a later draw without coordinates. A fogged draw
+without specular-alpha coordinates is drawn from arrays without the array,
+since `drawStridedSlow` sets none either.
+
+The emulation remains where the array draw could differ: vertices or indices
+beyond their buffers, a stride-zero element (D3D repeats it, named GL arrays
+read it packed), a loaded base vertex that differs from `drawStridedSlow`'s,
+generic attributes, instancing, or no position. It also remains when the fog
+coordinates themselves are emulated: `gl_compat.c`'s fallback (a GL without
+`EXT_fog_coord`, e.g. a host without `DG_CAP_GL_FOG_COORD`) exists only in
+immediate mode, so it now clears the driver's `glFogCoordPointerEXT`, which
+Wine loads regardless of the extension string. DreamGPU's packed XYZRHW path
+requires that entry point for its fog array as well; it used to draw such fog
+through the frontend's rejected array, without fog.
+
+Immediate-mode draws no longer set the emulation flag (they already read every
+element from memory), so the `d3d_perf` "Using software emulation because
+manual fog coordinates are provided" warning no longer reports them. DreamGPU
+has no BGRA vertex arrays, so Wine still draws any fixed-function D3DCOLOR
+stream outside buffer objects in immediate mode: UP draws, dynamic and
+system-memory buffers. Textured XYZRHW draws of up to 64 vertices can take the
+packed path, which already fed fog coordinates as an array. `test_fog_coord_arrays.py` runs
+the prepared helpers under ASan/UBSan against a reference read the way
+`drawStridedSlow` reads memory and checks the draw and fallback structure; it
+fails without the patch. The installed D3D7 probe and the D3D8/9 vertex buffer
+probe draw specular-alpha fog from buffers and user memory with exact pixels;
+the emulation produced the same pixels, so they check results, not the path.
+The diagnostic stack is rebased onto 0041 with its call-site line numbers
+renumbered.

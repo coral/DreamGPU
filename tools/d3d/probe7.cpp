@@ -55,6 +55,144 @@ static BOOL HR(HRESULT result, const char *stage) {
 static LRESULT CALLBACK WindowProc(HWND w, UINT message, WPARAM a, LPARAM b) {
     return DefWindowProcA(w, message, a, b);
 }
+/* Vertex fog from the specular alpha (FOGVERTEXMODE and FOGTABLEMODE NONE) of
+ * untransformed XYZ | DIFFUSE | SPECULAR vertices with identity transforms,
+ * from a video-memory vertex buffer: DrawIndexedPrimitiveVB from start
+ * vertices 4 and 8 (Wine's base vertex), DrawPrimitiveVB from vertex 12,
+ * then a DrawPrimitive quad from user memory. (Wine's index buffer is sized
+ * to the first draw, so both indexed draws start at index 0; the D3D8/9
+ * probe covers a start index.) Each quad has its own constant alpha a, so
+ * red diffuse fogged toward blue is exactly (a, 0, 255 - a); a fog coordinate
+ * read from the wrong vertex (the decoy below vertex 4 has a = 255) shows as
+ * another colour. Wine draws the buffer quads from arrays with a fog
+ * coordinate array (Wine 0041); its former emulation gives the same pixels,
+ * so this checks the result, not which path drew it. Every pixel is compared
+ * except the band along each quad edge. */
+static void FogBuffers(void) {
+    struct FogVertex {
+        float x, y, z;
+        DWORD diffuse, specular;
+    };
+    struct Area {
+        int left, top, right, bottom;
+        DWORD alpha;
+    };
+    static const DWORD fvf = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_SPECULAR, background = 0x102030;
+    static const Area decoy = {20, 140, 100, 220, 0xff};
+    static const Area quads[4] = {{20, 30, 100, 110, 0x40},
+                                  {120, 30, 200, 110, 0xc0},
+                                  {220, 30, 300, 110, 0x80},
+                                  {220, 140, 300, 220, 0x20}};
+    static WORD indices[6] = {0, 1, 2, 2, 1, 3};
+    const auto corners = [](FogVertex *out, const Area &area) {
+        const float left = area.left / 160.f - 1, right = area.right / 160.f - 1;
+        const float top = 1 - area.top / 120.f, bottom = 1 - area.bottom / 120.f;
+        const DWORD specular = area.alpha << 24;
+        out[0] = {left, top, .5f, 0xffff0000, specular};
+        out[1] = {right, top, .5f, 0xffff0000, specular};
+        out[2] = {left, bottom, .5f, 0xffff0000, specular};
+        out[3] = {right, bottom, .5f, 0xffff0000, specular};
+    };
+    D3DVERTEXBUFFERDESC desc = {};
+    IDirect3DVertexBuffer7 *vb = NULL;
+    FogVertex *mapped = NULL, user[4];
+    D3DMATRIX identity = {};
+    DDSURFACEDESC2 locked = {};
+    BOOL ok;
+    Log("STAGE vertex buffer fog");
+    identity._11 = identity._22 = identity._33 = identity._44 = 1;
+    desc.dwSize = sizeof(desc);
+    desc.dwCaps = D3DVBCAPS_WRITEONLY;
+    desc.dwFVF = fvf;
+    desc.dwNumVertices = 16;
+    corners(user, quads[3]);
+    ok = HR(IDirect3D7_CreateVertexBuffer(d3d, &desc, &vb, 0), "FAIL fog vertex buffer creation") &&
+         HR(IDirect3DVertexBuffer7_Lock(vb, DDLOCK_WAIT | DDLOCK_WRITEONLY, (void **)&mapped, NULL),
+            "FAIL fog vertex buffer lock");
+    if (ok) {
+        ok = Check(mapped != NULL, "FAIL fog vertex buffer pointer", 0);
+        if (ok) {
+            corners(mapped, decoy);
+            for (UINT i = 0; i < 3; ++i)
+                corners(mapped + 4 + 4 * i, quads[i]);
+        }
+        ok = HR(IDirect3DVertexBuffer7_Unlock(vb), "FAIL fog vertex buffer unlock") && ok;
+    }
+    ok = ok &&
+         HR(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_WORLD, &identity),
+            "FAIL fog world") &&
+         HR(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_VIEW, &identity),
+            "FAIL fog view") &&
+         HR(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_PROJECTION, &identity),
+            "FAIL fog projection") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_SPECULARENABLE, FALSE),
+            "FAIL fog specular") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_ALPHABLENDENABLE, FALSE),
+            "FAIL fog blend") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGCOLOR, 0xff0000ff),
+            "FAIL fog colour") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGTABLEMODE, D3DFOG_NONE),
+            "FAIL fog table mode") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGVERTEXMODE, D3DFOG_NONE),
+            "FAIL fog vertex mode") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGENABLE, TRUE),
+            "FAIL fog enable") &&
+         HR(IDirect3DDevice7_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0xff000000 | background, 1, 0),
+            "FAIL fog clear") &&
+         HR(IDirect3DDevice7_BeginScene(device), "FAIL fog begin scene") &&
+         HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, vb, 4, 4, indices,
+                                                    6, 0),
+            "FAIL fog indexed draw from vertex 4") &&
+         HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, vb, 8, 4, indices,
+                                                    6, 0),
+            "FAIL fog indexed draw from vertex 8") &&
+         HR(IDirect3DDevice7_DrawPrimitiveVB(device, D3DPT_TRIANGLESTRIP, vb, 12, 4, 0),
+            "FAIL fog draw from vertex 12") &&
+         HR(IDirect3DDevice7_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, fvf, user, 4, 0),
+            "FAIL fog user memory draw") &&
+         HR(IDirect3DDevice7_EndScene(device), "FAIL fog end scene");
+    IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGENABLE, FALSE);
+    locked.dwSize = sizeof(locked);
+    if (ok &&
+        HR(IDirectDrawSurface7_Lock(target, NULL, &locked, DDLOCK_READONLY | DDLOCK_WAIT, NULL),
+           "FAIL fog readback lock")) {
+        UINT wrong = 0;
+        if (Check(locked.lpSurface && locked.lPitch >= 1280, "FAIL fog readback layout",
+                  locked.lPitch))
+            for (int y = 0; y < 240; ++y)
+                for (int x = 0; x < 320; ++x) {
+                    DWORD expected = background;
+                    BOOL edge = FALSE;
+                    for (UINT i = 0; i < 4; ++i) {
+                        const Area &a = quads[i];
+                        if (x > a.left && x < a.right - 1 && y > a.top && y < a.bottom - 1)
+                            expected = a.alpha << 16 | (255 - a.alpha);
+                        else if (x >= a.left - 1 && x <= a.right && y >= a.top - 1 && y <= a.bottom)
+                            edge = TRUE;
+                    }
+                    if (edge)
+                        continue;
+                    const DWORD actual =
+                        *(DWORD *)((BYTE *)locked.lpSurface + y * locked.lPitch + x * 4) & 0xffffff;
+                    if (actual != expected && !wrong++) {
+                        Number("FAIL exact fog pixel", actual);
+                        Number("fog pixel x", (DWORD)x);
+                        Number("fog pixel y", (DWORD)y);
+                        Number("fog pixel expected", expected);
+                    }
+                }
+        if (wrong) {
+            Number("fog wrong pixels", wrong);
+            failed = TRUE;
+        }
+        HR(IDirectDrawSurface7_Unlock(target, NULL), "FAIL fog readback unlock");
+        if (!failed)
+            Log("PASS vertex buffer fog: specular-alpha fog of indexed, base-vertex, start-vertex "
+                "and user-memory quads exact, decoy unseen");
+    }
+    if (vb)
+        IDirect3DVertexBuffer7_Release(vb);
+}
 static void Run(void) {
     typedef HRESULT(WINAPI * CreateDraw)(GUID *, void **, REFIID, IUnknown *);
     HMODULE gl, runtime;
@@ -314,6 +452,8 @@ static void Run(void) {
                 }
         ReleaseDC(window, dc);
     }
+    if (!failed)
+        FogBuffers();
 }
 extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);

@@ -191,6 +191,11 @@ int main(){
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
  assert(seen_fog.size()==4);for(unsigned i=0;i<4;++i)assert(seen_fog[i]==(float)data[i].spec[3]);
  assert(enabled==0&&!fog_pointer&&last_fog==32.0f);
+ // gl_compat.c's emulated coordinates have no array entry point (Wine 0041):
+ // they exist only in Wine's own immediate mode.
+ gl.gl_ops.ext.p_glFogCoordPointerEXT=nullptr;saved=calls;
+ assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&saved==calls);
+ gl.gl_ops.ext.p_glFogCoordPointerEXT=fp;
  // Table fog or fog disabled: no coordinate array.
  dev.state.render_states[1]=3;last_fog=-1;
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)==false);

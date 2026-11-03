@@ -248,6 +248,10 @@
       "scope": "installed-api",
       "path": "tools/d3d/fog-probe.inc"
     },
+    "d3d-fog-coord-arrays": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fog_coord_arrays.py"
+    },
     "gl-cube-map": {
       "scope": "source",
       "path": "tests/guest/opengl/test_cube_map.py"
@@ -1461,9 +1465,11 @@
         "gl-fog-coord",
         "d3d-vertex-arrays",
         "native",
-        "guest-fog"
+        "guest-fog",
+        "d3d-fog-coord-arrays",
+        "guest-vbuffer"
       ],
-      "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
+      "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Wine patch 0041 gives fixed-function array draws (buffer objects) a float fog coordinate array with drawStridedSlow's values instead of emulating them in immediate mode; D3DCOLOR streams outside buffer objects stay in immediate mode without BGRA vertex arrays. The installed D3D7 probe and D3D8/9 vertex buffer probe add exact untransformed buffer and UP fog quads, untested on guests. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
     },
     {
       "id": "gl.cube-map",
