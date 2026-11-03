@@ -218,6 +218,10 @@ With fog coordinates, a textured pretransformed quad fogs from red to blue
 exactly on Win2000 and XP through D3D8/9; the same probe reads red fading to
 black (the emulation) on the previous build.
 
+With cube maps, D3D8 and D3D9 report CUBEMAP, MIPCUBEMAP and CUBEMAP_POW2, and
+a MANAGED A8R8G8B8 cube texture samples each of its six faces exactly on
+Win2000, XP and Win98 SE.
+
 Windows 98 SE (Linux host, fresh clone of the user's Win98 image, legacy
 `qemumini` migration): installs to a terminal receipt; OpenGL, border, Glide,
 DirectDraw and D3D6–9 probes pass, including all thirteen D3D8/9 stage cases,
