@@ -1106,7 +1106,7 @@
         "win9x-window",
         "win9x-window16"
       ],
-      "remaining": "Capture mode enumeration and verify exposed gamma/vblank semantics across hosts/OSes. Win98 GL window presentation now takes 16-bpp (RGB565) and 32-bpp desktops; capd3d6 passes its 640x480x16 exclusive fullscreen checks on Win98 SE. RGB565 colour cursors stay native (exact under bit replication); 8-bpp palette cursors fall back to the software cursor, which blocks GL takeover."
+      "remaining": "Capture mode enumeration and verify exposed gamma/vblank semantics across hosts/OSes. Win98 GL window presentation now takes 16-bpp (RGB565) and 32-bpp desktops; capd3d6 passes its 640x480x16 exclusive fullscreen checks on Win98 SE. 1/4/16/32-bit colour cursors stay native on 16- and 32-bpp desktops (Win98 USER converts non-matching colour cursors to 4-bit standard-palette indices; exact under 565 truncation and bit replication); 8-bit index cursors fall back to the software cursor, which blocks GL takeover."
     },
     {
       "id": "transport.failures",

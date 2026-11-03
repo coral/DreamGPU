@@ -148,11 +148,11 @@ int main(void) {
         assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == 1 && HostPixels[0] == 0xffffff &&
                HostPixels[1] == 0x030201);
         assert(HostPixels[2] == 0 && HostPixels[3] == 0x060504);
+        /* On a 16-bpp desktop the same 32-bit XOR truncates to 565 first. */
         wBpp = Primary.bpp = 16;
-        submits = Submits;
-        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_FALLBACK &&
-               !Dg9CursorTakeoverSafe());
-        assert(Submits == submits + 1 && Registers[DG_CURSOR_REG_FLAGS / 4] == 0);
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               Dg9CursorTakeoverSafe() && HostPixels[0] == 0xffffff && HostPixels[1] == 0);
+        assert(HostPixels[2] == 0 && HostPixels[3] == 0x000400);
         wBpp = Primary.bpp = 32;
     }
     /* RGB565 color on a 16-bpp desktop stays native (so GL takeover remains
@@ -166,7 +166,7 @@ int main(void) {
         Shape[15] = 0xff;
         Shape[16] = 0x45; /* pixel 1: 0x8d45 = r 17, g 42, b 5 */
         Shape[17] = 0x8d;
-        assert(!Dg9CursorLayout(Shape, 32, &layout));
+        assert(Dg9CursorLayout(Shape, 32, &layout) && layout.XorStride == 4 && layout.Bytes == 6);
         assert(Dg9CursorLayout(Shape, 16, &layout) && layout.XorStride == 4 && layout.Bytes == 6);
         wBpp = Primary.bpp = 16;
         assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
@@ -183,11 +183,13 @@ int main(void) {
         Shape[16] = 0x00;
         Shape[17] = 0x08; /* lowest red bit */
         assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE && HostPixels[3] == 0x080000);
-        /* The same shape on a 32-bpp desktop is a mismatch: GDI gives device-format XOR. */
+        /* Win98 USER passes a color cursor at its bitmap's depth, so a 565
+         * cursor also reaches a 32-bpp desktop: it expands the same way. */
         wBpp = Primary.bpp = 32;
-        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_FALLBACK &&
-               !Dg9CursorTakeoverSafe());
-        /* A depth change between begin and commit cannot convert stale bytes. */
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               Dg9CursorTakeoverSafe() && HostPixels[3] == 0x080000);
+        /* Commit converts for the desktop depth current at commit; a desktop
+         * that is neither 16 nor 32 bpp cannot take a native color cursor. */
         {
             DWORD w0 = 0, w1 = 0, w2 = 0, k, words[2 * 2];
             DG9_CURSOR_LAYOUT staged;
@@ -197,8 +199,79 @@ int main(void) {
             assert(DreamGpuCursorData(Shape[12] | (DWORD)Shape[13] << 8 | (DWORD)Shape[14] << 16 |
                                           (DWORD)Shape[15] << 24,
                                       Shape[16] | (DWORD)Shape[17] << 8, 0));
-            assert(!DreamGpuCursorCommit(32, 0, 0, words, 4));
+            assert(!DreamGpuCursorCommit(8, 0, 0, words, 4));
+            assert(!Dg9CursorLayout(Shape, 8, &layout));
         }
+    }
+    /* 32-bit XOR (Wine's D3D8/9 cursors: CreateBitmap(32, 32, 1, 32)) on a
+     * 16-bpp desktop truncates to 565 first, then replicates like the
+     * desktop: exactly the 565 framebuffer's pixels. 32-bpp is unchanged. */
+    {
+        CURSORSHAPE h = {1, 0, 2, 1, 2, 1, 32};
+        memcpy(Shape, &h, 12);
+        Shape[12] = 0x80;
+        Shape[13] = 0;
+        Shape[14] = 0xff; /* pixel 0 XOR white: inversion */
+        Shape[15] = 0xff;
+        Shape[16] = 0xff;
+        Shape[17] = 0x80; /* alpha byte ignored */
+        Shape[18] = 0x2f; /* pixel 1 BGR 2f ab 8f -> 565 0x8d45 -> 0x8caa29 */
+        Shape[19] = 0xab;
+        Shape[20] = 0x8f;
+        Shape[21] = 0x00;
+        wBpp = Primary.bpp = 16;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               Dg9CursorTakeoverSafe());
+        assert(HostPixels[0] == 0xffffff && HostPixels[1] == 0xffffff);
+        assert(HostPixels[2] == 0 && HostPixels[3] == 0x8caa29);
+        wBpp = Primary.bpp = 32;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               HostPixels[3] == 0x8fab2f);
+        /* 8-bit indices would need the system palette: GDI keeps them. */
+        Shape[11] = 8;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_FALLBACK &&
+               !Dg9CursorTakeoverSafe());
+        assert(!Dg9CursorLayout(Shape, 32, &layout) && !Dg9CursorLayout(Shape, 16, &layout));
+    }
+    /* Win98 USER converts every color cursor that does not match the desktop
+     * depth to packed 4-bit standard-palette indices, high nibble first, in
+     * WORD-aligned rows (observed on Win98 SE). Index 11 is yellow and 14 cyan
+     * in Windows order; 15 inverts. */
+    {
+        CURSORSHAPE h = {16, 1, 32, 2, 4, 1, 4};
+        DWORD k;
+        memcpy(Shape, &h, 12);
+        memset(Shape + 12, 0, 8 + 32);
+        Shape[12 + 4] = 0x00; /* row 1 AND: pixels 16-31 keep the desktop */
+        Shape[12 + 6] = 0xff;
+        Shape[12 + 7] = 0xff;
+        for (k = 0; k < 8; ++k) {
+            Shape[20 + k] = 0xbb;     /* row 0: 0-15 yellow */
+            Shape[20 + 8 + k] = 0xee; /* row 0: 16-31 cyan */
+            Shape[36 + k] = 0x9c;     /* row 1: red, blue alternating */
+            Shape[36 + 8 + k] = 0xf0; /* row 1: invert, transparent */
+        }
+        assert(Dg9CursorLayout(Shape, 16, &layout) && layout.XorStride == 16 && layout.Bytes == 40);
+        wBpp = Primary.bpp = 16;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               Dg9CursorTakeoverSafe());
+        assert(HostPixels[0] == 0 && HostPixels[1] == 0xffff00);
+        assert(HostPixels[2 * 16] == 0 && HostPixels[2 * 16 + 1] == 0x00ffff);
+        assert(HostPixels[2 * 32 + 1] == 0xff0000 && HostPixels[2 * 33 + 1] == 0x0000ff);
+        assert(HostPixels[2 * 48] == 0xffffff && HostPixels[2 * 48 + 1] == 0xffffff);
+        assert(HostPixels[2 * 49] == 0xffffff && HostPixels[2 * 49 + 1] == 0);
+        /* Half-intensity entries quantize to 565 on a 16-bpp desktop. */
+        Shape[20] = 0x87;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               HostPixels[1] == 0x848284 && HostPixels[3] == 0xc6c3c6);
+        wBpp = Primary.bpp = 32;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               HostPixels[1] == 0x808080 && HostPixels[3] == 0xc0c0c0);
+        /* Odd widths keep WORD-aligned 4-bit rows. */
+        h.cx = 5;
+        h.xHotSpot = 1;
+        memcpy(Shape, &h, 12);
+        assert(Dg9CursorLayout(Shape, 32, &layout) && layout.XorStride == 4);
     }
     Mono();
     memcpy(malformed, Shape, 12);

@@ -233,12 +233,23 @@ desktops as well as 32-bpp ones: the frontend bind, the 16-bit BitBlt DDI and
 the VxD primary metadata take matching depths, every desktop record carries the
 format word, and a depth change while GPU-owned faults like a size change.
 Before this every 16-bpp exclusive fullscreen DirectDraw/Direct3D primary
-failed (`capd3d6` failed at that step); it now passes at 640×480×16. RGB565
-colour cursors stay native: the host composite `(desktop & and) ^ xor` commutes
-exactly with the bit-replicating 565 expansion it already applies to the
-desktop. Previously they fell back to GDI's software cursor, and GL takeover
-then refused every bind while one was shown (Wine's D3D8/9 hardware cursors are
-colour cursors). 8-bpp palette cursors still fall back.
+failed (`capd3d6` failed at that step); it now passes at 640×480×16.
+
+Win98 USER passes a colour cursor whose bitmap matches the desktop depth at
+that depth. It converts every other colour cursor to packed 4-bit indices of
+the standard 16-colour palette (Windows order), with a centred hotspot, as
+observed on Win98 SE through a traced driver. That includes Wine's 32-bit
+D3D8/9 hardware cursors on a 16-bpp desktop, as well as 8-, 24- and 32-bit
+bitmaps. The driver used to keep only monochrome and 32-on-32 cursors native,
+so on a 16-bpp desktop every colour cursor fell back to GDI's software cursor.
+GL takeover then refused every bind while one was shown.
+
+1-, 4-, 16- and 32-bit cursors now stay native on 16- and 32-bpp desktops. The
+host composite `(desktop & and) ^ xor` commutes exactly with the
+bit-replicating 565 expansion it already applies to a 16-bpp desktop. A colour
+is therefore truncated to 565 and expanded the same way, which gives exactly a
+565 framebuffer's pixels. 8-bit indices would need the system palette and
+still fall back.
 
 Links 2003 (DirectDraw7 through Wine, Win2000): two defects stopped it. Every
 depth-to-depth Blt into the game's spare Z-buffer returned INVALIDCALL, because

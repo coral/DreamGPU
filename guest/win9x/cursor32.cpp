@@ -12,6 +12,24 @@ typedef int BOOL;
 #include "cursor32.h"
 static_assert(sizeof(DG9_CURSOR_LAYOUT) == 32);
 namespace {
+/* The host composites (desktop & and) ^ xor in 8-bit RGB and expands a
+ * 16-bpp desktop by bit replication. Replication is linear over XOR, and an
+ * AND mask is all zeros or all ones, so a 565 XOR expanded the same way gives
+ * exactly a 565 framebuffer's cursor pixels. Deeper colors on a 16-bpp
+ * desktop first truncate to 565, as the desktop's own pixels did. */
+constexpr DWORD expand565(DWORD v) noexcept {
+    const DWORD r = (v >> 11) & 31, g = (v >> 5) & 63, b = v & 31;
+    return (((r << 3) | (r >> 2)) << 16) | (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+}
+constexpr DWORD truncate565(DWORD rgb) noexcept {
+    return ((rgb >> 8) & 0xf800) | ((rgb >> 5) & 0x07e0) | ((rgb >> 3) & 0x001f);
+}
+/* Standard 16-color palette in Windows order (4-bit color cursors). */
+constexpr DWORD vga16[16] = {0x000000, 0x800000, 0x008000, 0x808000, 0x000080, 0x800080,
+                             0x008080, 0xc0c0c0, 0x808080, 0xff0000, 0x00ff00, 0xffff00,
+                             0x0000ff, 0xff00ff, 0x00ffff, 0xffffff};
+static_assert(expand565(0xffff) == 0xffffff && expand565(0x8d45) == 0x8caa29);
+static_assert(truncate565(0x8caa29) == 0x8d45 && truncate565(0x8fab2f) == 0x8d45);
 class cursor_stream final {
     BYTE raw_[DG9_CURSOR_RAW_MAX]{};
     DG9_CURSOR_LAYOUT layout_{};
@@ -72,7 +90,7 @@ class cursor_stream final {
             return 0;
         staging_ = false;
         const DWORD words = layout_.Width * layout_.Height * 2;
-        if (!pixels || capacity < words || (layout_.Bits != 1 && layout_.Bits != bpp))
+        if (!pixels || capacity < words || (bpp != 16 && bpp != 32))
             return 0;
         DWORD output = 0;
         for (DWORD y = 0; y < layout_.Height; ++y) {
@@ -83,16 +101,19 @@ class cursor_stream final {
                 pixels[output++] = (raw_[and_start + x / 8] & mask) ? 0x00ffffffUL : 0;
                 if (layout_.Bits == 1)
                     pixels[output++] = (raw_[xor_start + x / 8] & mask) ? 0x00ffffffUL : 0;
-                else if (layout_.Bits == 16) {
+                else if (layout_.Bits == 4) {
+                    const DWORD packed = raw_[xor_start + x / 2];
+                    const DWORD rgb = vga16[(x & 1) ? packed & 15 : packed >> 4];
+                    pixels[output++] = bpp == 16 ? expand565(truncate565(rgb)) : rgb;
+                } else if (layout_.Bits == 16) {
                     const DWORD offset = xor_start + x * 2;
-                    const DWORD v = raw_[offset] | (DWORD(raw_[offset + 1]) << 8);
-                    const DWORD r = v >> 11, g = (v >> 5) & 63, b = v & 31;
-                    pixels[output++] = (((r << 3) | (r >> 2)) << 16) |
-                                       (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+                    pixels[output++] =
+                        expand565(raw_[offset] | (DWORD(raw_[offset + 1]) << 8));
                 } else {
                     const DWORD offset = xor_start + x * 4;
-                    pixels[output++] = raw_[offset] | (DWORD(raw_[offset + 1]) << 8) |
-                                       (DWORD(raw_[offset + 2]) << 16);
+                    const DWORD bgr = raw_[offset] | (DWORD(raw_[offset + 1]) << 8) |
+                                      (DWORD(raw_[offset + 2]) << 16);
+                    pixels[output++] = bpp == 16 ? expand565(truncate565(bgr)) : bgr;
                 }
             }
         }
