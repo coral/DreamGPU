@@ -28,6 +28,11 @@
  * TEXTURE_MAX_ANISOTROPY_EXT, TEXTURE_FILTER_CONTROL LOD bias and POINT_SPRITE
  * COORD_REPLACE, plus their state queries, as ordinary validated records. */
 #define DG_CAP_GL_FIXED_STATE 0x10000
+/* Texture control: ATI_texture_env_combine3 COMBINE modes, ATI_texture_mirror_once
+ * wrap modes and SGIS_generate_mipmap (TexParameter GENERATE_MIPMAP, its hint and
+ * queries). Values travel in existing records; native generation of levels below
+ * a defined image is charged with that image. */
+#define DG_CAP_GL_TEXTURE_CONTROL 0x20000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

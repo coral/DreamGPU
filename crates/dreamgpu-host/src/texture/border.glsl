@@ -99,6 +99,9 @@ vec3 combineColor(vec3 a, vec3 b, vec3 c) {
     if (combineRGB == 34023) return a - b;
     if (combineRGB == 34478 || combineRGB == 34479)
         return vec3(4.0 * dot(a - 0.5, b - 0.5));
+    if (combineRGB == 34628) return a * c + b; // MODULATE_ADD_ATI
+    if (combineRGB == 34629) return a * c + b - 0.5; // MODULATE_SIGNED_ADD_ATI
+    if (combineRGB == 34630) return a * c - b; // MODULATE_SUBTRACT_ATI
     return a * b;
 }
 float combineOpacity(float a, float b, float c) {
@@ -107,6 +110,9 @@ float combineOpacity(float a, float b, float c) {
     if (combineAlpha == 34164) return a + b - 0.5;
     if (combineAlpha == 34165) return a * c + b * (1.0 - c);
     if (combineAlpha == 34023) return a - b;
+    if (combineAlpha == 34628) return a * c + b;
+    if (combineAlpha == 34629) return a * c + b - 0.5;
+    if (combineAlpha == 34630) return a * c - b;
     return a * b;
 }
 vec4 environment(vec4 texel, vec4 primary) {

@@ -84,6 +84,72 @@ BOOL JglMultitextureAvailable(void);
 /* Blend color/equation/separate, separate stencil, point parameters/sprites,
  * anisotropy and LOD bias. */
 BOOL JglFixedStateAvailable(void);
+/* ATI_texture_env_combine3, ATI_texture_mirror_once and SGIS_generate_mipmap. */
+BOOL JglTextureControlAvailable(void);
+/* Value counts of the TexParameter/TexEnv names the host accepts, and Hint
+ * validity. Scalar and vector entrypoints share them: an unknown name is a local
+ * GL_INVALID_ENUM, never a record the host rejects as malformed (which would
+ * fail the whole batch and the context). Zero means invalid. */
+static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
+    if (target != 0x0de0 && target != 0x0de1) /* TEXTURE_1D, TEXTURE_2D */
+        return 0;
+    switch (pname) {
+        case 0x1004: /* TEXTURE_BORDER_COLOR */
+            return 4;
+        case 0x2801:
+        case 0x2800: /* TEXTURE_MIN/MAG_FILTER */
+        case 0x2802:
+        case 0x2803: /* TEXTURE_WRAP_S/T */
+        case 0x8066: /* TEXTURE_PRIORITY */
+        case 0x813c: /* TEXTURE_BASE_LEVEL */
+        case 0x813d: /* TEXTURE_MAX_LEVEL */
+            return 1;
+        case 0x84fe: /* TEXTURE_MAX_ANISOTROPY_EXT */
+            return JglFixedStateAvailable() ? 1 : 0;
+        case 0x8191: /* GENERATE_MIPMAP_SGIS */
+            return JglTextureControlAvailable() ? 1 : 0;
+        default:
+            return 0;
+    }
+}
+static inline ULONG JglTextureEnvCount(GLenum target, GLenum pname) {
+    /* TEXTURE_FILTER_CONTROL/TEXTURE_LOD_BIAS, POINT_SPRITE/COORD_REPLACE */
+    if (target == 0x8500 || target == 0x8861)
+        return JglFixedStateAvailable() && pname == (target == 0x8500 ? 0x8501U : 0x8862U) ? 1 : 0;
+    if (target != 0x2300) /* TEXTURE_ENV */
+        return 0;
+    switch (pname) {
+        case 0x2201: /* TEXTURE_ENV_COLOR */
+            return 4;
+        case 0x2200: /* TEXTURE_ENV_MODE */
+        case 0x8571:
+        case 0x8572: /* COMBINE_RGB/ALPHA */
+        case 0x8573:
+        case 0x0d1c: /* RGB_SCALE/ALPHA_SCALE */
+        case 0x8580:
+        case 0x8581:
+        case 0x8582: /* SOURCE0..2_RGB */
+        case 0x8588:
+        case 0x8589:
+        case 0x858a: /* SOURCE0..2_ALPHA */
+        case 0x8590:
+        case 0x8591:
+        case 0x8592: /* OPERAND0..2_RGB */
+        case 0x8598:
+        case 0x8599:
+        case 0x859a: /* OPERAND0..2_ALPHA */
+            return 1;
+        default:
+            return 0;
+    }
+}
+static inline BOOL JglHintValid(GLenum target, GLenum mode) {
+    if (mode < 0x1100 || mode > 0x1102) /* DONT_CARE, FASTEST, NICEST */
+        return FALSE;
+    /* PERSPECTIVE_CORRECTION, POINT/LINE/POLYGON_SMOOTH and FOG hints */
+    return (target >= 0x0c50 && target <= 0x0c54) ||
+           (target == 0x8192 /* GENERATE_MIPMAP_HINT_SGIS */ && JglTextureControlAvailable());
+}
 /* Negotiated GL_EXTENSIONS: static storage, valid for the process lifetime. */
 const GLubyte *JglExtensions(void);
 ULONG JglReadbackCapacity(void);

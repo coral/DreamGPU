@@ -90,6 +90,9 @@ BOOL JglMultitextureAvailable(void) {
 BOOL JglFixedStateAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_FIXED_STATE);
 }
+BOOL JglTextureControlAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_CONTROL);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -104,9 +107,11 @@ BOOL JglFixedStateAvailable(void) {
     "GL_SGIS_texture_edge_clamp GL_EXT_texture_filter_anisotropic GL_EXT_texture_lod_bias "        \
     "GL_ARB_point_parameters GL_EXT_point_parameters GL_ARB_point_sprite "                         \
     "GL_ARB_texture_env_add GL_EXT_texture_env_add"
+#define JGL_TEXTURE_CONTROL_EXTENSIONS                                                             \
+    "GL_ATI_texture_env_combine3 GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
-                       sizeof(JGL_FIXED_STATE_EXTENSIONS)];
+                       sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -121,8 +126,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_SECONDARY_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_FIXED_STATE)
         AppendExtensions(&at, JGL_FIXED_STATE_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_TEXTURE_CONTROL)
+        AppendExtensions(&at, JGL_TEXTURE_CONTROL_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_TEXTURE_CONTROL_EXTENSIONS
 #undef JGL_FIXED_STATE_EXTENSIONS
 #undef JGL_SECONDARY_EXTENSIONS
 #undef JGL_MULTITEXTURE_EXTENSIONS
@@ -315,6 +323,23 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
          function == FEnum_glPointParameterf) &&
         !(HostCapabilities & DG_CAP_GL_FIXED_STATE)) {
         CommandError(c, GL_INVALID_OPERATION);
+        return;
+    }
+    /* The host sizes these by name and rejects unknown names as malformed
+     * records; GL reports them as GL_INVALID_ENUM and keeps the context. */
+    if (function == FEnum_glTexParameteri || function == FEnum_glTexParameterf ||
+        function == FEnum_glTexEnvi || function == FEnum_glTexEnvf) {
+        const ULONG *w = (const ULONG *)arguments;
+        BOOL parameter = function == FEnum_glTexParameteri || function == FEnum_glTexParameterf;
+        if ((parameter ? JglTextureParameterCount(w[0], w[1]) : JglTextureEnvCount(w[0], w[1])) !=
+            1) {
+            CommandError(c, GL_INVALID_ENUM);
+            return;
+        }
+    }
+    if (function == FEnum_glHint &&
+        !JglHintValid(((const ULONG *)arguments)[0], ((const ULONG *)arguments)[1])) {
+        CommandError(c, GL_INVALID_ENUM);
         return;
     }
     if (function == FEnum_glCopyTexImage2D && words == 8 && ((const ULONG *)arguments)[7] &&

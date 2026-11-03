@@ -16,6 +16,8 @@ struct Mock {
     strip_border: bool,
     query_error: u32,
     offsets: Vec<i32>,
+    generate: i32,
+    generate_error: u32,
 }
 thread_local! { static MOCK: RefCell<Mock> = RefCell::new(Mock::default()); }
 fn index(key: u32) -> usize {
@@ -144,6 +146,14 @@ unsafe extern "C" fn level(_: u32, _: i32, key: u32, out: *mut i32) {
             };
         }
         v.error = v.query_error;
+    });
+}
+unsafe extern "C" fn parameter(_: u32, key: u32, out: *mut i32) {
+    assert_eq!(key, GL_GENERATE_MIPMAP);
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        unsafe { *out = v.generate };
+        v.error = v.generate_error;
     });
 }
 fn api() -> DreamGpuGlApi {
@@ -506,4 +516,96 @@ fn empty_redefinition_releases_full_precision_storage_without_zero_fill() {
         );
     }
     assert_eq!(MOCK.with(|v| v.borrow().zeros), 0);
+}
+
+#[test]
+fn generated_mip_chains_are_charged_with_their_defining_image() {
+    let mut api = api();
+    let mut t = Texture::default();
+    let mut total = 0;
+    MOCK.with(|v| *v.borrow_mut() = Mock::default());
+    let image = |w: u32, h: u32| {
+        [
+            GL_TEXTURE_2D,
+            0,
+            GL_RGBA8,
+            w,
+            h,
+            0,
+            GL_RGBA,
+            GL_UNSIGNED_BYTE,
+        ]
+    };
+    // Without the native query the charge is exactly the defined level.
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(4, 4),
+            64
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!((total, t.levels[0]), (64, 64));
+    // GENERATE_MIPMAP set: a third more, rounded up, replacing the old charge.
+    api.dg_glGetTexParameteriv = Some(parameter);
+    MOCK.with(|v| v.borrow_mut().generate = 1);
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(4, 4),
+            64
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!((total, t.levels[0]), (86, 86));
+    assert_eq!(t.widths[0], 4);
+    // Subimages never change the charge.
+    let tile = [GL_TEXTURE_2D, 0, 0, 0, 2, 2, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(
+        run(&api, &mut t, &mut total, FEnum_glTexSubImage2D, tile, 16),
+        (Ok(()), 0)
+    );
+    assert_eq!(total, 86);
+    // A native without the parameter reports an error: consumed, never
+    // charged and never surfaced as the upload's own error.
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        v.generate = 0;
+        v.generate_error = GL_INVALID_ENUM;
+    });
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(4, 4),
+            64
+        ),
+        (Ok(()), 0)
+    );
+    assert_eq!((total, t.levels[0]), (64, 64));
+    MOCK.with(|v| v.borrow_mut().generate_error = 0);
+    // The chain charge alone can exhaust the budget before native allocation.
+    MOCK.with(|v| v.borrow_mut().generate = 1);
+    // Replacing the 64-byte level fits on its own; its 22-byte chain does not.
+    total = u64::from(DG_GL_MAX_TEXTURE_BYTES) - 10;
+    assert_eq!(
+        run(
+            &api,
+            &mut t,
+            &mut total,
+            FEnum_glTexImage2D,
+            image(4, 4),
+            64
+        )
+        .0,
+        Err(9)
+    );
 }

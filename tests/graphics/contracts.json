@@ -227,6 +227,10 @@
     "guest-stages": {
       "scope": "installed-api",
       "path": "tools/d3d/stage-probe.inc"
+    },
+    "gl-fixed": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_fixed.py"
     }
   },
   "contracts": [
@@ -1254,6 +1258,26 @@
         "guest-stages"
       ],
       "remaining": "Reports 8 stages/8 simultaneous textures, TextureOpCaps 0x0280bbff. Installed D3D8/9 probes check every claimed two-stage op and a three-stage TFACTOR chain. Patch 0027 enables a target for active texture-less stages; frontend accepts every GL1.2 packed type used for Wine dummy textures. ADDSMOOTH, PREMODULATE, MODULATE*_ADD*, MULTIPLYADD, BUMPENVMAP, cube and volume stages are not claimed."
+    },
+    {
+      "id": "gl.texture-control",
+      "area": 8,
+      "api": "OpenGL 1.1 + ATI_texture_env_combine3/ATI_texture_mirror_once/SGIS_generate_mipmap",
+      "operation": "combine3 environments, mirror-once wrap, generated mipmaps with hint and queries",
+      "format": "all exposed texture formats",
+      "resource": "texture",
+      "usage": "sampling",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-fixed-state",
+        "gl-fixed",
+        "native",
+        "guest-stages"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_TEXTURE_CONTROL. Native pixel tests cover the three combine3 modes, MIRROR_CLAMP_TO_EDGE_ATI and a generated level; frontend tests cover scalar pre-validation. Generated chains enabled only after definition are not charged until the next image definition. macOS CGL and installed MIRRORONCE/AUTOGENMIPMAP use remain unverified."
     }
   ]
 }

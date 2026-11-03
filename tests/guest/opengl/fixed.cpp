@@ -3,7 +3,7 @@
 #include <stdio.h>
 #include "fixed.cpp"
 #include "query.cpp"
-static BOOL Ready = TRUE, Secondary = TRUE, Multitexture, FixedState;
+static BOOL Ready = TRUE, Secondary = TRUE, Multitexture, FixedState, TextureControl;
 static const GLubyte Negotiated[] = "negotiated extensions";
 static ULONG ScalarFunctions[4], ScalarWords[4][4], ScalarCount;
 static ULONG Error, Calls, Function, Bytes, Words, Queries, ResultCount = 4;
@@ -18,6 +18,9 @@ BOOL JglMultitextureAvailable(void) {
 }
 BOOL JglFixedStateAvailable(void) {
     return FixedState;
+}
+BOOL JglTextureControlAvailable(void) {
+    return TextureControl;
 }
 const GLubyte *JglExtensions(void) {
     return Negotiated;
@@ -283,6 +286,20 @@ int main(void) {
         Error = 0;
         glTexParameterfv(GL_TEXTURE_2D, 0x84fe, four);
         assert(Calls == saved && Error == GL_INVALID_ENUM);
+        Error = 0;
+        glTexParameterfv(GL_TEXTURE_2D, 0x8191, four); /* GENERATE_MIPMAP_SGIS */
+        assert(Calls == saved && Error == GL_INVALID_ENUM);
+        Error = 0;
+        TextureControl = TRUE;
+        glTexParameterfv(GL_TEXTURE_2D, 0x8191, four);
+        assert(Calls == saved + 1 && !Error && Function == FEnum_glTexParameterfv &&
+               Arguments[1] == 0x8191 && Bytes == 4);
+        glTexParameterfv(GL_TEXTURE_1D, 0x813d, four); /* TEXTURE_MAX_LEVEL is GL1.2 core */
+        assert(Calls == saved + 2 && !Error && Bytes == 4);
+        glTexParameterfv(0x8513, 0x8191, four); /* no cube maps */
+        assert(Calls == saved + 2 && Error == GL_INVALID_ENUM);
+        TextureControl = FALSE;
+        saved = Calls;
         Error = 0;
         glTexEnviv(0x8500, 0x8501, ints);
         assert(Calls == saved && Error == GL_INVALID_ENUM);

@@ -1,7 +1,8 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Fixed-function vector state. Sizes are determined from pname before touching
  * caller memory; native validation independently checks the same contract.
- * Parameters of DG_CAP_GL_FIXED_STATE are sized only when it is negotiated. */
+ * Parameters of DG_CAP_GL_FIXED_STATE and DG_CAP_GL_TEXTURE_CONTROL are sized
+ * only when negotiated (internal.h). */
 #include "internal.h"
 
 extern "C" {
@@ -10,54 +11,10 @@ static ULONG Count(ULONG function, GLenum target, GLenum pname) {
     switch (function) {
         case FEnum_glTexParameterfv:
         case FEnum_glTexParameteriv:
-            if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D)
-                return 0;
-            switch (pname) {
-                case GL_TEXTURE_BORDER_COLOR:
-                    return 4;
-                case GL_TEXTURE_MIN_FILTER:
-                case GL_TEXTURE_MAG_FILTER:
-                case GL_TEXTURE_WRAP_S:
-                case GL_TEXTURE_WRAP_T:
-                    return 1;
-                case 0x84fe: /* TEXTURE_MAX_ANISOTROPY_EXT */
-                    return JglFixedStateAvailable() ? 1 : 0;
-                default:
-                    return 0;
-            }
+            return JglTextureParameterCount(target, pname);
         case FEnum_glTexEnvfv:
         case FEnum_glTexEnviv:
-            /* TEXTURE_FILTER_CONTROL/TEXTURE_LOD_BIAS, POINT_SPRITE/COORD_REPLACE */
-            if (target == 0x8500 || target == 0x8861)
-                return JglFixedStateAvailable() && pname == (target == 0x8500 ? 0x8501U : 0x8862U)
-                           ? 1
-                           : 0;
-            if (target != GL_TEXTURE_ENV)
-                return 0;
-            switch (pname) {
-                case GL_TEXTURE_ENV_COLOR:
-                    return 4;
-                case GL_TEXTURE_ENV_MODE:
-                case 0x8571:
-                case 0x8572: /* COMBINE_RGB/ALPHA */
-                case 0x8573:
-                case 0x0d1c: /* RGB_SCALE/ALPHA_SCALE */
-                case 0x8580:
-                case 0x8581:
-                case 0x8582: /* SOURCE0..2_RGB */
-                case 0x8588:
-                case 0x8589:
-                case 0x858a: /* SOURCE0..2_ALPHA */
-                case 0x8590:
-                case 0x8591:
-                case 0x8592: /* OPERAND0..2_RGB */
-                case 0x8598:
-                case 0x8599:
-                case 0x859a: /* OPERAND0..2_ALPHA */
-                    return 1;
-                default:
-                    return 0;
-            }
+            return JglTextureEnvCount(target, pname);
         case FEnum_glLightfv:
             if (target < GL_LIGHT0 || target > GL_LIGHT7)
                 return 0;

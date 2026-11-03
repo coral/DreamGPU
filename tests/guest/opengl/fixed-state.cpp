@@ -31,6 +31,8 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     "GL_SGIS_texture_edge_clamp GL_EXT_texture_filter_anisotropic GL_EXT_texture_lod_bias "        \
     "GL_ARB_point_parameters GL_EXT_point_parameters GL_ARB_point_sprite "                         \
     "GL_ARB_texture_env_add GL_EXT_texture_env_add"
+#define CONTROL_NAMES                                                                              \
+    "GL_ATI_texture_env_combine3 GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap"
 #define BLEND 0x0be2U
 #define POINT_SPRITE 0x8861U
 
@@ -117,14 +119,17 @@ int main() {
      * contexts. Without FIXED_STATE the M1/secondary strings are unchanged. */
     {
         const GLubyte *pointer = NULL;
-        for (ULONG n = 0; n < 8; ++n) {
+        for (ULONG n = 0; n < 16; ++n) {
             Reset();
-            HostCaps = (n & 1 ? DG_CAP_GL_MULTITEXTURE : 0) | (n & 4 ? DG_CAP_GL_FIXED_STATE : 0);
+            HostCaps = (n & 1 ? DG_CAP_GL_MULTITEXTURE : 0) | (n & 4 ? DG_CAP_GL_FIXED_STATE : 0) |
+                       (n & 8 ? DG_CAP_GL_TEXTURE_CONTROL : 0);
             HostSecondaryWords = n & 2 ? 3 : 0;
             HGLRC context = Create();
-            char expected[sizeof(MULTITEXTURE_NAMES " " SECONDARY_NAMES " " FIXED_NAMES)] = "";
-            static const char *const groups[3] = {MULTITEXTURE_NAMES, SECONDARY_NAMES, FIXED_NAMES};
-            for (ULONG group = 0; group < 3; ++group)
+            char expected[sizeof(MULTITEXTURE_NAMES " " SECONDARY_NAMES " " FIXED_NAMES
+                                                    " " CONTROL_NAMES)] = "";
+            static const char *const groups[4] = {MULTITEXTURE_NAMES, SECONDARY_NAMES, FIXED_NAMES,
+                                                  CONTROL_NAMES};
+            for (ULONG group = 0; group < 4; ++group)
                 if (n & (1U << group)) {
                     if (*expected)
                         strcat(expected, " ");
@@ -143,6 +148,7 @@ int main() {
             assert(wglMakeCurrent((HDC)1, context));
             assert(glGetString(GL_EXTENSIONS) == pointer && JglExtensions() == pointer);
             assert(JglFixedStateAvailable() == !!(n & 4));
+            assert(JglTextureControlAvailable() == !!(n & 8));
             assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
         }
         // The earlier combined string, verbatim.
@@ -342,11 +348,62 @@ int main() {
         assert(QueryCalls == queries + 2);
     }
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+
+    /* Name-sized scalars: an unknown, vector-only or unnegotiated name is a
+     * local GL_INVALID_ENUM. The host would reject the record as malformed and
+     * fail the batch, losing the context. Values are never judged locally. */
+    for (ULONG negotiated = 0; negotiated < 2; ++negotiated) {
+        Reset();
+        HostCaps = DG_CAP_GL_MULTITEXTURE | DG_CAP_GL_FIXED_STATE |
+                   (negotiated ? DG_CAP_GL_TEXTURE_CONTROL : 0);
+        context = Create();
+        c = Lookup(context);
+        const struct {
+            void (*call)(void);
+            BOOL valid;
+        } scalars[] = {
+            {[] { glTexParameteri(GL_TEXTURE_2D, 0x813b, 0); }, FALSE}, /* MAX_LOD: GL1.2 */
+            {[] { glTexParameterf(GL_TEXTURE_2D, 0x1004, 1); }, FALSE}, /* BORDER_COLOR */
+            {[] { glTexParameteri(0x8513, 0x2801, 0x2600); }, FALSE},   /* cube map */
+            {[] { glTexEnvi(0x2300, 0x8583, 0x1702); }, FALSE},         /* SOURCE3_RGB_NV */
+            {[] { glTexEnvf(0x2300, 0x2201, 0); }, FALSE},              /* ENV_COLOR */
+            {[] { glHint(0x0c54, 0x1234); }, FALSE},
+            {[] { glHint(0x8457, 0x1102); }, FALSE}, /* FOG_COORDINATE_SOURCE */
+            {[] { glTexParameteri(GL_TEXTURE_2D, 0x2802, 0x8743); }, TRUE}, /* MIRROR_ONCE */
+            {[] { glTexParameterf(GL_TEXTURE_1D, 0x813c, 1); }, TRUE},      /* BASE_LEVEL */
+            {[] { glTexEnvi(0x2300, 0x8571, 0x8744); }, TRUE},              /* MODULATE_ADD */
+            {[] { glHint(0x0c50, 0x1102); }, TRUE},
+            {[] { glTexParameteri(GL_TEXTURE_2D, 0x8191, 1); }, 2}, /* GENERATE_MIPMAP */
+            {[] { glHint(0x8192, 0x1102); }, 2},                    /* GENERATE_MIPMAP_HINT */
+        };
+        for (const auto &item : scalars) {
+            BOOL valid = item.valid == 2 ? negotiated : item.valid;
+            Clear(c);
+            item.call();
+            assert(valid ? c->Records == 1 && !c->Error
+                         : !c->Records && c->Error == GL_INVALID_ENUM);
+        }
+        // Within a display list the rejection is deferred, never recorded raw.
+        assert(JglListMode(GL_COMPILE));
+        Clear(c);
+        glHint(0x8192, 0x1102);
+        glTexParameteri(GL_TEXTURE_2D, 0x813b, 0);
+        assert(c->Records == 2 && !c->Error);
+        const ULONG invalidEnum = GL_INVALID_ENUM;
+        if (!negotiated)
+            Expect(c, 0, DG_GL_RECORD_ERROR, &invalidEnum, 1);
+        else
+            assert(Nth(c, 0)[8] == FEnum_glHint);
+        Expect(c, 1, DG_GL_RECORD_ERROR, &invalidEnum, 1);
+        assert(JglListMode(0));
+        assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+    }
     BindCapabilities = 0;
     Reset();
     assert(!Allocations);
     puts("PASS fixed state actual frontend: exact negotiated extension strings and stable "
          "pointers; unnegotiated hosts unchanged; exact records/bits, ATI expansion, point "
-         "vectors, new pnames; Begin rejection; blend cache; lists; host queries");
+         "vectors, new pnames; Begin rejection; blend cache; lists; host queries; name-sized "
+         "scalar pre-validation and texture-control negotiation");
     return 0;
 }

@@ -129,6 +129,29 @@ pub(crate) unsafe fn proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 {
 
 pub type Zero = unsafe extern "C" fn(*mut c_void, *mut Texture, u32, u32, u32) -> u32;
 
+/// Whether the bound texture regenerates its mip chain on level changes
+/// (SGIS_generate_mipmap). The native query runs after pending errors were
+/// drained, so its own error is consumed here and never reaches the guest.
+unsafe fn generates_mipmaps(api: &DreamGpuGlApi, target: u32) -> bool {
+    let (Some(get), Some(error)) = (api.dg_glGetTexParameteriv, api.dg_glGetError) else {
+        return false;
+    };
+    let mut value = 0;
+    unsafe {
+        get(target, GL_GENERATE_MIPMAP, &mut value);
+        error() == 0 && value != 0
+    }
+}
+
+/// Native levels generated below a defined level cost at most a third more.
+fn with_chain(bytes: u64, chain: bool) -> u64 {
+    if chain {
+        bytes + bytes.div_ceil(3)
+    } else {
+        bytes
+    }
+}
+
 #[expect(
     clippy::too_many_arguments,
     reason = "Mirrors native texture upload arguments without borrowing state across callbacks."
@@ -168,7 +191,9 @@ unsafe fn upload(
     } else {
         4
     };
-    let allocation = u64::from(w) * u64::from(h) * texel_bytes;
+    // Generated levels are charged with the image that produces them.
+    let chain = image && unsafe { generates_mipmaps(api, a[0]) };
+    let allocation = with_chain(u64::from(w) * u64::from(h) * texel_bytes, chain);
     let old = unsafe { (*texture).levels[level] };
     let new_total = if image {
         let n = unsafe { *total }
@@ -391,7 +416,10 @@ unsafe fn upload(
             defined_width = width as u32;
             defined_height = height as u32;
             defined_border = border as u32;
-            defined_allocation = u64::from(defined_width) * u64::from(defined_height) * texel_bytes;
+            defined_allocation = with_chain(
+                u64::from(defined_width) * u64::from(defined_height) * texel_bytes,
+                chain,
+            );
             defined_total = new_total - allocation + defined_allocation;
         }
     }

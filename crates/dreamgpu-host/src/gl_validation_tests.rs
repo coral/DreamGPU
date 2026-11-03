@@ -589,3 +589,17 @@ fn proxy_definitions_accept_virtual_limit_probes_but_never_payloads_or_wrong_tar
         assert_eq!(data_validate(function, &a, &[]), DG_GL_ERROR_TEXTURE);
     }
 }
+
+#[test]
+fn texture_control_names_are_sized_and_hinted() {
+    assert_eq!(texture_params(GL_TEXTURE_2D, GL_GENERATE_MIPMAP), 1);
+    assert_eq!(texture_params(GL_TEXTURE_1D, GL_GENERATE_MIPMAP), 1);
+    assert_eq!(texture_params(GL_PROXY_TEXTURE_2D, GL_GENERATE_MIPMAP), 0);
+    assert_eq!(query_state_count(GL_GENERATE_MIPMAP_HINT), 1);
+    let mut a = [0u32; 8];
+    a[0] = GL_GENERATE_MIPMAP_HINT;
+    a[1] = GL_NICEST;
+    assert_eq!(call_validate(FEnum_glHint, &a), 0);
+    a[1] = GL_GENERATE_MIPMAP;
+    assert_eq!(call_validate(FEnum_glHint, &a), DG_GL_ERROR_UNSUPPORTED);
+}

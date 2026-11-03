@@ -72,7 +72,8 @@ pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
         | GL_TEXTURE_BASE_LEVEL
         | GL_TEXTURE_MAX_LEVEL
         | GL_TEXTURE_PRIORITY
-        | GL_TEXTURE_MAX_ANISOTROPY_EXT => 1,
+        | GL_TEXTURE_MAX_ANISOTROPY_EXT
+        | GL_GENERATE_MIPMAP => 1,
         _ => 0,
     }
 }
@@ -216,6 +217,7 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_STENCIL_BACK_WRITEMASK
         | GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
         | GL_MAX_TEXTURE_LOD_BIAS
+        | GL_GENERATE_MIPMAP_HINT
         | GL_POINT_SIZE_MIN
         | GL_POINT_SIZE_MAX
         | GL_POINT_FADE_THRESHOLD_SIZE
@@ -525,6 +527,7 @@ fn hint_target(target: u32) -> bool {
             | GL_LINE_SMOOTH_HINT
             | GL_POLYGON_SMOOTH_HINT
             | GL_FOG_HINT
+            | GL_GENERATE_MIPMAP_HINT
     )
 }
 fn call_validate(function: u32, a: &[u32; 8]) -> u32 {

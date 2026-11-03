@@ -67,6 +67,19 @@ and disposable-VM acceptance cycle:
   packed pixel type, which Wine uses for its per-unit dummy textures.
 - Wine patch 0027 keeps texture-less fixed-function stages active (see the
   patch README).
+- Texture control (`DG_CAP_GL_TEXTURE_CONTROL`) adds ATI_texture_env_combine3
+  (MODULATE_ADD/SIGNED_ADD/SUBTRACT), ATI_texture_mirror_once and
+  SGIS_generate_mipmap. Values ride existing records; native levels generated
+  below a defined image are charged with that image. Wine then claims
+  ADDSMOOTH, BLENDTEXTUREALPHAPM, MODULATEALPHA_ADDCOLOR,
+  MODULATECOLOR_ADDALPHA and MULTIPLYADD, MIRRORONCE addressing and
+  automatic mipmap generation. The macOS border sampler evaluates the
+  combine3 modes itself.
+- Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
+  frontend against the same tables as their vector forms. An unknown,
+  vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
+  host rejected the record as malformed, which failed the whole batch and left
+  the context permanently failed.
 
 Patch provenance stays checked in `support/guest/d3d/patches`; vendor trees are
 not edited. New texture-border behavior is negotiated between frontend and host.
@@ -167,6 +180,9 @@ installs to a terminal receipt, and `sysgl`, `bordergl`, `sysglide`, `sysddraw`,
 multi-stage probe. The Half-Life `jrgperf` timedemo ran at 193.6 and 205.0 FPS
 (177.4 before multitexture). UT99 through D3D renders CityIntro with lightmaps
 in a window. macOS CGL, Win98 and XP remain unverified for these capabilities.
+With texture control the installed D3D9 caps add CANAUTOGENMIPMAP (Caps2
+`0x60020000`), TextureOpCaps `0x0386ffff` and MIRRORONCE addressing
+(`0x3f`); the stage probe renders all thirteen claimed cases exactly.
 
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,

@@ -74,6 +74,26 @@ static Rgba Apply(D3DTEXTUREOP op, Rgba a, Rgba b) {
             out = {Mul(a.r, a.a) + Mul(b.r, 255 - a.a), Mul(a.g, a.a) + Mul(b.g, 255 - a.a),
                    Mul(a.b, a.a) + Mul(b.b, 255 - a.a), b.a};
             break;
+        case D3DTOP_ADDSMOOTH:
+            out = {Clamp(a.r + b.r - Mul(a.r, b.r)), Clamp(a.g + b.g - Mul(a.g, b.g)),
+                   Clamp(a.b + b.b - Mul(a.b, b.b)), b.a};
+            break;
+        case D3DTOP_BLENDTEXTUREALPHAPM:
+            out = {Clamp(a.r + Mul(b.r, 255 - a.a)), Clamp(a.g + Mul(b.g, 255 - a.a)),
+                   Clamp(a.b + Mul(b.b, 255 - a.a)), b.a};
+            break;
+        case D3DTOP_MODULATEALPHA_ADDCOLOR:
+            out = {Clamp(a.r + Mul(a.a, b.r)), Clamp(a.g + Mul(a.a, b.g)),
+                   Clamp(a.b + Mul(a.a, b.b)), b.a};
+            break;
+        case D3DTOP_MODULATECOLOR_ADDALPHA:
+            out = {Clamp(Mul(a.r, b.r) + a.a), Clamp(Mul(a.g, b.g) + a.a),
+                   Clamp(Mul(a.b, b.b) + a.a), b.a};
+            break;
+        case D3DTOP_MULTIPLYADD: /* Arg0 keeps its default, CURRENT (= Arg2 here). */
+            out = {Clamp(b.r + Mul(a.r, b.r)), Clamp(b.g + Mul(a.g, b.g)),
+                   Clamp(b.b + Mul(a.b, b.b)), b.a};
+            break;
         case D3DTOP_DOTPRODUCT3:
             dot = ((2 * a.r - 255) * (2 * b.r - 255) + (2 * a.g - 255) * (2 * b.g - 255) +
                    (2 * a.b - 255) * (2 * b.b - 255)) /
@@ -155,6 +175,14 @@ static void Run(Device *dev, Surface *target) {
         {"stage op SUBTRACT", D3DTOP_SUBTRACT, D3DTEXOPCAPS_SUBTRACT},
         {"stage op BLENDTEXTUREALPHA", D3DTOP_BLENDTEXTUREALPHA, D3DTEXOPCAPS_BLENDTEXTUREALPHA},
         {"stage op DOTPRODUCT3", D3DTOP_DOTPRODUCT3, D3DTEXOPCAPS_DOTPRODUCT3},
+        {"stage op ADDSMOOTH", D3DTOP_ADDSMOOTH, D3DTEXOPCAPS_ADDSMOOTH},
+        {"stage op BLENDTEXTUREALPHAPM", D3DTOP_BLENDTEXTUREALPHAPM,
+         D3DTEXOPCAPS_BLENDTEXTUREALPHAPM},
+        {"stage op MODULATEALPHA_ADDCOLOR", D3DTOP_MODULATEALPHA_ADDCOLOR,
+         D3DTEXOPCAPS_MODULATEALPHA_ADDCOLOR},
+        {"stage op MODULATECOLOR_ADDALPHA", D3DTOP_MODULATECOLOR_ADDALPHA,
+         D3DTEXOPCAPS_MODULATECOLOR_ADDALPHA},
+        {"stage op MULTIPLYADD", D3DTOP_MULTIPLYADD, D3DTEXOPCAPS_MULTIPLYADD},
     };
     unsigned passed = 0, skipped = 0;
     Log("STAGE fixed-function texture stages");
