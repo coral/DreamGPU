@@ -13,9 +13,12 @@ static WORD DgWindowSource(LPDIBENGINE dst, LPPDEVICE source, WORD dx, WORD dy, 
     LPDIBENGINE src = (LPDIBENGINE)source;
     DG9_BITMAP_TAG tag;
     DWORD __far *words;
+    /* The first scanline of a 16-pixel bitmap holds the whole 16-byte tag at
+     * either accepted depth, so the tag never straddles row padding. */
     if (dst != lpDriverPDevice || !source || rop != 0x00cc0020UL || src->deType != TYPE_DIBENG ||
-        src->deBitsPixel != 32 || src->dePlanes != 1 || src->deFlags & VRAM ||
-        !src->deBitsSelector || src->deBitsOffset > 65520UL || src->deWidth < 16 || !src->deHeight)
+        (src->deBitsPixel != 16 && src->deBitsPixel != 32) || src->dePlanes != 1 ||
+        src->deFlags & VRAM || !src->deBitsSelector || src->deBitsOffset > 65520UL ||
+        src->deWidth < 16 || !src->deHeight)
         return 0;
     words = DG9_WINDOW_WORDS(src);
     tag.Magic0 = words[0];
@@ -24,7 +27,9 @@ static WORD DgWindowSource(LPDIBENGINE dst, LPPDEVICE source, WORD dx, WORD dy, 
         return 0;
     tag.Binding = words[2];
     tag.Reserved = words[3];
-    if (!tag.Binding || tag.Reserved || dst->deBitsPixel != 32 || src->deBitsPixel != 32 ||
+    /* Never mixed depths; a 16-bpp primary must be the RGB565 layout. */
+    if (!tag.Binding || tag.Reserved || dst->deBitsPixel != src->deBitsPixel ||
+        (dst->deBitsPixel == 16 && !(dst->deFlags & FIVE6FIVE)) ||
         src->deFlags & (BUSY | SELECTEDDIB) || dst->deFlags & BUSY)
         return 2;
     return DgWindowBlt16(tag.Binding, sx | ((DWORD)sy << 16), dx | ((DWORD)dy << 16),

@@ -33,7 +33,8 @@ typedef struct {
     int(DREAMGPU_CDECL *WaitPending)(void);
     void(DREAMGPU_CDECL *Signal)(void);
     int(DREAMGPU_CDECL *CursorSafe)(void);
-    int(DREAMGPU_CDECL *Primary)(DWORD *, DWORD *, DWORD *, DWORD *);
+    /* Width, height, stride, offset and bpp of a validated 16/32-bpp primary. */
+    int(DREAMGPU_CDECL *Primary)(DWORD *, DWORD *, DWORD *, DWORD *, DWORD *);
     void(DREAMGPU_CDECL *PrimaryOwned)(int);
     void(DREAMGPU_CDECL *Fatal)(DWORD);
     void(DREAMGPU_CDECL *TraceText)(const char *);

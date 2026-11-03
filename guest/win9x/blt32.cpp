@@ -49,9 +49,13 @@ extern "C" int DREAMGPU_CDECL DreamGpuPrepareBlt(const DG9_SURFACE *surface, DWO
     *out = command;
     return 1;
 }
+/* Desktop records describe only XRGB8888 or little-endian RGB565 primaries.
+ * Both formats need a four-byte-aligned stride covering one row of pixels. */
 extern "C" int DREAMGPU_CDECL DreamGpuPrimaryMetadata(const DG9_SURFACE *surface) {
-    return surface && surface->Bpp == 32 && surface->Width && surface->Height &&
-           surface->Width <= DG_GL_MAX_DIMENSION && surface->Height <= DG_GL_MAX_DIMENSION &&
-           surface->Pitch >= surface->Width * 4 && !(surface->Pitch & 3) &&
-           surface->Pitch <= DG_DESKTOP_MAX_BYTES / surface->Height;
+    if (!surface || (surface->Bpp != 16 && surface->Bpp != 32))
+        return 0;
+    const DWORD bytes = surface->Bpp / 8;
+    return surface->Width && surface->Height && surface->Width <= DG_GL_MAX_DIMENSION &&
+           surface->Height <= DG_GL_MAX_DIMENSION && surface->Pitch >= surface->Width * bytes &&
+           !(surface->Pitch & 3) && surface->Pitch <= DG_DESKTOP_MAX_BYTES / surface->Height;
 }

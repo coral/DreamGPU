@@ -50,7 +50,7 @@ static void *fill_bytes(void *out, int value, size_t bytes) {
 #define Wait_Semaphore(value, flags) api->WaitSemaphore(value)
 #define Signal_Semaphore(value) api->SignalSemaphore(value)
 #define Dg9CursorTakeoverSafe() api->CursorSafe()
-#define Dg9Primary(w, h, s, o) api->Primary(w, h, s, o)
+#define Dg9Primary(w, h, s, o, b) api->Primary(w, h, s, o, b)
 #define Dg9PrimaryGpuOwned(owned) api->PrimaryOwned(owned)
 #define DgIdentityText(text) api->TraceText(text)
 #define DgIdentityField(text, value) api->TraceField(text, value)
@@ -379,7 +379,7 @@ static struct DG9_WINDOW {
 } dg_windows[DG9_WINDOW_SLOTS];
 static DWORD dg_window_next = 1;
 static BOOL dg_desktop_active;
-static DWORD dg_desktop_width, dg_desktop_height, dg_desktop_stride;
+static DWORD dg_desktop_width, dg_desktop_height, dg_desktop_stride, dg_desktop_bpp;
 
 static void Dg9DesktopFault(ULONG status) {
     dg_gl_faulted = TRUE;
@@ -389,7 +389,9 @@ static void Dg9DesktopFault(ULONG status) {
 extern "C" void DREAMGPU_CDECL DreamGpuPrimaryFault(void) {
     Dg9DesktopFault(DG_ESCAPE_STOPPED);
 }
-static ULONG *Dg9DesktopRecord(ULONG op, ULONG client, ULONG drawable) {
+/* Every record names the primary format; the device checks it against the
+ * active VBE mode. Zero keeps the original XRGB8888 records byte-identical. */
+static ULONG *Dg9DesktopRecord(ULONG op, ULONG client, ULONG drawable, ULONG bpp) {
     memset(dg_gl_commands, 0, 96);
     dg_gl_commands[0] = DG_GL_DESKTOP;
     dg_gl_commands[1] = 96;
@@ -397,6 +399,7 @@ static ULONG *Dg9DesktopRecord(ULONG op, ULONG client, ULONG drawable) {
     dg_gl_commands[4] = drawable;
     dg_gl_commands[7] = Dg9GlRead(NULL, DG_REG_GENERATION);
     dg_gl_commands[8] = op;
+    dg_gl_commands[8 + DG_DESKTOP_PRIMARY_BPP / 4] = bpp == 16 ? 16 : 0;
     return dg_gl_commands + 8;
 }
 static ULONG Dg9WindowSubmit(ULONG bytes) {
@@ -424,14 +427,14 @@ static void Dg9CohereLocked(void) {
         return;
     if (dg_gl_faulted)
         Dg9DesktopFault(DG_ESCAPE_STOPPED);
-    r = Dg9DesktopRecord(DG_DESKTOP_READBACK, 0, 0);
+    r = Dg9DesktopRecord(DG_DESKTOP_READBACK, 0, 0, dg_desktop_bpp);
     r[4] = dg_desktop_width;
     r[5] = dg_desktop_height;
     r[11] = dg_desktop_stride;
     status = Dg9WindowSubmit(96);
     if (status != DG_ESCAPE_OK)
         Dg9DesktopFault(status);
-    r = Dg9DesktopRecord(DG_DESKTOP_RETURN, 0, 0);
+    r = Dg9DesktopRecord(DG_DESKTOP_RETURN, 0, 0, dg_desktop_bpp);
     r[4] = dg_desktop_width;
     r[5] = dg_desktop_height;
     r[11] = dg_desktop_stride;
@@ -459,11 +462,13 @@ static struct DG9_WINDOW *Dg9WindowFind(DWORD token, DWORD client) {
             return &dg_windows[i];
     return NULL;
 }
-static ULONG Dg9WindowDiscard(struct DG9_WINDOW *window) {
+/* DISCARD touches no primary pixels, but the device still checks its format
+ * word, so it names the live primary rather than the last seeded desktop. */
+static ULONG Dg9WindowDiscard(struct DG9_WINDOW *window, DWORD bpp) {
     ULONG *r, status;
     if (!window->Retained)
         return DG_ESCAPE_OK;
-    r = Dg9DesktopRecord(DG_DESKTOP_DISCARD, window->Client, window->Drawable);
+    r = Dg9DesktopRecord(DG_DESKTOP_DISCARD, window->Client, window->Drawable, bpp);
     r[10] = window->Slot;
     r[12] = window->EpochLow;
     r[13] = window->EpochHigh;
@@ -476,11 +481,15 @@ static ULONG Dg9WindowDiscard(struct DG9_WINDOW *window) {
 }
 /* Called while the same GL mutex drains a retired client's native contexts. */
 static void Dg9WindowRetire(DWORD client) {
+    DWORD width, height, stride, offset, bpp = 0;
     unsigned i;
     for (i = 0; i < DG9_WINDOW_SLOTS; ++i) {
         if (dg_windows[i].Client != client)
             continue;
-        if (Dg9WindowDiscard(&dg_windows[i]) != DG_ESCAPE_OK)
+        /* An unsupported live depth keeps the original zero format word. */
+        if (dg_windows[i].Retained && !Dg9Primary(&width, &height, &stride, &offset, &bpp))
+            bpp = 0;
+        if (Dg9WindowDiscard(&dg_windows[i], bpp) != DG_ESCAPE_OK)
             Dg9DesktopFault(DG_ESCAPE_STOPPED);
         memset(&dg_windows[i], 0, sizeof(dg_windows[i]));
     }
@@ -497,7 +506,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
     DG9_OWNER_KEY owner;
     DG9_HANDLE_KEY handle;
     struct DG9_WINDOW *window;
-    DWORD flags, width = 0, height = 0, stride = 0, offset = 0;
+    DWORD flags, width = 0, height = 0, stride = 0, offset = 0, bpp = 0;
     unsigned i;
     BOOL acquired = FALSE, critical;
     ULONG status = DG_ESCAPE_INVALID;
@@ -548,8 +557,8 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
         status = DG_ESCAPE_STOPPED;
         goto unlock;
     }
-    if (!Dg9CursorTakeoverSafe() || !Dg9Primary(&width, &height, &stride, &offset) || offset ||
-        !(Dg9GlRead(NULL, DG_REG_CAPS) & DG_CAP_GL_PRESENT_BOUNDS)) {
+    if (!Dg9CursorTakeoverSafe() || !Dg9Primary(&width, &height, &stride, &offset, &bpp) ||
+        offset || !(Dg9GlRead(NULL, DG_REG_CAPS) & DG_CAP_GL_PRESENT_BOUNDS)) {
         status = DG_ESCAPE_UNSUPPORTED;
         goto unlock;
     }
@@ -589,7 +598,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
     }
     reply.Binding = window->Token;
     if (request.Operation == DG9_WINDOW_FINISH || request.Operation == DG9_WINDOW_RELEASE) {
-        status = Dg9WindowDiscard(window);
+        status = Dg9WindowDiscard(window, bpp);
         if (status == DG_ESCAPE_OK && request.Operation == DG9_WINDOW_RELEASE)
             memset(window, 0, sizeof(*window));
     } else if (request.Operation == DG9_WINDOW_PREPARE) {
@@ -627,6 +636,7 @@ unlock:
         DgIdentityField("height", height);
         DgIdentityField("stride", stride);
         DgIdentityField("offset", offset);
+        DgIdentityField("bpp", bpp);
         DgIdentityChar('\n');
         Dg9GlRestoreInterrupts(flags);
     }
@@ -647,7 +657,7 @@ done:
 extern "C" unsigned short DREAMGPU_CDECL DreamGpuWindowBlt(const DG9_CHANNEL_BLT *state) {
     struct DG9_WINDOW *window = NULL;
     DG9_OWNER_SLOT *owner;
-    DWORD width, height, stride, offset, context, flags, client = 0;
+    DWORD width, height, stride, offset, bpp, context, flags, client = 0;
     DWORD sx = state->Client_EBX & 65535, sy = state->Client_EBX >> 16;
     DWORD dx = state->Client_ECX & 65535, dy = state->Client_ECX >> 16;
     DWORD w = state->Client_ESI & 65535, h = state->Client_ESI >> 16;
@@ -684,12 +694,13 @@ extern "C" unsigned short DREAMGPU_CDECL DreamGpuWindowBlt(const DG9_CHANNEL_BLT
             client_lease.acquired(client);
     }
     Dg9GlRestoreInterrupts(flags);
-    if (!acquired || !Dg9CursorTakeoverSafe() || !Dg9Primary(&width, &height, &stride, &offset) ||
-        offset || sx > window->Width || w > window->Width - sx || sy > window->Height ||
-        h > window->Height - sy || dx > width || w > width - dx || dy > height || h > height - dy)
+    if (!acquired || !Dg9CursorTakeoverSafe() ||
+        !Dg9Primary(&width, &height, &stride, &offset, &bpp) || offset || sx > window->Width ||
+        w > window->Width - sx || sy > window->Height || h > window->Height - sy || dx > width ||
+        w > width - dx || dy > height || h > height - dy)
         goto done;
     if (!dg_desktop_active) {
-        r = Dg9DesktopRecord(DG_DESKTOP_SEED, 0, 0);
+        r = Dg9DesktopRecord(DG_DESKTOP_SEED, 0, 0, bpp);
         r[4] = width;
         r[5] = height;
         r[11] = stride;
@@ -699,12 +710,15 @@ extern "C" unsigned short DREAMGPU_CDECL DreamGpuWindowBlt(const DG9_CHANNEL_BLT
         dg_desktop_width = width;
         dg_desktop_height = height;
         dg_desktop_stride = stride;
+        dg_desktop_bpp = bpp;
         dg_desktop_active = TRUE;
         Dg9PrimaryGpuOwned(TRUE);
     }
-    if (width != dg_desktop_width || height != dg_desktop_height || stride != dg_desktop_stride)
+    /* GPU-owned VRAM has no CPU copy in any other geometry or pixel format. */
+    if (width != dg_desktop_width || height != dg_desktop_height || stride != dg_desktop_stride ||
+        bpp != dg_desktop_bpp)
         Dg9DesktopFault(DG_ESCAPE_STOPPED);
-    r = Dg9DesktopRecord(DG_DESKTOP_BLIT, client, window->Drawable);
+    r = Dg9DesktopRecord(DG_DESKTOP_BLIT, client, window->Drawable, dg_desktop_bpp);
     r[2] = dx;
     r[3] = dy;
     r[4] = w;

@@ -4,6 +4,10 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdio>
+#include <initializer_list>
+#include <utility>
+#include <sys/wait.h>
+#include <unistd.h>
 #include "../../../guest/win9x/channel32.cpp"
 #undef memcpy
 #undef memset
@@ -16,6 +20,11 @@ struct Model {
     bool held{}, critical{}, cursor_safe{true}, primary_owned{}, pending{}, signaled{};
     DWORD context{22}, submit_status{}, fail_opcode{}, last_opcode{}, last_operation{},
         query_sequence{}, retire_on_submit{};
+    /* Live FBHDA primary as validated by the VxD adapter. */
+    DWORD width{800}, height{600}, stride{3200}, bpp{32};
+    bool primary_ok{true}, expect_fatal{};
+    unsigned fatal_submits{}, record_count{};
+    DWORD records[64][24]{};
 } m;
 static DWORD DREAMGPU_CDECL check_pages(void *, DWORD, DWORD count) {
     return count;
@@ -100,6 +109,10 @@ static DWORD DREAMGPU_CDECL submit(DWORD physical, DWORD bytes, DG_ESCAPE_REPLY 
     ++m.submits;
     m.last_opcode = dg_gl_commands[0];
     m.last_operation = dg_gl_commands[8];
+    if (m.last_opcode == DG_GL_DESKTOP) {
+        assert(bytes == 96 && m.record_count < 64);
+        std::memcpy(m.records[m.record_count++], dg_gl_commands, 96);
+    }
     if (m.submit_status && (!m.fail_opcode || m.fail_opcode == m.last_opcode))
         return m.submit_status;
     reply->CompletedSequence = m.submits;
@@ -127,17 +140,24 @@ static void DREAMGPU_CDECL signal_wait() {
 static int DREAMGPU_CDECL cursor_safe() {
     return m.cursor_safe;
 }
-static int DREAMGPU_CDECL primary(DWORD *w, DWORD *h, DWORD *s, DWORD *o) {
-    *w = 800;
-    *h = 600;
-    *s = 3200;
+static int DREAMGPU_CDECL primary(DWORD *w, DWORD *h, DWORD *s, DWORD *o, DWORD *bpp) {
+    if (!m.primary_ok)
+        return 0;
+    *w = m.width;
+    *h = m.height;
+    *s = m.stride;
     *o = 0;
+    *bpp = m.bpp;
     return 1;
 }
 static void DREAMGPU_CDECL primary_owned(int owned) {
     m.primary_owned = owned;
 }
-static void DREAMGPU_CDECL fatal(DWORD) {
+static void DREAMGPU_CDECL fatal(DWORD status) {
+    /* A forked child proves the fault happened before any further record. */
+    if (m.expect_fatal)
+        _exit(status == DG_ESCAPE_STOPPED && dg_gl_faulted && m.submits == m.fatal_submits ? 42
+                                                                                           : 43);
     std::abort();
 }
 static const DG9_CHANNEL_SERVICES services{
@@ -195,6 +215,7 @@ static void initialize() {
     std::memset(dg_windows, 0, sizeof(dg_windows));
     dg_window_next = 1;
     dg_desktop_active = 0;
+    dg_desktop_width = dg_desktop_height = dg_desktop_stride = dg_desktop_bpp = 0;
     DreamGpuChannelBind(&services);
     m.registers[DG_REG_GENERATION / 4] = 1;
     m.registers[DG_REG_CAPS / 4] =
@@ -202,6 +223,139 @@ static void initialize() {
     m.registers[DG_GL_REG_VERSION / 4] = DG_GL_VERSION;
     m.registers[DG_GL_REG_MAX_BYTES / 4] = 65536;
     m.registers[DG_GL_REG_MAX_RECORDS / 4] = 1024;
+}
+/* Full 96-byte record identity: header, op, primary format word 16 and the
+ * given record-relative words; every other word must be zero. */
+static void expect_record(unsigned index, DWORD op, DWORD bpp, DWORD client, DWORD drawable,
+                          std::initializer_list<std::pair<unsigned, DWORD>> words) {
+    DWORD expected[24]{};
+    expected[0] = DG_GL_DESKTOP;
+    expected[1] = 96;
+    expected[2] = client ? client : 0xffffffffu;
+    expected[4] = drawable;
+    expected[7] = m.registers[DG_REG_GENERATION / 4];
+    expected[8] = op;
+    expected[8 + DG_DESKTOP_PRIMARY_BPP / 4] = bpp == 16 ? 16 : 0;
+    for (const auto &[word, value] : words)
+        expected[8 + word] = value;
+    assert(index < m.record_count && !std::memcmp(m.records[index], expected, 96));
+}
+static void expect_primary(unsigned index, DWORD op, DWORD bpp) {
+    expect_record(index, op, bpp, 0, 0, {{4, m.width}, {5, m.height}, {11, m.stride}});
+}
+static void expect_blit(unsigned index, DWORD bpp, DWORD client) {
+    expect_record(index, DG_DESKTOP_BLIT, bpp, client, 5,
+                  {{2, 10}, {3, 20}, {4, 32}, {5, 32}, {10, 2}, {12, 3}, {14, 4}});
+}
+static void expect_discard(unsigned index, DWORD bpp, DWORD client) {
+    expect_record(index, DG_DESKTOP_DISCARD, bpp, client, 5, {{10, 2}, {12, 3}, {14, 4}});
+}
+static void set_primary(DWORD bpp, DWORD stride) {
+    m.bpp = bpp;
+    m.stride = stride;
+}
+/* Every Win98 record type carries the primary format exactly like NT. */
+static void primary_formats() {
+    initialize();
+    const DWORD client = request(DG_ESCAPE_OPEN).Client;
+    const auto bound = window(DG9_WINDOW_BIND, client);
+    assert(bound.Status == 0 && bound.Binding);
+    DG9_CHANNEL_BLT blt{bound.Binding, 0, 10 | (20u << 16), 32 | (32u << 16)};
+    for (const auto &[bpp, stride] :
+         {std::pair<DWORD, DWORD>{32, 3200}, {16, 1600}, {16, 3200}, {32, 3200}}) {
+        set_primary(bpp, stride);
+        m.record_count = 0;
+        assert(window(DG9_WINDOW_PREPARE, client, bound.Binding).Status == 0);
+        assert(DreamGpuWindowBlt(&blt) == 1 && m.primary_owned);
+        assert(DreamGpuWindowBlt(&blt) == 1 && dg_desktop_bpp == bpp);
+        cleaned();
+        DreamGpuPrimaryAccess();
+        assert(!m.primary_owned && !dg_desktop_active);
+        cleaned();
+        assert(window(DG9_WINDOW_FINISH, client, bound.Binding).Status == 0);
+        assert(m.record_count == 6);
+        expect_primary(0, DG_DESKTOP_SEED, bpp);
+        expect_blit(1, bpp, client);
+        expect_blit(2, bpp, client);
+        expect_primary(3, DG_DESKTOP_READBACK, bpp);
+        expect_primary(4, DG_DESKTOP_RETURN, bpp);
+        expect_discard(5, bpp, client);
+    }
+    /* XRGB8888 records stay byte-identical to the original layout: header,
+     * SEED, zero flags/origin, 800x600, zero format word 16, stride 3200. */
+    set_primary(32, 3200);
+    m.record_count = 0;
+    assert(window(DG9_WINDOW_PREPARE, client, bound.Binding).Status == 0);
+    assert(DreamGpuWindowBlt(&blt) == 1);
+    const DWORD seed32[24] = {
+        DG_GL_DESKTOP, 96,  0xffffffffu, 0, 0, 0, 0, 1,   DG_DESKTOP_SEED, 0, 0, 0,
+        800,           600, 0,           0, 0, 0, 0, 3200};
+    assert(!std::memcmp(m.records[0], seed32, sizeof(seed32)));
+    DreamGpuPrimaryAccess();
+    /* DISCARD names the live mode even after the last desktop was 32 bpp. */
+    set_primary(16, 1600);
+    m.record_count = 0;
+    assert(window(DG9_WINDOW_FINISH, client, bound.Binding).Status == 0);
+    assert(m.record_count == 1);
+    expect_discard(0, 16, client);
+    assert(window(DG9_WINDOW_PREPARE, client, bound.Binding).Status == 0);
+    m.record_count = 0;
+    assert(window(DG9_WINDOW_RELEASE, client, bound.Binding).Status == 0 && !dg_windows[0].Token);
+    assert(m.record_count == 1);
+    expect_discard(0, 16, client);
+    /* Unsupported live depth: bind/present refuse without any record. */
+    const auto second = window(DG9_WINDOW_BIND, client);
+    assert(second.Status == 0 && second.Binding);
+    m.primary_ok = false;
+    m.record_count = 0;
+    const unsigned before = m.submits;
+    assert(window(DG9_WINDOW_BIND, client).Status == DG_ESCAPE_UNSUPPORTED);
+    assert(window(DG9_WINDOW_PREPARE, client, second.Binding).Status == DG_ESCAPE_UNSUPPORTED);
+    blt.Client_EDI = second.Binding;
+    assert(!DreamGpuWindowBlt(&blt) && m.submits == before && !m.record_count);
+    cleaned();
+    /* Client rundown discards with the live format, then zero if unsupported. */
+    m.primary_ok = true;
+    assert(window(DG9_WINDOW_PREPARE, client, second.Binding).Status == 0);
+    const DWORD other = request(DG_ESCAPE_OPEN).Client;
+    const auto third = window(DG9_WINDOW_BIND, other);
+    assert(window(DG9_WINDOW_PREPARE, other, third.Binding).Status == 0);
+    m.record_count = 0;
+    assert(request(DG_ESCAPE_CLOSE, client).Status == 0);
+    assert(m.record_count == 1 && m.last_opcode == DG_GL_CLOSE_CLIENT);
+    expect_discard(0, 16, client);
+    m.primary_ok = false;
+    m.record_count = 0;
+    assert(request(DG_ESCAPE_CLOSE, other).Status == 0);
+    assert(m.record_count == 1);
+    expect_discard(0, 0, other);
+    DreamGpuGlShutdown();
+    assert(m.allocations == m.frees && m.sem_created == m.sem_destroyed);
+}
+/* A primary format change while GPU-owned is treated like a geometry change:
+ * the device is stopped before any record names the new format. */
+static void format_fault(DWORD from, DWORD from_stride, DWORD to, DWORD to_stride) {
+    initialize();
+    set_primary(from, from_stride);
+    const DWORD client = request(DG_ESCAPE_OPEN).Client;
+    const auto bound = window(DG9_WINDOW_BIND, client);
+    assert(window(DG9_WINDOW_PREPARE, client, bound.Binding).Status == 0);
+    DG9_CHANNEL_BLT blt{bound.Binding, 0, 10 | (20u << 16), 32 | (32u << 16)};
+    assert(DreamGpuWindowBlt(&blt) == 1 && dg_desktop_active && dg_desktop_bpp == from);
+    cleaned();
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+        set_primary(to, to_stride);
+        m.expect_fatal = true;
+        m.fatal_submits = m.submits;
+        DreamGpuWindowBlt(&blt);
+        _exit(1);
+    }
+    int status = 0;
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 42);
+    DreamGpuGlShutdown();
 }
 int main() {
     assert(Dg9GlResultLimit(0) == 512 && Dg9GlResultLimit(DG_CAP_GL_TRANSPORT) == 512 &&
@@ -317,7 +471,14 @@ int main() {
     DreamGpuGlShutdown();
     assert(m.allocations == m.frees);
     cleaned();
+    primary_formats();
+    /* Same width/height/stride: only the pixel format changes. */
+    format_fault(32, 3200, 16, 3200);
+    format_fault(16, 3200, 32, 3200);
+    format_fault(16, 1600, 32, 3200);
     std::puts("PASS actual C++ Win98 channel/window: pin/allocation failure ownership, OS "
               "identity, privileged packet rejection, typed result identity across cleanup, "
-              "retained-frame lifecycle, GDI clips/coherence, timeout and waiter-safe teardown");
+              "retained-frame lifecycle, GDI clips/coherence, timeout and waiter-safe teardown, "
+              "XRGB8888/RGB565 format word on SEED/BLIT/READBACK/RETURN/DISCARD and "
+              "format-change fault");
 }

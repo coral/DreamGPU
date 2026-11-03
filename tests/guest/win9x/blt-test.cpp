@@ -56,7 +56,7 @@ int main() {
                 surface.Height = 0;
                 break;
             case 2:
-                surface.Bpp = 16;
+                surface.Bpp = 24;
                 break;
             case 3:
                 surface.Pitch = 3196;
@@ -74,6 +74,50 @@ int main() {
         assert(!DreamGpuPrimaryMetadata(&surface));
     }
     assert(!DreamGpuPrimaryMetadata(nullptr));
+    /* RGB565 primaries: two bytes per pixel, the same four-byte stride rule. */
+    for (DWORD pitch : {1600u, 1604u, 3200u}) {
+        surface = {800, 600, 16, pitch, 0};
+        assert(DreamGpuPrimaryMetadata(&surface));
+    }
+    for (DWORD pitch : {0u, 1596u, 1598u, 1599u, 1601u, 1602u, 1603u}) {
+        surface = {800, 600, 16, pitch, 0};
+        assert(!DreamGpuPrimaryMetadata(&surface));
+    }
+    surface = {801, 600, 16, 1602, 0};
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface.Pitch = 1604;
+    assert(DreamGpuPrimaryMetadata(&surface));
+    surface = {1, 1, 16, 4, 0};
+    assert(DreamGpuPrimaryMetadata(&surface));
+    surface.Pitch = 2;
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface = {4096, 4096, 16, 8192, 0};
+    assert(DreamGpuPrimaryMetadata(&surface));
+    surface.Pitch = DG_DESKTOP_MAX_BYTES / 4096;
+    assert(DreamGpuPrimaryMetadata(&surface));
+    surface.Pitch += 4;
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface = {4097, 600, 16, 8196, 0};
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface = {800, 4097, 16, 1600, 0};
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface = {0, 600, 16, 1600, 0};
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface = {800, 0, 16, 1600, 0};
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    /* XRGB8888 keeps its four-byte row; 16 bpp never relaxes 32 bpp. */
+    surface = {800, 600, 32, 1600, 0};
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    surface = {4096, 4096, 32, 16384, 0};
+    assert(DreamGpuPrimaryMetadata(&surface));
+    surface.Pitch += 4;
+    assert(!DreamGpuPrimaryMetadata(&surface));
+    /* Palettized, 15/24-bpp and other depths remain unsupported. */
+    for (DWORD bpp : {0u, 1u, 4u, 8u, 15u, 24u, 31u, 33u, 64u, UINT32_MAX}) {
+        surface = {800, 600, bpp, 3200, 0};
+        assert(!DreamGpuPrimaryMetadata(&surface));
+    }
     std::puts("PASS actual C++ Win98 2D preparation: exact fill/copy records, 8/16/32bpp, "
-              "clipping, overflow rejection without writes and primary metadata bounds");
+              "clipping, overflow rejection without writes and 16/32bpp primary metadata "
+              "pitch/alignment/size bounds with 8/15/24bpp rejected");
 }

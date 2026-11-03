@@ -14,12 +14,15 @@ extern "C" {
 extern BOOL JglTransportIs9x(void);
 extern HANDLE JglTransportDevice(void);
 static struct JGL9_BINDING {
-    ULONG Token, Client, Width, Height;
+    ULONG Token, Client, Width, Height, Depth;
     HWND Window;
     HDC Memory;
     HBITMAP Bitmap, Previous;
     char Property[48];
 } Bindings[DG9_WINDOW_SLOTS];
+/* The tag bitmap is at least 16 pixels wide, so its first scanline holds the
+ * whole tag at 16 or 32 bpp and SetBitmapBits row padding cannot split it. */
+static_assert(sizeof(DG9_BITMAP_TAG) <= 16 * 2, "tag fits one 16-bpp scanline");
 static BOOL WindowRequest(DG9_WINDOW_REQUEST *request, DG9_WINDOW_REPLY *reply) {
     DWORD returned = 0;
     HANDLE device = JglTransportDevice();
@@ -41,14 +44,18 @@ int JglTransportBind(HDC dc, const DG_WINDOW_BIND *request, DG_WINDOW_REPLY *rep
     HWND window;
     DWORD process;
     unsigned i;
+    int depth;
     if (!JglTransportIs9x())
         return ExtEscape(dc, WNDOBJ_SETUP, sizeof(*request), (LPCSTR)request, sizeof(*reply),
                          (LPSTR)reply);
     window = WindowFromDC(dc);
     if (!window || (ULONG)(ULONG_PTR)window != request->Window ||
         !GetWindowThreadProcessId(window, &process) || process != GetCurrentProcessId() ||
-        !GetClientRect(window, &rect) || rect.right <= 0 || rect.bottom <= 0 ||
-        GetDeviceCaps(dc, BITSPIXEL) != 32)
+        !GetClientRect(window, &rect) || rect.right <= 0 || rect.bottom <= 0)
+        return 0;
+    /* The compatible tag bitmap takes this depth: XRGB8888 or RGB565 only. */
+    depth = GetDeviceCaps(dc, BITSPIXEL);
+    if (depth != 16 && depth != 32)
         return 0;
     for (i = 0; i < DG9_WINDOW_SLOTS && Bindings[i].Token; ++i) {
     }
@@ -77,6 +84,7 @@ int JglTransportBind(HDC dc, const DG_WINDOW_BIND *request, DG_WINDOW_REPLY *rep
     binding->Window = window;
     binding->Width = rect.right;
     binding->Height = rect.bottom;
+    binding->Depth = (ULONG)depth;
     wsprintfA(binding->Property, "DreamGPU.%08lx.%08lx", GetCurrentProcessId(), binding->Token);
     tag.Magic0 = DG9_BITMAP_MAGIC0;
     tag.Magic1 = DG9_BITMAP_MAGIC1;
@@ -159,6 +167,10 @@ int JglTransportPresent(HDC dc, const DG_WINDOW_PRESENT *present) {
         !GetViewportOrgEx(dc, &viewport) || !GetWindowOrgEx(dc, &origin) || viewport.x ||
         viewport.y || origin.x || origin.y)
         return 0;
+    /* A depth change retires the tag bitmap's format. Nothing has been
+     * submitted yet, so the frontend may bind a fresh compatible bitmap once. */
+    if (GetDeviceCaps(dc, BITSPIXEL) != (int)binding->Depth)
+        return DG_WINDOW_PRESENT_REBIND;
     /* Hold a fresh private DC through the whole present. Its GDI object cannot
      * be recycled by caller ReleaseDC/HWND reuse during the native wait. */
     fresh = GetDCEx(binding->Window, NULL, DCX_CACHE | DCX_CLIPCHILDREN | DCX_CLIPSIBLINGS);

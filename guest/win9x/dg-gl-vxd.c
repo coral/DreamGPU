@@ -9,6 +9,7 @@ extern volatile DWORD *DgVxdRegisters(void);
 extern BOOL Dg9CursorTakeoverSafe(void);
 extern BOOL Dg9Primary(DWORD *, DWORD *, DWORD *, DWORD *);
 extern void Dg9PrimaryGpuOwned(BOOL);
+extern FBHDA_t *hda;
 static DWORD dg_gl_sequence;
 static volatile DWORD dg_gl_wait, dg_gl_pending;
 /* One bounded boot event permits state-driven fixture logon with the normal
@@ -195,8 +196,13 @@ static void __cdecl Dg9ApiSignal(void) {
 static int __cdecl Dg9ApiCursor(void) {
     return Dg9CursorTakeoverSafe();
 }
-static int __cdecl Dg9ApiPrimary(DWORD *w, DWORD *h, DWORD *s, DWORD *o) {
-    return Dg9Primary(w, h, s, o);
+static int __cdecl Dg9ApiPrimary(DWORD *w, DWORD *h, DWORD *s, DWORD *o, DWORD *bpp) {
+    /* Dg9Primary just validated hda as a 16/32-bpp primary and nothing here
+     * blocks before this read. Any other depth still fails closed. */
+    if (!Dg9Primary(w, h, s, o) || !hda)
+        return 0;
+    *bpp = hda->bpp;
+    return *bpp == 16 || *bpp == 32;
 }
 static void __cdecl Dg9ApiPrimaryOwned(int owned) {
     Dg9PrimaryGpuOwned(owned);
