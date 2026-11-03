@@ -47,6 +47,17 @@ configuration and window code: defaults, regeneration, the windowed override,
 unwritable directories, the mode and popup, and restoration on close and on
 failed opens.
 
+## Colour formats
+
+`grSstWinOpen`'s colour format applies to every colour value an application
+passes (constant, fog, clear and chroma key colours); palettes and LFB writes
+have their own formats. The chroma key is converted to `0xAARRGGBB` and compared
+with the ARGB palette. The donor rotated `GR_COLORFORMAT_RGBA` the wrong way, so
+an RGBA key never matched: Diablo II (`-3dfx`, RGBA, key `0x000000ff`, opaque
+black) drew its menu text and logo on black rectangles. Patch
+`0005-chromakey-rgba.patch` fixes the rotation; `tests/guest/glide/test_chromakey.py`
+runs the patched conversion and palette keying for all four formats.
+
 ## Glide 3.x provider
 
 `glide3x.dll` is a separate CMake target. It compiles the OpenGLide core units

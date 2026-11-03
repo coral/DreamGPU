@@ -344,6 +344,10 @@
       "scope": "source",
       "path": "tests/guest/glide/test_fullscreen.py"
     },
+    "glide-chromakey": {
+      "scope": "source",
+      "path": "tests/guest/glide/test_chromakey.py"
+    },
     "glide3-trace": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_trace.py"

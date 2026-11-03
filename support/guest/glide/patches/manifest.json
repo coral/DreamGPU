@@ -20,6 +20,10 @@
     {
       "file": "0004-fullscreen-default.patch",
       "sha256": "c51a70922d541d170b5012eeeba11107a11500e3e94860ce4299d8b0d203baba"
+    },
+    {
+      "file": "0005-chromakey-rgba.patch",
+      "sha256": "c91a472064160f2cc6922de19d76d97251585d0398c95d86ad2bb9bb8deb18f4"
     }
   ],
   "files": {
@@ -33,7 +37,7 @@
     },
     "GLutil.cpp": {
       "before_sha256": "9a045648d961af31a6768116d50f122d3709319a6bc6844be65d45f1b4207f5b",
-      "after_sha256": "fcf80a009afa917f30c572f748593fddae00e37b708a4bd03b79a9fd5ce0403d"
+      "after_sha256": "d5e1c30f5231eb958f0545e9459684f2164fe7e653879fea180b9ae9e274fe07"
     },
     "GLExtensions.cpp": {
       "before_sha256": "8cad12a722f409db6cf9cd644d51a9df20be2bba5bb862872fc655ca309a4987",
