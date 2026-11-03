@@ -247,6 +247,26 @@
     "guest-fog": {
       "scope": "installed-api",
       "path": "tools/d3d/fog-probe.inc"
+    },
+    "gl-cube-map": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_cube_map.py"
+    },
+    "native-cube-map": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/cube_map.rs"
+    },
+    "d3d-discarded-depth": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_discarded_depth.py"
+    },
+    "win9x-window": {
+      "scope": "source",
+      "path": "tests/guest/win9x/test_window9.py"
+    },
+    "win9x-window16": {
+      "scope": "source",
+      "path": "tests/guest/win9x/test_window16.py"
     }
   },
   "contracts": [
@@ -811,9 +831,10 @@
       "implementation": "unverified",
       "tests": [
         "native",
-        "depth-ownership"
+        "depth-ownership",
+        "d3d-discarded-depth"
       ],
-      "remaining": "Verify real depth and stencil contents and target A/B/A through installed APIs."
+      "remaining": "Verify real depth and stencil contents and target A/B/A through installed APIs. A discarded offscreen depth surface (no GL storage without depth textures) now maps to a defined zeroed CPU copy (patch 0028), so DirectDraw depth-to-depth Blts succeed; Links 2003 copies its course depth this way. Depth contents written by the GPU into offscreen depth surfaces remain unreadable."
     },
     {
       "id": "gl.readback",
@@ -1077,9 +1098,11 @@
         "native",
         "fullscreen-probe",
         "guest-fullscreen",
-        "fullscreen-activation"
+        "fullscreen-activation",
+        "win9x-window",
+        "win9x-window16"
       ],
-      "remaining": "Capture mode enumeration and verify exposed gamma/vblank semantics across hosts/OSes."
+      "remaining": "Capture mode enumeration and verify exposed gamma/vblank semantics across hosts/OSes. Win98 GL window presentation now takes 16-bpp (RGB565) and 32-bpp desktops; capd3d6 passes its 640x480x16 exclusive fullscreen checks on Win98 SE. Win98 16-bpp colour cursors fall back to the software cursor."
     },
     {
       "id": "transport.failures",
@@ -1329,6 +1352,25 @@
         "guest-fog"
       ],
       "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
+    },
+    {
+      "id": "gl.cube-map",
+      "area": 8,
+      "api": "OpenGL 1.1 + ARB_texture_cube_map (D3D8/D3D9 cube textures through Wine)",
+      "operation": "six-face definition/upload/copy/compressed/readback, proxies, per-unit binding, NORMAL_MAP/REFLECTION_MAP texgen",
+      "format": "all exposed 2D texture formats",
+      "resource": "cube texture",
+      "usage": "sampling",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-cube-map",
+        "native-cube-map",
+        "native"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_TEXTURE_CUBE_MAP. Native pixel tests sample all six faces through explicit STR coordinates and both texgen modes, and cover completeness, proxies and per-face redefinition. Installed D3D8/9 cube sampling, seamless/edge filtering, macOS CGL and the macOS border sampler for cube targets remain unverified."
     }
   ]
 }

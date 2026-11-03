@@ -94,6 +94,12 @@ and disposable-VM acceptance cycle:
   the fog colour before texturing, so fogged textured geometry darkened instead
   of fading to the fog colour. Wine's fast vertex path now packs those fog
   coordinates; other fog-coordinate states still use its strided path.
+- Cube maps (`DG_CAP_GL_TEXTURE_CUBE_MAP`) add ARB_texture_cube_map: a third
+  texture target with its own default object, per-unit binding and enable, six
+  square face chains addressed by face target in every image, copy, compressed
+  and readback record, the proxy target, and NORMAL_MAP/REFLECTION_MAP texgen.
+  Completeness needs all six faces at one size; residency charges every face.
+  Wine then claims D3DPTEXTURECAPS_CUBEMAP (and MIPCUBEMAP).
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
@@ -218,9 +224,22 @@ DirectDraw and D3D6–9 probes pass, including all thirteen D3D8/9 stage cases,
 DXT1/3/5 and textured vertex fog. Two Win9x `CreateThread` calls passed a NULL
 thread-id destination, which Windows 95/98/Me reject: the D3D6 probe's worker
 and the interactive installer's worker (the interactive installer exited with
-code 32 on Win98). Exclusive fullscreen DirectDraw primaries fail at 16 bpp on
-Win98 because GL window presentation there is implemented only for 32-bpp
-desktops; `capd3d6` fails at that step. 32-bpp modes work.
+code 32 on Win98). GL window presentation on Win98 now accepts 16-bpp (RGB565)
+desktops as well as 32-bpp ones: the frontend bind, the 16-bit BitBlt DDI and
+the VxD primary metadata take matching depths, every desktop record carries the
+format word, and a depth change while GPU-owned faults like a size change.
+Before this every 16-bpp exclusive fullscreen DirectDraw/Direct3D primary
+failed (`capd3d6` failed at that step); it now passes at 640×480×16. Colour
+cursors at 16 bpp still fall back to the software cursor.
+
+Links 2003 (DirectDraw7 through Wine, Win2000): two defects stopped it. Every
+depth-to-depth Blt into the game's spare Z-buffer returned INVALIDCALL, because
+mapping a discarded offscreen depth surface asked for a native depth transfer
+only the device-owned drawable has (patch 0028 defines a zeroed CPU copy
+instead). With multitexture, Wine's fast pretransformed path set the unit-0
+coordinate pointer on whichever client unit Wine's own loaders left selected,
+so every menu tile sampled one texel; it now selects unit 0. Menus and Quick
+Start render correctly; gameplay beyond Quick Start is unverified.
 
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,
