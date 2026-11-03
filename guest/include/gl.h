@@ -133,6 +133,52 @@
  * smaller native limit). Residency charges every image of a level. */
 #define DG_CAP_GL_TEXTURE_3D 0x800000
 #define DG_GL_MAX_3D_TEXTURE_SIZE 256
+/* Vertex buffer objects: ARB_vertex_buffer_object, targets ARRAY_BUFFER and
+ * ELEMENT_ARRAY_BUFFER. Buffer names and objects share the texture namespace
+ * (wglShareLists). Records name their buffers: bindings, array pointers and
+ * mappings are frontend client state, and the host holds no binding.
+ * BufferDataARB is DATA (name, size at most DG_GL_MAX_BUFFER_BYTES, usage:
+ * any of the nine STREAM/STATIC/DYNAMIC DRAW/READ/COPY hints) carrying exactly
+ * size bytes, or none for zero-defined storage; the first one creates the
+ * object. BufferSubDataARB is DATA (name, offset) storing its payload at
+ * offset. DeleteBuffersARB is DATA (count, at most DG_GL_MAX_BUFFERS, then
+ * names). All three execute immediately and are never compiled into display
+ * lists. A subdata range beyond the buffer (or an unknown name) is
+ * GL_INVALID_VALUE; a buffer table or resource budget exhaustion is
+ * GL_OUT_OF_MEMORY and leaves the buffer empty. Storage is charged against the
+ * resource budget at its size.
+ * The buffer draw is DATA function DrawRangeElements with ten scalar words:
+ * mode, base, count, the DrawArraysEXT mask with ARRAY_RAW, the generic mask
+ * (both as in the attribute draw), the buffer mask (bit s: descriptor slot s,
+ * an enabled slot, reads a buffer), vertices, index type (zero for an array
+ * draw, else UNSIGNED_BYTE, UNSIGNED_SHORT or UNSIGNED_INT), element buffer
+ * (zero: inline indices) and element offset (a multiple of the index size;
+ * zero without an element buffer). The payload has the attribute draw's
+ * thirty-two descriptors under its rules, then one reference of
+ * DG_GL_BUFFER_REFERENCE_BYTES (buffer name, nonzero; byte offset; stride at
+ * most DG_GL_MAX_BUFFER_STRIDE, zero for tight; offset and stride multiples
+ * of the component size) per buffer slot in slot order, then a client section
+ * of `vertices` vertices for every other enabled slot under the RAW alignment
+ * and padding rules, then any inline indices at their size alignment, then
+ * zero padding to a word. Client sections hold vertices base..base+vertices-1.
+ * An array draw draws vertices base..base+count-1, and vertices is count with
+ * a client section, else zero. An indexed draw draws count indices; with a
+ * client section vertices is 1..DG_GL_MAX_VERTICES and every index lies in
+ * base..base+vertices-1, without one base and vertices are zero. Count is at
+ * most DG_GL_MAX_BUFFER_ELEMENTS, and DG_GL_MAX_INDICES for inline indices;
+ * base+count-1 and base+vertices-1 fit 32 bits. A missing buffer, an element
+ * range beyond its buffer, an attribute read beyond its buffer or an
+ * element-buffer index outside the client vertices is GL_INVALID_OPERATION
+ * and draws nothing, as is a buffer draw received while compiling a display
+ * list: the frontend dereferences buffers into client draws there, as the
+ * extension requires. Native GL converts buffer attributes of every
+ * descriptor type. */
+#define DG_CAP_GL_VERTEX_BUFFER_OBJECT 0x1000000
+#define DG_GL_MAX_BUFFERS 16384
+#define DG_GL_MAX_BUFFER_BYTES 0x08000000
+#define DG_GL_MAX_BUFFER_STRIDE 2048
+#define DG_GL_MAX_BUFFER_ELEMENTS 0x01000000
+#define DG_GL_BUFFER_REFERENCE_BYTES 12
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

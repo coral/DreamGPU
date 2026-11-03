@@ -118,4 +118,82 @@ static inline int DgRawAttribLayout(unsigned mask, unsigned generic, unsigned co
     *length = (at + 3) & ~3U;
     return 1;
 }
+/* The index size of a buffer draw's index type word: zero for an array draw,
+ * (unsigned)-1 for any other value. */
+static inline unsigned DgBufferIndexBytes(unsigned type) {
+    return type == 0        ? 0
+           : type == 0x1401 ? 1
+           : type == 0x1403 ? 2
+           : type == 0x1405 ? 4
+                            : (unsigned)-1;
+}
+/* The buffer draw (DG_CAP_GL_VERTEX_BUFFER_OBJECT): a[0..9] are its scalar
+ * words, descriptors the thirty-two attribute draw descriptors and references
+ * the packed (buffer, offset, stride) words of its buffer slots in slot order.
+ * Computes each client section's payload offset (zero for other slots), the
+ * inline index offset (zero without inline indices) and the padded length. */
+static inline int DgRawBufferLayout(const unsigned *a, const unsigned *descriptors,
+                                    const unsigned *references, unsigned *offsets,
+                                    unsigned *indices, unsigned *length) {
+    const unsigned mask = a[3], generic = a[4], buffered = a[5], vertices = a[6];
+    const unsigned enabled = (mask & DG_GL_ARRAY_EXT_MASK) | (generic << DG_GL_ARRAY_EXT_SLOTS);
+    const unsigned client = enabled & ~buffered, index = DgBufferIndexBytes(a[7]);
+    unsigned at = DG_GL_ATTRIB_DESCRIPTOR_BYTES, n = 0;
+    *indices = 0;
+    if (a[0] > 9 || mask != ((mask & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW) ||
+        (generic & ~(unsigned)DG_GL_ATTRIB_MASK) ||
+        !((mask & DG_GL_ARRAY_POSITION) || (generic & 1)) || (buffered & ~enabled) ||
+        index == (unsigned)-1 || a[2] > DG_GL_MAX_BUFFER_ELEMENTS)
+        return 0;
+    if (!index) {
+        /* Array draw: vertices base..base+count-1 within 32 bits. */
+        if (a[8] || a[9] || vertices != (client ? a[2] : 0) || vertices > DG_GL_MAX_VERTICES ||
+            (a[2] && a[1] > 0xffffffffU - (a[2] - 1)))
+            return 0;
+    } else if (client ? !vertices || vertices > DG_GL_MAX_VERTICES ||
+                            a[1] > 0xffffffffU - (vertices - 1)
+                      : vertices || a[1]) {
+        return 0;
+    } else if (a[8] ? a[9] % index : a[9]) {
+        return 0;
+    }
+    for (unsigned slot = 0; slot < DG_GL_ATTRIB_SLOTS; ++slot) {
+        const unsigned d = descriptors[slot];
+        offsets[slot] = 0;
+        if (!((enabled >> slot) & 1)) {
+            if (d)
+                return 0;
+            continue;
+        }
+        if (!(slot >= DG_GL_ARRAY_EXT_SLOTS ? DgRawAttribDescriptor(d) : DgRawArraySlot(slot, d)))
+            return 0;
+        if ((buffered >> slot) & 1) {
+            const unsigned unit = DgArrayComponentBytes(d & 65535), *r = references + 3 * n++;
+            if (!r[0] || r[2] > DG_GL_MAX_BUFFER_STRIDE || r[1] % unit || r[2] % unit)
+                return 0;
+        }
+    }
+    at += n * DG_GL_BUFFER_REFERENCE_BYTES;
+    for (unsigned slot = 0; slot < DG_GL_ATTRIB_SLOTS; ++slot) {
+        const unsigned d = descriptors[slot];
+        unsigned unit;
+        if (!((client >> slot) & 1))
+            continue;
+        unit = DgArrayComponentBytes(d & 65535);
+        at = (at + unit - 1) & ~(unit - 1);
+        offsets[slot] = at;
+        // vertices<=65536, n<=4, unit<=8, at most thirty-one sections: no u32 overflow.
+        at += vertices * ((d >> 16) & 255) * unit;
+    }
+    if (index && !a[8]) {
+        at = (at + index - 1) & ~(index - 1);
+        *indices = at;
+        /* Inline indices travel in one packet: far below 32-bit overflow. */
+        if (a[2] > DG_GL_MAX_INDICES)
+            return 0;
+        at += a[2] * index;
+    }
+    *length = (at + 3) & ~3U;
+    return 1;
+}
 #endif

@@ -21,6 +21,8 @@ pub struct Namespace {
     pub lists: *mut crate::lists::Namespace,
     /// ARB_fragment_program names and objects of the same share group.
     pub programs: *mut crate::program::Namespace,
+    /// ARB_vertex_buffer_object buffer objects of the same share group.
+    pub buffers: *mut crate::buffer::Namespace,
     pub entries: [Entry; SLOTS],
 }
 impl Default for Namespace {
@@ -29,6 +31,7 @@ impl Default for Namespace {
             refs: 0,
             lists: core::ptr::null_mut(),
             programs: core::ptr::null_mut(),
+            buffers: core::ptr::null_mut(),
             entries: [Entry::EMPTY; SLOTS],
         }
     }
@@ -178,6 +181,7 @@ pub unsafe extern "C" fn dreamgpu_texture_namespace_unref(
         }
         crate::lists::namespace_release(&*memory, (*ns).lists);
         crate::program::namespace_release(&*memory, (*ns).programs);
+        crate::buffer::namespace_release(&*memory, (*ns).buffers);
         ((*memory).free)((*memory).opaque, ns.cast());
     }
 }

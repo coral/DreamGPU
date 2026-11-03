@@ -11,7 +11,7 @@ ROOT = HERE.parents[2]
 with tempfile.TemporaryDirectory(prefix='dreamgpu-icd-client-') as temporary:
     root = Path(temporary)
     (root/'GL').mkdir()
-    for name in ('frontend.cpp','arrays.cpp','icd-client.inc','internal.h','packing.h','transport.h','scalar.inc','names.h','state.h'):
+    for name in ('frontend.cpp','arrays.cpp','buffers.h','icd-client.inc','internal.h','packing.h','transport.h','scalar.inc','names.h','state.h'):
         shutil.copyfile(ROOT/'guest/opengl'/name, root/name)
     shutil.copyfile(HERE/'frontend.cpp', root/'frontend-harness.cpp')
     shutil.copyfile(HERE/'frontend-windows.h', root/'windows.h')

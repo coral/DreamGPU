@@ -13,7 +13,7 @@ SOURCE = ROOT / "guest/opengl"
 with tempfile.TemporaryDirectory(prefix="dreamgpu-fixed-state-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("frontend.cpp", "arrays.cpp", "query.cpp", "fixed.cpp", "compatibility.cpp",
+    for name in ("frontend.cpp", "arrays.cpp", "buffers.h", "query.cpp", "fixed.cpp", "compatibility.cpp",
                  "internal.h", "packing.h", "transport.h", "scalar.inc", "names.h", "state.h"):
         shutil.copyfile(SOURCE / name, root / name)
     shutil.copyfile(HERE / "frontend.cpp", root / "frontend-harness.cpp")

@@ -1,0 +1,51 @@
+--- a/wined3d/buffer.c
++++ b/wined3d/buffer.c
+@@ -193,8 +193,11 @@
+ 
+     This->buffer_object_usage = gl_usage;
+ 
++    /* DreamGPU: glBufferData just uploaded the whole system memory copy, so
++     * nothing is dirty; a needed conversion reloads it all anyway (the new
++     * declaration counts as changed). Marking it dirty sent it twice. */
+     if (This->flags & WINED3D_BUFFER_DOUBLEBUFFER)
+-        buffer_invalidate_bo_range(This, 0, 0);
++        buffer_clear_dirty_areas(This);
+     else
+         wined3d_resource_free_sysmem(&This->resource);
+ 
+@@ -757,6 +760,22 @@
+      * caller always takes care of this. */
+     GL_EXTCALL(glBindBuffer(This->buffer_type_hint, This->buffer_object));
+     checkGLcall("glBindBuffer");
++    /* DreamGPU: without ARB_map_buffer_range or APPLE_flush_buffer_range a
++     * write-only map gives no way to say which bytes changed, so the whole
++     * buffer would travel again; upload each dirty range instead. */
++    if (!gl_info->supported[ARB_MAP_BUFFER_RANGE] && !(This->flags & WINED3D_BUFFER_APPLESYNC))
++    {
++        while (This->modified_areas)
++        {
++            This->modified_areas--;
++            start = This->maps[This->modified_areas].offset;
++            len = This->maps[This->modified_areas].size;
++            GL_EXTCALL(glBufferSubData(This->buffer_type_hint, start, len,
++                    (BYTE *)This->resource.heap_memory + start));
++            checkGLcall("glBufferSubData");
++        }
++        return;
++    }
+     if (gl_info->supported[ARB_MAP_BUFFER_RANGE])
+     {
+         GLbitfield mapflags;
+@@ -1452,6 +1471,12 @@
+     else
+     {
+         buffer->flags |= WINED3D_BUFFER_CREATEBO;
++        /* DreamGPU: the guest GL keeps buffer contents in guest memory and has
++         * no ARB_map_buffer_range, so a GL map is a copy of the whole buffer
++         * and unmapping one uploads all of it again. Keep the system memory
++         * copy instead: locks never map GL, and buffer_direct_upload sends
++         * exactly the dirty ranges. */
++        buffer->flags |= WINED3D_BUFFER_DOUBLEBUFFER;
+     }
+ 
+     if (data)

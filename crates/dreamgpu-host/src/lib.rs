@@ -33,6 +33,7 @@ pub extern "C" fn rust_eh_personality(
 
 mod arrays;
 mod batch;
+mod buffer;
 mod composition;
 mod cursor;
 mod data;

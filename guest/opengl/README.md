@@ -335,6 +335,31 @@ with `GL_INVALID_OPERATION`, are hidden from `wglGetProcAddress`, and every new
 enum stays the local `GL_INVALID_ENUM` it was. `tests/guest/opengl/test_texture_3d.py`
 covers the contract.
 
+### ARB_vertex_buffer_object
+
+`DG_CAP_GL_VERTEX_BUFFER_OBJECT` adds `GL_ARB_vertex_buffer_object`, last in
+the extension string, and eleven ARB-named exports (`buffer.cpp`; no core
+names, which WineD3D then maps to the ARB ones). Buffer objects live in a
+per-share-group table beside the texture names (`buffers.h`), each with a
+16-byte-aligned copy of its contents. Gen, Bind, Is, the parameter and
+pointer queries, `GetBufferSubData` and `MapBuffer` never reach the host;
+`BufferData` sends its contents in one record when they fit, otherwise
+zero-defined storage and BufferSubData slabs, `UnmapBuffer` re-sends the whole
+copy unless the map was READ_ONLY, and `DeleteBuffers` sends the names of
+existing objects in bounded batches and resets this context's bindings. Every
+pointer call latches the ARRAY_BUFFER binding (name and object identity) with
+its offset; `CLIENT_VERTEX_ARRAY_BIT` saves both bindings. A draw with any
+buffer-sourced array or an element buffer uses the buffer draw record
+(function `DrawRangeElements`); client arrays in it send only the vertex range
+their indices reach (scanned locally), buffer-only indexed draws are sent
+without a scan and bounded by the host. Inside a display list, and for what
+the record cannot express, the arrays resolve into the buffer copies and draw
+as ordinary client arrays, as does ArrayElement. Missing, deleted, mapped or
+overrun buffers are local `GL_INVALID_OPERATION` where the frontend checks.
+Without the capability the exports fail locally with `GL_INVALID_OPERATION`,
+are hidden from `wglGetProcAddress`, and the binding queries stay host queries.
+`tests/guest/opengl/test_vertex_buffer_object.py` covers the contract.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

@@ -300,6 +300,11 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glTexImage3D : glTexImage3D) dg_glTexImage3D;
     __typeof__(1 ? glTexSubImage3D : glTexSubImage3D) dg_glTexSubImage3D;
     __typeof__(1 ? glCopyTexSubImage3D : glCopyTexSubImage3D) dg_glCopyTexSubImage3D;
+    __typeof__(1 ? glGenBuffers : glGenBuffers) dg_glGenBuffers;
+    __typeof__(1 ? glDeleteBuffers : glDeleteBuffers) dg_glDeleteBuffers;
+    __typeof__(1 ? glBindBuffer : glBindBuffer) dg_glBindBuffer;
+    __typeof__(1 ? glBufferData : glBufferData) dg_glBufferData;
+    __typeof__(1 ? glBufferSubData : glBufferSubData) dg_glBufferSubData;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -446,5 +451,7 @@ typedef struct DreamGpuGlApi {
     .dg_glDisableVertexAttribArrayARB = glDisableVertexAttribArrayARB,                              \
     .dg_glGetVertexAttribfvARB = glGetVertexAttribfvARB,                                            \
     .dg_glTexImage3D = glTexImage3D, .dg_glTexSubImage3D = glTexSubImage3D,                         \
-    .dg_glCopyTexSubImage3D = glCopyTexSubImage3D
+    .dg_glCopyTexSubImage3D = glCopyTexSubImage3D, .dg_glGenBuffers = glGenBuffers,                 \
+    .dg_glDeleteBuffers = glDeleteBuffers, .dg_glBindBuffer = glBindBuffer,                         \
+    .dg_glBufferData = glBufferData, .dg_glBufferSubData = glBufferSubData
 #endif

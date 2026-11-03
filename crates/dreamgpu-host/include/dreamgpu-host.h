@@ -38,8 +38,8 @@ typedef struct DreamGpuTextureEntry {
 } DreamGpuTextureEntry;
 typedef struct DreamGpuTextureNamespace {
     uint32_t refs;
-    /* Rust-owned display list and ARB_fragment_program tables of the group. */
-    void *lists, *programs;
+    /* Rust-owned display list, program and buffer object tables of the group. */
+    void *lists, *programs, *buffers;
     DreamGpuTextureEntry entries[8192];
 } DreamGpuTextureNamespace;
 typedef struct DreamGpuTextureMemory {

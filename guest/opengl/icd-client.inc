@@ -2,8 +2,10 @@
  * GL1.1 client attribute stack: specification section6.1.11/table6.2.
  * https://registry.khronos.org/OpenGL/specs/gl/glspec11.pdf
  * With ARB_multitexture the vertex-array group adds CLIENT_ACTIVE_TEXTURE and
- * every unit's coordinate array (GL1.3 vertex-array state), and with
- * ARB_vertex_program every generic attribute array.
+ * every unit's coordinate array (GL1.3 vertex-array state), with
+ * ARB_vertex_program every generic attribute array, and with
+ * ARB_vertex_buffer_object the ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER bindings
+ * (each array keeps the buffer it latched).
  * No client address or client stack mutation crosses the transport.
  */
 static void APIENTRY AliasArrayElement(GLint index) {
@@ -26,6 +28,8 @@ static void APIENTRY AliasPushClientAttrib(GLbitfield mask) {
         CopyMemory(entry.Attribute, state->Attribute, sizeof(entry.Attribute));
         CopyMemory(entry.Generic, state->Generic, sizeof(entry.Generic));
         entry.ClientTexture = state->ClientTexture;
+        entry.ArrayBuffer = state->ArrayBuffer;
+        entry.ElementBuffer = state->ElementBuffer;
     }
     if (mask & 1) { // GL_CLIENT_PIXEL_STORE_BIT
         entry.Pack = *JglPack();
@@ -46,6 +50,8 @@ static void APIENTRY AliasPopClientAttrib(void) {
         CopyMemory(state->Attribute, entry.Attribute, sizeof(entry.Attribute));
         CopyMemory(state->Generic, entry.Generic, sizeof(entry.Generic));
         state->ClientTexture = entry.ClientTexture;
+        state->ArrayBuffer = entry.ArrayBuffer;
+        state->ElementBuffer = entry.ElementBuffer;
     }
     if (entry.Mask & 1) {
         *JglPack() = entry.Pack;

@@ -34,6 +34,9 @@ BOOL JglVertexProgramAvailable(void) {
 BOOL JglTexture3DAvailable(void) {
     return FALSE;
 }
+BOOL JglVertexBufferObjectAvailable(void) {
+    return FALSE;
+}
 GLubyte *JglProgramErrorBuffer(void) {
     return NULL;
 }

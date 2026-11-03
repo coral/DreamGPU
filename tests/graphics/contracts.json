@@ -328,6 +328,22 @@
       "scope": "installed-api",
       "path": "tools/d3d/volume-probe.inc"
     },
+    "gl-vertex-buffer-object": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_vertex_buffer_object.py"
+    },
+    "native-vertex-buffer-object": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/vertex_buffer_object.rs"
+    },
+    "d3d-vbo-adaptations": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_vbo_adaptations.py"
+    },
+    "guest-vbuffer": {
+      "scope": "installed-api",
+      "path": "tools/d3d/vbuffer-probe.inc"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1533,6 +1549,28 @@
         "guest-volume"
       ],
       "remaining": "Negotiated by DG_CAP_GL_TEXTURE_3D; without it the extension, entry points, enums and image pixel storage stay hidden. TexImage3D/TexSubImage3D are nine- and ten-word DATA records with tight payloads (the frontend resolves every unpack value and splits into bounded slabs of whole images or 2D tiles); CopyTexSubImage3D is a nine-word CALL. MAX_3D_TEXTURE_SIZE is 256; images are borderless (a border is GL_INVALID_OPERATION, its proxy rejected) and compressed 3D formats are not accepted. Native pixel tests (Linux, private Mesa on Radeon) sample slices at explicit R with NEAREST and LINEAR filtering, mip levels, WRAP_R, subimages, copies, readback through every image, zero definitions, tight RGB and packed payloads, proxies, display lists, per-unit bindings and TEXTURE_BIT, 3D over 2D precedence and the incomplete fallback. Wine claims VOLUMEMAP, MIPVOLUMEMAP and VOLUMEMAP_POW2; patch 0035 states the unpack alignment of volume uploads. The installed D3D8/9 volume probe (four LockBox slices of a MANAGED A8R8G8B8 4x4x4 texture) is untested on guests; DEFAULT-pool LockBox, volume mip chains through D3D, converted formats, shaders sampling volumes, macOS CGL and games remain unverified."
+    },
+    {
+      "id": "gl.vertex-buffer-object",
+      "area": 8,
+      "api": "OpenGL 1.1 + ARB_vertex_buffer_object (D3D8/D3D9 vertex and index buffers through Wine)",
+      "operation": "ARRAY_BUFFER/ELEMENT_ARRAY_BUFFER objects in the shared namespace: Gen/Delete/Is/Bind, BufferData (all usage hints), BufferSubData, GetBufferSubData, Map/Unmap, GetBufferParameteriv/Pointerv; array pointers latching buffer offsets (conventional, units 1-7, fog, generic attributes, InterleavedArrays), *_ARRAY_BUFFER_BINDING queries, DrawArrays/DrawElements from buffers, ArrayElement, display list dereference",
+      "format": "attribute draw descriptors; UNSIGNED_BYTE/SHORT/INT indices",
+      "resource": "buffer object",
+      "usage": "vertex and index data",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-vertex-buffer-object",
+        "native-vertex-buffer-object",
+        "native",
+        "d3d-vbo-adaptations",
+        "d3d-vertex-arrays",
+        "guest-vbuffer"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_VERTEX_BUFFER_OBJECT; without it the extension and entry points are hidden and every draw is unchanged. BufferData/BufferSubData/DeleteBuffers name their buffer and execute immediately (never compiled); contents up to DG_GL_MAX_BUFFER_BYTES travel in bounded BufferSubData slabs and are charged against the resource budget. Bindings, array latches and mappings are frontend client state; the frontend keeps a copy of every buffer, so maps return it (16-byte aligned), Unmap re-sends it unless READ_ONLY, and reads never wait for the host. Draws reading buffers use the buffer draw (DATA function DrawRangeElements: references per slot, client sections of the indexed vertex range, inline or element-buffer indices), so older kernels keep every existing admission; the host bounds every read against current sizes, scanning element-buffer indices in its own copy, and state-dependent failures are GL errors. Display list compilation and anything the record cannot express (unaligned offsets, strides beyond 2048, oversized client sections) dereference the buffers into client draws. BufferData on a mapped buffer unmaps it, as in Mesa; buffers deleted in another context end its draws with GL_INVALID_OPERATION. Wine patches 0037-0040 double-buffer buffer objects with dirty-range BufferSubData uploads, repair this tree's fixed-function D3DCOLOR/XYZRHW conversion, keep immediate mode on memory and size/delete the zero attribute buffer; dynamic buffers stay in system memory without ARB_map_buffer_range. Native pixel tests, the installed D3D8/9 vertex buffer probe, macOS CGL and games remain to be run on guests."
     },
     {
       "id": "glide3.vertex",

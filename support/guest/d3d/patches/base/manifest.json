@@ -147,6 +147,22 @@
     {
       "file": "0036-volume-map-binding.patch",
       "sha256": "af2ec3da035a0b8521c871ea058cd04d55aa68c504d862e4be9d3dda44563d85"
+    },
+    {
+      "file": "0037-vbo-double-buffered-uploads.patch",
+      "sha256": "9d2cbb6a511763339d865f331094e9049d2f80951b9c53ac6ea3b019ed28af5f"
+    },
+    {
+      "file": "0038-vbo-conversion-offsets.patch",
+      "sha256": "cfca7c9656feec9ff52e762d7de6d06a16a5f7ea431a9035c9993d0564466e0f"
+    },
+    {
+      "file": "0039-vbo-mixed-stream-fallbacks.patch",
+      "sha256": "619faa8fccc2aecb6118ff49c87c460cb7a2f96b0bbff1e5529dd109b4caed44"
+    },
+    {
+      "file": "0040-vbo-zero-attribute.patch",
+      "sha256": "b644851bda9afee50ca4da1c327e4f3b992956dc0b618c0682f117cfb69e6ce3"
     }
   ],
   "files": {
@@ -224,7 +240,7 @@
     },
     "wined3d/drawprim.c": {
       "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
-      "after_sha256": "f27a19fa8aa16399846ddf1f6fb5a21ad4c71846d82174274914e805051791a2"
+      "after_sha256": "ce5aa9a55896a91ef2405f0b58f32f45b26a56a1a46cd133172b2e8859b8b455"
     },
     "ddraw/ddraw.c": {
       "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",
@@ -236,11 +252,11 @@
     },
     "wined3d/device.c": {
       "before_sha256": "0a5880a762561579c5a93c36bc32ab51f5f441e4f290f1dbbe83b8064cebf3c4",
-      "after_sha256": "719e10b05c67ad6262a921c897405d72065117109339554d9ad122866cbdf7dd"
+      "after_sha256": "d07347cecc32e562c7b9e720bab678101a168af42a6abe7de922b37670b78798"
     },
     "wined3d/context.c": {
       "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
-      "after_sha256": "61cb17531755ec5b9989523c6fe3e679a8176e145a4bbfbeb7c848a9631e54d1"
+      "after_sha256": "6e97889d99080fe2c06dedcd906e710218c2cc4a2947b852c7853a611af81c93"
     },
     "wined3d/swapchain.c": {
       "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
@@ -276,7 +292,7 @@
     },
     "wined3d/buffer.c": {
       "before_sha256": "78911f46049e08dc8cb43c78309849afe1cc47abe03f7627e2b315decc0ab8c2",
-      "after_sha256": "450f03f427f53b75f77dbfc9c6e77a9704844e07677de48f19ca1a15bed92802"
+      "after_sha256": "58ec43cb85a2ff37e2ef65213852f13b4fc3f02b6a8c118033f079ce96777aba"
     },
     "wined3d/arb_program_shader.c": {
       "before_sha256": "e817b87102cc16f41454f5925a79e7c4002cabff018cb9c28220f50977b3ae6a",

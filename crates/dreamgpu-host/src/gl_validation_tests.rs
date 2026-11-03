@@ -993,3 +993,92 @@ fn vertex_attribute_records_draws_and_queries_have_exact_shapes() {
         );
     }
 }
+#[test]
+fn buffer_object_records_and_the_buffer_draw_have_exact_shapes() {
+    let word_bytes = |a: &[u32]| a.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+    let validate = |f: u32, a: &[u32], data: &[u8]| {
+        let args = word_bytes(a);
+        unsafe { dreamgpu_gl_data_validate(f, args.as_ptr(), data.as_ptr(), data.len() as u32) }
+    };
+    assert_eq!(
+        function_words(FEnum_glBufferDataARB),
+        DG_GL_FUNCTION_INLINE_DATA | 3
+    );
+    assert_eq!(
+        function_words(FEnum_glBufferSubDataARB),
+        DG_GL_FUNCTION_INLINE_DATA | 2
+    );
+    assert_eq!(
+        function_words(FEnum_glDeleteBuffersARB),
+        DG_GL_FUNCTION_INLINE_DATA | 1
+    );
+    assert_eq!(
+        function_words(FEnum_glDrawRangeElements),
+        DG_GL_FUNCTION_INLINE_DATA | 10
+    );
+    // Bindings, mapping and reads are frontend state: never records.
+    for f in [
+        FEnum_glBindBufferARB,
+        FEnum_glGenBuffersARB,
+        FEnum_glIsBufferARB,
+        FEnum_glMapBufferARB,
+        FEnum_glUnmapBufferARB,
+        FEnum_glGetBufferSubDataARB,
+        FEnum_glGetBufferParameterivARB,
+        FEnum_glGetBufferPointervARB,
+        FEnum_glBufferData,
+        FEnum_glDrawRangeElementsEXT,
+    ] {
+        assert_eq!(function_words(f), u32::MAX);
+    }
+    let data = FEnum_glBufferDataARB;
+    assert_eq!(validate(data, &[1, 3, GL_STATIC_DRAW], &[1, 2, 3]), 0);
+    assert_eq!(validate(data, &[1, 3, GL_DYNAMIC_READ], &[]), 0);
+    for (a, payload) in [
+        ([0, 3, GL_STATIC_DRAW], &[1u8, 2, 3][..]),
+        ([1, 3, GL_STATIC_DRAW], &[1, 2][..]),
+        ([1, 3, 0], &[][..]),
+        ([1, DG_GL_MAX_BUFFER_BYTES + 1, GL_STATIC_DRAW], &[][..]),
+    ] {
+        assert_eq!(validate(data, &a, payload), DG_GL_ERROR_BATCH, "{a:x?}");
+    }
+    let sub = FEnum_glBufferSubDataARB;
+    assert_eq!(validate(sub, &[1, 9], &[1, 2]), 0);
+    assert_eq!(validate(sub, &[0, 9], &[1, 2]), DG_GL_ERROR_BATCH);
+    assert_eq!(
+        validate(sub, &[1, DG_GL_MAX_BUFFER_BYTES], &[1]),
+        DG_GL_ERROR_BATCH
+    );
+    let delete = FEnum_glDeleteBuffersARB;
+    assert_eq!(validate(delete, &[2], &word_bytes(&[4, 5])), 0);
+    assert_eq!(
+        validate(delete, &[3], &word_bytes(&[4, 5])),
+        DG_GL_ERROR_BATCH
+    );
+    assert_eq!(
+        validate(delete, &[DG_GL_MAX_BUFFERS + 1], &[]),
+        DG_GL_ERROR_BATCH
+    );
+    // The buffer draw: the shared layout, inline indices within the client vertices.
+    let draw = FEnum_glDrawRangeElements;
+    let mask = crate::arrays::raw::tests::BUFFER_MASK;
+    let inline = crate::arrays::raw::tests::buffer_packet(3, &[5, 7, 6, 5]);
+    let a = [
+        GL_TRIANGLE_STRIP,
+        5,
+        4,
+        mask,
+        2,
+        1,
+        3,
+        GL_UNSIGNED_SHORT,
+        0,
+        0,
+    ];
+    assert_eq!(validate(draw, &a, &inline), 0);
+    let outside = crate::arrays::raw::tests::buffer_packet(3, &[5, 8, 6, 5]);
+    assert_eq!(validate(draw, &a, &outside), DG_GL_ERROR_BATCH);
+    let mut bad = a;
+    bad[0] = GL_POLYGON + 1;
+    assert_eq!(validate(draw, &bad, &inline), DG_GL_ERROR_BATCH);
+}

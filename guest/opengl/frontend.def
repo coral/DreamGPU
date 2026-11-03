@@ -290,6 +290,17 @@ EXPORTS
     glTexSubImage3D=glTexSubImage3D@44
     glTexImage3DEXT=glTexImage3DEXT@40
     glTexSubImage3DEXT=glTexSubImage3DEXT@44
+    glGenBuffersARB=glGenBuffersARB@8
+    glBindBufferARB=glBindBufferARB@8
+    glDeleteBuffersARB=glDeleteBuffersARB@8
+    glIsBufferARB=glIsBufferARB@4
+    glBufferDataARB=glBufferDataARB@16
+    glBufferSubDataARB=glBufferSubDataARB@16
+    glGetBufferSubDataARB=glGetBufferSubDataARB@16
+    glMapBufferARB=glMapBufferARB@8
+    glUnmapBufferARB=glUnmapBufferARB@4
+    glGetBufferParameterivARB=glGetBufferParameterivARB@12
+    glGetBufferPointervARB=glGetBufferPointervARB@12
     glClearColor=glClearColor@16
     glClear=glClear@4
     glEnable=glEnable@4

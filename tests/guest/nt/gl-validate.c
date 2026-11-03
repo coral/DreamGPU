@@ -22,6 +22,8 @@ static ULONG FunctionWords(void *context, ULONG function) {
             return DG_GL_FUNCTION_INLINE_DATA | 4;
         case 0xaec: /* the attribute draw (VertexAttribPointerARB) */
             return DG_GL_FUNCTION_INLINE_DATA | 5;
+        case 0x1f5: /* the buffer draw (DrawRangeElements) */
+            return DG_GL_FUNCTION_INLINE_DATA | 10;
         case 20:
             return DG_GL_FUNCTION_INLINE_DATA | 8;
         default:
@@ -125,6 +127,68 @@ int main(void) {
         assert(DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
         attrib[8] = 0x1d6; /* the sixteen-slot layout has no generic slots */
         assert(!DgValidateUserGl(attrib, sizeof(attrib), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* The buffer draw: vertices 5-7, the position (FLOAT 3) from buffer 9 at
+         * offset 8 with stride 12, a client colour section (UNSIGNED_BYTE 4) at
+         * payload byte 140. Arguments at word 10, descriptors at word 20, the
+         * reference at 52, the section at 55. */
+        ULONG draw[64] = {DG_GL_DATA_CALL,     232, 0, 1, 1, 0, 0, 0, 0x1f5, 152, 4, 5, 3,
+                          DG_GL_ARRAY_RAW | 3, 0,   1, 3, 0, 0, 0};
+        draw[20] = 0x1406 | (3U << 16);
+        draw[21] = 0x1401 | (4U << 16);
+        draw[52] = 9;
+        draw[53] = 8;
+        draw[54] = 12;
+        draw[55] = draw[56] = draw[57] = 0xff0000ffU;
+        assert(DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[52] = 0; /* a reference names a buffer */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[52] = 9;
+        draw[53] = 6; /* offsets are component aligned */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[53] = 8;
+        draw[54] = DG_GL_MAX_BUFFER_STRIDE + 4; /* bounded strides */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[54] = 12;
+        draw[15] = 1 | 1U << 2; /* a buffer slot that is not enabled */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[15] = 1;
+        draw[16] = 2; /* client sections hold count vertices */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[16] = 3;
+        draw[18] = 4; /* no element buffer without an index type */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[18] = 0;
+        draw[22] = 0x1406 | (3U << 16); /* a stray disabled descriptor */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[22] = 0;
+        /* Indexed from element buffer 4 at offset 6 (UNSIGNED_SHORT), the
+         * colour section of vertices 5-7: no inline indices. */
+        draw[17] = 0x1403;
+        draw[18] = 4;
+        draw[19] = 6;
+        draw[12] = 300;
+        assert(DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[19] = 5; /* element offsets are index aligned */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        /* Inline indices: two UNSIGNED_SHORT after the section, then padding. */
+        draw[1] = 236;
+        draw[9] = 156;
+        draw[12] = 2;
+        draw[18] = draw[19] = 0;
+        draw[58] = 5 | 7U << 16;
+        assert(DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
+        draw[9] = 154; /* the record size must match the padded payload */
+        assert(!DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
+        draw[9] = 156;
+        draw[12] = 1; /* one index, nonzero padding */
+        assert(!DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
+        draw[58] = 5;
+        draw[1] = 236;
+        assert(DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
+        draw[10] = 10; /* beyond GL_POLYGON */
+        assert(!DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
     }
     {
         /* Fog coordinates (slot 14): float2 positions at 64, one FLOAT each at 80. */

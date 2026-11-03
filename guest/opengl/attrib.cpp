@@ -10,7 +10,8 @@
  *
  * Generic attribute arrays are client state, never aliased with the
  * conventional arrays except that array 0 is the position; arrays.cpp draws
- * them through the attribute draw. Their state queries are answered here, the
+ * them through the attribute draw, or the buffer draw when an array latched a
+ * buffer object (ARB_vertex_buffer_object). Their state queries are answered here, the
  * current values (attributes 1-15; attribute 0 has none) by the host.
  */
 #include "internal.h"
@@ -25,6 +26,7 @@ extern "C" {
 #define JGL_CURRENT_VERTEX_ATTRIB 0x8626
 #define JGL_ATTRIB_ARRAY_POINTER 0x8645
 #define JGL_ATTRIB_ARRAY_NORMALIZED 0x886a
+#define JGL_ATTRIB_ARRAY_BUFFER_BINDING 0x889f /* ARB_vertex_buffer_object */
 
 /* Float arguments and vectors are copied as bits and never loaded: an x87
  * load would quiet signaling NaNs and change status flags (packing.h). */
@@ -178,6 +180,9 @@ void APIENTRY glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GL
     a->Stride = stride;
     a->Pointer = pointer;
     a->Normalized = normalized != GL_FALSE;
+    /* ARB_vertex_buffer_object: the pointer is an offset into the bound buffer. */
+    a->Buffer = JglArrays()->ArrayBuffer.Name;
+    a->Serial = JglArrays()->ArrayBuffer.Serial;
 }
 void APIENTRY glEnableVertexAttribArrayARB(GLuint index) {
     JGL_ARRAY *a = Array(index);
@@ -221,6 +226,11 @@ static ULONG Get(GLuint index, GLenum pname, GLint *state, GLfloat *current) {
         case JGL_ATTRIB_ARRAY_NORMALIZED:
             *state = a->Normalized;
             return 1;
+        case JGL_ATTRIB_ARRAY_BUFFER_BINDING:
+            if (!JglVertexBufferObjectAvailable())
+                break;
+            *state = (GLint)a->Buffer;
+            return 1;
         case JGL_CURRENT_VERTEX_ATTRIB: {
             /* Attribute 0 is the vertex position: it has no current value. */
             ULONG args[3] = {index, pname, 0}, bytes = 0;
@@ -235,9 +245,10 @@ static ULONG Get(GLuint index, GLenum pname, GLint *state, GLfloat *current) {
                        : 0;
         }
         default:
-            JglSetError(GL_INVALID_ENUM);
-            return 0;
+            break;
     }
+    JglSetError(GL_INVALID_ENUM);
+    return 0;
 }
 void APIENTRY glGetVertexAttribfvARB(GLuint index, GLenum pname, GLfloat *params) {
     GLint state = 0;

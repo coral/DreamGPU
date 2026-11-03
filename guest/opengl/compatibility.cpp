@@ -37,7 +37,18 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glGetVertexAttrib", JglVertexProgramAvailable},
                     {"glTexImage3D", JglTexture3DAvailable},
                     {"glTexSubImage3D", JglTexture3DAvailable},
-                    {"glCopyTexSubImage3D", JglTexture3DAvailable}};
+                    {"glCopyTexSubImage3D", JglTexture3DAvailable},
+                    {"glGenBuffersARB", JglVertexBufferObjectAvailable},
+                    {"glBindBufferARB", JglVertexBufferObjectAvailable},
+                    {"glDeleteBuffersARB", JglVertexBufferObjectAvailable},
+                    {"glIsBufferARB", JglVertexBufferObjectAvailable},
+                    {"glBufferDataARB", JglVertexBufferObjectAvailable},
+                    {"glBufferSubDataARB", JglVertexBufferObjectAvailable},
+                    {"glGetBufferSubDataARB", JglVertexBufferObjectAvailable},
+                    {"glMapBufferARB", JglVertexBufferObjectAvailable},
+                    {"glUnmapBufferARB", JglVertexBufferObjectAvailable},
+                    {"glGetBufferParameterivARB", JglVertexBufferObjectAvailable},
+                    {"glGetBufferPointervARB", JglVertexBufferObjectAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {

@@ -431,3 +431,68 @@ that LockBox had just exposed. The next texture load then found no location
 ("Implement texture loading from 0") and the volume sampled black. The
 installed volume probe failed this way on Win2000 until this patch.
 `test_volume_map_binding.py` checks the prepared source.
+
+Patches 0037-0040 adapt WineD3D to DreamGPU's `ARB_vertex_buffer_object`
+(`DG_CAP_GL_VERTEX_BUFFER_OBJECT`). With the extension, non-dynamic D3D vertex
+and index buffers outside `D3DPOOL_SYSTEMMEM` get GL buffer objects; dynamic
+buffers stay in system memory, since this Wine creates buffer objects for
+them only with `ARB_map_buffer_range` or `APPLE_flush_buffer_range`, which
+DreamGPU does not advertise. The guest frontend keeps a copy of every buffer
+(the guest cannot address host memory), so a GL map returns that copy and
+unmapping re-sends all of it.
+
+`0037-vbo-double-buffered-uploads.patch` keeps the system memory copy of
+every buffer object (`WINED3D_BUFFER_DOUBLEBUFFER`). Locks then never map GL:
+this Wine mapped static buffers `GL_READ_WRITE` for the whole Lock-Unlock
+interval, so every Unlock re-sent the whole buffer, a draw from a locked
+buffer read a mapped buffer, and the pointer had to stay 16-byte aligned.
+`buffer_direct_upload` now sends each dirty range with `glBufferSubData`
+instead of mapping write-only, which also re-sent everything. Creation no
+longer marks the copy it just uploaded with `glBufferData` dirty, which sent
+each buffer twice; a needed conversion reloads it regardless.
+
+`0038-vbo-conversion-offsets.patch` repairs fixed-function vertex conversion,
+which every buffer object holding D3DCOLOR (DreamGPU has no BGRA vertex
+arrays) or XYZRHW data needs. This tree's `VBOX_WITH_WINE_FIX_BUFOFFSET`
+conversion never set the stream element's offset or the buffer's stream
+offset, marked only the first byte of each converted attribute and left the
+D3DCOLOR swizzle commented out, so colours reached GL with red and blue
+swapped and pretransformed positions unconverted; it also re-read the whole
+buffer on every declaration check and eventually dropped the buffer object.
+The element offset, the stream offset and every attribute byte are now
+recorded, the swizzle runs, and the upload covers the range widened to whole
+vertices. Without the BUFOFFSET macros the structure layouts would differ
+between units, so the repair stays in that code.
+
+`0039-vbo-mixed-stream-fallbacks.patch` keeps immediate mode on memory.
+`context_update_stream_info` preloads every stream before taking any buffer
+object: a preload that stops converting unloads its buffer object, and
+elements taken earlier in the same loop kept the deleted name. Immediate mode
+(`drawStridedSlow`, `drawStridedSlowVs`) reads every element and index from
+memory, but draws mixing buffer objects with system memory streams reach it
+with buffer object offsets, which it dereferenced as pointers near zero.
+`draw_primitive` now replaces buffer objects with their system memory copies
+for any immediate-mode draw (not only emulation) and reads indices from the
+index buffer's copy. FLOAT16 declarations with vertex shaders always take
+immediate mode, since DreamGPU has no `ARB_half_float_vertex` and buffer
+objects would be read as floats.
+
+`0040-vbo-zero-attribute.patch` fixes the zero attribute buffer that VBox's
+`VBOX_WITH_WINE_FIX_ZEROVERTATTR` binds when a vertex shader leaves attribute 0
+without a stream (patch 0033 gave the no-buffer-object case a client array).
+It was sized to the draw's index count, so an array draw from a nonzero start
+or indices beyond that count read past it; it now covers `start + count`
+vertices of an array draw and at least 65536 for an indexed draw (every 16-bit
+index; larger 32-bit indices stay uncovered, and the host refuses such a draw
+instead of reading past the buffer). It was never deleted, so after a device
+Reset the stale name bound, or overwrote, whichever buffer reused it; it is now
+deleted with the device's contexts and at uninit.
+
+DreamGPU's packed XYZRHW/D3DCOLOR path (`guest/d3d/wine-vertex-array.h`)
+returned to Wine's per-vertex immediate mode whenever the extension existed;
+it now packs any draw whose elements are all in system memory (0039 guarantees
+that in immediate mode) and binds `ARRAY_BUFFER` zero for its client arrays.
+`test_vbo_adaptations.py` checks 0037, 0039 and 0040 in the prepared source and
+runs 0038's converted-attribute bookkeeping under ASan/UBSan;
+`test_vertex_arrays.py` covers the packed path. The diagnostic stack is
+rebased onto 0040 with its call-site line numbers renumbered.

@@ -2169,6 +2169,12 @@ pub const DG_GL_PROGRAM_NAME_BATCH: u32 = 128;
 pub const DG_GL_MAX_VERTEX_ATTRIBS: u32 = 16;
 pub const DG_CAP_GL_TEXTURE_3D: u32 = 8388608;
 pub const DG_GL_MAX_3D_TEXTURE_SIZE: u32 = 256;
+pub const DG_CAP_GL_VERTEX_BUFFER_OBJECT: u32 = 16777216;
+pub const DG_GL_MAX_BUFFERS: u32 = 16384;
+pub const DG_GL_MAX_BUFFER_BYTES: u32 = 134217728;
+pub const DG_GL_MAX_BUFFER_STRIDE: u32 = 2048;
+pub const DG_GL_MAX_BUFFER_ELEMENTS: u32 = 16777216;
+pub const DG_GL_BUFFER_REFERENCE_BYTES: u32 = 12;
 pub const DG_GL_VERTEX_BYTES: u32 = 64;
 pub const DG_GL_VERTEX_POSITION: u32 = 0;
 pub const DG_GL_VERTEX_COLOR: u32 = 16;
@@ -6464,6 +6470,31 @@ pub struct DreamGpuGlApi {
             arg7: ::core::ffi::c_int,
             arg8: ::core::ffi::c_int,
             arg9: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glGenBuffers: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *mut ::core::ffi::c_uint),
+    >,
+    pub dg_glDeleteBuffers: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *const ::core::ffi::c_uint),
+    >,
+    pub dg_glBindBuffer: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint),
+    >,
+    pub dg_glBufferData: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: isize,
+            arg3: *const ::core::ffi::c_void,
+            arg4: ::core::ffi::c_uint,
+        ),
+    >,
+    pub dg_glBufferSubData: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: isize,
+            arg3: isize,
+            arg4: *const ::core::ffi::c_void,
         ),
     >,
 }

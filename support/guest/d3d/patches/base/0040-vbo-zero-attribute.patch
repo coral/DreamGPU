@@ -1,0 +1,40 @@
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -1164,6 +1164,10 @@
+     device->blitter->free_private(device);
+     device->shader_backend->shader_free_private(device);
+     destroy_dummy_textures(device, gl_info);
++#ifdef VBOX_WITH_WINE_FIX_ZEROVERTATTR
++    /* DreamGPU: delete the zero attribute buffer while a context is current. */
++    zv_destroy(device);
++#endif
+ 
+     /* Release the context again as soon as possible. In particular,
+      * releasing the render target views below may release the last reference
+@@ -4502,6 +4506,11 @@
+     device->blitter->free_private(device);
+     device->shader_backend->shader_free_private(device);
+     destroy_dummy_textures(device, gl_info);
++#ifdef VBOX_WITH_WINE_FIX_ZEROVERTATTR
++    /* DreamGPU: the zero attribute buffer dies with these contexts; a stale
++     * name would later bind, or overwrite, whichever buffer reuses it. */
++    zv_destroy(device);
++#endif
+ 
+     context_release(context);
+ 
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -705,7 +705,11 @@
+     {
+     	return;
+     }
+-    device->czvDrawVertices = index_count;
++    /* DreamGPU: the zero attribute must cover every vertex the draw reaches,
++     * not index_count of them: an array draw starts at start_idx, and any
++     * 16-bit index (always below 65536) may be read. Larger 32-bit indices
++     * stay uncovered; the host refuses such a draw rather than read past it. */
++    device->czvDrawVertices = indexed ? max(index_count, 65536) : start_idx + index_count;
+ #endif
+ 
+     if (!context_apply_draw_state(context, device))

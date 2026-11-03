@@ -516,3 +516,159 @@ fn attribute_draws_bind_generic_arrays_for_the_draw_alone() {
         Err(1)
     );
 }
+unsafe extern "C" fn bind_buffer(target: u32, name: u32) {
+    note(27, target as usize);
+    note(28, name as usize);
+}
+/// The (target, name) of every bind and the (stride, pointer) of every
+/// pointer call, in order, with draws.
+fn buffer_calls(seen: &[(u32, usize)]) -> Vec<(u32, usize, usize)> {
+    let mut out = Vec::new();
+    for (i, &(op, value)) in seen.iter().enumerate() {
+        match op {
+            27 => out.push((27, value, seen[i + 1].1)),
+            5 => out.push((5, value, seen[i + 1].1)),
+            7 => out.push((7, value, seen[i + 1].1)),
+            _ => {}
+        }
+    }
+    out
+}
+#[test]
+fn buffer_draws_bind_each_slot_point_at_offsets_and_unbind() {
+    let mut api = attrib_api();
+    api.dg_glBindBuffer = Some(bind_buffer);
+    let data = raw::tests::buffer_packet(3, &[]);
+    let base = data.as_ptr() as usize;
+    let a = [
+        GL_TRIANGLES,
+        5,
+        3,
+        raw::tests::BUFFER_MASK,
+        2,
+        1,
+        3,
+        0,
+        0,
+        0,
+    ];
+    let layout = raw::layout_buffer(&a, &data, true).unwrap();
+    let mut resolved = crate::buffer::Resolved {
+        slots: [0; 32],
+        element: 0,
+    };
+    resolved.slots[0] = 77;
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    assert_eq!(
+        unsafe { buffer_draw(&api, &a, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    // Position reads buffer 77 at offset 8 with its stride; the client colour
+    // and generic sections hold vertices from 5, so their pointers start five
+    // vertices before them; the draw starts at vertex 5; no binding outlives it.
+    assert_eq!(
+        buffer_calls(&seen),
+        [
+            (27, GL_ARRAY_BUFFER as usize, 77),
+            (5, 20, 8),
+            (27, GL_ARRAY_BUFFER as usize, 0),
+            (5, 0, (base + 140).wrapping_sub(20)),
+            (27, GL_ARRAY_BUFFER as usize, 0),
+            (5, 0, (base + 152).wrapping_sub(20)),
+            (7, GL_TRIANGLES as usize, 5),
+            (27, GL_ARRAY_BUFFER as usize, 0),
+            (27, GL_ELEMENT_ARRAY_BUFFER as usize, 0),
+        ]
+    );
+    // An element buffer is bound for the draw, its offset passed as indices;
+    // inline indices bind zero and point into the payload.
+    let e = [
+        GL_TRIANGLES,
+        5,
+        6,
+        raw::tests::BUFFER_MASK,
+        2,
+        1,
+        3,
+        GL_UNSIGNED_INT,
+        9,
+        12,
+    ];
+    let layout = raw::layout_buffer(&e, &data, true).unwrap();
+    resolved.element = 88;
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe { buffer_draw(&api, &e, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let at = seen
+        .iter()
+        .position(|v| *v == (27, GL_ELEMENT_ARRAY_BUFFER as usize))
+        .unwrap();
+    assert_eq!(seen[at + 1], (28, 88));
+    assert_eq!(
+        &seen[at + 2..at + 5],
+        [(7, GL_TRIANGLES as usize), (9, 6), (10, 12)]
+    );
+    let inline = raw::tests::buffer_packet(3, &[5, 7, 6, 5]);
+    let i = [
+        GL_TRIANGLE_STRIP,
+        5,
+        4,
+        raw::tests::BUFFER_MASK,
+        2,
+        1,
+        3,
+        GL_UNSIGNED_SHORT,
+        0,
+        0,
+    ];
+    let layout = raw::layout_buffer(&i, &inline, true).unwrap();
+    resolved.element = 0;
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe { buffer_draw(&api, &i, &inline, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let at = seen
+        .iter()
+        .position(|v| *v == (27, GL_ELEMENT_ARRAY_BUFFER as usize))
+        .unwrap();
+    assert_eq!(seen[at + 1], (28, 0));
+    assert_eq!(seen[at + 4], (10, inline.as_ptr() as usize + 164));
+    // A native error restores like the other draws; without BindBuffer the
+    // draw exposes nothing.
+    ERROR.with(|v| *v.borrow_mut() = GL_INVALID_OPERATION);
+    assert_eq!(
+        unsafe {
+            buffer_draw(
+                &api,
+                &a,
+                &data,
+                &raw::layout_buffer(&a, &data, true).unwrap(),
+                &resolved,
+            )
+        },
+        Ok(GL_INVALID_OPERATION)
+    );
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    api.dg_glBindBuffer = None;
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe {
+            buffer_draw(
+                &api,
+                &a,
+                &data,
+                &raw::layout_buffer(&a, &data, true).unwrap(),
+                &resolved,
+            )
+        },
+        Err(3)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
+}

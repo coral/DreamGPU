@@ -125,6 +125,48 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                         if (data[j])
                             return 0;
                 }
+                // The buffer draw (DrawRangeElements, 0x1f5) names buffers per
+                // slot and carries only client sections and inline indices.
+                if (record[8] == 0x1f5 && args == 10) {
+                    unsigned descriptors[DG_GL_ATTRIB_SLOTS], offsets[DG_GL_ATTRIB_SLOTS], length,
+                        indices, references = 0;
+                    const unsigned char *data = (const unsigned char *)record + payload;
+                    const unsigned *a = (const unsigned *)record + 10;
+                    if (data_bytes < DG_GL_ATTRIB_DESCRIPTOR_BYTES)
+                        return 0;
+                    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
+                        descriptors[i] = record[payload / 4 + i];
+                        references += (a[5] >> i) & 1;
+                    }
+                    if (data_bytes < DG_GL_ATTRIB_DESCRIPTOR_BYTES +
+                                         references * DG_GL_BUFFER_REFERENCE_BYTES ||
+                        !DgRawBufferLayout(a, descriptors,
+                                           (const unsigned *)record + payload / 4 +
+                                               DG_GL_ATTRIB_SLOTS,
+                                           offsets, &indices, &length) ||
+                        length != data_bytes)
+                        return 0;
+                    unsigned end =
+                        DG_GL_ATTRIB_DESCRIPTOR_BYTES + references * DG_GL_BUFFER_REFERENCE_BYTES;
+                    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
+                        if (!offsets[i])
+                            continue;
+                        for (unsigned j = end; j < offsets[i]; ++j)
+                            if (data[j])
+                                return 0;
+                        end = offsets[i] + a[6] * ((descriptors[i] >> 16) & 255) *
+                                               DgArrayComponentBytes(descriptors[i] & 65535);
+                    }
+                    if (indices) {
+                        for (unsigned j = end; j < indices; ++j)
+                            if (data[j])
+                                return 0;
+                        end = indices + a[2] * DgBufferIndexBytes(a[7]);
+                    }
+                    for (unsigned j = end; j < length; ++j)
+                        if (data[j])
+                            return 0;
+                }
                 expected = size;
                 break;
             }

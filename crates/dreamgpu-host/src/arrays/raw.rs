@@ -60,6 +60,175 @@ pub(crate) fn layout_attribs(
         data,
     )
 }
+/// One buffer slot of the buffer draw: guest buffer name, byte offset and
+/// stride (zero for tight).
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub(crate) struct Reference {
+    pub name: u32,
+    pub offset: u32,
+    pub stride: u32,
+}
+/// The buffer draw (ARB_vertex_buffer_object): thirty-two attribute draw
+/// slots, client slots with their payload offsets, buffer slots with their
+/// references, and the inline indices (offset and size; size zero for an
+/// array draw, offset zero with an element buffer).
+#[derive(Clone, Copy)]
+pub(crate) struct BufferLayout {
+    pub slots: [Attribute; 32],
+    pub references: [Reference; 32],
+    pub indices: usize,
+    pub index_size: usize,
+}
+/// The index size of an index type word: zero for an array draw.
+pub(crate) fn buffer_index_bytes(kind: u32) -> Option<usize> {
+    match kind {
+        0 => Some(0),
+        GL_UNSIGNED_BYTE => Some(1),
+        GL_UNSIGNED_SHORT => Some(2),
+        GL_UNSIGNED_INT => Some(4),
+        _ => None,
+    }
+}
+/// The buffer draw's complete record shape (guest/include/gl-arrays.h,
+/// DgRawBufferLayout): scalar words, descriptors, references, sections, inline
+/// indices and zero padding. With `indices_checked`, every inline index must
+/// also lie within the client vertices; execution re-parses an admitted record
+/// without repeating that scan.
+pub(crate) fn layout_buffer(
+    a: &[u32; 10],
+    data: &[u8],
+    indices_checked: bool,
+) -> Option<BufferLayout> {
+    let [mode, base, count, mask, generic, buffered, vertices, kind, element, element_offset] = *a;
+    let enabled = (mask & DG_GL_ARRAY_EXT_MASK) | (generic << 16);
+    let client = enabled & !buffered;
+    let index_size = buffer_index_bytes(kind)?;
+    if mode > GL_POLYGON
+        || mask != ((mask & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW)
+        || generic & !DG_GL_ATTRIB_MASK != 0
+        || (mask & DG_GL_ARRAY_POSITION == 0 && generic & 1 == 0)
+        || buffered & !enabled != 0
+        || count > DG_GL_MAX_BUFFER_ELEMENTS
+        || data.len() < 128
+    {
+        return None;
+    }
+    let last = |n: u32| n == 0 || u64::from(base) + u64::from(n) - 1 <= u64::from(u32::MAX);
+    if index_size == 0 {
+        if element != 0
+            || element_offset != 0
+            || vertices != if client != 0 { count } else { 0 }
+            || vertices > DG_GL_MAX_VERTICES
+            || !last(count)
+        {
+            return None;
+        }
+    } else if client != 0 {
+        if vertices == 0 || vertices > DG_GL_MAX_VERTICES || !last(vertices) {
+            return None;
+        }
+    } else if vertices != 0 || base != 0 {
+        return None;
+    }
+    if index_size != 0
+        && (if element != 0 {
+            !(element_offset as usize).is_multiple_of(index_size)
+        } else {
+            element_offset != 0 || count > DG_GL_MAX_INDICES
+        })
+    {
+        return None;
+    }
+    let word = |at: usize| -> Option<u32> {
+        Some(u32::from_le_bytes(data.get(at..at + 4)?.try_into().ok()?))
+    };
+    let mut layout = BufferLayout {
+        slots: [Attribute::default(); 32],
+        references: [Reference::default(); 32],
+        indices: 0,
+        index_size,
+    };
+    let mut at = 128;
+    for slot in 0..32 {
+        let descriptor = word(slot * 4)?;
+        if enabled & (1 << slot) == 0 {
+            if descriptor != 0 {
+                return None;
+            }
+            continue;
+        }
+        let attribute = if slot < 16 {
+            conventional(slot, descriptor)?
+        } else {
+            generic_attribute(descriptor)?
+        };
+        layout.slots[slot] = attribute;
+        if buffered & (1 << slot) != 0 {
+            let r = Reference {
+                name: word(at)?,
+                offset: word(at + 4)?,
+                stride: word(at + 8)?,
+            };
+            let unit = attribute.unit as u32;
+            if r.name == 0
+                || r.stride > DG_GL_MAX_BUFFER_STRIDE
+                || !r.offset.is_multiple_of(unit)
+                || !r.stride.is_multiple_of(unit)
+            {
+                return None;
+            }
+            layout.references[slot] = r;
+            at += DG_GL_BUFFER_REFERENCE_BYTES as usize;
+        }
+    }
+    let mut end = at;
+    for (slot, a) in layout.slots.iter_mut().enumerate() {
+        if client & (1 << slot) == 0 {
+            continue;
+        }
+        a.offset = (end + a.unit - 1) & !(a.unit - 1);
+        if data.get(end..a.offset)?.iter().any(|&v| v != 0) {
+            return None;
+        }
+        end = a
+            .offset
+            .checked_add(vertices as usize * a.size as usize * a.unit)?;
+        if end > data.len() {
+            return None;
+        }
+    }
+    if index_size != 0 && element == 0 {
+        let offset = (end + index_size - 1) & !(index_size - 1);
+        if data.get(end..offset)?.iter().any(|&v| v != 0) {
+            return None;
+        }
+        end = offset.checked_add(count as usize * index_size)?;
+        let bytes = data.get(offset..end)?;
+        if indices_checked && client != 0 {
+            let high = u64::from(base) + u64::from(vertices);
+            if !bytes.chunks_exact(index_size).all(|i| {
+                let v = u64::from(index_value(i));
+                v >= u64::from(base) && v < high
+            }) {
+                return None;
+            }
+        }
+        layout.indices = offset;
+    }
+    let total = (end + 3) & !3;
+    if total != data.len() || data[end..].iter().any(|&v| v != 0) {
+        return None;
+    }
+    Some(layout)
+}
+/// One little-endian index of 1, 2 or 4 bytes.
+pub(crate) fn index_value(bytes: &[u8]) -> u32 {
+    match bytes.len() {
+        1 => u32::from(bytes[0]),
+        2 => u32::from(u16::from_le_bytes([bytes[0], bytes[1]])),
+        _ => u32::from_le_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]),
+    }
+}
 fn unit_bytes(kind: u32) -> Option<usize> {
     Some(match kind {
         GL_BYTE | GL_UNSIGNED_BYTE => 1,
@@ -100,7 +269,7 @@ fn conventional(slot: usize, descriptor: u32) -> Option<Attribute> {
 }
 /// A generic attribute: any GL1.1 component type, one to four components,
 /// normalized only for an integer type; every other bit zero.
-fn generic(descriptor: u32) -> Option<Attribute> {
+fn generic_attribute(descriptor: u32) -> Option<Attribute> {
     let kind = descriptor & 65535;
     let size = (descriptor >> 16) & 255;
     let normalized = descriptor & DG_GL_ATTRIB_NORMALIZED != 0;
@@ -139,7 +308,7 @@ fn layout_descriptors<const N: usize>(
         *a = if slot < 16 {
             conventional(slot, descriptor)?
         } else {
-            generic(descriptor)?
+            generic_attribute(descriptor)?
         };
         a.offset = (end + a.unit - 1) & !(a.unit - 1);
         if data.get(end..a.offset)?.iter().any(|&v| v != 0) {
@@ -273,8 +442,198 @@ pub(crate) mod tests {
         // Generic slots never exist in the older layouts.
         assert!(layout_extended(mask | DG_GL_ARRAY_POSITION, 3, &data).is_none());
     }
+    /// A buffer draw: position (FLOAT 3) from buffer 4 at offset 8, stride
+    /// 20; colour (UNSIGNED_BYTE 4) and generic 1 (SHORT 2) client sections of
+    /// `vertices` vertices; inline UNSIGNED_SHORT `indices` when indexed.
+    pub(crate) fn buffer_packet(vertices: u32, indices: &[u16]) -> Vec<u8> {
+        let mut data = vec![0u8; 128];
+        for (slot, descriptor) in [
+            (0, GL_FLOAT | (3 << 16)),
+            (1, GL_UNSIGNED_BYTE | (4 << 16)),
+            (17, GL_SHORT | (2 << 16)),
+        ] {
+            data[slot * 4..slot * 4 + 4].copy_from_slice(&descriptor.to_le_bytes());
+        }
+        for word in [4u32, 8, 20] {
+            data.extend_from_slice(&word.to_le_bytes());
+        }
+        data.extend((0..vertices * 4).map(|v| v as u8 | 1));
+        data.extend((0..vertices * 2).flat_map(|v| (v as u16 + 1).to_le_bytes()));
+        if !indices.is_empty() {
+            data.resize((data.len() + 1) & !1, 0);
+            data.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
+        }
+        data.resize((data.len() + 3) & !3, 0);
+        data
+    }
+    pub(crate) const BUFFER_MASK: u32 = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR;
+    #[test]
+    fn buffer_draws_place_references_sections_and_indices() {
+        // An array draw of 3 vertices from vertex 5.
+        let data = buffer_packet(3, &[]);
+        let a = [GL_TRIANGLES, 5, 3, BUFFER_MASK, 2, 1, 3, 0, 0, 0];
+        let l = layout_buffer(&a, &data, true).unwrap();
+        assert_eq!(
+            l.references[0],
+            Reference {
+                name: 4,
+                offset: 8,
+                stride: 20
+            }
+        );
+        assert_eq!((l.slots[1].offset, l.slots[17].offset), (140, 152));
+        assert_eq!((l.index_size, l.indices, data.len()), (0, 0, 164));
+        // Without client sections an array draw carries no vertices.
+        let mut both = data[..140].to_vec();
+        both[4..8].fill(0);
+        both[68..72].fill(0);
+        let only = [
+            GL_POINTS,
+            9,
+            100,
+            DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+        ];
+        assert!(layout_buffer(&only, &both, true).is_some());
+        for (word, value) in [(6, 100), (1, u32::MAX - 98)] {
+            let mut bad = only;
+            bad[word] = value;
+            assert!(layout_buffer(&bad, &both, true).is_none(), "{word}");
+        }
+        // Indexed with inline indices within base 5, 3 vertices.
+        let data = buffer_packet(3, &[5, 7, 6, 5]);
+        let a = [
+            GL_TRIANGLE_STRIP,
+            5,
+            4,
+            BUFFER_MASK,
+            2,
+            1,
+            3,
+            GL_UNSIGNED_SHORT,
+            0,
+            0,
+        ];
+        let l = layout_buffer(&a, &data, true).unwrap();
+        assert_eq!((l.index_size, l.indices, data.len()), (2, 164, 172));
+        // An index outside the client vertices is malformed when checked.
+        for index in [4u16, 8] {
+            let bad = buffer_packet(3, &[5, index, 6, 5]);
+            assert!(layout_buffer(&a, &bad, true).is_none(), "{index}");
+            assert!(layout_buffer(&a, &bad, false).is_some(), "{index}");
+        }
+        // An element buffer: no inline indices, an aligned offset.
+        let data = buffer_packet(3, &[]);
+        let e = [
+            GL_TRIANGLES,
+            5,
+            6,
+            BUFFER_MASK,
+            2,
+            1,
+            3,
+            GL_UNSIGNED_INT,
+            9,
+            12,
+        ];
+        assert!(layout_buffer(&e, &data, true).is_some());
+        let mut bad = e;
+        bad[9] = 6;
+        assert!(layout_buffer(&bad, &data, true).is_none());
+        // Every buffer slot and every word of the record shape.
+        let a = [GL_TRIANGLES, 5, 3, BUFFER_MASK, 2, 1, 3, 0, 0, 0];
+        let data = buffer_packet(3, &[]);
+        for (word, value) in [
+            (0, GL_POLYGON + 1),
+            (3, BUFFER_MASK & !DG_GL_ARRAY_RAW),
+            (3, BUFFER_MASK | 1 << 15),
+            (4, 2 | 1 << 16),
+            (5, 1 | 1 << 3),
+            (6, 2),
+            (7, GL_UNSIGNED_BYTE + 1),
+            (8, 1),
+            (9, 4),
+            (2, DG_GL_MAX_BUFFER_ELEMENTS + 1),
+        ] {
+            let mut bad = a;
+            bad[word] = value;
+            assert!(
+                layout_buffer(&bad, &data, true).is_none(),
+                "{word} {value:#x}"
+            );
+        }
+        // References: nonzero name, bounded and aligned stride and offset.
+        for (at, value) in [
+            (128, 0u32),
+            (132, 6),
+            (136, 22),
+            (136, DG_GL_MAX_BUFFER_STRIDE + 4),
+        ] {
+            let mut bad = data.clone();
+            bad[at..at + 4].copy_from_slice(&value.to_le_bytes());
+            assert!(layout_buffer(&a, &bad, true).is_none(), "{at} {value}");
+        }
+        // Stray descriptors, zero padding, exact length.
+        for at in [8, 72, 124] {
+            let mut bad = data.clone();
+            bad[at] = 1;
+            assert!(layout_buffer(&a, &bad, true).is_none(), "{at}");
+        }
+        assert!(layout_buffer(&a, &data[..160], true).is_none());
+        let one = buffer_packet(3, &[5]);
+        let indexed = [
+            GL_POINTS,
+            5,
+            1,
+            BUFFER_MASK,
+            2,
+            1,
+            3,
+            GL_UNSIGNED_SHORT,
+            0,
+            0,
+        ];
+        assert!(layout_buffer(&indexed, &one, true).is_some());
+        let mut bad = one.clone();
+        bad[166] = 1;
+        assert!(layout_buffer(&indexed, &bad, true).is_none());
+        // A buffer slot must be enabled; a buffered slot keeps its slot rules.
+        let mut bad = a;
+        bad[5] = 1 | 1 << 2;
+        assert!(layout_buffer(&bad, &data, true).is_none());
+        let mut position = data.clone();
+        position[..4].copy_from_slice(&(GL_UNSIGNED_BYTE | (3 << 16)).to_le_bytes());
+        assert!(layout_buffer(&a, &position, true).is_none());
+        // Indexed draws without client sections carry no base or vertices.
+        let mut solo = data[..140].to_vec();
+        solo[4..8].fill(0);
+        solo[68..72].fill(0);
+        let i = [
+            GL_TRIANGLES,
+            0,
+            3,
+            DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION,
+            0,
+            1,
+            0,
+            GL_UNSIGNED_BYTE,
+            3,
+            1,
+        ];
+        assert!(layout_buffer(&i, &solo, true).is_some());
+        for word in [1, 6] {
+            let mut bad = i;
+            bad[word] = 1;
+            assert!(layout_buffer(&bad, &solo, true).is_none(), "{word}");
+        }
+    }
     fn generic_descriptor(descriptor: u32) -> Option<Attribute> {
-        generic(descriptor)
+        generic_attribute(descriptor)
     }
     #[test]
     fn fog_coordinate_slot_is_one_float_or_double() {

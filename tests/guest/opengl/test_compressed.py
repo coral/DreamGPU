@@ -29,7 +29,7 @@ assert re.search(r"^set\(frontend_sources [^)]*\bcompressed\b", cmake, re.M)
 with tempfile.TemporaryDirectory(prefix="dreamgpu-compressed-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("frontend.cpp", "arrays.cpp", "query.cpp", "texture.cpp", "compressed.cpp",
+    for name in ("frontend.cpp", "arrays.cpp", "buffers.h", "query.cpp", "texture.cpp", "compressed.cpp",
                  "compatibility.cpp", "internal.h", "packing.h", "transport.h", "scalar.inc",
                  "names.h", "state.h"):
         shutil.copyfile(SOURCE / name, root / name)

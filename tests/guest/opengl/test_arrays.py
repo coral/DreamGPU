@@ -10,7 +10,7 @@ HERE = Path(__file__).resolve().parent
 with tempfile.TemporaryDirectory(prefix="jgl-arrays-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("arrays.cpp", "secondary.cpp", "packing.h", "internal.h"):
+    for name in ("arrays.cpp", "buffers.h", "secondary.cpp", "packing.h", "internal.h"):
         shutil.copyfile((HERE.parents[2] / "guest/opengl") / name, root / name)
     shutil.copyfile(HERE / "arrays.cpp", root / "test.cpp")
     shutil.copyfile(HERE / "frontend-windows.h", root / "windows.h")

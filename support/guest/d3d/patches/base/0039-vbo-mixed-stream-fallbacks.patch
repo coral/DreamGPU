@@ -1,0 +1,65 @@
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -3146,6 +3146,18 @@
+ 
+     stream_info->all_vbo = 1;
+     context->num_buffer_queries = 0;
++    /* DreamGPU: preload every stream before taking any buffer object. A
++     * preload may stop converting and unload its buffer object; elements
++     * taken earlier in the loop below would keep the deleted name. */
++    if (state->load_base_vertex_index >= 0)
++    {
++        for (i = 0, map = stream_info->use_map; map; map >>= 1, ++i)
++        {
++            if (map & 1)
++                buffer_internal_preload(state->streams[stream_info->elements[i].stream_idx].buffer,
++                        context, state);
++        }
++    }
+     for (i = 0, map = stream_info->use_map; map; map >>= 1, ++i)
+     {
+         struct wined3d_stream_info_element *element;
+@@ -3176,7 +3188,6 @@
+         }
+         else
+         {
+-            buffer_internal_preload(buffer, context, state);
+             buffer_get_memory(buffer, context, &data);
+             element->data.buffer_object = data.buffer_object;
+             element->data.addr += (ULONG_PTR)data.addr;
+@@ -3193,7 +3204,9 @@
+ 
+     if (use_vs(state))
+     {
+-        if (state->vertex_declaration->half_float_conv_needed && !stream_info->all_vbo)
++        /* DreamGPU: no ARB_half_float_vertex, so FLOAT16 data is never
++         * native, not even from buffer objects. */
++        if (state->vertex_declaration->half_float_conv_needed)
+         {
+             TRACE("Using drawStridedSlow with vertex shaders for FLOAT16 conversion.\n");
+             context->use_immediate_mode_draw = TRUE;
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -796,6 +796,22 @@
+         }
+     }
+ 
++    /* DreamGPU: immediate mode reads every element and index in memory, but
++     * buffer object elements hold offsets. Streams mix buffer objects and
++     * system memory (only those draws take this path), and FLOAT16 with
++     * vertex shaders takes it with buffer objects alone. */
++    if (context->use_immediate_mode_draw && !emulation)
++    {
++        si_emulated = context->stream_info;
++        remove_vbos(context, state, &si_emulated);
++        stream_info = &si_emulated;
++    }
++    if ((context->use_immediate_mode_draw || emulation) && indexed && !idx_data)
++    {
++        idx_data = buffer_get_sysmem(state->index_buffer, context);
++        ib_query = NULL;
++    }
++
+     if (context->use_immediate_mode_draw || emulation)
+     {
+         /* Immediate mode drawing. */

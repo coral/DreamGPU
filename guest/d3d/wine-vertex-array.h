@@ -36,7 +36,6 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
         !context->use_immediate_mode_draw || context->namedArraysLoaded ||
         context->numberedArraysLoaded || context->num_untracked_materials ||
         context->d3d_info->xyzrhw || use_ps(state) ||
-        gl_info->supported[ARB_VERTEX_BUFFER_OBJECT] ||
         (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE] && !fog) ||
         !state->textures[0] ||
         (si->use_map & ~(required | texture_inputs | (1u << WINED3D_FFP_SPECULAR))) ||
@@ -92,6 +91,12 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
                 return FALSE;
         dg_wine_pack_vertex(&vertices[i], position, textures, used, diffuse, specular);
     }
+    /* Every element is in system memory (the buffer object case is excluded
+     * above, and draw_primitive replaces buffer objects with their system
+     * memory copies for immediate mode); a stale ARRAY_BUFFER binding from
+     * Wine's array loaders would turn these client pointers into offsets. */
+    if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
+        GL_EXTCALL(glBindBuffer)(GL_ARRAY_BUFFER, 0);
     gl_info->gl_ops.gl.p_glNormal3f(0, 0, 0);
     if (!secondary && gl_info->supported[EXT_SECONDARY_COLOR])
         GL_EXTCALL(glSecondaryColor3fEXT)(0, 0, 0);

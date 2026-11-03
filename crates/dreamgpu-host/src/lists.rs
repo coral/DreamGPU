@@ -387,7 +387,8 @@ unsafe fn error(c: *mut ContextState, e: u32) {
 }
 // Commands which depend on client state are already canonicalized into their
 // DATA payload. Deletion and PixelStore are explicitly immediate in GL1.1, and
-// ARB_fragment_program executes DeleteProgramsARB immediately too.
+// ARB_fragment_program executes DeleteProgramsARB immediately too. Buffer
+// object commands are never compiled (ARB_vertex_buffer_object).
 fn immediate(f: u32) -> bool {
     matches!(
         f,
@@ -396,6 +397,9 @@ fn immediate(f: u32) -> bool {
             | FEnum_glPixelStorei
             | FEnum_glDeleteTextures
             | FEnum_glDeleteProgramsARB
+            | FEnum_glBufferDataARB
+            | FEnum_glBufferSubDataARB
+            | FEnum_glDeleteBuffersARB
     )
 }
 unsafe fn capture(
@@ -422,6 +426,16 @@ unsafe fn capture(
         return true;
     }
     let execute = unsafe { (*s).mode } == GL_COMPILE_AND_EXECUTE;
+    // A list dereferences array data at compile time; the frontend sends
+    // buffer-sourced arrays as client draws there. A buffer draw itself would
+    // read buffers at execution, so it compiles as GL_INVALID_OPERATION.
+    if f == FEnum_glDrawRangeElements {
+        let code = GL_INVALID_OPERATION;
+        if unsafe { capture(m, c, 0, DG_GL_RECORD_ERROR, &code.to_le_bytes(), &[]) } {
+            unsafe { error(c, code) };
+        }
+        return false;
+    }
     if f == FEnum_glBegin {
         let code = if unsafe { (*s).begin } != 0 {
             GL_INVALID_OPERATION

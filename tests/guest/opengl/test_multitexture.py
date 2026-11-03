@@ -16,7 +16,7 @@ SOURCE = ROOT / "guest/opengl"
 with tempfile.TemporaryDirectory(prefix="dreamgpu-multitexture-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("frontend.cpp", "arrays.cpp", "query.cpp", "multitexture.cpp", "compatibility.cpp",
+    for name in ("frontend.cpp", "arrays.cpp", "buffers.h", "query.cpp", "multitexture.cpp", "compatibility.cpp",
                  "icd-client.inc", "internal.h", "packing.h", "transport.h", "scalar.inc", "names.h",
                  "state.h"):
         shutil.copyfile(SOURCE / name, root / name)

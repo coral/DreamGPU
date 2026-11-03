@@ -112,6 +112,9 @@ BOOL JglVertexProgramAvailable(void) {
 BOOL JglTexture3DAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_3D);
 }
+BOOL JglVertexBufferObjectAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -135,13 +138,15 @@ BOOL JglTexture3DAvailable(void) {
 #define JGL_FRAGMENT_PROGRAM_EXTENSIONS "GL_ARB_fragment_program"
 #define JGL_VERTEX_PROGRAM_EXTENSIONS "GL_ARB_vertex_program"
 #define JGL_TEXTURE_3D_EXTENSIONS "GL_EXT_texture3D"
+#define JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS "GL_ARB_vertex_buffer_object"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
                        sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
                        sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS) +
                        sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
-                       sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS)];
+                       sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
+                       sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -170,8 +175,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_VERTEX_PROGRAM_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_TEXTURE_3D)
         AppendExtensions(&at, JGL_TEXTURE_3D_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT)
+        AppendExtensions(&at, JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS
 #undef JGL_TEXTURE_3D_EXTENSIONS
 #undef JGL_VERTEX_PROGRAM_EXTENSIONS
 #undef JGL_FRAGMENT_PROGRAM_EXTENSIONS
@@ -229,8 +237,11 @@ static JGL_NAMES *TextureNames(JGL_CONTEXT *c) {
     return c->Names;
 }
 static void ReleaseNames(JGL_CONTEXT *c) {
-    if (c->Names && !--c->Names->References)
+    if (c->Names && !--c->Names->References) {
+        if (c->Names->FreeBuffers)
+            c->Names->FreeBuffers(c->Names->Buffers);
         HeapFree(Heap, 0, c->Names);
+    }
     c->Names = NULL;
 }
 static BOOL PublishFront(JGL_CONTEXT *c);
@@ -561,6 +572,29 @@ BOOL JglReady(void) {
     }
     return TRUE;
 }
+/* Buffer objects (buffer.cpp) share the namespace lock and process heap. */
+void **JglSharedBuffers(void (*release)(void *)) {
+    JGL_CONTEXT *c = CurrentContext();
+    JGL_NAMES *names = c ? TextureNames(c) : NULL;
+    if (!names)
+        return NULL;
+    if (release)
+        names->FreeBuffers = release;
+    return &names->Buffers;
+}
+void JglLockShared(void) {
+    EnterCriticalSection(&Lock);
+}
+void JglUnlockShared(void) {
+    LeaveCriticalSection(&Lock);
+}
+void *JglAllocate(ULONG bytes) {
+    return HeapAlloc(Heap, 0, bytes);
+}
+void JglFree(void *memory) {
+    if (memory)
+        HeapFree(Heap, 0, memory);
+}
 JGL_ARRAY_STATE *JglArrays(void) {
     JGL_CONTEXT *c = CurrentContext();
     return c ? &c->Arrays : NULL;
@@ -672,6 +706,7 @@ static BOOL CaptureData(ULONG function, const ULONG *arguments, ULONG words, con
         (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
         (function == FEnum_glDrawArrays || function == FEnum_glDrawArraysEXT ||
          function == FEnum_glVertexAttribPointerARB || function == FEnum_glDrawElements ||
+         function == FEnum_glDrawRangeElements ||
          (words == 8 &&
           (function == FEnum_glBitmap ||
            (function == FEnum_glDrawPixels && arguments[2] != GL_DEPTH_COMPONENT &&

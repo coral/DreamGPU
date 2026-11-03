@@ -46,7 +46,7 @@ for name in ("DG_GL_MAX_PROGRAM_BYTES", "DG_GL_MAX_PROGRAMS", "DG_GL_PROGRAM_NAM
 with tempfile.TemporaryDirectory(prefix="dreamgpu-fragment-program-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("frontend.cpp", "arrays.cpp", "query.cpp", "program.cpp", "compatibility.cpp",
+    for name in ("frontend.cpp", "arrays.cpp", "buffers.h", "query.cpp", "program.cpp", "compatibility.cpp",
                  "internal.h", "packing.h", "transport.h", "scalar.inc", "names.h", "state.h"):
         shutil.copyfile(SOURCE / name, root / name)
     shutil.copyfile(HERE / "frontend.cpp", root / "frontend-harness.cpp")

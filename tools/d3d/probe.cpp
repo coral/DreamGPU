@@ -185,6 +185,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "shader-probe.inc"
 #include "vshader-probe.inc"
 #include "volume-probe.inc"
+#include "vbuffer-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -338,6 +339,9 @@ static void Run(void) {
     if (failed)
         return;
     volume_probe::Run(device, surface);
+    if (failed)
+        return;
+    vbuffer_probe::Run(device, surface);
     if (failed)
         return;
     Log("STAGE present");

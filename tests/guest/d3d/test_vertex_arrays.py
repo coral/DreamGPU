@@ -38,6 +38,7 @@ using UINT=unsigned; using GLenum=unsigned; using BOOL=int; using DWORD=unsigned
 #define GL_SECONDARY_COLOR_ARRAY_EXT 3
 #define GL_FOG_COORDINATE_ARRAY_EXT 4
 #define GL_TEXTURE0_ARB 0x84c0
+#define GL_ARRAY_BUFFER 0x8892
 #define WINED3D_UNMAPPED_STAGE 0xffffffffu
 #include "dg-wine-vertex-pack.h"
 static const void *pointers[4]; static unsigned strides[4], enabled;
@@ -56,13 +57,18 @@ static void en(unsigned i){++calls; if(i==GL_TEXTURE_COORD_ARRAY) tex_enabled|=1
 static void dis(unsigned i){++calls; if(i==GL_TEXTURE_COORD_ARRAY) tex_enabled&=~(1u<<client); else enabled&=~(1u<<i);}
 static void client_active(unsigned unit){++calls;++client_calls;client=unit-GL_TEXTURE0_ARB;}
 static void multi(unsigned unit,const float*p){++calls;memcpy(last_multi[unit-GL_TEXTURE0_ARB],p,8);}
+static unsigned bound_array=7, binds;
+static void bind_buffer(unsigned target,unsigned name){++calls;++binds;assert(target==GL_ARRAY_BUFFER);bound_array=name;}
 static void normal(float x,float y,float z){++calls;assert(x==0&&y==0&&z==0);}
 static void secondary(float x,float y,float z){++calls;assert(x==0&&y==0&&z==0);}
 static void color(unsigned char r,unsigned char g,unsigned char b,unsigned char a){++calls;last_color[0]=r;last_color[1]=g;last_color[2]=b;last_color[3]=a;}
 static void sec(const unsigned char*p){++calls;memcpy(last_secondary,p,3);}
 static void uv(const float*p){++calls;memcpy(last_uv,p,8);}
+static bool vbo_supported;
 static void draw(unsigned primitive,int first,unsigned n){
     ++calls;++draws; assert(primitive==99&&first==0&&(enabled&3)==3&&(tex_enabled&1));
+    // With buffer objects the client pointers need ARRAY_BUFFER zero.
+    assert(!vbo_supported||bound_array==0);
     seen.clear();seen_fog.clear();for(unsigned i=0;i<n;++i) {
         dg_wine_vertex v{};
         memcpy(v.position,(const char*)pointers[0]+i*strides[0],16);
@@ -89,6 +95,7 @@ struct ext_functions {
  decltype(&multi) p_glMultiTexCoord2fvARB=multi;
  decltype(&fp) p_glFogCoordPointerEXT=fp;
  decltype(&ff) p_glFogCoordfEXT=ff;
+ decltype(&bind_buffer) p_glBindBuffer=bind_buffer;
 };
 struct wined3d_gl_info {bool supported[4]{};struct {unsigned textures=1,texture_coords=1;}limits;struct {gl_functions gl;ext_functions ext;}gl_ops;};
 struct format {unsigned id;};
@@ -168,7 +175,14 @@ int main(){
  // Fog coordinates without specular to read them from remain Wine's.
  gl.supported[EXT_FOG_COORD]=true;dev.state.render_states[0]=1;ctx.fog_coord=true;si.use_map&=~(1u<<WINED3D_FFP_SPECULAR);
  assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));si.use_map|=1u<<WINED3D_FFP_SPECULAR;ctx.fog_coord=false;dev.state.render_states[0]=0;
- gl.supported[ARB_VERTEX_BUFFER_OBJECT]=true;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));gl.supported[ARB_VERTEX_BUFFER_OBJECT]=false;
+ // ARB_vertex_buffer_object: system memory elements still pack, after
+ // unbinding ARRAY_BUFFER; any buffer object element stays Wine's.
+ saved=calls;gl.supported[ARB_VERTEX_BUFFER_OBJECT]=vbo_supported=true;
+ si.elements[WINED3D_FFP_DIFFUSE].data.buffer_object=3;
+ assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));assert(saved==calls);
+ si.elements[WINED3D_FFP_DIFFUSE].data.buffer_object=0;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&binds==1&&bound_array==0);
+ gl.supported[ARB_VERTEX_BUFFER_OBJECT]=vbo_supported=false;binds=0;bound_array=7;saved=calls;
  dev.state.base_vertex_index=-5;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,2,99,wide,4,0));dev.state.base_vertex_index=0;
  assert(saved==calls);
  // Specular-alpha fog: drawStridedSlow's coordinates per vertex as one array,

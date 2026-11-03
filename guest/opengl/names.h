@@ -14,6 +14,10 @@ typedef struct {
 typedef struct {
     ULONG References, Count, Next;
     BOOL NativeLists;
+    /* ARB_vertex_buffer_object objects of the share group and their release
+     * (buffer.cpp sets both when it creates the table). */
+    void *Buffers;
+    void (*FreeBuffers)(void *buffers);
     JGL_NAME Entries[JGL_NAME_SLOTS];
 } JGL_NAMES;
 

@@ -1,0 +1,55 @@
+--- a/wined3d/buffer.c
++++ b/wined3d/buffer.c
+@@ -266,6 +266,8 @@
+             TRACE("Reconverting because converted attributes occur, and the stride changed\n");
+ #ifdef VBOX_WITH_WINE_FIX_BUFOFFSET
+              This->stride = *stride_this_run;
++             /* DreamGPU: remember the stream offset the map is relative to. */
++             This->offset = *offset_this_run;
+ #endif
+             free(This->conversion_map);
+             This->conversion_map = calloc(1,
+@@ -283,7 +285,9 @@
+ #ifndef VBOX_WITH_WINE_FIX_BUFOFFSET
+         DWORD_PTR idx = (data + i) % This->stride;
+ #else
+-        DWORD_PTR idx = attrib->offset;
++        /* DreamGPU: every byte of the attribute, relative to the vertex start
++         * at the stream offset (this marked only the attribute's first byte). */
++        DWORD_PTR idx = (attrib->offset + i) % This->stride;
+ #endif
+         if (This->conversion_map[idx] != conversion_type)
+         {
+@@ -1094,7 +1098,8 @@
+                         break;
+                     case CONV_D3DCOLOR:
+ #ifdef VBOX_WITH_WINE_FIX_BUFOFFSET
+-                        //fixup_d3dcolor((DWORD *) (cur_ptr + j));
++                        /* DreamGPU: fixed-function GL reads RGBA; swap D3DCOLOR's red and blue. */
++                        fixup_d3dcolor((DWORD *) (cur_ptr + j));
+ #else
+                         fixup_d3dcolor((DWORD *) (data + i * buffer->stride + j));
+ #endif
+@@ -1117,7 +1122,8 @@
+ 
+         GL_EXTCALL(glBindBuffer(buffer->buffer_type_hint, buffer->buffer_object));
+         checkGLcall("glBindBuffer");
+-        GL_EXTCALL(glBufferSubData(buffer->buffer_type_hint, start, len, data + start));
++        /* DreamGPU: the range widened to whole vertices; upload all of it. */
++        GL_EXTCALL(glBufferSubData(buffer->buffer_type_hint, start, end - start, data + start));
+         checkGLcall("glBufferSubData");
+     }
+ 
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -3101,6 +3101,10 @@
+             stream_info->elements[idx].format = element->format;
+             stream_info->elements[idx].data.buffer_object = 0;
+             stream_info->elements[idx].data.addr = (BYTE *)NULL + stream->offset + element->offset;
++#ifdef VBOX_WITH_WINE_FIX_BUFOFFSET
++            /* DreamGPU: buffer conversion finds the stream offset as addr - offset. */
++            stream_info->elements[idx].offset = element->offset;
++#endif
+             stream_info->elements[idx].stride = stream->stride;
+             stream_info->elements[idx].stream_idx = element->input_slot;
+             if (stream->flags & WINED3DSTREAMSOURCE_INSTANCEDATA)

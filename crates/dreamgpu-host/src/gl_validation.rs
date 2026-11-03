@@ -429,6 +429,12 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glVertexAttrib4fARB => 5,
         FEnum_glVertexAttribPointerARB => DG_GL_FUNCTION_INLINE_DATA | 5,
         FEnum_glGetVertexAttribfvARB => DG_GL_FUNCTION_QUERY | 2,
+        // ARB_vertex_buffer_object (DG_CAP_GL_VERTEX_BUFFER_OBJECT): named
+        // buffer data and deletion, and the buffer draw.
+        FEnum_glBufferDataARB => DG_GL_FUNCTION_INLINE_DATA | 3,
+        FEnum_glBufferSubDataARB => DG_GL_FUNCTION_INLINE_DATA | 2,
+        FEnum_glDeleteBuffersARB => DG_GL_FUNCTION_INLINE_DATA | 1,
+        FEnum_glDrawRangeElements => DG_GL_FUNCTION_INLINE_DATA | 10,
         // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
         FEnum_glActiveTexture => 1,
         FEnum_glMultiTexCoord4f => 5,
@@ -878,6 +884,27 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     }
     if function == FEnum_glProgramStringARB {
         return if program_string(a, data) {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
+    if function == FEnum_glBufferDataARB {
+        return if crate::buffer::data_shape(a, data) {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
+    if function == FEnum_glBufferSubDataARB {
+        return if crate::buffer::sub_data_shape(a, data) {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
+    if function == FEnum_glDeleteBuffersARB {
+        return if a[0] <= DG_GL_MAX_BUFFERS && data.len() as u64 == u64::from(a[0]) * 4 {
             0
         } else {
             DG_GL_ERROR_BATCH
@@ -1439,6 +1466,15 @@ pub unsafe extern "C" fn dreamgpu_gl_data_validate(
     };
     if matches!(function, FEnum_glTexImage3D | FEnum_glTexSubImage3D) {
         return crate::texture::volume::validate(function, &a, data);
+    }
+    if function == FEnum_glDrawRangeElements {
+        // The buffer draw (ARB_vertex_buffer_object): the whole record shape,
+        // inline indices within the client vertices included.
+        return if crate::arrays::raw::layout_buffer(&a, data, true).is_some() {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
     }
     let a: [u32; 8] = a[..8].try_into().unwrap();
     data_validate(function, &a, data)

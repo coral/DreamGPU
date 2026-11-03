@@ -134,6 +134,67 @@ unsafe fn stage_arrays<'a>(
     }
     Some(storage)
 }
+/// The buffer draw (ARB_vertex_buffer_object). Every state-dependent failure
+/// is the guest's GL error; buffer contents are guest (little-endian) bytes,
+/// so big-endian hosts, which do not advertise the capability, refuse it too.
+unsafe fn buffer_draw(
+    m: &Memory,
+    state: *mut ContextState,
+    serial: u64,
+    a: &[u32; 10],
+    data: &[u8],
+) -> u32 {
+    let api = unsafe { &*m.api };
+    let errors = unsafe { addr_of_mut!((*state).guest_errors) };
+    let Some(layout) = crate::arrays::raw::layout_buffer(a, data, false) else {
+        return DG_GL_ERROR_BATCH;
+    };
+    if a[2] == 0 {
+        return 0;
+    }
+    if cfg!(target_endian = "big") {
+        unsafe { query::store(errors, GL_INVALID_OPERATION) };
+        return 0;
+    }
+    let resolved = match unsafe { crate::buffer::resolve(state, a, &layout, data) } {
+        Ok(resolved) => resolved,
+        Err(code) => {
+            unsafe { query::store(errors, code) };
+            return 0;
+        }
+    };
+    if let Err(e) = unsafe { crate::state::prepare_textures(api, state, serial) } {
+        return e;
+    }
+    if let Err(e) = unsafe { query::remember(api, errors) } {
+        return e;
+    }
+    if let Err(e) = unsafe { crate::texture::border::prepare(m, state) } {
+        return e;
+    }
+    let mut gl_error = 0;
+    let e = match unsafe { crate::arrays::buffer_draw(api, a, data, &layout, &resolved) } {
+        Ok(code) => {
+            gl_error = code;
+            if code == 0 {
+                0
+            } else {
+                DG_GL_ERROR_HOST
+            }
+        }
+        Err(e) => e,
+    };
+    unsafe {
+        crate::texture::border::finish(m, state);
+        query::store(errors, gl_error)
+    };
+    // A native error of a validated draw is the guest's GL error.
+    if e == DG_GL_ERROR_HOST && gl_error != 0 {
+        0
+    } else {
+        e
+    }
+}
 /// # Safety
 /// State/accounting belong to current render worker. Args/data are the immutable
 /// snapshot already accepted by data_validate; memory callbacks cannot reenter.
@@ -307,6 +368,30 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
             unsafe { crate::program::delete(m, state, data) }
         };
         return result.map_or_else(|e| e, |()| 0);
+    }
+    if matches!(
+        function,
+        FEnum_glBufferDataARB | FEnum_glBufferSubDataARB | FEnum_glDeleteBuffersARB
+    ) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        let result = match function {
+            FEnum_glBufferDataARB => unsafe { crate::buffer::data(m, state, &a, data) },
+            FEnum_glBufferSubDataARB => unsafe { crate::buffer::sub_data(m, state, &a, data) },
+            _ => unsafe { crate::buffer::delete(m, state, data) },
+        };
+        return result.map_or_else(|e| e, |()| 0);
+    }
+    if function == FEnum_glDrawRangeElements {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        return unsafe { buffer_draw(m, state, serial, &wide, data) };
     }
     if function == FEnum_glDeleteTextures {
         // Deleting a texture bound on any unit reverts that unit to default.

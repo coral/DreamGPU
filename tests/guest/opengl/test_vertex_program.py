@@ -56,7 +56,7 @@ assert "DG_CAP_GL_VERTEX_PROGRAM" in qemu
 with tempfile.TemporaryDirectory(prefix="dreamgpu-vertex-program-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("frontend.cpp", "arrays.cpp", "query.cpp", "program.cpp", "attrib.cpp",
+    for name in ("frontend.cpp", "arrays.cpp", "buffers.h", "query.cpp", "program.cpp", "attrib.cpp",
                  "compatibility.cpp", "icd-client.inc", "internal.h", "packing.h", "transport.h",
                  "scalar.inc", "names.h", "state.h"):
         shutil.copyfile(SOURCE / name, root / name)
@@ -100,14 +100,22 @@ typedef struct {
     GLenum Type;
     const void *Pointer;
     BOOL Enabled, Normalized;
+    GLuint Buffer;
+    ULONG Serial;
 } JGL_ARRAY;
 typedef struct {
+    GLuint Name;
+    ULONG Serial;
+} JGL_BUFFER_BINDING;
+typedef struct {
     JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
+    JGL_BUFFER_BINDING ArrayBuffer;
 } JGL_ARRAY_STATE;
 #ifdef __cplusplus
 extern "C" {
 #endif
 JGL_ARRAY_STATE *JglArrays(void);
+BOOL JglVertexBufferObjectAvailable(void);
 GLfloat JglColorComponent(const BYTE *value, GLenum type);
 BOOL JglQuery(ULONG, const ULONG[3], ULONG, void *, ULONG, ULONG *);
 #ifdef __cplusplus

@@ -31,7 +31,7 @@ assert re.search(r"^set\(frontend_sources [^)]*\bfog\b", cmake, re.M)
 with tempfile.TemporaryDirectory(prefix="dreamgpu-fog-coord-") as temporary:
     root = Path(temporary)
     (root / "GL").mkdir()
-    for name in ("frontend.cpp", "arrays.cpp", "query.cpp", "fog.cpp", "compatibility.cpp",
+    for name in ("frontend.cpp", "arrays.cpp", "buffers.h", "query.cpp", "fog.cpp", "compatibility.cpp",
                  "icd-client.inc", "internal.h", "packing.h", "transport.h", "scalar.inc",
                  "names.h", "state.h"):
         shutil.copyfile(SOURCE / name, root / name)

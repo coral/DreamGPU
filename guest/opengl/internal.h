@@ -21,20 +21,31 @@ typedef struct {
 /* CPU client pointers are local to their owning WGL context. Draw commands
  * snapshot them into the existing immutable packed-vertex ABI. Normalized is
  * the generic attribute arrays' flag (ARB_vertex_program); conventional
- * arrays leave it zero. */
+ * arrays leave it zero. With ARB_vertex_buffer_object, Buffer is the
+ * ARRAY_BUFFER binding latched by the pointer call (zero: client memory) and
+ * Pointer its byte offset; Serial identifies the object it named then. */
 typedef struct {
     GLint Size, Stride;
     GLenum Type;
     const void *Pointer;
     BOOL Enabled, Normalized;
+    GLuint Buffer;
+    ULONG Serial;
 } JGL_ARRAY;
 /* Stack entries borrow the same application-owned client pointers as the live
  * descriptor; snapshots never own/free array storage or copy vertex data. */
+/* ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER bindings: a name and the identity of
+ * the object it named when bound (vertex-array client state). */
+typedef struct {
+    GLuint Name;
+    ULONG Serial;
+} JGL_BUFFER_BINDING;
 typedef struct {
     GLbitfield Mask;
     JGL_ARRAY Attribute[JGL_ARRAY_SLOTS];
     JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     ULONG ClientTexture;
+    JGL_BUFFER_BINDING ArrayBuffer, ElementBuffer;
     JGL_UNPACK Pack, Unpack;
 } JGL_CLIENT_SNAPSHOT;
 typedef struct {
@@ -51,6 +62,7 @@ typedef struct {
      * the conventional arrays, except that array 0 is the position. */
     JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     ULONG ClientTexture; /* client-active unit, 0-7 */
+    JGL_BUFFER_BINDING ArrayBuffer, ElementBuffer;
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
 } JGL_ARRAY_STATE;
 #ifdef __cplusplus
@@ -179,6 +191,34 @@ static inline BOOL JglProgramQueryRejected(GLenum name) {
             return FALSE;
     }
 }
+/* ARB_vertex_buffer_object: buffer objects in the shared namespace, their
+ * bindings, data, mapping and queries (buffer.cpp), and draws reading them. */
+BOOL JglVertexBufferObjectAvailable(void);
+/* GLsizeiptrARB and GLintptrARB: pointer-sized signed integers. */
+typedef __PTRDIFF_TYPE__ JGL_SIZEIPTR;
+#define JGL_ARRAY_BUFFER 0x8892
+#define JGL_ELEMENT_ARRAY_BUFFER 0x8893
+/* One buffer object of a share group. Data is the frontend's copy of the
+ * contents (16-byte aligned, never NULL), which records keep equal to the
+ * host's: mapping returns it, reads and display lists dereference it. */
+typedef struct {
+    GLuint Name;
+    ULONG Serial, Size;
+    GLenum Usage, Access;
+    BOOL Mapped;
+    BYTE *Data;
+    void *Allocation;
+} JGL_BUFFER;
+/* The share group's buffer table slot of the current context, under the
+ * shared lock (buffers.h), recording how the group's last context releases it
+ * unless release is NULL; NULL without a context or memory. */
+void **JglSharedBuffers(void (*release)(void *table));
+void JglLockShared(void);
+void JglUnlockShared(void);
+void *JglAllocate(ULONG bytes);
+void JglFree(void *memory);
+/* Reset the current context's bindings of a deleted buffer object. */
+void JglForgetBuffer(GLuint name, ULONG serial);
 /* Per-context NUL-terminated PROGRAM_ERROR_STRING_ARB storage (DG_GL_MAX_RESULT_BYTES),
  * stable until the context is deleted; NULL without a context or memory. */
 GLubyte *JglProgramErrorBuffer(void);

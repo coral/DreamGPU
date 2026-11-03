@@ -84,6 +84,137 @@ unsafe fn draw(
     if vertices == 0 || (elements && indices == 0) {
         return Ok(0);
     }
+    unsafe {
+        execute(
+            api,
+            &Spec {
+                mode: args[0],
+                attributes,
+                generic,
+                units,
+                raw,
+                stride,
+                primitive: if elements {
+                    Primitive::Elements {
+                        count: indices as i32,
+                        kind: args[2],
+                        offset: vertices as usize * stride as usize,
+                    }
+                } else {
+                    Primitive::Arrays {
+                        first: 0,
+                        count: vertices as i32,
+                    }
+                },
+                buffers: None,
+            },
+            data,
+        )
+    }
+}
+
+/// The buffer draw (ARB_vertex_buffer_object): `a` and `layout` are an
+/// admitted record with a nonzero count, `resolved` its bounded native
+/// buffers. Returns the native GL error like the other array draws.
+///
+/// # Safety
+/// API belongs to the current native context, which binds no buffer; payload
+/// is native-endian.
+pub(crate) unsafe fn buffer_draw(
+    api: &DreamGpuGlApi,
+    a: &[u32; 10],
+    data: &[u8],
+    layout: &raw::BufferLayout,
+    resolved: &crate::buffer::Resolved,
+) -> Result<u32, u32> {
+    let [mode, base, count, mask, generic, _, _, kind, element, element_offset] = *a;
+    unsafe {
+        execute(
+            api,
+            &Spec {
+                mode,
+                attributes: mask & !DG_GL_ARRAY_RAW,
+                generic,
+                units: true,
+                raw: Some(layout.slots),
+                stride: 0,
+                primitive: if layout.index_size == 0 {
+                    Primitive::Arrays {
+                        first: base as i32,
+                        count: count as i32,
+                    }
+                } else {
+                    Primitive::Elements {
+                        count: count as i32,
+                        kind,
+                        offset: if element != 0 {
+                            element_offset as usize
+                        } else {
+                            layout.indices
+                        },
+                    }
+                },
+                buffers: Some(Buffers {
+                    references: &layout.references,
+                    natives: &resolved.slots,
+                    element: resolved.element,
+                    base,
+                }),
+            },
+            data,
+        )
+    }
+}
+
+/// Native buffers of a buffer draw, its references and its client base.
+struct Buffers<'a> {
+    references: &'a [raw::Reference; 32],
+    natives: &'a [u32; 32],
+    element: u32,
+    base: u32,
+}
+enum Primitive {
+    Arrays {
+        first: i32,
+        count: i32,
+    },
+    /// Indices at `offset`: into the payload, or into the element buffer.
+    Elements {
+        count: i32,
+        kind: u32,
+        offset: usize,
+    },
+}
+/// One validated array draw: enabled conventional slots (without ARRAY_RAW),
+/// generic attributes, whether units 1-7 and the fog coordinate belong to the
+/// record (DrawArraysEXT and later), the compact layout or the legacy stride,
+/// and buffer sources of a buffer draw.
+struct Spec<'a> {
+    mode: u32,
+    attributes: u32,
+    generic: u32,
+    units: bool,
+    raw: Option<[raw::Attribute; 32]>,
+    stride: u64,
+    primitive: Primitive,
+    buffers: Option<Buffers<'a>>,
+}
+
+unsafe fn execute(api: &DreamGpuGlApi, spec: &Spec, data: &[u8]) -> Result<u32, u32> {
+    let Spec {
+        mode,
+        attributes,
+        generic,
+        units,
+        stride,
+        ..
+    } = *spec;
+    let raw = spec.raw;
+    let extended = attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0;
+    let position = attributes & DG_GL_ARRAY_POSITION != 0;
+    if spec.buffers.is_some() && api.dg_glBindBuffer.is_none() {
+        return Err(3);
+    }
     // Check every needed entry before exposing a client pointer to GL, so a
     // missing function cannot escape before PopClientAttrib restores ownership.
     if api.dg_glGetFloatv.is_none()
@@ -153,12 +284,40 @@ unsafe fn draw(
         return Err(3);
     }
     // Legacy layout and compact descriptors share native pointer/state lifetime.
-    let attribute = |i: usize, size: i32, kind: u32, offset: usize| {
-        if let Some(raw) = &raw {
-            (raw[i].size as i32, raw[i].kind, 0, raw[i].offset)
-        } else {
-            (size, kind, stride as i32, offset)
-        }
+    // A buffer draw's slot reads its native buffer at the reference offset,
+    // or its client section, which holds vertices from the record's base.
+    let source = |i: usize, size: i32, kind: u32, offset: usize| {
+        let Some(raw) = &raw else {
+            return (
+                size,
+                kind,
+                stride as i32,
+                unsafe { data.as_ptr().add(offset) }.cast::<core::ffi::c_void>(),
+            );
+        };
+        let a = raw[i];
+        let (step, pointer) = match &spec.buffers {
+            Some(b) if b.natives[i] != 0 => {
+                let r = b.references[i];
+                unsafe { api.dg_glBindBuffer.unwrap()(GL_ARRAY_BUFFER, b.natives[i]) };
+                (r.stride as i32, r.offset as usize as *const u8)
+            }
+            Some(b) => {
+                unsafe { api.dg_glBindBuffer.unwrap()(GL_ARRAY_BUFFER, 0) };
+                let first = b.base as usize * a.size as usize * a.unit;
+                (
+                    0,
+                    unsafe { data.as_ptr().add(a.offset) }.wrapping_sub(first),
+                )
+            }
+            None => (0, unsafe { data.as_ptr().add(a.offset) }),
+        };
+        (
+            a.size as i32,
+            a.kind,
+            step,
+            pointer.cast::<core::ffi::c_void>(),
+        )
     };
     let mut index = 0.0;
     let mut edge = 0;
@@ -218,8 +377,8 @@ unsafe fn draw(
         }
         if position {
             api.dg_glEnableClientState.unwrap()(GL_VERTEX_ARRAY);
-            let (size, kind, step, offset) = attribute(0, 4, GL_FLOAT, 0);
-            api.dg_glVertexPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
+            let (size, kind, step, pointer) = source(0, 4, GL_FLOAT, 0);
+            api.dg_glVertexPointer.unwrap()(size, kind, step, pointer);
         } else {
             api.dg_glDisableClientState.unwrap()(GL_VERTEX_ARRAY);
         }
@@ -236,17 +395,17 @@ unsafe fn draw(
             }
         }
         if attributes & DG_GL_ARRAY_COLOR != 0 {
-            let (size, kind, step, offset) = attribute(1, 4, GL_FLOAT, DG_GL_VERTEX_COLOR as usize);
-            api.dg_glColorPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
+            let (size, kind, step, pointer) = source(1, 4, GL_FLOAT, DG_GL_VERTEX_COLOR as usize);
+            api.dg_glColorPointer.unwrap()(size, kind, step, pointer);
         }
         if attributes & DG_GL_ARRAY_NORMAL != 0 {
-            let (_, kind, step, offset) = attribute(2, 3, GL_FLOAT, DG_GL_VERTEX_NORMAL as usize);
-            api.dg_glNormalPointer.unwrap()(kind, step, data.as_ptr().add(offset).cast());
+            let (_, kind, step, pointer) = source(2, 3, GL_FLOAT, DG_GL_VERTEX_NORMAL as usize);
+            api.dg_glNormalPointer.unwrap()(kind, step, pointer);
         }
         if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
-            let (size, kind, step, offset) =
-                attribute(3, 4, GL_FLOAT, DG_GL_VERTEX_TEXCOORD as usize);
-            api.dg_glTexCoordPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
+            let (size, kind, step, pointer) =
+                source(3, 4, GL_FLOAT, DG_GL_VERTEX_TEXCOORD as usize);
+            api.dg_glTexCoordPointer.unwrap()(size, kind, step, pointer);
         }
         // PushClientAttrib saved CLIENT_ACTIVE_TEXTURE and every unit's array;
         // PopClientAttrib below restores both.
@@ -257,36 +416,26 @@ unsafe fn draw(
                     api.dg_glDisableClientState.unwrap()(GL_TEXTURE_COORD_ARRAY);
                     continue;
                 }
-                let a = raw.as_ref().expect("units are compact")[6 + u];
+                let (size, kind, step, pointer) = source(6 + u, 0, 0, 0);
                 api.dg_glEnableClientState.unwrap()(GL_TEXTURE_COORD_ARRAY);
-                api.dg_glTexCoordPointer.unwrap()(
-                    a.size as i32,
-                    a.kind,
-                    0,
-                    data.as_ptr().add(a.offset).cast(),
-                );
+                api.dg_glTexCoordPointer.unwrap()(size, kind, step, pointer);
             }
         }
         // CLIENT_VERTEX_ARRAY_BIT covers the fog coordinate array (GL 1.4);
         // only DrawArraysEXT carries it, so other draws leave it untouched.
         if units {
             if fog {
-                let a = raw.as_ref().expect("units are compact")[14];
+                let (_, kind, step, pointer) = source(14, 0, 0, 0);
                 api.dg_glEnableClientState.unwrap()(GL_FOG_COORDINATE_ARRAY);
-                api.dg_glFogCoordPointer.unwrap()(a.kind, 0, data.as_ptr().add(a.offset).cast());
+                api.dg_glFogCoordPointer.unwrap()(kind, step, pointer);
             } else {
                 api.dg_glDisableClientState.unwrap()(GL_FOG_COORDINATE_ARRAY);
             }
         }
         if attributes & DG_GL_ARRAY_SECONDARY != 0 {
-            let (size, kind, step, offset) =
-                attribute(4, 3, GL_FLOAT, DG_GL_VERTEX_SECONDARY as usize);
-            api.dg_glSecondaryColorPointer.unwrap()(
-                size,
-                kind,
-                step,
-                data.as_ptr().add(offset).cast(),
-            );
+            let (size, kind, step, pointer) =
+                source(4, 3, GL_FLOAT, DG_GL_VERTEX_SECONDARY as usize);
+            api.dg_glSecondaryColorPointer.unwrap()(size, kind, step, pointer);
         }
         if extended {
             for (bit, cap) in [
@@ -300,14 +449,13 @@ unsafe fn draw(
                 }
             }
             if attributes & DG_GL_ARRAY_INDEX != 0 {
-                let (_, kind, step, offset) =
-                    attribute(5, 1, GL_DOUBLE, DG_GL_VERTEX_INDEX as usize);
-                api.dg_glIndexPointer.unwrap()(kind, step, data.as_ptr().add(offset).cast());
+                let (_, kind, step, pointer) = source(5, 1, GL_DOUBLE, DG_GL_VERTEX_INDEX as usize);
+                api.dg_glIndexPointer.unwrap()(kind, step, pointer);
             }
             if attributes & DG_GL_ARRAY_EDGE != 0 {
-                let (_, _, step, offset) =
-                    attribute(6, 1, GL_UNSIGNED_BYTE, DG_GL_VERTEX_EDGE as usize);
-                api.dg_glEdgeFlagPointer.unwrap()(step, data.as_ptr().add(offset).cast());
+                let (_, _, step, pointer) =
+                    source(6, 1, GL_UNSIGNED_BYTE, DG_GL_VERTEX_EDGE as usize);
+                api.dg_glEdgeFlagPointer.unwrap()(step, pointer);
             }
         }
         // Generic arrays are enabled only for this draw: native GL never holds
@@ -316,28 +464,40 @@ unsafe fn draw(
             if generic & 1 << n == 0 {
                 continue;
             }
-            let a = raw.as_ref().expect("attributes are compact")[16 + n];
+            let normalized = raw.as_ref().expect("attributes are compact")[16 + n].normalized;
+            let (size, kind, step, pointer) = source(16 + n, 0, 0, 0);
             api.dg_glVertexAttribPointerARB.unwrap()(
                 n as u32,
-                a.size as i32,
-                a.kind,
-                u8::from(a.normalized),
-                0,
-                data.as_ptr().add(a.offset).cast(),
+                size,
+                kind,
+                u8::from(normalized),
+                step,
+                pointer,
             );
             api.dg_glEnableVertexAttribArrayARB.unwrap()(n as u32);
         }
-        if elements {
-            api.dg_glDrawElements.unwrap()(
-                args[0],
-                indices as i32,
-                args[2],
-                data.as_ptr()
-                    .add(vertices as usize * stride as usize)
-                    .cast(),
-            );
-        } else {
-            api.dg_glDrawArrays.unwrap()(args[0], 0, vertices as i32);
+        match spec.primitive {
+            Primitive::Elements {
+                count,
+                kind,
+                offset,
+            } => {
+                let indices = match &spec.buffers {
+                    Some(b) => {
+                        api.dg_glBindBuffer.unwrap()(GL_ELEMENT_ARRAY_BUFFER, b.element);
+                        if b.element != 0 {
+                            offset as *const u8
+                        } else {
+                            data.as_ptr().add(offset)
+                        }
+                    }
+                    None => data.as_ptr().add(offset),
+                };
+                api.dg_glDrawElements.unwrap()(mode, count, kind, indices.cast());
+            }
+            Primitive::Arrays { first, count } => {
+                api.dg_glDrawArrays.unwrap()(mode, first, count);
+            }
         }
         let error = api.dg_glGetError.unwrap()();
         // CLIENT_VERTEX_ARRAY_BIT covers generic arrays too; disable them
@@ -348,6 +508,11 @@ unsafe fn draw(
             }
         }
         api.dg_glPopClientAttrib.unwrap()();
+        // Native contexts hold no buffer binding between records.
+        if spec.buffers.is_some() {
+            api.dg_glBindBuffer.unwrap()(GL_ARRAY_BUFFER, 0);
+            api.dg_glBindBuffer.unwrap()(GL_ELEMENT_ARRAY_BUFFER, 0);
+        }
         if attributes & DG_GL_ARRAY_COLOR != 0 {
             api.dg_glColor4fv.unwrap()(color.as_ptr());
         }

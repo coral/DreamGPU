@@ -559,6 +559,18 @@ int main(void) {
 void JglCommandError(GLenum e) {
     JglSetError(e);
 }
+/* No negotiated buffer objects: every array is client memory. */
+BOOL JglVertexBufferObjectAvailable(void) {
+    return FALSE;
+}
+BOOL JglCompiling(void) {
+    return FALSE;
+}
+void **JglSharedBuffers(void (*)(void *)) {
+    return NULL;
+}
+void JglLockShared(void) {}
+void JglUnlockShared(void) {}
 BOOL JglCommandReady(void) {
     return JglReady();
 }
