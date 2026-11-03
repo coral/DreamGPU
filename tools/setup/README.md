@@ -137,6 +137,14 @@ NT5 protected-runtime replacement uses an owned boot rename transaction without
 disabling Windows File Protection or replacing its original cache. A disjoint
 valid OS rename queue defers installation to a reboot; overlapping or ambiguous
 entries remain conflicts. Win98 uses its checked boot replacement transaction.
+Each generation's boot record (`T<generation>\APPLY.BOOT`, `RESTORE.BOOT`) holds
+up to 24 file operations. The largest plan is 17: Windows 98 with SYSBCKUP copies
+of `ddraw.dll`, `d3d8.dll` and `d3d9.dll`. Earlier installers wrote schema 1
+records (16 entries). They are still read and continued, and new appends are
+schema 2, so one log can hold schema 1 appends followed by schema 2. Only an
+incomplete final append is dropped. A generation directory keeps up to 50 WININIT
+receipts: a full apply, a cancellation and a full restore. The NT rename-queue
+snapshot and its wait receipt are unchanged.
 Startup entries retain their own before-images and exact installer identities.
 Both OS families use a persistent owned Run value for new pending transactions,
 avoiding RunOnce re-registration during the same startup. GLOBAL is the sole

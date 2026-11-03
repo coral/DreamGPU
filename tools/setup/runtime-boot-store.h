@@ -2,9 +2,19 @@
 #pragma once
 #include "win32-lifecycle.h"
 #include "boot-queue.h"
+#include "boot-record-log.h"
 #include "boot-wait.h"
 #include "durable-record.h"
 namespace setup::lifecycle {
+// One boot record holds every file operation of the largest system plan: the
+// shared runtime, the ICD, three native aliases, three public runtimes and, on
+// Windows 98, their three SYSBCKUP copies (17 today).
+constexpr unsigned largest_boot_plan =
+    unsigned(sizeof(shared_runtime) / sizeof(shared_runtime[0])) + 1 +
+    unsigned(sizeof(native_aliases) / sizeof(native_aliases[0])) +
+    unsigned(sizeof(public_runtime) / sizeof(public_runtime[0])) +
+    unsigned(sizeof(win98_runtime_cache) / sizeof(win98_runtime_cache[0]));
+static_assert(largest_boot_plan <= boot::max_entries, "boot record capacity");
 // Bridge from the install journal to the OS queue. The queue can only reference
 // exact destinations and source slots reconstructed from this owned generation.
 // Aliases are private generated payloads; Microsoft originals are never embedded.
@@ -95,12 +105,12 @@ class RuntimeBootStore {
         return true;
     }
     bool load(boot::Record &record, bool &exists) {
-        DurableRecord<boot::Record> log(record_path_);
+        boot::RecordLog log(record_path_);
         return record_path_[0] &&
                log.load(record, exists, [this](const auto &r) { return valid_record(r); });
     }
     bool save(const boot::Record &record) {
-        DurableRecord<boot::Record> log(record_path_);
+        boot::RecordLog log(record_path_);
         boot::Record previous;
         bool exists;
         return record_path_[0] &&

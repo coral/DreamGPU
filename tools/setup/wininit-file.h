@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 #pragma once
+#include "boot-queue.h"
 #include "wininit-document.h"
 #include "sha256.h"
 #include <new>
@@ -12,6 +13,11 @@ template <class T> T *wininit_object() {
     void *storage = HeapAlloc(GetProcessHeap(), HEAP_ZERO_MEMORY, sizeof(T));
     return storage ? ::new (storage) T{} : nullptr;
 }
+// One receipt per WININIT.INI edit in a generation directory: every apply
+// entry, a cancellation, then every restore entry. Earlier installers scanned
+// 32 (two schema 1 batches); a directory they wrote is read the same way.
+constexpr unsigned wininit_slots = 2 * max_entries + 2;
+static_assert(wininit_slots >= 32 && wininit_slots <= 100, "W9NN receipt names");
 // Reserved W9* names live in the installer's authenticated private generation.
 // Publish a flushed before/after receipt before touching WININIT.INI. MoveFileA
 // cannot replace an existing file on Win98, so keep the exact old file under a
@@ -216,7 +222,7 @@ class WininitFile {
         frame_ = wininit_object<Frame>();
         if (!frame_)
             return false;
-        for (slot_ = 0; slot_ < 32; ++slot_) {
+        for (slot_ = 0; slot_ < wininit_slots; ++slot_) {
             char receipt[MAX_PATH];
             if (!name(receipt, "bin"))
                 return false;
@@ -271,7 +277,7 @@ class WininitFile {
         return true;
     }
     bool replace(const WininitDocument &before, bool existed, const WininitDocument &after) {
-        if (!frame_ || slot_ >= 32 || !matches(path_, before, existed))
+        if (!frame_ || slot_ >= wininit_slots || !matches(path_, before, existed))
             return false;
         if (existed && same(before, after))
             return true;

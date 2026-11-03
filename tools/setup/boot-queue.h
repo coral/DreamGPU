@@ -3,8 +3,14 @@
 #include <stdint.h>
 #include <stddef.h>
 namespace setup::boot {
-constexpr unsigned max_entries = 16, path_capacity = 260;
-constexpr unsigned queue_words = max_entries * (path_capacity * 2 + 10) + 1;
+// Schema 1 records (earlier installers) hold 16 entries; schema 2 holds 24: the
+// largest system plan is 17 file operations (Windows 98 with all three SYSBCKUP
+// copies), plus headroom. queue_words is unchanged: it bounds the NT
+// PendingFileRenameOperations snapshot and the persisted foreign-queue receipt,
+// and every valid record's normalized queue must fit it.
+constexpr unsigned v1_entries = 16, max_entries = 24, path_capacity = 260;
+constexpr unsigned queue_words = v1_entries * (path_capacity * 2 + 10) + 1;
+constexpr uint32_t record_magic = 0x51424744, record_version = 2;
 enum class Phase : uint32_t {
     prepared,
     registering,
@@ -25,11 +31,18 @@ struct Entry {
     File before{}, desired{};
     uint32_t protected_target = 0;
 };
+// In memory every record is schema 2; schema 1 is only ever read and widened.
 struct Record {
-    uint32_t magic = 0x51424744, version = 1, generation = 0, count = 0;
+    uint32_t magic = record_magic, version = record_version, generation = 0, count = 0;
     Phase phase = Phase::prepared;
     uint32_t completed = 0;
     Entry entries[max_entries]{};
+};
+struct RecordV1 {
+    uint32_t magic = record_magic, version = 1, generation = 0, count = 0;
+    Phase phase = Phase::prepared;
+    uint32_t completed = 0;
+    Entry entries[v1_entries]{};
 };
 struct RawQueue {
     bool exists = false;
@@ -80,8 +93,26 @@ inline bool valid_file(const File &f) {
 inline bool same(const File &a, const File &b) {
     return a.exists == b.exists && (!a.exists || (a.size == b.size && equal(a.sha, b.sha, 68)));
 }
+inline unsigned length(const char *s) {
+    unsigned n = 0;
+    while (n < path_capacity && s[n])
+        ++n;
+    return n;
+}
+// Upper bound of Queue's normalized queue for all entries: "\??\" + source
+// (or the destination of a deletion), then "!\??\" + destination or an empty
+// member, then the final terminator. Encoded paths are never longer.
+inline unsigned queue_bound(const Record &r) {
+    unsigned words = 1;
+    for (unsigned n = 0; n < r.count && n < max_entries; ++n) {
+        const auto &e = r.entries[n];
+        words += 5 + length(e.desired.exists ? e.source : e.destination);
+        words += e.desired.exists ? 6 + length(e.destination) : 1;
+    }
+    return words;
+}
 inline bool valid(const Record &r) {
-    if (r.magic != 0x51424744 || r.version != 1 || !r.generation || !r.count ||
+    if (r.magic != record_magic || r.version != record_version || !r.generation || !r.count ||
         r.count > max_entries || uint32_t(r.phase) > uint32_t(Phase::complete) ||
         (r.completed >> r.count))
         return false;
@@ -103,10 +134,28 @@ inline bool valid(const Record &r) {
                 return false;
         }
     }
+    return queue_bound(r) <= queue_words;
+}
+static_assert(sizeof(File) == 76 && sizeof(Entry) == 676 && sizeof(RecordV1) == 10840,
+              "Independent persistent boot queue schema v1 (read only)");
+static_assert(sizeof(Record) == 24 + max_entries * sizeof(Entry) && sizeof(Record) == 16248,
+              "Persistent boot queue schema v2");
+static_assert(max_entries < 32, "completed is a 32-bit entry mask");
+static_assert(v1_entries * (2 * path_capacity + 9) + 1 <= queue_words,
+              "every schema 1 record's queue fits");
+// A schema 1 image as written by earlier installers, widened in place.
+inline bool widen(const RecordV1 &stored, Record &out) {
+    if (stored.magic != record_magic || stored.version != 1 || stored.count > v1_entries)
+        return false;
+    out = {};
+    out.generation = stored.generation;
+    out.count = stored.count;
+    out.phase = stored.phase;
+    out.completed = stored.completed;
+    for (unsigned n = 0; n < v1_entries; ++n)
+        out.entries[n] = stored.entries[n];
     return true;
 }
-static_assert(sizeof(File) == 76 && sizeof(Entry) == 676 && sizeof(Record) == 10840,
-              "Independent persistent boot queue schema v1");
 inline bool raw_equal(const RawQueue &a, const RawQueue &b) {
     if (a.exists != b.exists || a.words != b.words)
         return false;
@@ -138,6 +187,9 @@ template <class Ops> class Queue {
                 continue;
             const auto &e = r_.entries[n];
             for (unsigned side = 0; side < 2; ++side) {
+                // Every write stays below queue_words, keeping the terminator.
+                if (out.words + 6 >= queue_words)
+                    return false;
                 if (side && !e.desired.exists) {
                     // A deletion has an empty second member, not the end of the
                     // entire MULTI_SZ. Later entries remain part of this batch.
@@ -150,9 +202,12 @@ template <class Ops> class Queue {
                 out.data[out.words++] = u'?';
                 out.data[out.words++] = u'?';
                 out.data[out.words++] = u'\\';
-                unsigned count = ops_.encode(side || !e.desired.exists ? e.destination : e.source,
-                                             out.data + out.words, path_capacity);
-                if (!count || count > path_capacity || out.data[out.words + count - 1])
+                const unsigned room = queue_words - 1 - out.words;
+                unsigned count =
+                    ops_.encode(side || !e.desired.exists ? e.destination : e.source,
+                                out.data + out.words, room < path_capacity ? room : path_capacity);
+                if (!count || count > path_capacity || count > room ||
+                    out.data[out.words + count - 1])
                     return false;
                 out.words += count;
             }

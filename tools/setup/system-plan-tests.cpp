@@ -258,6 +258,116 @@ static void reinstall(bool removed) {
     assert(again.rollback() == Result::complete);
     original_files();
 }
+// An older package shipped six shared providers and no glide3x.dll. Its
+// activated journal is the current plan without that operation, captured with
+// its own indices exactly as that installer wrote it.
+static Journal older_installation(Win32Store &store) {
+    Journal j;
+    assert(store.init("C:\\WINDOWS\\DreamGPU") && system_plan(Os::nt5, payloads, j, true));
+    assert(j.count == 19 && !strcmp(j.items[6].path, "glide3x.dll"));
+    for (unsigned n = 6; n + 1 < j.count; ++n)
+        j.items[n] = j.items[n + 1];
+    j.items[--j.count] = {};
+    assert(capture_system(Os::nt5, store, j));
+    Engine install(store, j);
+    assert(install.continue_apply(true) == Result::pending_reboot);
+    j.state = State::activated; // API verification is outside this adapter test.
+    assert(store.persist(j));
+    return j;
+}
+// Upgrading that installation must add glide3x.dll as a new owned operation.
+// Its original is the bytes present at upgrade time (absent, or a foreign
+// glide3x.dll). Rollback and uninstall both return exactly to that original.
+static void older_package_upgrade() {
+    using namespace fake_win32;
+    const auto glide3x = canon("C:\\WINDOWS\\SYSTEM\\glide3x.dll");
+    const std::vector<BYTE> foreign_bytes = {'f', 'o', 'r', 'e', 'i', 'g', 'n', ' ', '3', 'x'};
+    unsigned cases = 0;
+    for (bool foreign : {false, true})
+        for (bool uninstall : {false, true}) {
+            initial();
+            if (foreign) {
+                files[glide3x].bytes = foreign_bytes;
+                files[glide3x].flushed = true;
+            }
+            auto pre_upgrade = [&] {
+                assert(foreign ? files.at(glide3x).bytes == foreign_bytes : !files.count(glide3x));
+            };
+            Win32Store store;
+            Journal old = older_installation(store), next, loaded;
+            pre_upgrade();
+            for (unsigned n = 0; n < old.count; ++n)
+                assert(strcmp(old.items[n].path, "glide3x.dll"));
+            // The new package also changes an existing provider.
+            auto &bytes = resources[payloads[0].id];
+            const auto old_bytes = bytes;
+            bytes.push_back(0x43);
+            payloads[0].size = unsigned(bytes.size());
+            native_alias::hash(bytes, payloads[0].sha);
+            assert(next_system_generation(Os::nt5, payloads, store, old, next) == Result::complete);
+            assert(next.generation == old.generation + 1 && next.count == 19 && !next.uninstall);
+            const auto &g = next.items[6];
+            assert(!strcmp(g.path, "glide3x.dll") && g.kind == Kind::file &&
+                   g.resource == payloads[10].id && g.phase == Phase::prepared &&
+                   g.desired.exists && g.desired.size == payloads[10].size &&
+                   !strcmp(g.desired.sha, payloads[10].sha));
+            assert(g.original_generation == next.generation && g.original_index == 6 &&
+                   same(g.before, g.original) && g.before.exists == unsigned(foreign));
+            for (unsigned n = 0; n < next.count; ++n)
+                if (n != 6)
+                    assert(next.items[n].original_generation == old.generation &&
+                           next.items[n].original_index == (n < 6 ? n : n - 1));
+            // The published durable journal is the seven-provider generation.
+            assert(store.load(loaded) && loaded.generation == next.generation &&
+                   loaded.count == 19 && !strcmp(loaded.items[6].path, "glide3x.dll"));
+            pre_upgrade(); // Preparation never touches the public destination.
+            if (foreign) {
+                // A foreign file changed after its capture is a conflict, not
+                // something to overwrite; the captured bytes allow progress.
+                files[glide3x].bytes.push_back('!');
+                Engine blocked(store, next);
+                assert(blocked.continue_apply(true) == Result::conflict);
+                assert(files.at(glide3x).bytes.back() == '!');
+                files[glide3x].bytes = foreign_bytes;
+            }
+            Engine upgrade(store, next);
+            assert(upgrade.continue_apply(true) == Result::pending_reboot);
+            assert(files.at(glide3x).bytes == resources[payloads[10].id]);
+            assert(files.at(canon("C:\\WINDOWS\\SYSTEM\\dgpugl.dll")).bytes == bytes);
+            next.state = State::activated;
+            assert(store.persist(next));
+            assert(store.load(loaded) && loaded.items[6].phase == Phase::applied &&
+                   store.classify(loaded, 6, false) == Actual::after);
+            Journal removal;
+            if (uninstall) {
+                assert(make_uninstall_plan(store, next, removal) == Result::complete);
+                assert(!strcmp(removal.items[next.count - 1 - 6].path, "glide3x.dll"));
+            } else {
+                assert(upgrade.rollback() == Result::complete && next.state == State::failed);
+                pre_upgrade();
+                assert(files.at(canon("C:\\WINDOWS\\SYSTEM\\dgpugl.dll")).bytes == old_bytes);
+                for (unsigned n = 0; n < old.count; ++n)
+                    assert(store.classify(old, n, false) == Actual::after);
+                // The restored upgrade keeps its installed parent removable.
+                assert(make_uninstall_plan(store, next, removal) == Result::complete);
+            }
+            assert(store.prepare_generation(removal, nullptr, true) &&
+                   store.publish_preparation(removal));
+            Engine remove(store, removal);
+            assert(remove.continue_apply(false) == Result::complete);
+            assert(removal.state == State::removed);
+            original_files();
+            pre_upgrade();
+            for (const char *name : shared_runtime)
+                if (strcmp(name, "glide3x.dll"))
+                    assert(
+                        !files.count(canon((std::string("C:\\WINDOWS\\SYSTEM\\") + name).c_str())));
+            ++cases;
+        }
+    printf("PASS six-provider upgrade: glide3x.dll journalled as a new owned operation (absent "
+           "and foreign originals), installed, rolled back and uninstalled in %u cases\n",
+           cases);
+}
 static unsigned preparation_recovery(unsigned mode) {
     auto run = [mode](unsigned failure, bool recover) {
         initial();
@@ -473,6 +583,7 @@ int main() {
            fresh_faults, upgrade_faults, removal_faults, migration_faults);
     reinstall(false);
     reinstall(true);
+    older_package_upgrade();
     unsigned preparation, application, restoration;
     {
         initial();

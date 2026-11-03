@@ -349,8 +349,47 @@ static void foreign_wait_tests() {
          "permission "
          "mutation, consumed queue resumes; collisions/aliases/malformed paths and drift rejected");
 }
+// Schema 2 capacity: 24 entries run the unchanged NT adapter; more entries, or
+// a normalized queue larger than the frozen NT snapshot, are refused before
+// any registry or file mutation.
+static void capacity_tests() {
+    static_assert(v1_entries == 16 && max_entries == 24 && sizeof(Record) == 16248);
+    Store s;
+    Record r = initial(s, max_entries);
+    assert(valid(r) && r.version == record_version);
+    assert(resume(s, r) == Result::pending);
+    boot(s, r, max_entries);
+    assert(resume(s, r) == Result::complete && r.completed == (1u << max_entries) - 1);
+    r = initial(s, max_entries);
+    r.count = max_entries + 1;
+    assert(!valid(r));
+    r = initial(s, max_entries);
+    r.version = 1; // schema 1 is a stored format only, never an in-memory record
+    assert(!valid(r) && resume(s, r) == Result::invalid && values.empty());
+    // Longest paths: each entry's members approach path_capacity.
+    r = initial(s, max_entries);
+    for (unsigned n = 0; n < r.count; ++n) {
+        auto &e = r.entries[n];
+        std::string name(220, char('a' + n % 26));
+        std::snprintf(e.source, sizeof(e.source), "C:\\WINDOWS\\DreamGPU\\generation1\\%s%u",
+                      name.c_str(), n);
+        std::snprintf(e.destination, sizeof(e.destination), "C:\\WINDOWS\\SYSTEM32\\%s%u.dll",
+                      name.c_str(), n);
+        e.protected_target = 0;
+        s.files[lower(e.source)] = e.desired;
+        s.files[lower(e.destination)] = e.before;
+    }
+    assert(queue_bound(r) > queue_words && !valid(r));
+    assert(resume(s, r) == Result::invalid && values.empty() && mutations == 0);
+    r.count = v1_entries; // the same paths fit a schema 1 sized batch
+    assert(queue_bound(r) <= queue_words && valid(r));
+    std::printf("PASS boot queue schema 2 capacity: %u entries through the NT adapter, %u-word "
+                "queue bound, oversize records refused before mutation\n",
+                max_entries, queue_words);
+}
 int main() {
     foreign_wait_tests();
+    capacity_tests();
     Store s;
     Record r = initial(s, 16);
     assert(resume(s, r) == Result::pending);

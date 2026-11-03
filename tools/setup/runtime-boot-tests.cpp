@@ -79,8 +79,163 @@ static void wait_receipt() {
            "idempotent, owned boot record remains prepared\n",
            points);
 }
+static void put(const std::string &path, const std::string &bytes) {
+    auto &node = fake_win32::files[fake_win32::canon(path.c_str())];
+    node.bytes.assign(bytes.begin(), bytes.end());
+    node.flushed = true;
+}
+static std::string bytes(const char *path) {
+    const auto &b = fake_win32::files.at(fake_win32::canon(path)).bytes;
+    return {b.begin(), b.end()};
+}
+static Image image(const std::string &bytes) {
+    Image out;
+    out.exists = 1;
+    out.size = DWORD(bytes.size());
+    Sha256 hash;
+    hash.update(reinterpret_cast<const BYTE *>(bytes.data()), out.size);
+    hash.finish(out.sha);
+    return out;
+}
+// The full Windows 98 system plan's 17 file operations with all three
+// SYSBCKUP copies, captured by the real store exactly as installation does.
+static Journal win98_plan(Win32Store &store) {
+    using namespace fake_win32;
+    reset();
+    files[canon(Owner)].directory = true;
+    files[canon("C:\\WINDOWS\\DreamGPU\\setup.exe")].bytes = {'p', 'e'};
+    keys[canon(RunKey)];
+    for (unsigned n = 0; n < 3; ++n) {
+        put(std::string("C:\\WINDOWS\\SYSTEM\\") + public_runtime[n], "native");
+        put(std::string("C:\\WINDOWS\\") + win98_runtime_cache[n], "native");
+    }
+    Journal j;
+    j.generation = 1;
+    auto add = [&](const char *path, uint32_t resource, const std::string &content) {
+        auto &i = j.items[j.count++];
+        strcpy(i.path, path);
+        i.resource = resource;
+        i.desired = image(content);
+        if (resource != derived_resource)
+            resources[resource] = {content.begin(), content.end()};
+    };
+    unsigned id = 100;
+    for (const char *name : shared_runtime)
+        add(name, id++, std::string("provider ") + name);
+    add("dgpuicd.dll", id++, "icd");
+    for (const char *name : native_aliases)
+        add(name, derived_resource, std::string("alias ") + name);
+    for (unsigned n = 0; n < 3; ++n) {
+        add(win98_runtime_cache[n], id, "switcher");
+        add(public_runtime[n], id++, "switcher");
+    }
+    assert(j.count == largest_boot_plan && j.count > boot::v1_entries);
+    assert(store.init(Owner) && store.create_generation(1));
+    for (unsigned n = 0; n < j.count; ++n) {
+        assert(store.capture(j, n));
+        if (j.items[n].resource == derived_resource)
+            put("C:\\WINDOWS\\DreamGPU\\T00000001\\" + std::string(n < 10 ? "0" : "") +
+                    std::to_string(n) + ".payload",
+                std::string("alias ") + j.items[n].path);
+    }
+    assert(valid(j) && store.persist(j));
+    return j;
+}
+static void win98_full_plan() {
+    Win32Store store;
+    Journal j = win98_plan(store);
+    {
+        RuntimeBootStore bridge(store, j, Os::win98, false);
+        boot::Record record;
+        bool needed = false;
+        assert(bridge.prepare(record, needed) && needed && record.count == j.count);
+        boot::Record loaded;
+        bool exists = false;
+        assert(bridge.load(loaded, exists) && exists && loaded.count == j.count);
+        for (unsigned n = 0; n < record.count; ++n)
+            assert(!record.entries[n].protected_target && bridge.approved(record.entries[n]));
+    }
+    // Installed: every destination holds its desired bytes. Rollback in the
+    // same generation and removal in the next each need all 17 operations.
+    for (unsigned n = 0; n < j.count; ++n) {
+        char path[MAX_PATH];
+        assert(store.public_path(j.items[n], path));
+        const std::string content =
+            j.items[n].resource == derived_resource
+                ? std::string("alias ") + j.items[n].path
+                : std::string(fake_win32::resources[j.items[n].resource].begin(),
+                              fake_win32::resources[j.items[n].resource].end());
+        put(path, content);
+        assert(store.classify(j, n, false) == Actual::after);
+        j.items[n].phase = Phase::applied;
+    }
+    {
+        RuntimeBootStore bridge(store, j, Os::win98, true);
+        boot::Record record;
+        bool needed = false;
+        assert(bridge.prepare(record, needed) && needed && record.count == j.count);
+        unsigned deletions = 0;
+        for (unsigned n = 0; n < record.count; ++n)
+            deletions += !record.entries[n].desired.exists;
+        assert(deletions == 11);
+    }
+    j.state = State::activated;
+    Journal removal;
+    assert(uninstall_plan(j, removal) && store.create_generation(removal.generation));
+    {
+        RuntimeBootStore bridge(store, removal, Os::win98, false);
+        boot::Record record;
+        bool needed = false;
+        assert(bridge.prepare(record, needed) && needed && record.count == j.count);
+    }
+    std::printf("PASS Windows 98 boot bridge: %u-operation plan with all SYSBCKUP copies "
+                "prepared for installation, rollback and removal (capacity %u)\n",
+                largest_boot_plan, boot::max_entries);
+}
+// A schema 1 APPLY.BOOT from an earlier installer is read and continued.
+static void schema1_bridge() {
+    Win32Store store;
+    Journal j;
+    initial(store, j);
+    RuntimeBootStore bridge(store, j, Os::nt5, false);
+    boot::Record record;
+    bool needed = false;
+    assert(bridge.prepare(record, needed) && needed);
+    record.phase = boot::Phase::queued;
+    boot::RecordV1 v1;
+    v1.generation = record.generation;
+    v1.count = record.count;
+    v1.phase = record.phase;
+    v1.entries[0] = record.entries[0];
+    char sha[65];
+    Sha256 hash;
+    hash.update(reinterpret_cast<const BYTE *>(&v1), sizeof(v1));
+    hash.finish(sha);
+    const char path[] = "C:\\WINDOWS\\DreamGPU\\T00000001\\APPLY.BOOT";
+    const std::string stored =
+        std::string(reinterpret_cast<const char *>(&v1), sizeof(v1)) + std::string(sha, 64);
+    put(path, stored);
+    boot::Record loaded;
+    bool exists = false;
+    assert(bridge.load(loaded, exists) && exists && loaded.phase == boot::Phase::queued &&
+           loaded.version == boot::record_version && loaded.count == 1 &&
+           !memcmp(&loaded.entries[0], &record.entries[0], sizeof(boot::Entry)));
+    loaded.phase = boot::Phase::complete;
+    assert(bridge.save(loaded) && bytes(path).size() == stored.size() + sizeof(boot::Record) + 64);
+    assert(bridge.load(loaded, exists) && exists && loaded.phase == boot::Phase::complete);
+    // A schema 1 record for another generation is still foreign.
+    v1.generation = 2;
+    hash = Sha256();
+    hash.update(reinterpret_cast<const BYTE *>(&v1), sizeof(v1));
+    hash.finish(sha);
+    put(path, std::string(reinterpret_cast<const char *>(&v1), sizeof(v1)) + std::string(sha, 64));
+    assert(!bridge.load(loaded, exists));
+    std::printf("PASS schema 1 boot record: read through the bridge, continued as schema 2\n");
+}
 int main() {
     wait_receipt();
+    schema1_bridge();
+    win98_full_plan();
     unsigned prepare_points = 0;
     {
         Win32Store store;
