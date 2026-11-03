@@ -22,6 +22,8 @@ typedef void (*PROC)(void);
 #define GL_FOG_MODE 0x0b65
 #define GL_FOG_COLOR 0x0b66
 HINSTANCE JglModule(void);
+BOOL JglMultitextureAvailable(void);
+BOOL JglFixedStateAvailable(void);
 HGLRC wglGetCurrentContext(void);
 PROC GetProcAddress(HINSTANCE, LPCSTR);
 void glVertex3f(GLfloat, GLfloat, GLfloat);

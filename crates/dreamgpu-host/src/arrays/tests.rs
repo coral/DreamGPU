@@ -1,6 +1,6 @@
 use super::*;
 use std::cell::RefCell;
-thread_local! { static SEEN: RefCell<Vec<(u32, usize)>> = const { RefCell::new(Vec::new()) }; static ERROR: RefCell<u32> = const { RefCell::new(0) }; }
+thread_local! { static SEEN: RefCell<Vec<(u32, usize)>> = const { RefCell::new(Vec::new()) }; static ERROR: RefCell<u32> = const { RefCell::new(0) }; static ACTIVE: RefCell<u32> = const { RefCell::new(GL_TEXTURE0) }; }
 fn note(op: u32, value: usize) {
     SEEN.with(|v| v.borrow_mut().push((op, value)));
 }
@@ -52,6 +52,20 @@ unsafe extern "C" fn error() -> u32 {
 unsafe extern "C" fn restore(p: *const f32) {
     note(11, unsafe { *p }.to_bits() as usize);
 }
+unsafe extern "C" fn active(texture: u32) {
+    note(17, texture as usize);
+}
+unsafe extern "C" fn client_active(texture: u32) {
+    note(18, texture as usize);
+}
+unsafe extern "C" fn multi_restore(target: u32, p: *const f32) {
+    note(19, target as usize);
+    note(11, unsafe { *p }.to_bits() as usize);
+}
+unsafe extern "C" fn integer(pname: u32, out: *mut i32) {
+    note(20, pname as usize);
+    unsafe { *out = ACTIVE.with(|v| *v.borrow()) as i32 };
+}
 fn api() -> DreamGpuGlApi {
     let mut a: DreamGpuGlApi = unsafe { core::mem::zeroed() };
     a.dg_glGetFloatv = Some(get);
@@ -71,7 +85,81 @@ fn api() -> DreamGpuGlApi {
     a.dg_glSecondaryColor3fv = Some(restore);
     a.dg_glNormal3fv = Some(restore);
     a.dg_glTexCoord4fv = Some(restore);
+    a.dg_glActiveTexture = Some(active);
+    a.dg_glClientActiveTexture = Some(client_active);
+    a.dg_glMultiTexCoord4fv = Some(multi_restore);
+    a.dg_glGetIntegerv = Some(integer);
     a
+}
+#[test]
+fn multitexture_arrays_select_each_unit_and_restore_its_own_coordinates() {
+    let api = api();
+    let data = raw::tests::extended_packet();
+    let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_TEXCOORD | 0x200;
+    // Unit 1 is active: unit 0's array must not save or restore unit 1's coordinates.
+    ACTIVE.with(|v| *v.borrow_mut() = GL_TEXTURE0 + 1);
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    let args = [GL_TRIANGLES, 0, 3, mask, 0, 0, 0, 0];
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArraysEXT, &args, &data) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    ACTIVE.with(|v| *v.borrow_mut() = GL_TEXTURE0);
+    let units = |op: u32| {
+        seen.iter()
+            .filter(|v| v.0 == op)
+            .map(|v| v.1 as u32 - GL_TEXTURE0)
+            .collect::<Vec<_>>()
+    };
+    // Saves switch to units 0 and 3, then return to the guest's unit 1.
+    assert_eq!(units(17), [0, 3, 1]);
+    assert_eq!(units(18), [0, 1, 2, 3, 4, 5, 6, 7]);
+    assert_eq!(units(19), [0, 3]);
+    let base = data.as_ptr() as usize;
+    let pointers = seen
+        .iter()
+        .filter(|v| v.0 == 6)
+        .map(|v| v.1 - base)
+        .collect::<Vec<_>>();
+    assert_eq!(pointers, [64, 88, 112]);
+    assert_eq!(
+        seen.iter()
+            .filter(|v| v.0 == 3)
+            .map(|v| v.1 as u32)
+            .collect::<Vec<_>>(),
+        [
+            GL_VERTEX_ARRAY,
+            GL_TEXTURE_COORD_ARRAY,
+            GL_TEXTURE_COORD_ARRAY
+        ]
+    );
+    // Disabled units 1, 2 and 4-7 are explicitly disabled under the push.
+    assert_eq!(
+        seen.iter()
+            .filter(|v| v.0 == 4 && v.1 as u32 == GL_TEXTURE_COORD_ARRAY)
+            .count(),
+        6
+    );
+    // Restoration follows PopClientAttrib.
+    assert!(
+        seen.iter().position(|v| v.0 == 2).unwrap() < seen.iter().position(|v| v.0 == 19).unwrap()
+    );
+    // The seven-slot function cannot carry units 1-7.
+    assert_eq!(
+        unsafe { draw(&api, FEnum_glDrawArrays, &args, &data) },
+        Err(1)
+    );
+    // A missing per-unit entry point fails before any client pointer is exposed.
+    let mut partial = api;
+    partial.dg_glClientActiveTexture = None;
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe { draw(&partial, FEnum_glDrawArraysEXT, &args, &data) },
+        Err(3)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
 }
 #[test]
 fn vertex_layout_indices_and_restore_on_gpu_error() {

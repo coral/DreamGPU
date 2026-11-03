@@ -104,12 +104,12 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
     return result;
 }
 /* The host supplies stable identity strings and no extension/version claim.
- * These public pointers stay valid across later queries and context switches. */
+ * These public pointers stay valid across later queries and context switches.
+ * Extensions name only negotiated host contracts; the version stays 1.1 so
+ * callers do not assume promoted core features. */
 const GLubyte *APIENTRY glGetString(GLenum name) {
     static const GLubyte vendor[] = "DreamGPU";
     static const GLubyte renderer[] = "DreamGPU (native host OpenGL)";
-    static const GLubyte extensions[] = "";
-    static const GLubyte secondary[] = "GL_EXT_secondary_color GL_EXT_separate_specular_color";
     static const GLubyte version[] = "1.1 DreamGPU";
     if (!JglReady())
         return NULL;
@@ -119,7 +119,7 @@ const GLubyte *APIENTRY glGetString(GLenum name) {
         case GL_RENDERER:
             return renderer;
         case GL_EXTENSIONS:
-            return JglSupportsSecondary() ? secondary : extensions;
+            return JglExtensions();
         /* A valid identity pointer for legacy diagnostic output, with no claim
          * that this evolving frontend implements a complete OpenGL version. */
         case GL_VERSION:

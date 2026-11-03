@@ -17,6 +17,21 @@ use core::{
     ptr::{addr_of_mut, null_mut},
 };
 const STACK: usize = 16;
+/// Logical texture units; bindings follow the active unit (ARB_multitexture).
+pub(crate) const UNITS: usize = DG_GL_MAX_TEXTURE_UNITS as usize;
+/// Bindings of every unit except the active one, saved by TEXTURE_BIT.
+#[repr(C)]
+#[derive(Clone, Copy)]
+pub struct UnitAttrib {
+    pub active: u32,
+    pub units: [[*mut Texture; 2]; UNITS],
+}
+impl UnitAttrib {
+    const EMPTY: Self = Self {
+        active: 0,
+        units: [[null_mut(); 2]; UNITS],
+    };
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
 pub struct Attrib {
@@ -55,8 +70,22 @@ pub struct ContextState {
     pub list_mode: u32,
     pub proxy_rejected: [u32; 2],
     pub border_sampler: *mut crate::texture::border::State,
+    /// Rust-only multitexture state, appended after the C-visible prefix.
+    /// `bound_texture`/`bound_texture_1d` hold the active unit's bindings, so
+    /// single-unit consumers keep operating on the active unit. `units` holds
+    /// each other unit's (2D, 1D) references; the active unit's entry is null.
+    pub active_unit: u32,
+    pub unit_limit: u32,
+    pub units: [[*mut Texture; 2]; UNITS],
+    pub unit_attrib: [UnitAttrib; STACK],
 }
 impl ContextState {
+    /// Every unit's (2D, 1D) binding, including the active unit's.
+    pub(crate) fn unit_bindings(&self) -> [[*mut Texture; 2]; UNITS] {
+        let mut all = self.units;
+        all[self.active_unit as usize] = [self.bound_texture, self.bound_texture_1d];
+        all
+    }
     const EMPTY: Self = Self {
         textures: null_mut(),
         default_texture: null_mut(),
@@ -74,9 +103,18 @@ impl ContextState {
         list_mode: 0,
         proxy_rejected: [0; 2],
         border_sampler: null_mut(),
+        active_unit: 0,
+        unit_limit: 0,
+        units: [[null_mut(); 2]; UNITS],
+        unit_attrib: [UnitAttrib::EMPTY; STACK],
     };
 }
 
+/// Size of the Rust-owned state that C embeds; checked against its mirror.
+#[no_mangle]
+pub extern "C" fn dreamgpu_context_state_size() -> usize {
+    core::mem::size_of::<ContextState>()
+}
 /// # Safety
 /// State is fresh render-worker-owned storage. Memory callbacks allocate aligned
 /// writable storage and cannot reenter; shared namespace is a live same-client
@@ -133,23 +171,27 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
             .refs
             .checked_add(1)
             .expect("namespace reference overflow");
+        // Defaults: one owner reference plus one binding per texture unit.
         two.write(Texture {
-            refs: 2,
+            refs: 1 + UNITS as u32,
             target: GL_TEXTURE_2D,
             ..Texture::default()
         });
         one.write(Texture {
-            refs: 2,
+            refs: 1 + UNITS as u32,
             target: GL_TEXTURE_1D,
             ..Texture::default()
         });
         *m.count += 2;
+        let mut units = [[two, one]; UNITS];
+        units[0] = [null_mut(); 2];
         state.write(ContextState {
             textures: namespace,
             default_texture: two,
             bound_texture: two,
             default_texture_1d: one,
             bound_texture_1d: one,
+            units,
             ..ContextState::EMPTY
         });
     }
@@ -176,11 +218,20 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     unsafe { crate::selection::release(&*memory, &mut old.capture) };
     unsafe { crate::lists::release(&*memory, old.lists) };
     assert!(old.attrib_depth as usize <= STACK);
-    for saved in &old.attrib[..old.attrib_depth as usize] {
+    for (saved, units) in old.attrib[..old.attrib_depth as usize]
+        .iter()
+        .zip(&old.unit_attrib)
+    {
         unsafe {
             dreamgpu_texture_unref(memory, saved.texture);
             dreamgpu_texture_unref(memory, saved.texture_1d);
+            for texture in units.units.iter().flatten() {
+                dreamgpu_texture_unref(memory, *texture);
+            }
         }
+    }
+    for texture in old.units.iter().flatten() {
+        unsafe { dreamgpu_texture_unref(memory, *texture) };
     }
     unsafe {
         dreamgpu_texture_unref(memory, old.bound_texture);
@@ -272,22 +323,32 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
     if mask & (GL_FOG_BIT | GL_ENABLE_BIT) != 0 {
         saved.color_sum = unsafe { enabled(GL_COLOR_SUM) } as u32;
     }
+    let mut units = UnitAttrib::EMPTY;
     if mask & GL_TEXTURE_BIT != 0 {
         unsafe {
             saved.texture = (*state).bound_texture;
             saved.texture_1d = (*state).bound_texture_1d;
-            (*saved.texture).refs = (*saved.texture)
-                .refs
-                .checked_add(1)
-                .expect("texture reference overflow");
-            (*saved.texture_1d).refs = (*saved.texture_1d)
-                .refs
-                .checked_add(1)
-                .expect("texture reference overflow");
+            // TEXTURE_BIT also covers ACTIVE_TEXTURE and every unit's bindings.
+            units = UnitAttrib {
+                active: (*state).active_unit,
+                units: (*state).units,
+            };
+            for texture in [saved.texture, saved.texture_1d]
+                .iter()
+                .chain(units.units.iter().flatten())
+            {
+                if !texture.is_null() {
+                    (**texture).refs = (**texture)
+                        .refs
+                        .checked_add(1)
+                        .expect("texture reference overflow");
+                }
+            }
         }
     }
     unsafe {
         (*state).attrib[depth] = saved;
+        (*state).unit_attrib[depth] = units;
         (*state).attrib_depth += 1;
     }
     Ok(())
@@ -315,10 +376,11 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
     {
         return Err(DG_GL_ERROR_UNSUPPORTED);
     }
+    let saved_units = unsafe { (*state).unit_attrib[depth - 1] };
+    let (restored, restored_count) = distinct(&saved, &saved_units);
     if !saved.texture.is_null() {
-        unsafe {
-            dreamgpu_texture_wait(api, saved.texture, serial);
-            dreamgpu_texture_wait(api, saved.texture_1d, serial);
+        for texture in &restored[..restored_count] {
+            unsafe { dreamgpu_texture_wait(api, *texture, serial) };
         }
     }
     unsafe {
@@ -349,16 +411,119 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
         if !saved.texture.is_null() {
             let old_two = (*state).bound_texture;
             let old_one = (*state).bound_texture_1d;
+            let old_units = (*state).units;
             (*state).bound_texture = saved.texture;
             (*state).bound_texture_1d = saved.texture_1d;
+            (*state).units = saved_units.units;
+            (*state).active_unit = saved_units.active;
             dreamgpu_texture_unref(memory, old_two);
             dreamgpu_texture_unref(memory, old_one);
-            dreamgpu_texture_written(api, saved.texture, serial);
-            dreamgpu_texture_written(api, saved.texture_1d, serial);
+            for texture in old_units.iter().flatten() {
+                dreamgpu_texture_unref(memory, *texture);
+            }
+            // Native PopAttrib restored parameters of every unit's binding.
+            for texture in &restored[..restored_count] {
+                dreamgpu_texture_written(api, *texture, serial);
+            }
         }
         (*state).attrib[depth - 1] = Attrib::EMPTY;
+        (*state).unit_attrib[depth - 1] = UnitAttrib::EMPTY;
         (*state).attrib_depth -= 1;
         select(api, state)?;
+    }
+    Ok(())
+}
+/// Distinct non-null textures of a saved TEXTURE_BIT entry, so each storage
+/// object is fenced once even when one default is bound on many units.
+fn distinct(saved: &Attrib, units: &UnitAttrib) -> ([*mut Texture; 2 + 2 * UNITS], usize) {
+    let mut out = [null_mut(); 2 + 2 * UNITS];
+    let mut n = 0;
+    for &texture in [saved.texture, saved.texture_1d]
+        .iter()
+        .chain(units.units.iter().flatten())
+    {
+        if !texture.is_null() && !out[..n].contains(&texture) {
+            out[n] = texture;
+            n += 1;
+        }
+    }
+    (out, n)
+}
+/// Every unit's live (2D, 1D) binding slot, alternating as texture deletion expects.
+pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Texture; 2 * UNITS] {
+    let mut slots = [null_mut(); 2 * UNITS];
+    unsafe {
+        let active = (*state).active_unit as usize;
+        for (unit, pair) in slots.chunks_exact_mut(2).enumerate() {
+            if unit == active {
+                pair[0] = addr_of_mut!((*state).bound_texture);
+                pair[1] = addr_of_mut!((*state).bound_texture_1d);
+            } else {
+                pair[0] = addr_of_mut!((*state).units[unit][0]);
+                pair[1] = addr_of_mut!((*state).units[unit][1]);
+            }
+        }
+    }
+    slots
+}
+/// Native fixed-function unit count, clamped to the logical table.
+unsafe fn unit_limit(api: &DreamGpuGlApi, state: *mut ContextState) -> Result<u32, u32> {
+    unsafe {
+        if (*state).unit_limit == 0 {
+            let mut units = 0i32;
+            api.dg_glGetIntegerv.ok_or(DG_GL_ERROR_UNSUPPORTED)?(GL_MAX_TEXTURE_UNITS, &mut units);
+            (*state).unit_limit = (units.max(1) as u32).min(UNITS as u32);
+        }
+        Ok((*state).unit_limit)
+    }
+}
+/// Move binding ownership so `bound_texture*` always describe the active unit.
+unsafe fn switch_unit(state: *mut ContextState, unit: u32) {
+    let s = unsafe { &mut *state };
+    if unit == s.active_unit {
+        return;
+    }
+    s.units[s.active_unit as usize] = [s.bound_texture, s.bound_texture_1d];
+    [s.bound_texture, s.bound_texture_1d] = s.units[unit as usize];
+    s.units[unit as usize] = [null_mut(); 2];
+    s.active_unit = unit;
+}
+/// Draw admission for every texture unit: an enabled target must not sample
+/// undefined levels, and each bound texture's producer fence is honored.
+/// Only a unit holding a texture with undefined levels needs a native enable
+/// query, so ordinary draws issue no active-unit switches.
+pub(crate) unsafe fn prepare_textures(
+    api: &DreamGpuGlApi,
+    state: *const ContextState,
+    serial: u64,
+) -> Result<(), u32> {
+    let (all, active) = unsafe { ((*state).unit_bindings(), (*state).active_unit) };
+    let enabled = api.dg_glIsEnabled.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    for (unit, pair) in all.iter().enumerate() {
+        for (texture, cap) in [(pair[0], GL_TEXTURE_2D), (pair[1], GL_TEXTURE_1D)] {
+            if texture.is_null() || unsafe { (*texture).undefined_levels } == 0 {
+                continue;
+            }
+            let on = if unit as u32 == active {
+                unsafe { enabled(cap) }
+            } else {
+                let select = api.dg_glActiveTexture.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+                unsafe {
+                    select(GL_TEXTURE0 + unit as u32);
+                    let on = enabled(cap);
+                    select(GL_TEXTURE0 + active);
+                    on
+                }
+            };
+            if on != 0 {
+                return Err(DG_GL_ERROR_TEXTURE);
+            }
+        }
+    }
+    for texture in all.iter().flatten() {
+        if !texture.is_null() {
+            unsafe { dreamgpu_texture_wait(api, *texture, serial) };
+        }
     }
     Ok(())
 }
@@ -400,6 +565,15 @@ unsafe fn scalar(
                 return Err(DG_GL_ERROR_UNSUPPORTED);
             }
             call!(dg_glHint(word(0), word(1)));
+        }
+        FEnum_glActiveTexture => {
+            let unit = word(0).wrapping_sub(GL_TEXTURE0);
+            if unit >= unsafe { unit_limit(api, state)? } {
+                unsafe { error(state, GL_INVALID_ENUM) };
+                return Ok(());
+            }
+            call!(dg_glActiveTexture(word(0)));
+            unsafe { switch_unit(state, unit) };
         }
         FEnum_glBindTexture => {
             let target = word(0);
@@ -483,19 +657,8 @@ unsafe fn scalar(
             if word(0) > GL_POLYGON {
                 return Err(DG_GL_ERROR_CONTEXT);
             }
-            for (texture, cap) in unsafe {
-                [
-                    ((*state).bound_texture, GL_TEXTURE_2D),
-                    ((*state).bound_texture_1d, GL_TEXTURE_1D),
-                ]
-            } {
-                if unsafe { (*texture).undefined_levels } != 0 && call!(dg_glIsEnabled(cap)) != 0 {
-                    return Err(DG_GL_ERROR_TEXTURE);
-                }
-            }
             unsafe {
-                dreamgpu_texture_wait(api, (*state).bound_texture, serial);
-                dreamgpu_texture_wait(api, (*state).bound_texture_1d, serial);
+                prepare_textures(api, state, serial)?;
                 crate::texture::border::prepare(&*memory, state)?;
             }
         }

@@ -296,10 +296,12 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
     count: u32,
     default_2d: *mut Texture,
     default_1d: *mut Texture,
-    binding_2d: *mut *mut Texture,
-    binding_1d: *mut *mut Texture,
+    bindings: *const *mut *mut Texture,
+    binding_count: u32,
 ) {
     assert!(count <= DG_GL_MAX_TEXTURES);
+    // Bindings alternate 2D, 1D for each texture unit.
+    let bindings = unsafe { core::slice::from_raw_parts(bindings, binding_count as usize) };
     let api = unsafe { &*(*memory).api };
     for i in 0..count as usize {
         let name =
@@ -312,7 +314,12 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
             api.dg_glDeleteTextures.unwrap()(1, core::ptr::addr_of!((*texture).name));
             (*texture).deleted = 1;
             remove(ns, slot);
-            for (binding, default) in [(binding_2d, default_2d), (binding_1d, default_1d)] {
+            for (index, &binding) in bindings.iter().enumerate() {
+                let default = if index % 2 == 0 {
+                    default_2d
+                } else {
+                    default_1d
+                };
                 if *binding == texture {
                     (*default).refs = (*default)
                         .refs

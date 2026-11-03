@@ -12,6 +12,10 @@ mod discard;
 mod evaluator;
 #[path = "native_qemu/fixed.rs"]
 mod fixed;
+#[path = "native_qemu/fixed_state.rs"]
+mod fixed_state;
+#[path = "native_qemu/multitexture.rs"]
+mod multitexture;
 #[path = "native_qemu/pixel_image.rs"]
 mod pixel_image;
 #[path = "native_qemu/pixels.rs"]

@@ -37,7 +37,8 @@ static ULONG JglMaxDataBytes(ULONG n){assert(n==1);return capacity;}
 static void JglScalarVector(ULONG f,ULONG n,const void*p){fn=f;memcpy(scalars,p,n*4);++calls;}
 static bool JglData(ULONG f,const ULONG*a,ULONG n,const void*p,ULONG bytes){
  assert(f==FEnum_glPrioritizeTextures&&n==1&&bytes==a[0]*8);++calls;
- if(calls==fail)return false;packed.insert(packed.end(),(const BYTE*)p,(const BYTE*)p+bytes);return true;}
+ if(calls==fail)return false;
+ packed.insert(packed.end(),(const BYTE*)p,(const BYTE*)p+bytes);return true;}
 static bool JglQuery(ULONG f,const ULONG*a,ULONG kind,void*out,ULONG cap,ULONG*bytes){
  if(f==FEnum_glGetTexLevelParameteriv){
   assert(kind==DG_GL_RESULT_INT&&cap==4);++queries;

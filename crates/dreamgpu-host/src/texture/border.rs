@@ -506,6 +506,12 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
         }
         return Ok(());
     }
+    // The private program replaces the whole fragment stage and samples unit 0.
+    // When another unit is active or texturing, native sampling (which ignores
+    // supplied borders) is preferable to discarding that unit's contribution.
+    if unsafe { (*c).active_unit } != 0 {
+        return Ok(());
+    }
     unsafe {
         query::remember(a, core::ptr::addr_of_mut!((*c).guest_errors))?;
     }
@@ -518,6 +524,19 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
             return Ok(());
         }
     };
+    // Other units can only be enabled after ActiveTexture, which sets the limit.
+    for unit in 1..unsafe { (*c).unit_limit } {
+        let other = unsafe {
+            a.dg_glActiveTexture.unwrap()(GL_TEXTURE0 + unit);
+            let on = a.dg_glIsEnabled.unwrap()(GL_TEXTURE_2D) != 0
+                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_1D) != 0;
+            a.dg_glActiveTexture.unwrap()(GL_TEXTURE0);
+            on
+        };
+        if other {
+            return Ok(());
+        }
+    }
     let target = unsafe { (*texture).target };
     let base = unsafe { parameter(a, target, GL_TEXTURE_BASE_LEVEL) };
     if !(0..12).contains(&base) || unsafe { (*texture).borders[base as usize] } != 1 {

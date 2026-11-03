@@ -71,14 +71,19 @@ pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
         | GL_TEXTURE_WRAP_T
         | GL_TEXTURE_BASE_LEVEL
         | GL_TEXTURE_MAX_LEVEL
-        | GL_TEXTURE_PRIORITY => 1,
+        | GL_TEXTURE_PRIORITY
+        | GL_TEXTURE_MAX_ANISOTROPY_EXT => 1,
         _ => 0,
     }
 }
 
 pub(crate) fn texture_env_params(target: u32, pname: u32) -> u32 {
-    if target != GL_TEXTURE_ENV {
-        return 0;
+    match (target, pname) {
+        (GL_TEXTURE_FILTER_CONTROL, GL_TEXTURE_LOD_BIAS) | (GL_POINT_SPRITE, GL_COORD_REPLACE) => {
+            return 1
+        }
+        _ if target != GL_TEXTURE_ENV => return 0,
+        _ => (),
     }
     match pname {
         GL_TEXTURE_ENV_COLOR => 4,
@@ -86,6 +91,14 @@ pub(crate) fn texture_env_params(target: u32, pname: u32) -> u32 {
         | GL_SOURCE0_RGB | GL_SOURCE1_RGB | GL_SOURCE2_RGB | GL_SOURCE0_ALPHA
         | GL_SOURCE1_ALPHA | GL_SOURCE2_ALPHA | GL_OPERAND0_RGB | GL_OPERAND1_RGB
         | GL_OPERAND2_RGB | GL_OPERAND0_ALPHA | GL_OPERAND1_ALPHA | GL_OPERAND2_ALPHA => 1,
+        _ => 0,
+    }
+}
+
+pub(crate) fn point_params(pname: u32) -> u32 {
+    match pname {
+        GL_POINT_SIZE_MIN | GL_POINT_SIZE_MAX | GL_POINT_FADE_THRESHOLD_SIZE => 1,
+        GL_POINT_DISTANCE_ATTENUATION => 3,
         _ => 0,
     }
 }
@@ -133,6 +146,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
     }
     match pname {
         GL_MODELVIEW_MATRIX | GL_PROJECTION_MATRIX | GL_TEXTURE_MATRIX => 16,
+        GL_BLEND_COLOR => 4,
+        GL_POINT_DISTANCE_ATTENUATION => 3,
         GL_CURRENT_RASTER_COLOR
         | GL_CURRENT_RASTER_TEXTURE_COORDS
         | GL_CURRENT_RASTER_POSITION
@@ -184,6 +199,26 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_UNPACK_SKIP_PIXELS
         | GL_UNPACK_ALIGNMENT
         | GL_TEXTURE_BINDING_1D
+        | GL_ACTIVE_TEXTURE
+        | GL_MAX_TEXTURE_UNITS
+        | GL_BLEND_EQUATION
+        | GL_BLEND_EQUATION_ALPHA
+        | GL_BLEND_SRC_RGB
+        | GL_BLEND_DST_RGB
+        | GL_BLEND_SRC_ALPHA
+        | GL_BLEND_DST_ALPHA
+        | GL_STENCIL_BACK_FUNC
+        | GL_STENCIL_BACK_FAIL
+        | GL_STENCIL_BACK_PASS_DEPTH_FAIL
+        | GL_STENCIL_BACK_PASS_DEPTH_PASS
+        | GL_STENCIL_BACK_REF
+        | GL_STENCIL_BACK_VALUE_MASK
+        | GL_STENCIL_BACK_WRITEMASK
+        | GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
+        | GL_MAX_TEXTURE_LOD_BIAS
+        | GL_POINT_SIZE_MIN
+        | GL_POINT_SIZE_MAX
+        | GL_POINT_FADE_THRESHOLD_SIZE
         | GL_TEXTURE_BINDING_2D
         | GL_ATTRIB_STACK_DEPTH
         | GL_MAX_ATTRIB_STACK_DEPTH
@@ -324,7 +359,7 @@ pub(crate) fn function_words(function: u32) -> u32 {
         | FEnum_glGetTexLevelParameteriv
         | FEnum_glGetTexImage
         | FEnum_glReadPixels => DG_GL_FUNCTION_QUERY | 3,
-        FEnum_glDrawArrays => DG_GL_FUNCTION_INLINE_DATA | 4,
+        FEnum_glDrawArrays | FEnum_glDrawArraysEXT => DG_GL_FUNCTION_INLINE_DATA | 4,
         FEnum_glDrawElements => DG_GL_FUNCTION_INLINE_DATA | 5,
         FEnum_glTexImage1D | FEnum_glTexSubImage1D | FEnum_glTexImage2D | FEnum_glTexSubImage2D => {
             DG_GL_FUNCTION_INLINE_DATA | 8
@@ -341,6 +376,17 @@ pub(crate) fn function_words(function: u32) -> u32 {
         | FEnum_glTexEnvfv
         | FEnum_glTexEnviv => DG_GL_FUNCTION_INLINE_DATA | 2,
         FEnum_glBindTexture => 2,
+        // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
+        FEnum_glActiveTexture => 1,
+        FEnum_glMultiTexCoord4f => 5,
+        // Fixed-function blend, stencil and point state (DG_CAP_GL_FIXED_STATE).
+        FEnum_glBlendEquation => 1,
+        FEnum_glBlendEquationSeparate | FEnum_glPointParameterf => 2,
+        FEnum_glBlendColor
+        | FEnum_glBlendFuncSeparate
+        | FEnum_glStencilFuncSeparate
+        | FEnum_glStencilOpSeparate => 4,
+        FEnum_glPointParameterfv => DG_GL_FUNCTION_INLINE_DATA | 1,
         FEnum_glTexParameteri | FEnum_glTexParameterf | FEnum_glTexEnvi | FEnum_glTexEnvf => 3,
         FEnum_glEnd | FEnum_glFlush | FEnum_glFinish | FEnum_glLoadIdentity
         | FEnum_glPushMatrix | FEnum_glPopAttrib | FEnum_glPopMatrix => 0,
@@ -435,6 +481,7 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_TEXTURE_GEN_T
             | GL_TEXTURE_GEN_R
             | GL_TEXTURE_GEN_Q
+            | GL_POINT_SPRITE
     )
 }
 
@@ -452,6 +499,7 @@ fn vector_function(function: u32) -> bool {
             | FEnum_glTexGenfv
             | FEnum_glTexGendv
             | FEnum_glClipPlane
+            | FEnum_glPointParameterfv
     )
 }
 fn vector_bytes(function: u32, a: &[u32; 8]) -> u32 {
@@ -465,6 +513,7 @@ fn vector_bytes(function: u32, a: &[u32; 8]) -> u32 {
         FEnum_glTexGenfv => texgen_params(a[0], a[1]) * 4,
         FEnum_glTexGendv => texgen_params(a[0], a[1]) * 8,
         FEnum_glClipPlane if (GL_CLIP_PLANE0..=GL_CLIP_PLANE5).contains(&a[0]) => 32,
+        FEnum_glPointParameterfv => point_params(a[0]) * 4,
         _ => 0,
     }
 }
@@ -537,6 +586,18 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
     }
 }
 fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
+    if function == FEnum_glDrawArraysEXT {
+        // Multitexture arrays exist only in the compact sixteen-slot layout.
+        return if a[3] & DG_GL_ARRAY_RAW != 0
+            && a[0] <= GL_POLYGON
+            && a[1] == 0
+            && crate::arrays::raw::layout_extended(a[3], a[2], data).is_some()
+        {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     let elements = function == FEnum_glDrawElements;
     let vertices = a[if elements { 3 } else { 2 }];
     let attributes = a[if elements { 4 } else { 3 }];
@@ -636,7 +697,10 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
             DG_GL_ERROR_BATCH
         };
     }
-    if matches!(function, FEnum_glDrawArrays | FEnum_glDrawElements) {
+    if matches!(
+        function,
+        FEnum_glDrawArrays | FEnum_glDrawArraysEXT | FEnum_glDrawElements
+    ) {
         return validate_arrays(function, a, data);
     }
     if function == FEnum_glPrioritizeTextures {

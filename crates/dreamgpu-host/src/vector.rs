@@ -57,6 +57,7 @@ pub unsafe extern "C" fn dreamgpu_gl_vector(
         FEnum_glTexGenfv => call!(dg_glTexGenfv(args[0], args[1], floats.as_ptr())),
         FEnum_glTexGendv => call!(dg_glTexGendv(args[0], args[1], doubles.as_ptr())),
         FEnum_glClipPlane => call!(dg_glClipPlane(args[0], doubles.as_ptr())),
+        FEnum_glPointParameterfv => call!(dg_glPointParameterfv(args[0], floats.as_ptr())),
         _ => return DG_GL_ERROR_UNSUPPORTED,
     }
     0

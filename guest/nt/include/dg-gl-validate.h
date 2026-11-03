@@ -68,18 +68,24 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                         return 0;
                 // DrawArrays compact descriptor data is checked before DMA on
                 // both NT and Win9x. Other GL semantics remain host admission.
-                if (record[8] == 469 && args == 4 && (record[13] & DG_GL_ARRAY_RAW)) {
-                    unsigned descriptors[7], offsets[7], length;
+                // DrawArraysEXT (0x1d6) is the sixteen-slot multitexture form;
+                // it is always compact.
+                if ((record[8] == 469 && args == 4 && (record[13] & DG_GL_ARRAY_RAW)) ||
+                    (record[8] == 0x1d6 && args == 4)) {
+                    const unsigned slots = record[8] == 469 ? 7 : DG_GL_ARRAY_EXT_SLOTS;
+                    unsigned descriptors[DG_GL_ARRAY_EXT_SLOTS], offsets[DG_GL_ARRAY_EXT_SLOTS],
+                        length;
                     const unsigned char *data = (const unsigned char *)record + payload;
-                    if (data_bytes < DG_GL_ARRAY_DESCRIPTOR_BYTES || record[10] > 9 || record[11])
+                    if (data_bytes < slots * 4 || record[10] > 9 || record[11])
                         return 0;
-                    for (i = 0; i < 7; ++i)
+                    for (i = 0; i < slots; ++i)
                         descriptors[i] = record[payload / 4 + i];
-                    if (!DgRawArrayLayout(record[13], record[12], descriptors, offsets, &length) ||
+                    if (!DgRawArrayLayoutSlots(record[13], record[12], descriptors, offsets,
+                                               &length, slots) ||
                         length != data_bytes)
                         return 0;
-                    unsigned end = DG_GL_ARRAY_DESCRIPTOR_BYTES;
-                    for (i = 0; i < 7; ++i) {
+                    unsigned end = slots * 4;
+                    for (i = 0; i < slots; ++i) {
                         if (!(record[13] & (1U << i)))
                             continue;
                         for (unsigned j = end; j < offsets[i]; ++j)

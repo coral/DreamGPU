@@ -72,6 +72,9 @@ JGL_INLINE int StateCapability(ULONG cap) {
     }
 }
 
+/* TEXTURE_1D/2D and TEXTURE_GEN_S..Q are per texture unit (bits 4-5, 21-24). */
+#define JGL_UNIT_ENABLES 0x01e00030UL
+
 JGL_INLINE BOOL BlendFactor(ULONG factor, BOOL source) {
     if (factor <= 1 || (factor >= 0x0302 && factor <= 0x0305))
         return TRUE;
@@ -92,13 +95,21 @@ JGL_INLINE BOOL StateUnchanged(JGL_STATE_CACHE *cache, ULONG function, const voi
             return TRUE;
         cache->EnableKnown[word] |= mask;
         cache->EnableValue[word] = (cache->EnableValue[word] & ~mask) | value;
-    } else if (function == FEnum_glBlendFunc && BlendFactor(args[0], TRUE) &&
-               BlendFactor(args[1], FALSE)) {
+    } else if (function == FEnum_glBlendFunc) {
+        /* Native GL may accept factors this table does not model (constant
+         * colors, SRC_COLOR as a source): after one, the state is unknown. */
+        if (!BlendFactor(args[0], TRUE) || !BlendFactor(args[1], FALSE)) {
+            cache->BlendKnown = FALSE;
+            return FALSE;
+        }
         if (cache->BlendKnown && cache->Blend[0] == args[0] && cache->Blend[1] == args[1])
             return TRUE;
         cache->Blend[0] = args[0];
         cache->Blend[1] = args[1];
         cache->BlendKnown = TRUE;
+    } else if (function == FEnum_glBlendFuncSeparate) {
+        /* Separate factors replace both pairs; BlendEquation leaves them. */
+        cache->BlendKnown = FALSE;
     } else if (function == FEnum_glPolygonOffset && (args[0] & 0x7f800000UL) != 0x7f800000UL &&
                (args[1] & 0x7f800000UL) != 0x7f800000UL) {
         if (cache->OffsetKnown && cache->Offset[0] == args[0] && cache->Offset[1] == args[1])
@@ -106,6 +117,10 @@ JGL_INLINE BOOL StateUnchanged(JGL_STATE_CACHE *cache, ULONG function, const voi
         cache->Offset[0] = args[0];
         cache->Offset[1] = args[1];
         cache->OffsetKnown = TRUE;
+    } else if (function == FEnum_glActiveTexture) {
+        /* Only the previous unit's enables were known; never apply them to
+         * another unit. Callers pass only validated unit enums. */
+        cache->EnableKnown[0] &= ~JGL_UNIT_ENABLES;
     }
     return FALSE;
 }

@@ -14,6 +14,20 @@
 #define DG_CAP_GL_TEXTURE_IMAGES 0x2000
 /* Supplied border texels participate in sampling, not just storage/readback. */
 #define DG_CAP_GL_TEXTURE_BORDERS 0x4000
+/* Fixed-function multitexture: ARB_multitexture with combine and dot3
+ * environments. ActiveTexture (one word) and MultiTexCoord4f (target and four
+ * float words; legal inside Begin/End and in display lists) are ordinary CALL
+ * records. The host answers ACTIVE_TEXTURE and MAX_TEXTURE_UNITS. Bindings,
+ * enables, environments, coordinate generation and the texture matrix follow
+ * the active unit; TEXTURE_BIT push/pop covers every unit's bindings and the
+ * active unit. Client arrays for units 1-7 use DrawArraysEXT, below. */
+#define DG_CAP_GL_MULTITEXTURE 0x8000
+#define DG_GL_MAX_TEXTURE_UNITS 8
+/* Fixed-function state: BlendColor, BlendEquation(Separate), BlendFuncSeparate,
+ * StencilFunc/OpSeparate (core GL 2.0 face form), PointParameterf(v),
+ * TEXTURE_MAX_ANISOTROPY_EXT, TEXTURE_FILTER_CONTROL LOD bias and POINT_SPRITE
+ * COORD_REPLACE, plus their state queries, as ordinary validated records. */
+#define DG_CAP_GL_FIXED_STATE 0x10000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104
@@ -259,6 +273,15 @@
  * Legacy fixed records above remain accepted by the paired current host. */
 #define DG_GL_ARRAY_RAW 0x80000000U
 #define DG_GL_ARRAY_DESCRIPTOR_BYTES 28
+/* With DG_CAP_GL_MULTITEXTURE, DrawArraysEXT uses the same four scalar words
+ * and RAW payload rules with sixteen descriptors. Slots 0-6 match DrawArrays;
+ * slots 7-13 are texture coordinates of units 1-7 with the slot-3 rules;
+ * slots 14-15 are reserved: their mask bits and descriptors must be zero.
+ * A distinct function keeps older kernels' seven-slot admission intact. */
+#define DG_GL_ARRAY_TEXCOORD1 0x80
+#define DG_GL_ARRAY_EXT_MASK 0x3fff
+#define DG_GL_ARRAY_EXT_SLOTS 16
+#define DG_GL_ARRAY_EXT_DESCRIPTOR_BYTES 64
 #define DG_GL_MAX_VERTICES 65536
 #define DG_GL_MAX_EVAL_ORDER 8
 #define DG_GL_MAX_CAPTURE_VALUES 16384

@@ -9,18 +9,33 @@ pub(crate) struct Attribute {
     pub offset: usize,
 }
 pub(crate) fn layout(mask: u32, count: u32, data: &[u8]) -> Option<[Attribute; 7]> {
-    if mask != ((mask & DG_GL_ARRAY_MASK) | DG_GL_ARRAY_RAW)
+    layout_slots::<7>(mask, count, data)
+}
+/// Sixteen-slot DrawArraysEXT layout: slots 7-13 are texture coordinates of
+/// units 1-7 with the slot-3 rules; reserved slots 14-15 must stay disabled.
+pub(crate) fn layout_extended(mask: u32, count: u32, data: &[u8]) -> Option<[Attribute; 16]> {
+    layout_slots::<16>(mask, count, data)
+}
+fn layout_slots<const N: usize>(mask: u32, count: u32, data: &[u8]) -> Option<[Attribute; N]> {
+    let allowed = if N == 16 {
+        DG_GL_ARRAY_EXT_MASK
+    } else {
+        DG_GL_ARRAY_MASK
+    };
+    if (N != 7 && N != 16)
+        || mask != ((mask & allowed) | DG_GL_ARRAY_RAW)
         || mask & DG_GL_ARRAY_POSITION == 0
         || count > DG_GL_MAX_VERTICES
-        || data.len() < DG_GL_ARRAY_DESCRIPTOR_BYTES as usize
+        || data.len() < N * 4
     {
         return None;
     }
-    let mut result = [Attribute::default(); 7];
-    let mut end = DG_GL_ARRAY_DESCRIPTOR_BYTES as usize;
-    for (i, a) in result.iter_mut().enumerate() {
-        let descriptor = u32::from_le_bytes(data[i * 4..i * 4 + 4].try_into().ok()?);
-        if mask & (1 << i) == 0 {
+    let mut result = [Attribute::default(); N];
+    let mut end = N * 4;
+    for (slot, a) in result.iter_mut().enumerate() {
+        let i = if (7..=13).contains(&slot) { 3 } else { slot };
+        let descriptor = u32::from_le_bytes(data[slot * 4..slot * 4 + 4].try_into().ok()?);
+        if mask & (1 << slot) == 0 {
             if descriptor != 0 {
                 return None;
             }
@@ -91,6 +106,43 @@ pub(crate) mod tests {
         }
         data[176..179].copy_from_slice(&[0, 7, 255]);
         data
+    }
+    /// Position (FLOAT 2), unit 0 (FLOAT 2) and unit 3 (SHORT 3) for 3 vertices.
+    pub(crate) fn extended_packet() -> Vec<u8> {
+        let mut data = vec![0; 132];
+        for (slot, kind, size) in [(0, GL_FLOAT, 2), (3, GL_FLOAT, 2), (9, GL_SHORT, 3)] {
+            data[slot * 4..slot * 4 + 4].copy_from_slice(&(kind | (size << 16)).to_le_bytes());
+        }
+        data
+    }
+    #[test]
+    fn extended_texture_unit_slots_follow_texcoord_rules() {
+        let data = extended_packet();
+        let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_TEXCOORD | 0x200;
+        let a = layout_extended(mask, 3, &data).unwrap();
+        assert_eq!((a[0].offset, a[3].offset, a[9].offset), (64, 88, 112));
+        assert_eq!((a[9].kind, a[9].size, a[9].unit), (GL_SHORT, 3, 2));
+        // Reserved slots 14-15 and their mask bits must stay zero.
+        assert!(layout_extended(mask | 1 << 14, 3, &data).is_none());
+        let mut reserved = data.clone();
+        reserved[56] = 1;
+        assert!(layout_extended(mask, 3, &reserved).is_none());
+        // Texture units use the slot-3 rules: no unsigned or byte coordinates.
+        for kind in [GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT, GL_BYTE] {
+            let mut bad = data.clone();
+            bad[36..40].copy_from_slice(&(kind | (3 << 16)).to_le_bytes());
+            assert!(layout_extended(mask, 3, &bad).is_none());
+        }
+        // An enabled unit needs a descriptor; a disabled one must not have one.
+        assert!(layout_extended(mask & !0x200, 3, &data).is_none());
+        assert!(layout_extended(mask | 0x100, 3, &data).is_none());
+        // Trailing padding is zero and the length is exact.
+        let mut padded = data.clone();
+        padded[131] = 1;
+        assert!(layout_extended(mask, 3, &padded).is_none());
+        assert!(layout_extended(mask, 3, &data[..128]).is_none());
+        // The seven-slot layout never admits units 1-7.
+        assert!(layout(mask, 3, &data).is_none());
     }
     #[test]
     fn exact_native_types_alignment_and_malformed_admission() {

@@ -202,8 +202,12 @@ fn deleted_bound_storage_lives_until_last_owner_and_names_reuse() {
             1,
             default2,
             default1,
-            &mut binding2,
-            &mut binding1,
+            [
+                core::ptr::addr_of_mut!(binding2),
+                core::ptr::addr_of_mut!(binding1),
+            ]
+            .as_ptr(),
+            2,
         );
         assert_eq!(binding2, default2);
         assert_eq!(((*old).refs, (*old).deleted, total), (1, 1, 64));

@@ -369,6 +369,11 @@ unsafe fn execute(
                     integers[0] = DG_GL_MAX_DIMENSION as i32;
                     integers[1] = integers[0];
                 }
+                // ACTIVE_TEXTURE passes through: the native unit tracks the logical one.
+                GL_MAX_TEXTURE_UNITS => {
+                    call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
+                    integers[0] = integers[0].clamp(1, DG_GL_MAX_TEXTURE_UNITS as i32);
+                }
                 GL_MAX_LIGHTS => integers[0] = 8,
                 GL_MAX_CLIP_PLANES => integers[0] = 6,
                 _ => logical = false,

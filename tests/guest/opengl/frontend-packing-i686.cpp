@@ -57,6 +57,9 @@ extern "C" void CallVertexRaw(const ULONG *);
 extern "C" void CallOrthoRaw(const ULONG *);
 extern "C" void CallOffsetRaw(const ULONG *);
 extern "C" void CallSecondaryRaw(const ULONG *);
+extern "C" void CallMultiTexCoordRaw(const ULONG *);
+extern "C" void CallBlendColorRaw(const ULONG *);
+extern "C" void CallPointParameterRaw(const ULONG *);
 __asm__(".text\n"
         ".globl CallColorRaw\nCallColorRaw:\n"
         "movl 4(%esp), %eax\n"
@@ -70,6 +73,18 @@ __asm__(".text\n"
         "movl 4(%esp), %eax\n"
         "pushl 8(%eax)\npushl 4(%eax)\npushl 0(%eax)\n"
         "call glSecondaryColor3fEXT\nret\n"
+        ".globl CallMultiTexCoordRaw\nCallMultiTexCoordRaw:\n"
+        "movl 4(%esp), %eax\n"
+        "pushl 16(%eax)\npushl 12(%eax)\npushl 8(%eax)\npushl 4(%eax)\npushl 0(%eax)\n"
+        "call glMultiTexCoord4fARB\nret\n"
+        ".globl CallBlendColorRaw\nCallBlendColorRaw:\n"
+        "movl 4(%esp), %eax\n"
+        "pushl 12(%eax)\npushl 8(%eax)\npushl 4(%eax)\npushl 0(%eax)\n"
+        "call glBlendColorEXT\nret\n"
+        ".globl CallPointParameterRaw\nCallPointParameterRaw:\n"
+        "movl 4(%esp), %eax\n"
+        "pushl 4(%eax)\npushl 0(%eax)\n"
+        "call glPointParameterfARB\nret\n"
         ".globl CallOffsetRaw\nCallOffsetRaw:\n"
         "movl 4(%esp), %eax\n"
         "pushl 4(%eax)\npushl 0(%eax)\n"
@@ -168,6 +183,31 @@ static int Test(void) {
             if (Status() != before || Context.Records != 1 ||
                 !RecordEquals(Context.Packet.Words, FEnum_glSecondaryColor3f, colors[pattern], 3))
                 return 12;
+            /* Negotiated multitexture: target word, then the raw float bits. */
+            Reset(DG_GL_MAX_RECORDS, PACKET_WORDS);
+            HostCapabilities = DG_CAP_GL_MULTITEXTURE;
+            {
+                const ULONG multi[5] = {0x84c3, colors[pattern][0], colors[pattern][1],
+                                        colors[pattern][2], colors[pattern][3]};
+                CallMultiTexCoordRaw(multi);
+                if (Status() != before || Context.Records != 1 ||
+                    !RecordEquals(Context.Packet.Words, FEnum_glMultiTexCoord4f, multi, 5))
+                    return 13;
+            }
+            HostCapabilities = 0;
+            /* Negotiated fixed state: blend color and point parameter bits. */
+            Reset(DG_GL_MAX_RECORDS, PACKET_WORDS);
+            HostCapabilities = DG_CAP_GL_FIXED_STATE;
+            {
+                const ULONG point[2] = {0x8128, colors[pattern][1]};
+                CallBlendColorRaw(colors[pattern]);
+                CallPointParameterRaw(point);
+                if (Status() != before || Context.Records != 2 ||
+                    !RecordEquals(Context.Packet.Words, FEnum_glBlendColor, colors[pattern], 4) ||
+                    !RecordEquals(Context.Packet.Words + 13, FEnum_glPointParameterf, point, 2))
+                    return 14;
+            }
+            HostCapabilities = 0;
             /* Cached float state compares raw bits without consuming signaling
              * NaNs/denormals or changing the caller's live x87 exception flags. */
             Reset(DG_GL_MAX_RECORDS, PACKET_WORDS);

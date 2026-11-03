@@ -19,6 +19,9 @@ static ULONG Width = 320, Height = 240;
 static ULONG HostSecondaryWords;
 static ULONG HostCaps, CapabilityQueries, CapabilityFailure;
 static ULONG HostMaxRecords, HostMaxBytes, LargestSubmission;
+/* Typed state queries: the last function/first argument and fixed answers. */
+static ULONG HostInteger, LastQueryFunction, LastQueryArgument;
+static GLboolean HostEnabled;
 
 void *TlsGetValue(DWORD key) {
     assert(key == 0);
@@ -291,6 +294,8 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
         if (r[0] == DG_GL_QUERY) {
             assert(records == 1 && request->Bytes == 48);
             ++QueryCalls;
+            LastQueryFunction = r[8];
+            LastQueryArgument = r[9];
             if (r[8] == FEnum_glReadPixels) {
                 assert(request->ResultCapacity <= HostMaxResultBytes);
                 reply->ResultBytes = request->ResultCapacity;
@@ -301,6 +306,16 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
                 reply->ResultBytes = 1;
                 reply->ResultType = DG_GL_RESULT_BOOL;
                 *((BYTE *)(reply + 1)) = r[9] == 3; /* explicit bound name */
+            } else if (r[8] == FEnum_glGetIntegerv) {
+                assert(request->ResultCapacity >= 4);
+                reply->ResultBytes = 4;
+                reply->ResultType = DG_GL_RESULT_INT;
+                memcpy(reply + 1, &HostInteger, 4);
+            } else if (r[8] == FEnum_glIsEnabled) {
+                assert(request->ResultCapacity >= 1);
+                reply->ResultBytes = 1;
+                reply->ResultType = DG_GL_RESULT_BOOL;
+                *((BYTE *)(reply + 1)) = HostEnabled;
             } else {
                 assert(r[8] == FEnum_glGetError && request->ResultCapacity == 4);
                 reply->ResultBytes = MalformedQuery ? 2 : 4;
@@ -342,6 +357,8 @@ static void Reset(void) {
     HostMaxBytes = DG_ESCAPE_MAX_BYTES;
     LargestSubmission = HostSecondaryWords = 0;
     HostCaps = CapabilityQueries = CapabilityFailure = 0;
+    HostInteger = LastQueryFunction = LastQueryArgument = 0;
+    HostEnabled = 0;
     assert(DllMain(NULL, DLL_PROCESS_ATTACH, NULL));
 }
 static HGLRC Create(void) {

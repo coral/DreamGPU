@@ -1,12 +1,17 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
- * GL 1.1 client arrays. Only guest-local descriptors retain client pointers;
- * immutable draw packets contain packed vertices, never an address. */
+ * GL 1.1 client arrays, plus negotiated per-unit texture coordinates. Only
+ * guest-local descriptors retain client pointers; immutable draw packets
+ * contain packed vertices, never an address. */
 #include "internal.h"
 #include "gl-arrays.h"
 
 extern "C" {
 
-static GLint Attribute(GLenum cap) {
+/* Texture-coordinate commands address the client-active unit's slot. */
+static ULONG TextureSlot(const JGL_ARRAY_STATE *state) {
+    return state->ClientTexture ? 6 + state->ClientTexture : 3;
+}
+static GLint Attribute(const JGL_ARRAY_STATE *state, GLenum cap) {
     switch (cap) {
         case GL_VERTEX_ARRAY:
             return 0;
@@ -15,7 +20,7 @@ static GLint Attribute(GLenum cap) {
         case GL_NORMAL_ARRAY:
             return 2;
         case GL_TEXTURE_COORD_ARRAY:
-            return 3;
+            return (GLint)TextureSlot(state);
         case GL_INDEX_ARRAY:
             return 5;
         case GL_EDGE_FLAG_ARRAY:
@@ -75,7 +80,7 @@ static void Pointer(ULONG index, GLint size, GLenum type, GLsizei stride, const 
         JglSetError(GL_INVALID_ENUM);
         return;
     }
-    a = &JglArrays()->Attribute[index];
+    a = &JglArrays()->Attribute[index == 3 ? TextureSlot(JglArrays()) : index];
     a->Size = size;
     a->Type = type;
     a->Stride = stride;
@@ -107,7 +112,7 @@ static void Enable(GLenum cap, BOOL enabled) {
     GLint index;
     if (!JglReady())
         return;
-    index = Attribute(cap);
+    index = Attribute(JglArrays(), cap);
     if (index < 0) {
         JglSetError(GL_INVALID_ENUM);
         return;
@@ -119,6 +124,23 @@ void APIENTRY glEnableClientState(GLenum cap) {
 }
 void APIENTRY glDisableClientState(GLenum cap) {
     Enable(cap, FALSE);
+}
+/* Client-only selector; never recorded or sent. Unit 0 keeps slot 3. */
+void APIENTRY glClientActiveTextureARB(GLenum texture) {
+    if (!JglReady())
+        return;
+    if (!JglMultitextureAvailable()) {
+        JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (texture - JGL_TEXTURE0 >= DG_GL_MAX_TEXTURE_UNITS) {
+        JglSetError(GL_INVALID_ENUM);
+        return;
+    }
+    JglArrays()->ClientTexture = texture - JGL_TEXTURE0;
+}
+void APIENTRY glClientActiveTexture(GLenum texture) {
+    glClientActiveTextureARB(texture);
 }
 void APIENTRY glGetPointerv(GLenum pname, void **output) {
     GLint index;
@@ -147,7 +169,7 @@ void APIENTRY glGetPointerv(GLenum pname, void **output) {
             index = 2;
             break;
         case GL_TEXTURE_COORD_ARRAY_POINTER:
-            index = 3;
+            index = (GLint)TextureSlot(JglArrays());
             break;
         case 0x845d:
             if (!JglSupportsSecondary()) {
@@ -164,9 +186,10 @@ void APIENTRY glGetPointerv(GLenum pname, void **output) {
 }
 BOOL JglArrayQuery(GLenum pname, GLint *value) {
     JGL_ARRAY_STATE *state = JglArrays();
-    GLint index = Attribute(pname);
+    GLint index;
     if (!state)
         return FALSE;
+    index = Attribute(state, pname);
     if (index >= 0) {
         *value = state->Attribute[index].Enabled;
         return TRUE;
@@ -201,9 +224,14 @@ BOOL JglArrayQuery(GLenum pname, GLint *value) {
             GET(GL_COLOR_ARRAY_STRIDE, 1, Stride);
             GET(GL_NORMAL_ARRAY_TYPE, 2, Type);
             GET(GL_NORMAL_ARRAY_STRIDE, 2, Stride);
-            GET(GL_TEXTURE_COORD_ARRAY_SIZE, 3, Size);
-            GET(GL_TEXTURE_COORD_ARRAY_TYPE, 3, Type);
-            GET(GL_TEXTURE_COORD_ARRAY_STRIDE, 3, Stride);
+            GET(GL_TEXTURE_COORD_ARRAY_SIZE, TextureSlot(state), Size);
+            GET(GL_TEXTURE_COORD_ARRAY_TYPE, TextureSlot(state), Type);
+            GET(GL_TEXTURE_COORD_ARRAY_STRIDE, TextureSlot(state), Stride);
+        case 0x84e1: /* CLIENT_ACTIVE_TEXTURE: otherwise an unknown host enum */
+            if (!JglMultitextureAvailable())
+                return FALSE;
+            *value = (GLint)(JGL_TEXTURE0 + state->ClientTexture);
+            return TRUE;
         case 0x845a:
         case 0x845b:
         case 0x845c:
@@ -317,10 +345,10 @@ void JglArrayElement(GLint index) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
-    GLfloat values[5][4] = {};
+    GLfloat values[JGL_ARRAY_SLOTS][4] = {};
     // Validate and snapshot every enabled client range before any scalar can
     // flush the transport. An invalid later range must not partially set state.
-    for (ULONG i = 0; i < 7; ++i) {
+    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &state->Attribute[i];
         if (!a->Enabled)
             continue;
@@ -329,9 +357,9 @@ void JglArrayElement(GLint index) {
             return;
         }
     }
-    for (ULONG i = 0; i < 5; ++i) {
+    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &state->Attribute[i];
-        if (!a->Enabled)
+        if (!a->Enabled || i == 5 || i == 6)
             continue;
         ULONG unit = TypeBytes(a->Type);
         ULONG stride = a->Stride ? (ULONG)a->Stride : unit * a->Size;
@@ -359,6 +387,14 @@ void JglArrayElement(GLint index) {
     // Vertex last: the preceding setters establish this vertex's attributes.
     for (ULONG n = 1; n <= 5; ++n) {
         if (n == 5) {
+            // Units 1-7 (slots 7-13) use the canonical target-first record.
+            for (ULONG i = 7; i < JGL_ARRAY_SLOTS; ++i) {
+                if (!state->Attribute[i].Enabled)
+                    continue;
+                ULONG words[5] = {JGL_TEXTURE0 + i - 6};
+                CopyMemory(words + 1, values[i], sizeof(values[i]));
+                JglScalarVector(FEnum_glMultiTexCoord4f, 5, words);
+            }
             if (state->Attribute[5].Enabled)
                 JglScalarVector(FEnum_glIndexd, 2, &color_index);
             if (state->Attribute[6].Enabled)
@@ -407,19 +443,22 @@ void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
         return;
     }
     JGL_ARRAY_STATE *state = JglArrays();
-    JGL_ARRAY next[7];
+    JGL_ARRAY next[JGL_ARRAY_SLOTS];
     CopyMemory(next, state->Attribute, sizeof(next));
     const GLint sizes[4] = {layout.vertex, layout.color, layout.normal, layout.texture};
     const ULONG offsets[4] = {layout.vertex_offset, layout.color_offset, layout.normal_offset, 0};
+    // GL1.3: the coordinate set belongs to the client-active unit only.
+    const ULONG slots[4] = {0, 1, 2, TextureSlot(state)};
     for (ULONG i = 0; i < 4; ++i) {
-        next[i].Enabled = sizes[i] != 0;
+        JGL_ARRAY &a = next[slots[i]];
+        a.Enabled = sizes[i] != 0;
         // Disabled descriptors retain their original pointer/type/stride.
-        if (!next[i].Enabled)
+        if (!a.Enabled)
             continue;
-        next[i].Size = sizes[i];
-        next[i].Type = i == 1 ? layout.color_type : GL_FLOAT;
-        next[i].Stride = stride ? stride : layout.bytes;
-        next[i].Pointer = (const void *)((ULONG_PTR)pointer + offsets[i]);
+        a.Size = sizes[i];
+        a.Type = i == 1 ? layout.color_type : GL_FLOAT;
+        a.Stride = stride ? stride : layout.bytes;
+        a.Pointer = (const void *)((ULONG_PTR)pointer + offsets[i]);
     }
     next[5].Enabled = next[6].Enabled = FALSE;
     // Secondary color is an independent EXT array, unchanged by this GL1.1 call.
@@ -435,21 +474,23 @@ static GLenum ArrayWireType(ULONG index, const JGL_ARRAY *a) {
         return GL_FLOAT;
     return a->Type;
 }
+/* Seven descriptors (DrawArrays) unless a unit 1-7 array is enabled; then
+ * sixteen (DrawArraysEXT), with reserved slots 14-15 zero. */
 struct RawCapture {
     JGL_ARRAY_STATE *state;
     const BYTE *indices;
-    ULONG index_size, first, at, count, mask;
+    ULONG index_size, first, at, count, mask, slots;
     unsigned bytes;
     BOOL fan;
-    unsigned descriptors[7], offsets[7];
+    unsigned descriptors[DG_GL_ARRAY_EXT_SLOTS], offsets[DG_GL_ARRAY_EXT_SLOTS];
 };
 static void CaptureVertices(void *opaque, BYTE *out) {
     const RawCapture *c = (const RawCapture *)opaque;
-    CopyMemory(out, c->descriptors, DG_GL_ARRAY_DESCRIPTOR_BYTES);
-    ULONG end = DG_GL_ARRAY_DESCRIPTOR_BYTES;
-    for (ULONG i = 0; i < 7; ++i) {
+    CopyMemory(out, c->descriptors, c->slots * 4);
+    ULONG end = c->slots * 4;
+    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &c->state->Attribute[i];
-        if (!a->Enabled)
+        if (!(c->mask & (1U << i)))
             continue;
         ULONG unit = TypeBytes(a->Type);
         ULONG input_bytes = unit * a->Size;
@@ -540,7 +581,7 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     }
     /* Validate all ranges before emitting any piece of the draw. Caller
      * address validity itself remains the application's GL responsibility. */
-    for (i = 0; i < 7; ++i)
+    for (i = 0; i < JGL_ARRAY_SLOTS; ++i)
         if (state->Attribute[i].Enabled) {
             const JGL_ARRAY *a = &state->Attribute[i];
             if (!ArrayRange(a, max_index)) {
@@ -555,8 +596,11 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     capture.index_size = index_size;
     capture.first = (ULONG)first;
     capture.mask = mask | DG_GL_ARRAY_RAW;
+    // Unit 0 alone keeps the legacy record that every host admits.
+    capture.slots = (mask & ~DG_GL_ARRAY_MASK) ? DG_GL_ARRAY_EXT_SLOTS : 7;
+    const ULONG function = capture.slots == 7 ? FEnum_glDrawArrays : FEnum_glDrawArraysEXT;
     vertex_bytes = 0;
-    for (i = 0; i < 7; ++i) {
+    for (i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &state->Attribute[i];
         if (a->Enabled) {
             capture.descriptors[i] = ArrayWireType(i, a) | ((ULONG)a->Size << 16);
@@ -564,14 +608,12 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
         }
     }
     ULONG limit = JglMaxDataBytes(4);
-    capacity = limit > DG_GL_ARRAY_DESCRIPTOR_BYTES
-                   ? (limit - DG_GL_ARRAY_DESCRIPTOR_BYTES) / vertex_bytes
-                   : 0;
+    capacity = limit > capture.slots * 4 ? (limit - capture.slots * 4) / vertex_bytes : 0;
     if (capacity > DG_GL_MAX_VERTICES)
         capacity = DG_GL_MAX_VERTICES;
     // At most alignment padding needs trimming; no payload memory is touched.
-    while (capacity && (!DgRawArrayLayout(capture.mask, capacity, capture.descriptors,
-                                          capture.offsets, &capture.bytes) ||
+    while (capacity && (!DgRawArrayLayoutSlots(capture.mask, capacity, capture.descriptors,
+                                               capture.offsets, &capture.bytes, capture.slots) ||
                         capture.bytes > limit))
         --capacity;
     if (capacity < 4 || ((mode == GL_LINE_LOOP || mode == GL_POLYGON) && (ULONG)count > capacity)) {
@@ -609,8 +651,9 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
         capture.at = at;
         capture.count = n;
         capture.fan = fan;
-        DgRawArrayLayout(capture.mask, n, capture.descriptors, capture.offsets, &capture.bytes);
-        if (!JglCaptureData(FEnum_glDrawArrays, args, 4, capture.bytes, CaptureVertices, &capture))
+        DgRawArrayLayoutSlots(capture.mask, n, capture.descriptors, capture.offsets, &capture.bytes,
+                              capture.slots);
+        if (!JglCaptureData(function, args, 4, capture.bytes, CaptureVertices, &capture))
             return;
         at += fan ? n - 2 : n;
         if (at >= (ULONG)count)

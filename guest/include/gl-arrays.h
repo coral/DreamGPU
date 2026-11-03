@@ -21,16 +21,25 @@ static inline unsigned DgArrayComponentBytes(unsigned type) {
             return 0;
     }
 }
-static inline int DgRawArrayLayout(unsigned mask, unsigned count, const unsigned *descriptors,
-                                   unsigned *offsets, unsigned *length) {
-    unsigned at = DG_GL_ARRAY_DESCRIPTOR_BYTES;
-    if (mask != ((mask & DG_GL_ARRAY_MASK) | DG_GL_ARRAY_RAW) || !(mask & DG_GL_ARRAY_POSITION) ||
+/* Slots 7-13 of the extended layout are texture coordinates of units 1-7
+ * and follow every rule of slot 3. Slots 14-15 are reserved. */
+static inline unsigned DgArraySlotRole(unsigned slot) {
+    return slot >= 7 && slot <= 13 ? 3 : slot;
+}
+static inline int DgRawArrayLayoutSlots(unsigned mask, unsigned count, const unsigned *descriptors,
+                                        unsigned *offsets, unsigned *length, unsigned slots) {
+    const unsigned allowed =
+        slots == DG_GL_ARRAY_EXT_SLOTS ? DG_GL_ARRAY_EXT_MASK : DG_GL_ARRAY_MASK;
+    unsigned at = slots * 4;
+    if ((slots != 7 && slots != DG_GL_ARRAY_EXT_SLOTS) ||
+        mask != ((mask & allowed) | DG_GL_ARRAY_RAW) || !(mask & DG_GL_ARRAY_POSITION) ||
         count > DG_GL_MAX_VERTICES)
         return 0;
-    for (unsigned i = 0; i < 7; ++i) {
-        unsigned d = descriptors[i], type = d & 65535, n = d >> 16, unit;
-        offsets[i] = 0;
-        if (!(mask & (1U << i))) {
+    for (unsigned slot = 0; slot < slots; ++slot) {
+        unsigned d = descriptors[slot], type = d & 65535, n = d >> 16, unit,
+                 i = DgArraySlotRole(slot);
+        offsets[slot] = 0;
+        if (!(mask & (1U << slot))) {
             if (d)
                 return 0;
             continue;
@@ -49,11 +58,16 @@ static inline int DgRawArrayLayout(unsigned mask, unsigned count, const unsigned
                    (i != 1 && i != 2 && i != 4 && type == 0x1400)))
             return 0;
         at = (at + unit - 1) & ~(unit - 1);
-        offsets[i] = at;
-        // count<=65536, n<=4, unit<=8, seven attributes: cannot overflow u32.
+        offsets[slot] = at;
+        // count<=65536, n<=4, unit<=8, at most fourteen attributes: no u32 overflow.
         at += count * n * unit;
     }
     *length = (at + 3) & ~3U;
     return 1;
+}
+/* Seven-slot DrawArrays layout; older kernels validate exactly this. */
+static inline int DgRawArrayLayout(unsigned mask, unsigned count, const unsigned *descriptors,
+                                   unsigned *offsets, unsigned *length) {
+    return DgRawArrayLayoutSlots(mask, count, descriptors, offsets, length, 7);
 }
 #endif

@@ -21,6 +21,7 @@ pub(crate) fn allowed_in_begin(function: u32) -> bool {
             | FEnum_glVertex3f
             | FEnum_glVertex4f
             | FEnum_glTexCoord4f
+            | FEnum_glMultiTexCoord4f
             | FEnum_glColor3f
             | FEnum_glColor4f
             | FEnum_glSecondaryColor3f
@@ -59,6 +60,7 @@ unsafe fn execute(
         | FEnum_glReadBuffer
         | FEnum_glHint
         | FEnum_glBindTexture
+        | FEnum_glActiveTexture
         | FEnum_glCopyTexImage1D
         | FEnum_glCopyTexSubImage1D
         | FEnum_glCopyTexImage2D
@@ -262,6 +264,27 @@ unsafe fn execute(
         FEnum_glTexCoord2f => unsafe { api.dg_glTexCoord2f.ok_or(3u32)?(f(0)?, f(1)?) },
         FEnum_glTexCoord4f => unsafe {
             api.dg_glTexCoord4f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?, f(3)?)
+        },
+        FEnum_glBlendColor => unsafe {
+            api.dg_glBlendColor.ok_or(3u32)?(f(0)?, f(1)?, f(2)?, f(3)?)
+        },
+        FEnum_glBlendEquation => unsafe { api.dg_glBlendEquation.ok_or(3u32)?(u(0)?) },
+        FEnum_glBlendEquationSeparate => unsafe {
+            api.dg_glBlendEquationSeparate.ok_or(3u32)?(u(0)?, u(1)?)
+        },
+        FEnum_glBlendFuncSeparate => unsafe {
+            api.dg_glBlendFuncSeparate.ok_or(3u32)?(u(0)?, u(1)?, u(2)?, u(3)?)
+        },
+        FEnum_glStencilFuncSeparate => unsafe {
+            api.dg_glStencilFuncSeparate.ok_or(3u32)?(u(0)?, u(1)?, u(2)? as i32, u(3)?)
+        },
+        FEnum_glStencilOpSeparate => unsafe {
+            api.dg_glStencilOpSeparate.ok_or(3u32)?(u(0)?, u(1)?, u(2)?, u(3)?)
+        },
+        FEnum_glPointParameterf => unsafe { api.dg_glPointParameterf.ok_or(3u32)?(u(0)?, f(1)?) },
+        // Native GL rejects a target outside its units with INVALID_ENUM.
+        FEnum_glMultiTexCoord4f => unsafe {
+            api.dg_glMultiTexCoord4f.ok_or(3u32)?(u(0)?, f(1)?, f(2)?, f(3)?, f(4)?)
         },
         FEnum_glVertex3f => unsafe { api.dg_glVertex3f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?) },
         FEnum_glVertex4f => unsafe { api.dg_glVertex4f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?, f(3)?) },

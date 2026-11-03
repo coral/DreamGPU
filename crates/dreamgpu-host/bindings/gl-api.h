@@ -264,6 +264,17 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glUniform1f : glUniform1f) dg_glUniform1f;
     __typeof__(1 ? glUniform2f : glUniform2f) dg_glUniform2f;
     __typeof__(1 ? glUniform4fv : glUniform4fv) dg_glUniform4fv;
+    __typeof__(1 ? glClientActiveTexture : glClientActiveTexture) dg_glClientActiveTexture;
+    __typeof__(1 ? glMultiTexCoord4f : glMultiTexCoord4f) dg_glMultiTexCoord4f;
+    __typeof__(1 ? glMultiTexCoord4fv : glMultiTexCoord4fv) dg_glMultiTexCoord4fv;
+    __typeof__(1 ? glBlendColor : glBlendColor) dg_glBlendColor;
+    __typeof__(1 ? glBlendEquation : glBlendEquation) dg_glBlendEquation;
+    __typeof__(1 ? glBlendFuncSeparate : glBlendFuncSeparate) dg_glBlendFuncSeparate;
+    __typeof__(1 ? glBlendEquationSeparate : glBlendEquationSeparate) dg_glBlendEquationSeparate;
+    __typeof__(1 ? glStencilFuncSeparate : glStencilFuncSeparate) dg_glStencilFuncSeparate;
+    __typeof__(1 ? glStencilOpSeparate : glStencilOpSeparate) dg_glStencilOpSeparate;
+    __typeof__(1 ? glPointParameterf : glPointParameterf) dg_glPointParameterf;
+    __typeof__(1 ? glPointParameterfv : glPointParameterfv) dg_glPointParameterfv;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -376,5 +387,16 @@ typedef struct DreamGpuGlApi {
     .dg_glUniform1iv = glUniform1iv,                                                                \
     .dg_glUniform1f = glUniform1f,                                                                  \
     .dg_glUniform2f = glUniform2f,                                                                  \
-    .dg_glUniform4fv = glUniform4fv
+    .dg_glUniform4fv = glUniform4fv,                                                                \
+    .dg_glClientActiveTexture = glClientActiveTexture,                                              \
+    .dg_glMultiTexCoord4f = glMultiTexCoord4f,                                                      \
+    .dg_glMultiTexCoord4fv = glMultiTexCoord4fv,                                                    \
+    .dg_glBlendColor = glBlendColor,                                                                \
+    .dg_glBlendEquation = glBlendEquation,                                                          \
+    .dg_glBlendFuncSeparate = glBlendFuncSeparate,                                                  \
+    .dg_glBlendEquationSeparate = glBlendEquationSeparate,                                          \
+    .dg_glStencilFuncSeparate = glStencilFuncSeparate,                                              \
+    .dg_glStencilOpSeparate = glStencilOpSeparate,                                                  \
+    .dg_glPointParameterf = glPointParameterf,                                                      \
+    .dg_glPointParameterfv = glPointParameterfv
 #endif

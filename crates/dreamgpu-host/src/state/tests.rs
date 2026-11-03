@@ -47,6 +47,7 @@ struct Native {
     read: u32,
     fences: u32,
     deleted_fences: u32,
+    active: u32,
 }
 std::thread_local! {static N:RefCell<Native>=RefCell::new(Native::default());}
 unsafe extern "C" fn get_error() -> u32 {
@@ -111,6 +112,13 @@ unsafe extern "C" fn delete_sync(_: *mut __GLsync) {
     N.with(|n| n.borrow_mut().deleted_fences += 1)
 }
 unsafe extern "C" fn wait(_: *mut __GLsync, _: u32, _: u64) {}
+unsafe extern "C" fn active_texture(texture: u32) {
+    N.with(|n| n.borrow_mut().active = texture)
+}
+unsafe extern "C" fn native_units(pname: u32, out: *mut i32) {
+    assert_eq!(pname, GL_MAX_TEXTURE_UNITS);
+    unsafe { *out = 4 };
+}
 fn api() -> DreamGpuGlApi {
     let mut a: DreamGpuGlApi = unsafe { core::mem::zeroed() };
     a.dg_glGetError = Some(get_error);
@@ -249,8 +257,12 @@ fn attrib_restores_deleted_binding_and_logical_buffers_only_after_native_success
             1,
             s.default_texture,
             s.default_texture_1d,
-            &mut s.bound_texture,
-            &mut s.bound_texture_1d,
+            [
+                core::ptr::addr_of_mut!(s.bound_texture),
+                core::ptr::addr_of_mut!(s.bound_texture_1d),
+            ]
+            .as_ptr(),
+            2,
         )
     };
     assert_eq!(unsafe { ((*old).refs, (*old).deleted) }, (1, 1));
@@ -288,7 +300,9 @@ fn attrib_restores_deleted_binding_and_logical_buffers_only_after_native_success
         assert!(n.sum);
         assert_eq!(n.draw, [GL_COLOR_ATTACHMENT0]);
         assert_eq!(n.read, GL_COLOR_ATTACHMENT0);
-        assert_eq!(n.fences, 2);
+        // The restored 2D texture, unit 0's 1D default and the 2D default bound
+        // on units 1-7 are each fenced once.
+        assert_eq!(n.fences, 3);
     });
     unsafe { dreamgpu_context_state_release(&m, &mut s) };
     assert_eq!(count, 0);
@@ -315,7 +329,8 @@ fn attribute_overflow_underflow_and_failed_push_retain_owned_state() {
         0
     );
     assert_eq!(s.attrib_depth, 0);
-    assert_eq!(unsafe { (*s.bound_texture).refs }, 2);
+    // Owner plus one binding per texture unit; the failed push took none.
+    assert_eq!(unsafe { (*s.bound_texture).refs }, 1 + UNITS as u32);
     N.with(|n| n.borrow_mut().fail_push = false);
     for _ in 0..16 {
         assert_eq!(
@@ -324,7 +339,11 @@ fn attribute_overflow_underflow_and_failed_push_retain_owned_state() {
         );
     }
     assert_eq!(s.attrib_depth, 16);
-    assert_eq!(unsafe { (*s.bound_texture).refs }, 18);
+    // Each TEXTURE_BIT entry retains the 2D default bound on all eight units.
+    assert_eq!(
+        unsafe { (*s.bound_texture).refs },
+        1 + UNITS as u32 + 16 * UNITS as u32
+    );
     assert_eq!(
         command(&m, &mut s, FEnum_glPushAttrib, &[GL_TEXTURE_BIT]),
         0
@@ -370,5 +389,108 @@ fn context_state_c_abi_layout() {
             + 2 * pointer
             + 8
             + pointer
+            + 8
+            + 16 * pointer
+            + 16 * core::mem::size_of::<UnitAttrib>()
     );
+    // Appended multitexture state mirrors DreamGpuUnitAttrib/units in C.
+    assert_eq!(core::mem::offset_of!(UnitAttrib, units), pointer);
+    assert_eq!(core::mem::size_of::<UnitAttrib>(), pointer + 16 * pointer);
+    assert_eq!(
+        core::mem::offset_of!(ContextState, units),
+        core::mem::offset_of!(ContextState, active_unit) + 8
+    );
+}
+
+#[test]
+fn texture_units_move_binding_ownership_and_texture_bit_restores_every_unit() {
+    let mut api = api();
+    api.dg_glActiveTexture = Some(active_texture);
+    api.dg_glGetIntegerv = Some(native_units);
+    let mut a = Allocator::default();
+    let mut count = 0;
+    let mut bytes = 0;
+    let m = memory(&api, &mut a, &mut count, &mut bytes);
+    let mut s = ContextState::EMPTY;
+    assert_eq!(
+        unsafe { dreamgpu_context_state_init(&m, &mut s, null_mut()) },
+        0
+    );
+    let default = s.default_texture;
+    assert_eq!(
+        command(&m, &mut s, FEnum_glBindTexture, &[GL_TEXTURE_2D, 7]),
+        0
+    );
+    let seven = s.bound_texture;
+    assert_ne!(seven, default);
+    // Switching moves ownership: unit 0 keeps 7 while unit 2 starts at default.
+    assert_eq!(
+        command(&m, &mut s, FEnum_glActiveTexture, &[GL_TEXTURE0 + 2]),
+        0
+    );
+    assert_eq!(
+        (s.active_unit, N.with(|n| n.borrow().active)),
+        (2, GL_TEXTURE0 + 2)
+    );
+    assert_eq!((s.bound_texture, s.units[0][0]), (default, seven));
+    assert!(s.units[2][0].is_null());
+    assert_eq!(
+        command(&m, &mut s, FEnum_glBindTexture, &[GL_TEXTURE_2D, 8]),
+        0
+    );
+    let eight = s.bound_texture;
+    // The native limit (4) bounds units; the rejected switch changes nothing.
+    assert_eq!(
+        command(&m, &mut s, FEnum_glActiveTexture, &[GL_TEXTURE0 + 4]),
+        0
+    );
+    assert_ne!(s.guest_errors & 1, 0);
+    assert_eq!((s.active_unit, s.unit_limit), (2, 4));
+    s.guest_errors = 0;
+    let all = s.unit_bindings();
+    assert_eq!((all[0][0], all[1][0], all[2][0]), (seven, default, eight));
+    assert_eq!(unsafe { ((*seven).refs, (*eight).refs) }, (2, 2));
+    // TEXTURE_BIT saves every unit and the active unit.
+    assert_eq!(
+        command(&m, &mut s, FEnum_glPushAttrib, &[GL_TEXTURE_BIT]),
+        0
+    );
+    assert_eq!(unsafe { ((*seven).refs, (*eight).refs) }, (3, 3));
+    assert_eq!(
+        command(&m, &mut s, FEnum_glActiveTexture, &[GL_TEXTURE0]),
+        0
+    );
+    assert_eq!(
+        command(&m, &mut s, FEnum_glBindTexture, &[GL_TEXTURE_2D, 0]),
+        0
+    );
+    assert_eq!(
+        (s.active_unit, s.bound_texture, s.units[2][0]),
+        (0, default, eight)
+    );
+    assert_eq!(command(&m, &mut s, FEnum_glPopAttrib, &[]), 0);
+    assert_eq!(
+        (s.active_unit, s.bound_texture, s.units[0][0]),
+        (2, eight, seven)
+    );
+    assert!(s.units[2][0].is_null());
+    assert_eq!(unsafe { ((*seven).refs, (*eight).refs) }, (2, 2));
+    // Deleting a texture bound on an inactive unit reverts only that unit.
+    let slots = unsafe { binding_slots(&mut s) };
+    unsafe {
+        crate::texture::names::dreamgpu_texture_delete(
+            &m,
+            s.textures,
+            7u32.to_le_bytes().as_ptr(),
+            1,
+            s.default_texture,
+            s.default_texture_1d,
+            slots.as_ptr(),
+            slots.len() as u32,
+        )
+    };
+    assert_eq!((s.units[0][0], s.bound_texture), (default, eight));
+    unsafe { dreamgpu_context_state_release(&m, &mut s) };
+    assert_eq!(count, 0);
+    assert!(a.live.is_empty());
 }

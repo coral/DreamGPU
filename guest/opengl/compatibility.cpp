@@ -7,8 +7,30 @@
 
 extern "C" {
 
+/* Extension exports exist only for a negotiated host; otherwise lookup results
+ * match a frontend without them. Ordinals are never names. */
+static BOOL Negotiated(LPCSTR name) {
+    static const struct {
+        const char *prefix;
+        BOOL fixed; /* DG_CAP_GL_FIXED_STATE, else DG_CAP_GL_MULTITEXTURE */
+    } families[] = {{"glActiveTexture", FALSE},    {"glClientActiveTexture", FALSE},
+                    {"glMultiTexCoord", FALSE},    {"glBlendColor", TRUE},
+                    {"glBlendEquation", TRUE},     {"glBlendFuncSeparate", TRUE},
+                    {"glStencilOpSeparate", TRUE}, {"glStencilFuncSeparate", TRUE},
+                    {"glPointParameter", TRUE}};
+    if (!((ULONG_PTR)name >> 16))
+        return TRUE;
+    for (const auto &family : families) {
+        ULONG i = 0;
+        while (family.prefix[i] && name[i] == family.prefix[i])
+            ++i;
+        if (!family.prefix[i])
+            return family.fixed ? JglFixedStateAvailable() : JglMultitextureAvailable();
+    }
+    return TRUE;
+}
 PROC WINAPI wglGetProcAddress(LPCSTR name) {
-    if (!name || !wglGetCurrentContext())
+    if (!name || !wglGetCurrentContext() || !Negotiated(name))
         return NULL;
     return GetProcAddress(JglModule(), name);
 }

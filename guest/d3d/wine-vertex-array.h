@@ -14,13 +14,11 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     const struct wined3d_stream_info_element *p = &si->elements[WINED3D_FFP_POSITION];
     const struct wined3d_stream_info_element *d = &si->elements[WINED3D_FFP_DIFFUSE];
     const struct wined3d_stream_info_element *s = &si->elements[WINED3D_FFP_SPECULAR];
-    const struct wined3d_stream_info_element *t = &si->elements[WINED3D_FFP_TEXCOORD0];
-    const unsigned int required =
-        (1u << WINED3D_FFP_POSITION) | (1u << WINED3D_FFP_DIFFUSE) | (1u << WINED3D_FFP_TEXCOORD0);
-    /* The donor advertises ARB_MULTITEXTURE after installing one-unit
-     * emulation wrappers. Its actual limits, not that synthetic flag, bound
-     * this path. Extra declaration UV sets are unused by its one stage. */
+    const unsigned int required = (1u << WINED3D_FFP_POSITION) | (1u << WINED3D_FFP_DIFFUSE);
+    /* Declaration UV sets that no mapped stage reads are ignored, as in Wine. */
     const unsigned int texture_inputs = 0xffu << WINED3D_FFP_TEXCOORD0;
+    const struct wined3d_stream_info_element *t[DG_WINE_PACKED_UNITS];
+    unsigned int units[DG_WINE_PACKED_UNITS], used = 0, stage;
     struct dg_wine_vertex vertices[DG_WINE_PACKED_VERTICES];
     unsigned int i;
     BOOL secondary = !!(si->use_map & (1u << WINED3D_FFP_SPECULAR));
@@ -31,30 +29,51 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     if (!count || count > DG_WINE_PACKED_VERTICES || !si->position_transformed ||
         !context->use_immediate_mode_draw || context->namedArraysLoaded ||
         context->numberedArraysLoaded || context->num_untracked_materials ||
-        context->d3d_info->xyzrhw || use_ps(state) || gl_info->limits.textures != 1 ||
-        gl_info->limits.texture_coords != 1 || context->d3d_info->limits.ffp_blend_stages != 1 ||
+        context->d3d_info->xyzrhw || use_ps(state) ||
         gl_info->supported[ARB_VERTEX_BUFFER_OBJECT] ||
         (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE]) || !state->textures[0] ||
-        context->tex_unit_map[0] != 0 ||
-        state->texture_states[0][WINED3D_TSS_TEXCOORD_INDEX] != 0 ||
         (si->use_map & ~(required | texture_inputs | (1u << WINED3D_FFP_SPECULAR))) ||
         (si->use_map & required) != required || p->format->id != WINED3DFMT_R32G32B32A32_FLOAT ||
-        d->format->id != WINED3DFMT_B8G8R8A8_UNORM || t->format->id != WINED3DFMT_R32G32_FLOAT ||
-        p->data.buffer_object || d->data.buffer_object || t->data.buffer_object ||
+        d->format->id != WINED3DFMT_B8G8R8A8_UNORM || p->data.buffer_object ||
+        d->data.buffer_object ||
         (secondary && (s->format->id != WINED3DFMT_B8G8R8A8_UNORM || s->data.buffer_object ||
                        !gl_info->supported[EXT_SECONDARY_COLOR])) ||
         (index_size != 0 && index_size != 2 && index_size != 4) || (index_size && !indices) ||
         (!index_size && indices))
+        return FALSE;
+    /* Select stages exactly as drawStridedSlow does: every bound, mapped stage
+     * with an application coordinate set. Its default-coordinate case, texture
+     * generation and more stages than packed units remain Wine's. On an older
+     * host the donor reports ARB_MULTITEXTURE through one-unit emulation; the
+     * real unit limit, not that flag, keeps such draws on unit 0. */
+    for (stage = 0; stage < context->d3d_info->limits.ffp_blend_stages; ++stage) {
+        int coord = state->texture_states[stage][WINED3D_TSS_TEXCOORD_INDEX];
+        DWORD unit = context->tex_unit_map[stage];
+        const struct wined3d_stream_info_element *e;
+        if ((!gl_info->supported[ARB_MULTITEXTURE] && stage) || !state->textures[stage] ||
+            unit == WINED3D_UNMAPPED_STAGE || coord > 7 || coord < 0)
+            continue;
+        if (!(si->use_map & (1u << (WINED3D_FFP_TEXCOORD0 + coord))) ||
+            used == DG_WINE_PACKED_UNITS || unit >= gl_info->limits.textures)
+            return FALSE;
+        e = &si->elements[WINED3D_FFP_TEXCOORD0 + coord];
+        if (e->format->id != WINED3DFMT_R32G32_FLOAT || e->data.buffer_object)
+            return FALSE;
+        t[used] = e;
+        units[used++] = unit;
+    }
+    /* A single unit-0 stage keeps the established path with no unit selection. */
+    if (!used || ((used > 1 || units[0] != 0) && !gl_info->supported[ARB_MULTITEXTURE]))
         return FALSE;
     /* Explicit fog-coordinate emulation remains in drawStridedSlow. */
     if (secondary && gl_info->supported[EXT_FOG_COORD] &&
         state->render_states[WINED3D_RS_FOGENABLE] &&
         state->render_states[WINED3D_RS_FOGTABLEMODE] == WINED3D_FOG_NONE)
         return FALSE;
-
     for (i = 0; i < count; ++i) {
         int64_t index = (int64_t)first + i;
-        const void *position, *texture, *diffuse, *specular = NULL, *source;
+        const void *position, *textures[DG_WINE_PACKED_UNITS], *diffuse, *specular = NULL, *source;
+        unsigned int u;
         if (index_size) {
             uint32_t value = 0;
             if (!dg_wine_vertex_address(indices, index_size, index, index_size, &source))
@@ -63,11 +82,13 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
             index = (int64_t)value + state->base_vertex_index;
         }
         if (!dg_wine_vertex_address(p->data.addr, p->stride, index, 16, &position) ||
-            !dg_wine_vertex_address(t->data.addr, t->stride, index, 8, &texture) ||
             !dg_wine_vertex_address(d->data.addr, d->stride, index, 4, &diffuse) ||
             (secondary && !dg_wine_vertex_address(s->data.addr, s->stride, index, 4, &specular)))
             return FALSE;
-        dg_wine_pack_vertex(&vertices[i], position, texture, diffuse, specular);
+        for (u = 0; u < used; ++u)
+            if (!dg_wine_vertex_address(t[u]->data.addr, t[u]->stride, index, 8, &textures[u]))
+                return FALSE;
+        dg_wine_pack_vertex(&vertices[i], position, textures, used, diffuse, specular);
     }
     gl_info->gl_ops.gl.p_glNormal3f(0, 0, 0);
     if (!secondary && gl_info->supported[EXT_SECONDARY_COLOR])
@@ -75,10 +96,20 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     gl_info->gl_ops.gl.p_glVertexPointer(4, GL_FLOAT, sizeof(vertices[0]), vertices[0].position);
     gl_info->gl_ops.gl.p_glColorPointer(4, GL_UNSIGNED_BYTE, sizeof(vertices[0]),
                                         vertices[0].diffuse);
-    gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, sizeof(vertices[0]), vertices[0].texture);
+    if (used == 1 && units[0] == 0) {
+        gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, sizeof(vertices[0]),
+                                               vertices[0].texture[0]);
+        gl_info->gl_ops.gl.p_glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    } else {
+        for (i = 0; i < used; ++i) {
+            GL_EXTCALL(glClientActiveTextureARB)(GL_TEXTURE0_ARB + units[i]);
+            gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, sizeof(vertices[0]),
+                                                   vertices[0].texture[i]);
+            gl_info->gl_ops.gl.p_glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        }
+    }
     gl_info->gl_ops.gl.p_glEnableClientState(GL_VERTEX_ARRAY);
     gl_info->gl_ops.gl.p_glEnableClientState(GL_COLOR_ARRAY);
-    gl_info->gl_ops.gl.p_glEnableClientState(GL_TEXTURE_COORD_ARRAY);
     if (secondary) {
         GL_EXTCALL(glSecondaryColorPointerEXT)(3, GL_UNSIGNED_BYTE, sizeof(vertices[0]),
                                                vertices[0].specular);
@@ -87,11 +118,21 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     gl_info->gl_ops.gl.p_glDrawArrays(primitive, 0, count);
     gl_info->gl_ops.gl.p_glDisableClientState(GL_VERTEX_ARRAY);
     gl_info->gl_ops.gl.p_glDisableClientState(GL_COLOR_ARRAY);
-    gl_info->gl_ops.gl.p_glDisableClientState(GL_TEXTURE_COORD_ARRAY);
     /* No client descriptor may retain this stack allocation. */
     gl_info->gl_ops.gl.p_glVertexPointer(4, GL_FLOAT, 0, NULL);
     gl_info->gl_ops.gl.p_glColorPointer(4, GL_UNSIGNED_BYTE, 0, NULL);
-    gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, 0, NULL);
+    if (used == 1 && units[0] == 0) {
+        gl_info->gl_ops.gl.p_glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, 0, NULL);
+    } else {
+        for (i = 0; i < used; ++i) {
+            GL_EXTCALL(glClientActiveTextureARB)(GL_TEXTURE0_ARB + units[i]);
+            gl_info->gl_ops.gl.p_glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+            gl_info->gl_ops.gl.p_glTexCoordPointer(2, GL_FLOAT, 0, NULL);
+        }
+        /* Wine selects the client unit before each of its own pointer loads. */
+        GL_EXTCALL(glClientActiveTextureARB)(GL_TEXTURE0_ARB);
+    }
     if (secondary) {
         gl_info->gl_ops.gl.p_glDisableClientState(GL_SECONDARY_COLOR_ARRAY_EXT);
         GL_EXTCALL(glSecondaryColorPointerEXT)(3, GL_UNSIGNED_BYTE, 0, NULL);
@@ -103,6 +144,11 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
      * this value for a later draw which enables its fog emulation. */
     gl_info->gl_ops.gl.p_glColor4ub(vertices[count - 1].diffuse[0], vertices[count - 1].diffuse[1],
                                     vertices[count - 1].diffuse[2], vertices[count - 1].diffuse[3]);
-    gl_info->gl_ops.gl.p_glTexCoord2fv(vertices[count - 1].texture);
+    if (used == 1 && units[0] == 0)
+        gl_info->gl_ops.gl.p_glTexCoord2fv(vertices[count - 1].texture[0]);
+    else
+        for (i = 0; i < used; ++i)
+            GL_EXTCALL(glMultiTexCoord2fvARB)(GL_TEXTURE0_ARB + units[i],
+                                              vertices[count - 1].texture[i]);
     return TRUE;
 }

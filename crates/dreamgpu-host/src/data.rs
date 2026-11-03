@@ -41,7 +41,16 @@ unsafe fn stage_arrays<'a>(
     let attributes = a[if elements { 4 } else { 3 }];
     if attributes & DG_GL_ARRAY_RAW != 0 {
         let input = unsafe { core::slice::from_raw_parts(data, bytes as usize) };
-        let layout = crate::arrays::raw::layout(attributes, vertices as u32, input)?;
+        let mut layout = [crate::arrays::raw::Attribute::default(); 16];
+        if fnc == FEnum_glDrawArraysEXT {
+            layout = crate::arrays::raw::layout_extended(attributes, vertices as u32, input)?;
+        } else {
+            layout[..7].copy_from_slice(&crate::arrays::raw::layout(
+                attributes,
+                vertices as u32,
+                input,
+            )?);
+        }
         for a in layout.iter().filter(|a| a.unit > 1) {
             let length = vertices * a.size as usize * a.unit;
             let output =
@@ -211,19 +220,17 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         }
         return 0;
     }
-    if matches!(function, FEnum_glDrawArrays | FEnum_glDrawElements) {
+    if matches!(
+        function,
+        FEnum_glDrawArrays | FEnum_glDrawArraysEXT | FEnum_glDrawElements
+    ) {
         let elements = function == FEnum_glDrawElements;
         if a[if elements { 3 } else { 2 }] == 0 || (elements && a[1] == 0) {
             return 0;
         }
-        let two = unsafe { (*state).bound_texture };
-        let one = unsafe { (*state).bound_texture_1d };
-        for (t, cap) in [(two, GL_TEXTURE_2D), (one, GL_TEXTURE_1D)] {
-            if unsafe {
-                (*t).undefined_levels != 0 && api.dg_glIsEnabled.expect("complete API")(cap) != 0
-            } {
-                return DG_GL_ERROR_TEXTURE;
-            }
+        // Every unit's enabled target and producer fence, not only unit 0.
+        if let Err(e) = unsafe { crate::state::prepare_textures(api, state, serial) } {
+            return e;
         }
         let staged =
             unsafe { stage_arrays(m, function, &a, data, bytes, cfg!(target_endian = "big")) };
@@ -232,8 +239,6 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         }
         let data = staged.as_ref().map_or(data, |s| s.p.cast_const());
         unsafe {
-            dreamgpu_texture_wait(m.api, two, serial);
-            dreamgpu_texture_wait(m.api, one, serial);
             if let Err(e) = query::remember(api, errors) {
                 return e;
             }
@@ -259,6 +264,8 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         return e;
     }
     if function == FEnum_glDeleteTextures {
+        // Deleting a texture bound on any unit reverts that unit to default.
+        let bindings = unsafe { crate::state::binding_slots(state) };
         unsafe {
             dreamgpu_texture_delete(
                 memory,
@@ -267,8 +274,8 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 a[0],
                 (*state).default_texture,
                 (*state).default_texture_1d,
-                addr_of_mut!((*state).bound_texture),
-                addr_of_mut!((*state).bound_texture_1d),
+                bindings.as_ptr(),
+                bindings.len() as u32,
             )
         };
         return 0;

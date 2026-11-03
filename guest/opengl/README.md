@@ -190,6 +190,46 @@ widths,64/80-byte draws, context/attribute restoration and DMA canaries on both
 hosts. The public `dgwgl -arrays` probe adds192 exact pixels through the actual
 Windows exports; see the current run manifest for runtime acceptance.
 
+### ARB_multitexture
+
+`DG_CAP_GL_MULTITEXTURE` enables `GL_ARB_multitexture` (eight units),
+`GL_ARB_texture_env_combine`, `GL_EXT_texture_env_combine` and
+`GL_ARB_texture_env_dot3`. The reported version stays `1.1 DreamGPU`, so callers
+do not assume promoted core features. Without the capability the extension
+string, submitted records and `wglGetProcAddress` results are unchanged; the new
+exports fail locally with `GL_INVALID_OPERATION`.
+
+`ActiveTexture` and every core or ARB `MultiTexCoord` variant are ordinary
+scalar records; all coordinate variants submit one `MultiTexCoord4f` record
+(target, then s,t,r,q float bits). Unit enums are checked before submission.
+`ClientActiveTexture` is guest-only state that routes texture-coordinate
+pointers, enables, queries and interleaved arrays; the client attribute stack
+saves every unit. Draws keep the seven-descriptor `DrawArrays` record unless a
+unit 1-7 array is enabled; those use `DrawArraysEXT` with sixteen descriptors.
+Each `ActiveTexture` forgets the cached texture enable and coordinate-generation
+bits, which belong to a unit. `tests/guest/opengl/test_multitexture.py` covers
+the frontend contract and the i686 float wrappers.
+
+### Fixed-function state
+
+`DG_CAP_GL_FIXED_STATE` adds blend color, min/max/subtract and separate
+equations, separate blend factors, wrapping and separate stencil, border/mirror/
+edge clamping, anisotropic filtering, LOD bias, point parameters and sprites, and
+the `ADD` environment, each advertised under its EXT/ARB/ATI/SGIS name.
+`GL_EXTENSIONS` is assembled once per client open into one static buffer, in the
+order multitexture, secondary color, fixed state; without the new capability it
+equals the earlier strings. Without negotiation the new exports fail locally
+with `GL_INVALID_OPERATION`, are hidden from `wglGetProcAddress`, and the new
+vector parameters remain `GL_INVALID_ENUM`.
+
+Core, EXT, ARB and ATI names submit one core scalar record, except two cases.
+`glStencilFuncSeparateATI` checks both functions, then sends FRONT and BACK
+`StencilFuncSeparate` records. `glPointParameterfv` sends one DATA record with
+the pname word and one or three floats. None of them is legal inside Begin/End.
+`BlendFuncSeparate`, and any `BlendFunc` whose factors the cache does not model
+(including constant colors), make the cached blend factors unknown.
+`tests/guest/opengl/test_fixed_state.py` covers the frontend contract.
+
 Current build and evidence navigation: [guest runtime](../README.md),
 [guest tools](../../tools/README.md), and [execution evidence](../../docs/progress.md).
 Historical benchmark paths above belong to the original Juke evidence tree.

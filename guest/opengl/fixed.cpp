@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Fixed-function vector state. Sizes are determined from pname before touching
- * caller memory; native validation independently checks the same contract. */
+ * caller memory; native validation independently checks the same contract.
+ * Parameters of DG_CAP_GL_FIXED_STATE are sized only when it is negotiated. */
 #include "internal.h"
 
 extern "C" {
@@ -19,11 +20,18 @@ static ULONG Count(ULONG function, GLenum target, GLenum pname) {
                 case GL_TEXTURE_WRAP_S:
                 case GL_TEXTURE_WRAP_T:
                     return 1;
+                case 0x84fe: /* TEXTURE_MAX_ANISOTROPY_EXT */
+                    return JglFixedStateAvailable() ? 1 : 0;
                 default:
                     return 0;
             }
         case FEnum_glTexEnvfv:
         case FEnum_glTexEnviv:
+            /* TEXTURE_FILTER_CONTROL/TEXTURE_LOD_BIAS, POINT_SPRITE/COORD_REPLACE */
+            if (target == 0x8500 || target == 0x8861)
+                return JglFixedStateAvailable() && pname == (target == 0x8500 ? 0x8501U : 0x8862U)
+                           ? 1
+                           : 0;
             if (target != GL_TEXTURE_ENV)
                 return 0;
             switch (pname) {
@@ -102,6 +110,9 @@ static ULONG Count(ULONG function, GLenum target, GLenum pname) {
                                                                        : 0;
         case FEnum_glClipPlane:
             return target >= GL_CLIP_PLANE0 && target <= GL_CLIP_PLANE5 ? 4 : 0;
+        case FEnum_glPointParameterfv:
+            /* POINT_SIZE_MIN/MAX, POINT_FADE_THRESHOLD_SIZE; DISTANCE_ATTENUATION */
+            return target >= 0x8126 && target <= 0x8128 ? 1 : target == 0x8129 ? 3 : 0;
         default:
             return 0;
     }
@@ -152,6 +163,56 @@ void APIENTRY glTexGeni(GLenum target, GLenum pname, GLint value) {
         return;
     }
     glTexGenfv(target, pname, &number);
+}
+
+/* Point parameters: one DATA record, pname then inline floats. */
+static void PointParameter(GLenum pname, const GLfloat *values) {
+    ULONG args[1] = {pname}, count;
+    if (!JglCommandReady())
+        return;
+    if (!JglFixedStateAvailable()) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
+    count = Count(FEnum_glPointParameterfv, pname, 0);
+    if (!count) {
+        JglCommandError(GL_INVALID_ENUM);
+        return;
+    }
+    if (!values) {
+        JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    JglData(FEnum_glPointParameterfv, args, 1, values, count * sizeof(*values));
+}
+void APIENTRY glPointParameterfv(GLenum pname, const GLfloat *values) {
+    PointParameter(pname, values);
+}
+void APIENTRY glPointParameterfvARB(GLenum pname, const GLfloat *values) {
+    PointParameter(pname, values);
+}
+void APIENTRY glPointParameterfvEXT(GLenum pname, const GLfloat *values) {
+    PointParameter(pname, values);
+}
+/* ATI_separate_stencil sets both faces' functions with one reference and mask:
+ * two core face records, FRONT then BACK. Both functions (NEVER..ALWAYS) are
+ * checked first, so a rejected call never changes one face alone. */
+void APIENTRY glStencilFuncSeparateATI(GLenum front, GLenum back, GLint ref, GLuint mask) {
+    ULONG words[4] = {GL_FRONT, front, (ULONG)ref, mask};
+    if (!JglCommandReady())
+        return;
+    if (!JglFixedStateAvailable()) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (front - 0x0200 > 7 || back - 0x0200 > 7) {
+        JglCommandError(GL_INVALID_ENUM);
+        return;
+    }
+    JglScalarVector(FEnum_glStencilFuncSeparate, 4, words);
+    words[0] = GL_BACK;
+    words[1] = back;
+    JglScalarVector(FEnum_glStencilFuncSeparate, 4, words);
 }
 
 void APIENTRY glLightModeliv(GLenum pname, const GLint *values) {

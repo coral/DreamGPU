@@ -10,6 +10,11 @@
 typedef struct {
     GLint Alignment, RowLength, SkipRows, SkipPixels, SwapBytes, LsbFirst;
 } JGL_UNPACK;
+/* Client array slots follow the DrawArraysEXT descriptor order: seven legacy
+ * slots, then texture coordinates of units 1-7. Without negotiated
+ * multitexture the client-active unit stays 0 and slots 7-13 stay disabled. */
+#define JGL_ARRAY_SLOTS 14
+#define JGL_TEXTURE0 0x84c0 /* GL_TEXTURE0 */
 /* CPU client pointers are local to their owning WGL context. Draw commands
  * snapshot them into the existing immutable packed-vertex ABI. */
 typedef struct {
@@ -22,7 +27,8 @@ typedef struct {
  * descriptor; snapshots never own/free array storage or copy vertex data. */
 typedef struct {
     GLbitfield Mask;
-    JGL_ARRAY Attribute[7];
+    JGL_ARRAY Attribute[JGL_ARRAY_SLOTS];
+    ULONG ClientTexture;
     JGL_UNPACK Pack, Unpack;
 } JGL_CLIENT_SNAPSHOT;
 typedef struct {
@@ -32,8 +38,10 @@ typedef struct {
     ULONG ClientDepth;
     JGL_CLIENT_SNAPSHOT ClientStack[16];
     ULONG ServerDepth, ServerMasks[16], ServerDrawBuffers[16];
-    JGL_ARRAY Attribute[7]; /* position, color, normal, texture coordinate, secondary color, index,
-                               edge */
+    /* position, color, normal, texture coordinate (unit 0), secondary color,
+     * index, edge, texture coordinates of units 1-7 */
+    JGL_ARRAY Attribute[JGL_ARRAY_SLOTS];
+    ULONG ClientTexture; /* client-active unit, 0-7 */
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
 } JGL_ARRAY_STATE;
 #ifdef __cplusplus
@@ -71,6 +79,13 @@ void JglDrawableSize(ULONG *width, ULONG *height);
 BOOL JglDepthStencilReadbackAvailable(void);
 BOOL JglTextureImagesAvailable(void);
 BOOL JglTextureBordersAvailable(void);
+/* ARB_multitexture, combine and dot3 environments, and DrawArraysEXT. */
+BOOL JglMultitextureAvailable(void);
+/* Blend color/equation/separate, separate stencil, point parameters/sprites,
+ * anisotropy and LOD bias. */
+BOOL JglFixedStateAvailable(void);
+/* Negotiated GL_EXTENSIONS: static storage, valid for the process lifetime. */
+const GLubyte *JglExtensions(void);
 ULONG JglReadbackCapacity(void);
 ULONG *JglReadbackBuffer(void);
 BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output, ULONG capacity,

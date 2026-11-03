@@ -11,7 +11,7 @@ CODE = r'''
 #include <cstring>
 #include <cmath>
 #include <vector>
-using UINT=unsigned; using GLenum=unsigned; using BOOL=int;
+using UINT=unsigned; using GLenum=unsigned; using BOOL=int; using DWORD=unsigned;
 #define TRUE 1
 #define FALSE 0
 #define GL_EXTCALL(name) gl_info->gl_ops.ext.p_##name
@@ -36,28 +36,34 @@ using UINT=unsigned; using GLenum=unsigned; using BOOL=int;
 #define GL_COLOR_ARRAY 1
 #define GL_TEXTURE_COORD_ARRAY 2
 #define GL_SECONDARY_COLOR_ARRAY_EXT 3
+#define GL_TEXTURE0_ARB 0x84c0
+#define WINED3D_UNMAPPED_STAGE 0xffffffffu
 #include "dg-wine-vertex-pack.h"
 static const void *pointers[4]; static unsigned strides[4], enabled;
 static unsigned draws, calls; static std::vector<dg_wine_vertex> seen;
 static unsigned char last_color[4], last_secondary[3]; static float last_uv[2];
+static unsigned client, client_calls, tex_enabled; static const void *tex_pointers[8];
+static unsigned tex_strides[8]; static float last_multi[8][2];
 static void vp(int,unsigned,unsigned s,const void*p){++calls;pointers[0]=p;strides[0]=s;}
 static void cp(int,unsigned,unsigned s,const void*p){++calls;pointers[1]=p;strides[1]=s;}
-static void tp(int,unsigned,unsigned s,const void*p){++calls;pointers[2]=p;strides[2]=s;}
+static void tp(int,unsigned,unsigned s,const void*p){++calls;tex_pointers[client]=p;tex_strides[client]=s;}
 static void sp(int,unsigned,unsigned s,const void*p){++calls;pointers[3]=p;strides[3]=s;}
-static void en(unsigned i){++calls; enabled|=1u<<i;}
-static void dis(unsigned i){++calls; enabled&=~(1u<<i);}
+static void en(unsigned i){++calls; if(i==GL_TEXTURE_COORD_ARRAY) tex_enabled|=1u<<client; else enabled|=1u<<i;}
+static void dis(unsigned i){++calls; if(i==GL_TEXTURE_COORD_ARRAY) tex_enabled&=~(1u<<client); else enabled&=~(1u<<i);}
+static void client_active(unsigned unit){++calls;++client_calls;client=unit-GL_TEXTURE0_ARB;}
+static void multi(unsigned unit,const float*p){++calls;memcpy(last_multi[unit-GL_TEXTURE0_ARB],p,8);}
 static void normal(float x,float y,float z){++calls;assert(x==0&&y==0&&z==0);}
 static void secondary(float x,float y,float z){++calls;assert(x==0&&y==0&&z==0);}
 static void color(unsigned char r,unsigned char g,unsigned char b,unsigned char a){++calls;last_color[0]=r;last_color[1]=g;last_color[2]=b;last_color[3]=a;}
 static void sec(const unsigned char*p){++calls;memcpy(last_secondary,p,3);}
 static void uv(const float*p){++calls;memcpy(last_uv,p,8);}
 static void draw(unsigned primitive,int first,unsigned n){
-    ++calls;++draws; assert(primitive==99&&first==0&&(enabled&7)==7);
+    ++calls;++draws; assert(primitive==99&&first==0&&(enabled&3)==3&&(tex_enabled&1));
     seen.clear();for(unsigned i=0;i<n;++i) {
         dg_wine_vertex v{};
         memcpy(v.position,(const char*)pointers[0]+i*strides[0],16);
         memcpy(v.diffuse,(const char*)pointers[1]+i*strides[1],4);
-        memcpy(v.texture,(const char*)pointers[2]+i*strides[2],8);
+        for(unsigned u=0;u<2;++u) if(tex_enabled&(1u<<u)) memcpy(v.texture[u],(const char*)tex_pointers[u]+i*tex_strides[u],8);
         if(enabled&8)memcpy(v.specular,(const char*)pointers[3]+i*strides[3],3);
         seen.push_back(v);
     }
@@ -74,15 +80,17 @@ struct ext_functions {
  decltype(&secondary) p_glSecondaryColor3fEXT=secondary;
  decltype(&sp) p_glSecondaryColorPointerEXT=sp;
  decltype(&sec) p_glSecondaryColor3ubvEXT=sec;
+ decltype(&client_active) p_glClientActiveTextureARB=client_active;
+ decltype(&multi) p_glMultiTexCoord2fvARB=multi;
 };
 struct wined3d_gl_info {bool supported[4]{};struct {unsigned textures=1,texture_coords=1;}limits;struct {gl_functions gl;ext_functions ext;}gl_ops;};
 struct format {unsigned id;};
 struct wined3d_stream_info_element {const format *format;struct {const void*addr;unsigned buffer_object;}data;unsigned stride;};
-struct wined3d_stream_info {wined3d_stream_info_element elements[4];unsigned use_map;bool position_transformed;};
-struct wined3d_state {unsigned render_states[2]{},texture_states[1][1]{};void*textures[1];int base_vertex_index=0;bool ps=false;};
+struct wined3d_stream_info {wined3d_stream_info_element elements[12];unsigned use_map;bool position_transformed;};
+struct wined3d_state {unsigned render_states[2]{};int texture_states[3][1]{};void*textures[3]{};int base_vertex_index=0;bool ps=false;};
 static bool use_ps(const wined3d_state*s){return s->ps;}
 struct d3d_info {bool xyzrhw=false;struct {unsigned ffp_blend_stages=1;}limits;};
-struct wined3d_context {const wined3d_gl_info*gl_info;d3d_info*d3d_info; bool use_immediate_mode_draw=true,namedArraysLoaded=false,numberedArraysLoaded=false;unsigned num_untracked_materials=0;bool fog_coord=false;unsigned tex_unit_map[1]{};};
+struct wined3d_context {const wined3d_gl_info*gl_info;d3d_info*d3d_info; bool use_immediate_mode_draw=true,namedArraysLoaded=false,numberedArraysLoaded=false;unsigned num_untracked_materials=0;bool fog_coord=false;DWORD tex_unit_map[3]{0,1,2};};
 struct wined3d_device {wined3d_state state;};
 #include "wine-vertex-array.h"
 int main(){
@@ -98,9 +106,9 @@ int main(){
  {&cf,{data[0].color,0},sizeof(Input)},{&cf,{data[0].spec,0},sizeof(Input)},
  {&tf,{data[0].uv,0},sizeof(Input)}},15,true};
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
- assert(draws==1&&enabled==0);for(auto p:pointers)assert(!p);
+ assert(draws==1&&enabled==0&&tex_enabled==0&&client_calls==0);for(auto p:pointers)assert(!p);assert(!tex_pointers[0]);
  const float expected[4][4]={{1,2,3,.5f},{3,6,9,1},{4,8,12,1},{-2.5f,-5,-7.5f,-.5f}};
- for(unsigned i=0;i<4;++i){assert(!memcmp(seen[i].position,expected[i],16));assert(!memcmp(seen[i].texture,data[i].uv,8));assert(seen[i].diffuse[0]==data[i].color[2]&&seen[i].diffuse[3]==data[i].color[3]);assert(seen[i].specular[0]==data[i].spec[2]);}
+ for(unsigned i=0;i<4;++i){assert(!memcmp(seen[i].position,expected[i],16));assert(!memcmp(seen[i].texture[0],data[i].uv,8));assert(seen[i].diffuse[0]==data[i].color[2]&&seen[i].diffuse[3]==data[i].color[3]);assert(seen[i].specular[0]==data[i].spec[2]);}
  assert(last_color[0]==27&&last_secondary[0]==31&&last_uv[0]==1.75f);
  uint16_t indices[]={999,4,2,1};dev.state.base_vertex_index=-1;
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,3,99,indices,2,1));
@@ -109,9 +117,36 @@ int main(){
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,2,99,wide,4,0));assert(seen[0].position[0]==-2.5f);
  gl.supported[ARB_MULTITEXTURE]=true;si.use_map |= 1u<<(WINED3D_FFP_TEXCOORD0+1);
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
+ // More units and stages stay on the single-unit path while only stage 0 is bound.
+ gl.limits.textures=2;di.limits.ffp_blend_stages=2;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
+ // Base plus lightmap: stage 1 reads coordinate set 1 on unit 1.
+ float lightmap[4][2]={{.1f,.2f},{.3f,.4f},{.5f,.6f},{.7f,.8f}};
+ si.elements[WINED3D_FFP_TEXCOORD0+1]={&tf,{lightmap,0},8};
+ dev.state.textures[1]=&dev;dev.state.texture_states[1][0]=1;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
+ for(unsigned i=0;i<4;++i){assert(!memcmp(seen[i].texture[0],data[i].uv,8));assert(!memcmp(seen[i].texture[1],lightmap[i],8));}
+ assert(client_calls==5&&client==0&&tex_enabled==0&&!tex_pointers[0]&&!tex_pointers[1]);
+ assert(!memcmp(last_multi[0],data[3].uv,8)&&!memcmp(last_multi[1],lightmap[3],8));
+ client_calls=0;
+ // Texture generation and unmapped stages are skipped exactly like drawStridedSlow.
+ dev.state.texture_states[1][0]=0x10000;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
+ dev.state.texture_states[1][0]=1;ctx.tex_unit_map[1]=WINED3D_UNMAPPED_STAGE;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
+ ctx.tex_unit_map[1]=1;
+ // Without real multitexture Wine ignores stages past zero; so does this path.
+ gl.supported[ARB_MULTITEXTURE]=false;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&client_calls==0);
+ gl.supported[ARB_MULTITEXTURE]=true;
  unsigned saved=calls;
- gl.limits.textures=2;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));gl.limits.textures=1;
- di.limits.ffp_blend_stages=2;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));di.limits.ffp_blend_stages=1;
+ // Missing coordinates, a buffer object or a third bound stage remain Wine's.
+ dev.state.texture_states[1][0]=5;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
+ dev.state.texture_states[1][0]=1;si.elements[WINED3D_FFP_TEXCOORD0+1].data.buffer_object=1;
+ assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));si.elements[WINED3D_FFP_TEXCOORD0+1].data.buffer_object=0;
+ gl.limits.textures=3;di.limits.ffp_blend_stages=3;dev.state.textures[2]=&dev;
+ assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
+ dev.state.textures[2]=nullptr;dev.state.textures[1]=nullptr;gl.limits.textures=1;di.limits.ffp_blend_stages=1;
  assert(!dg_wine_draw_transformed(&dev,&ctx,&si,257,99,(void*)1,2,0));
  ctx.namedArraysLoaded=true;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));ctx.namedArraysLoaded=false;
  ctx.num_untracked_materials=1;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));ctx.num_untracked_materials=0;

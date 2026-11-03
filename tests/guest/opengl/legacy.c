@@ -47,9 +47,18 @@ HINSTANCE JglModule(void) {
 HGLRC wglGetCurrentContext(void) {
     return Ready ? (HGLRC)1 : NULL;
 }
+static BOOL Multitexture, FixedState;
+BOOL JglMultitextureAvailable(void) {
+    return Multitexture;
+}
+BOOL JglFixedStateAvailable(void) {
+    return FixedState;
+}
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
     assert(module == (HINSTANCE)1);
-    return !strcmp(name, "known") ? Marker : NULL;
+    if (!((ULONG_PTR)name >> 16))
+        return name == (LPCSTR)7 ? Marker : NULL;
+    return !strcmp(name, "known") || !strncmp(name, "gl", 2) ? Marker : NULL;
 }
 JGL_UNPACK *JglPack(void) {
     return &Pack;
@@ -171,6 +180,41 @@ int main(void) {
     BYTE image[3 * 416 + 32], before[sizeof(image)];
     ULONG i, row, column, at;
     assert(wglGetProcAddress("known") == Marker && !wglGetProcAddress("unknown"));
+    /* Unnegotiated multitexture exports resolve exactly as if absent; an
+     * ordinal is passed through without being read as a name. */
+    {
+        static const char *const names[] = {"glActiveTexture",       "glActiveTextureARB",
+                                            "glClientActiveTexture", "glClientActiveTextureARB",
+                                            "glMultiTexCoord2fv",    "glMultiTexCoord4fARB",
+                                            "glMultiTexCoord2svARB"};
+        for (const char *name : names) {
+            Multitexture = FALSE;
+            assert(GetProcAddress(JglModule(), name) == Marker && !wglGetProcAddress(name));
+            Multitexture = TRUE;
+            assert(wglGetProcAddress(name) == Marker);
+        }
+        Multitexture = FALSE;
+        assert(wglGetProcAddress("known") == Marker && wglGetProcAddress((LPCSTR)7) == Marker);
+        /* Fixed-state names follow their own capability, independently. */
+        static const char *const fixed[] = {
+            "glBlendColorEXT",        "glBlendEquation",        "glBlendEquationSeparateEXT",
+            "glBlendFuncSeparateEXT", "glStencilOpSeparateATI", "glStencilFuncSeparateATI",
+            "glStencilFuncSeparate",  "glPointParameterfARB",   "glPointParameterfvEXT"};
+        for (const char *name : fixed) {
+            Multitexture = TRUE;
+            FixedState = FALSE;
+            assert(!wglGetProcAddress(name));
+            FixedState = TRUE;
+            Multitexture = FALSE;
+            assert(wglGetProcAddress(name) == Marker && !wglGetProcAddress("glActiveTextureARB"));
+        }
+        // Core GL1.1 names sharing a prefix stay visible without either capability.
+        FixedState = FALSE;
+        static const char *const core[] = {"glBlendFunc", "glStencilOp", "glStencilFunc",
+                                           "glPointSize"};
+        for (const char *name : core)
+            assert(wglGetProcAddress(name) == Marker);
+    }
     Ready = FALSE;
     assert(!wglGetProcAddress("known"));
     Ready = TRUE;

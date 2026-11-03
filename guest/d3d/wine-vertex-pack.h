@@ -10,8 +10,10 @@
 /* Small primitives dominate the measured workload; stay below one x86 stack
  * page so an ineligible fallback draw does not pay a stack-probe call. */
 #define DG_WINE_PACKED_VERTICES 64
+/* Texture stages with their own coordinates; two cover base plus lightmap. */
+#define DG_WINE_PACKED_UNITS 2
 struct dg_wine_vertex {
-    float position[4], texture[2];
+    float position[4], texture[DG_WINE_PACKED_UNITS][2];
     unsigned char diffuse[4], specular[4];
 };
 
@@ -30,8 +32,8 @@ static inline int dg_wine_vertex_address(const void *base, unsigned int stride, 
 }
 
 static inline void dg_wine_pack_vertex(struct dg_wine_vertex *out, const void *position,
-                                       const void *texture, const void *diffuse,
-                                       const void *specular) {
+                                       const void *const *textures, unsigned int units,
+                                       const void *diffuse, const void *specular) {
     float p[4];
     const unsigned char *c = (const unsigned char *)diffuse;
     const unsigned char *s = (const unsigned char *)specular;
@@ -47,7 +49,8 @@ static inline void dg_wine_pack_vertex(struct dg_wine_vertex *out, const void *p
         memcpy(out->position, p, 3 * sizeof(float));
         out->position[3] = 1.0f;
     }
-    memcpy(out->texture, texture, sizeof(out->texture));
+    for (unsigned int i = 0; i < units; ++i)
+        memcpy(out->texture[i], textures[i], sizeof(out->texture[i]));
     out->diffuse[0] = c[2];
     out->diffuse[1] = c[1];
     out->diffuse[2] = c[0];

@@ -3,13 +3,29 @@
 #include <stdio.h>
 #include "fixed.cpp"
 #include "query.cpp"
-static BOOL Ready = TRUE, Secondary = TRUE;
+static BOOL Ready = TRUE, Secondary = TRUE, Multitexture, FixedState;
+static const GLubyte Negotiated[] = "negotiated extensions";
+static ULONG ScalarFunctions[4], ScalarWords[4][4], ScalarCount;
 static ULONG Error, Calls, Function, Bytes, Words, Queries, ResultCount = 4;
 static BYTE Data[32];
 static ULONG Arguments[3];
 static JGL_UNPACK Pack = {4, 0, 0, 0, 0, 0}, Unpack = {4, 0, 0, 0, 0, 0};
 BOOL JglSupportsSecondary(void) {
     return Secondary;
+}
+BOOL JglMultitextureAvailable(void) {
+    return Multitexture;
+}
+BOOL JglFixedStateAvailable(void) {
+    return FixedState;
+}
+const GLubyte *JglExtensions(void) {
+    return Negotiated;
+}
+void JglScalarVector(ULONG fn, ULONG words, const void *p) {
+    assert(ScalarCount < 4 && words == 4);
+    ScalarFunctions[ScalarCount] = fn;
+    memcpy(ScalarWords[ScalarCount++], p, 16);
 }
 BOOL JglReady(void) {
     return Ready;
@@ -47,7 +63,7 @@ BOOL JglQuery(ULONG fn, const ULONG args[3], ULONG type, void *output, ULONG cap
     Function = fn;
     memcpy(Arguments, args, 12);
     *bytes = ResultCount * (type == DG_GL_RESULT_DOUBLE ? 8 : type == DG_GL_RESULT_BOOL ? 1 : 4);
-    assert(*bytes <= capacity);
+    assert(*bytes <= capacity && ResultCount <= 4);
     for (i = 0; i < ResultCount; ++i) {
         if (type == DG_GL_RESULT_DOUBLE)
             ((GLdouble *)output)[i] = i + 0.5;
@@ -135,10 +151,18 @@ int main(void) {
     assert(Queries == saved + 1); /* Invalid cap must reach enum validation. */
     {
         const GLenum subpixelBits = 0x0d50;
-        struct { GLint value, guard; } iv = {0, 99};
-        struct { GLboolean value, guard; } bv = {0, 99};
-        struct { GLfloat value, guard; } fv = {0, 99};
-        struct { GLdouble value, guard; } dv = {0, 99};
+        struct {
+            GLint value, guard;
+        } iv = {0, 99};
+        struct {
+            GLboolean value, guard;
+        } bv = {0, 99};
+        struct {
+            GLfloat value, guard;
+        } fv = {0, 99};
+        struct {
+            GLdouble value, guard;
+        } dv = {0, 99};
         saved = Queries;
         ResultCount = 1;
         glGetIntegerv(subpixelBits, &iv.value);
@@ -213,14 +237,153 @@ int main(void) {
         assert(fv.guard == 99 && dv.guard == 99 && iv.guard == 99 && bv.guard == 99);
         glLightModeliv(0x81f8, &separate);
         assert(Bytes == 4 && *(GLfloat *)Data == 0x81fa);
-        assert(strstr((const char *)glGetString(GL_EXTENSIONS), "GL_EXT_secondary_color"));
+        // The frontend owns the negotiated string (its own exact tests).
+        assert(glGetString(GL_EXTENSIONS) == Negotiated);
         Secondary = FALSE;
-        assert(!*glGetString(GL_EXTENSIONS));
         saved = Calls;
         glLightModeliv(0x81f8, (const GLint *)1);
         assert(Calls == saved && Error == GL_INVALID_ENUM);
     }
+    {
+        saved = Queries;
+        for (ULONG n = 0; n < 4; ++n) {
+            Multitexture = n >= 2;
+            FixedState = n & 1;
+            assert(glGetString(GL_EXTENSIONS) == Negotiated);
+            assert(!strcmp((const char *)glGetString(GL_VERSION), "1.1 DreamGPU"));
+        }
+        FixedState = FALSE;
+        /* Unit-dependent server state is never answered locally. */
+        ResultCount = 1;
+        assert(glIsEnabled(GL_TEXTURE_2D) && Function == FEnum_glIsEnabled &&
+               Arguments[0] == GL_TEXTURE_2D);
+        static const GLenum host[] = {0x84e0, 0x84e2}; /* ACTIVE_TEXTURE, MAX_TEXTURE_UNITS */
+        for (GLenum pname : host) {
+            glGetIntegerv(pname, &local);
+            assert(Function == FEnum_glGetIntegerv && Arguments[0] == pname && local == 1);
+        }
+        assert(Queries == saved + 3);
+        Multitexture = FALSE;
+        Secondary = TRUE;
+    }
+    {
+        /* Fixed-state parameters exist only when negotiated; every size is
+         * known before caller memory is read, and nothing partial is sent. */
+        const GLfloat attenuation[3] = {1, .5f, .25f};
+        static const GLenum single[] = {0x8126, 0x8127, 0x8128}; /* SIZE_MIN/MAX, FADE */
+        void(APIENTRY *const point[3])(GLenum, const GLfloat *) = {
+            glPointParameterfv, glPointParameterfvARB, glPointParameterfvEXT};
+        Error = 0;
+        saved = Calls;
+        glPointParameterfvARB(0x8126, four);
+        assert(Calls == saved && Error == GL_INVALID_OPERATION);
+        Error = 0;
+        glStencilFuncSeparateATI(0x0207, 0x0200, 3, 0xff);
+        assert(!ScalarCount && Error == GL_INVALID_OPERATION);
+        Error = 0;
+        glTexParameterfv(GL_TEXTURE_2D, 0x84fe, four);
+        assert(Calls == saved && Error == GL_INVALID_ENUM);
+        Error = 0;
+        glTexEnviv(0x8500, 0x8501, ints);
+        assert(Calls == saved && Error == GL_INVALID_ENUM);
+        Error = 0;
+        glTexEnvfv(0x8861, 0x8862, four);
+        assert(Calls == saved && Error == GL_INVALID_ENUM);
+        Error = 0;
+        FixedState = TRUE;
+        for (auto entry : point) {
+            for (GLenum pname : single) {
+                entry(pname, four);
+                assert(Function == FEnum_glPointParameterfv && Words == 1 &&
+                       Arguments[0] == pname && Bytes == 4 && !memcmp(Data, four, 4));
+            }
+            entry(0x8129, attenuation); /* DISTANCE_ATTENUATION */
+            assert(Words == 1 && Arguments[0] == 0x8129 && Bytes == 12 &&
+                   !memcmp(Data, attenuation, 12));
+            saved = Calls;
+            static const GLenum invalid[] = {0x8125, 0x812a, 0x0b11 /* POINT_SIZE */};
+            for (GLenum pname : invalid) {
+                entry(pname, (const GLfloat *)1);
+                assert(Calls == saved && Error == GL_INVALID_ENUM);
+                Error = 0;
+            }
+            entry(0x8129, NULL);
+            assert(Calls == saved && Error == GL_INVALID_VALUE);
+            Error = 0;
+            Ready = FALSE;
+            entry(0x8126, four);
+            assert(Calls == saved && !Error);
+            Ready = TRUE;
+        }
+        glTexParameterfv(GL_TEXTURE_2D, 0x84fe, four);
+        assert(Function == FEnum_glTexParameterfv && Words == 2 && Arguments[1] == 0x84fe &&
+               Bytes == 4);
+        glTexParameteriv(GL_TEXTURE_1D, 0x84fe, ints);
+        assert(Function == FEnum_glTexParameteriv && Arguments[0] == GL_TEXTURE_1D && Bytes == 4);
+        glTexEnvfv(0x8500, 0x8501, four);
+        assert(Function == FEnum_glTexEnvfv && Arguments[0] == 0x8500 && Bytes == 4);
+        glTexEnviv(0x8861, 0x8862, ints);
+        assert(Function == FEnum_glTexEnviv && Arguments[1] == 0x8862 && Bytes == 4);
+        saved = Calls;
+        static const GLenum pairs[][2] = {{0x8500, 0x8862},
+                                          {0x8861, 0x8501},
+                                          {GL_TEXTURE_ENV, 0x8501},
+                                          {0x8500, GL_TEXTURE_ENV_MODE}};
+        for (const auto &pair : pairs) {
+            glTexEnvfv(pair[0], pair[1], (const GLfloat *)1);
+            assert(Calls == saved && Error == GL_INVALID_ENUM);
+            Error = 0;
+        }
+        // ATI: FRONT then BACK records sharing ref/mask; both functions first.
+        glStencilFuncSeparateATI(0x0207, 0x0201, -1, 0xff);
+        const ULONG front[4] = {GL_FRONT, 0x0207, 0xffffffff, 0xff},
+                    back[4] = {GL_BACK, 0x0201, 0xffffffff, 0xff};
+        assert(ScalarCount == 2 && ScalarFunctions[0] == FEnum_glStencilFuncSeparate &&
+               ScalarFunctions[1] == FEnum_glStencilFuncSeparate &&
+               !memcmp(ScalarWords[0], front, 16) && !memcmp(ScalarWords[1], back, 16));
+        ScalarCount = 0;
+        glStencilFuncSeparateATI(0x0208, 0x0200, 0, 0);
+        glStencilFuncSeparateATI(0x0200, 0x01ff, 0, 0);
+        assert(!ScalarCount && Error == GL_INVALID_ENUM);
+        Error = 0;
+        Ready = FALSE;
+        glStencilFuncSeparateATI(0x0200, 0x0200, 0, 0);
+        assert(!ScalarCount && !Error);
+        Ready = TRUE;
+
+        // Every new state query reaches the host with its own pname.
+        static const GLenum integers[] = {0x8009, 0x883d, 0x80c9, 0x80c8, 0x80cb, 0x80ca,
+                                          0x8800, 0x8801, 0x8802, 0x8803, 0x8ca3, 0x8ca4,
+                                          0x8ca5, 0x84ff, 0x84fd, 0x8126, 0x8127, 0x8128};
+        saved = Queries;
+        ResultCount = 1;
+        for (GLenum pname : integers) {
+            glGetIntegerv(pname, &local);
+            assert(Function == FEnum_glGetIntegerv && Arguments[0] == pname && local == 1);
+        }
+        struct {
+            GLfloat v[4], guard;
+        } color = {{0}, 99};
+        ResultCount = 4;
+        glGetFloatv(0x8005, color.v); /* BLEND_COLOR */
+        assert(Function == FEnum_glGetFloatv && Arguments[0] == 0x8005 && color.v[3] == 3.5f &&
+               color.guard == 99);
+        ResultCount = 3;
+        glGetFloatv(0x8129, color.v);
+        assert(Arguments[0] == 0x8129 && color.v[2] == 2.5f);
+        ResultCount = 1;
+        glGetTexParameterfv(GL_TEXTURE_2D, 0x84fe, color.v);
+        assert(Function == FEnum_glGetTexParameterfv && Arguments[1] == 0x84fe);
+        glGetTexEnviv(0x8500, 0x8501, &local);
+        assert(Function == FEnum_glGetTexEnviv && Arguments[0] == 0x8500);
+        glGetTexEnviv(0x8861, 0x8862, &local);
+        assert(Function == FEnum_glGetTexEnviv && Arguments[1] == 0x8862);
+        assert(glIsEnabled(0x8861) && Function == FEnum_glIsEnabled && Arguments[0] == 0x8861);
+        assert(Queries == saved + sizeof(integers) / sizeof(integers[0]) + 6);
+        FixedState = FALSE;
+    }
     puts("PASS actual fixed-function wrappers: bounded vector sizes, immutable bits, material "
-         "Begin exception, typed query canaries and local array queries");
+         "Begin exception, typed query canaries and local array queries; fixed-state point "
+         "parameters, anisotropy/LOD/sprite sizing, ATI stencil expansion and host queries");
     return 0;
 }

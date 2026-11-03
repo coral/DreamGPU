@@ -18,6 +18,7 @@ static ULONG FunctionWords(void *context, ULONG function) {
         case 19:
             return DG_GL_FUNCTION_QUERY | 1;
         case 469:
+        case 0x1d6: /* DrawArraysEXT */
             return DG_GL_FUNCTION_INLINE_DATA | 4;
         case 20:
             return DG_GL_FUNCTION_INLINE_DATA | 8;
@@ -45,6 +46,40 @@ int main(void) {
         compact[12] = 2;
         compact[16] = 0x1406 | (3U << 16); // disabled descriptor must be zero
         assert(!DgValidateUserGl(compact, sizeof(compact), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* Sixteen-slot multitexture arrays: float2 position, unit 3 short3. */
+        ULONG ext[37] = {DG_GL_DATA_CALL,
+                         148,
+                         0,
+                         1,
+                         1,
+                         0,
+                         0,
+                         0,
+                         0x1d6,
+                         92,
+                         4,
+                         0,
+                         2,
+                         DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | (DG_GL_ARRAY_TEXCOORD1 << 2)};
+        ext[14] = 0x1406 | (2U << 16);
+        ext[14 + 9] = 0x1402 | (3U << 16);
+        assert(DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[13] |= 1U << 14; /* reserved slot bit */
+        assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[13] &= ~(1U << 14);
+        ext[14 + 14] = 0x1406 | (1U << 16); /* reserved slot descriptor */
+        assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[14 + 14] = 0;
+        ext[14 + 9] = 0x1403 | (3U << 16); /* unsigned coordinates follow slot 3 */
+        assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[14 + 9] = 0x1402 | (3U << 16);
+        ext[13] &= ~DG_GL_ARRAY_RAW; /* the multitexture form is always compact */
+        assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[13] |= DG_GL_ARRAY_RAW;
+        ext[36] = 1; /* nonzero final section byte is data, not padding: still valid */
+        assert(DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
     }
     memcpy(words, valid, sizeof(valid));
     assert(DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));

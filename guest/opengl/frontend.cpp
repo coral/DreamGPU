@@ -84,6 +84,51 @@ BOOL JglTextureImagesAvailable(void) {
 BOOL JglTextureBordersAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_BORDERS);
 }
+BOOL JglMultitextureAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_MULTITEXTURE);
+}
+BOOL JglFixedStateAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_FIXED_STATE);
+}
+/* Extension names of negotiated host contracts only. Built once per client
+ * open, under Lock and before any context exists, into one static buffer:
+ * every returned pointer stays valid. Groups keep their established order. */
+#define JGL_MULTITEXTURE_EXTENSIONS                                                                \
+    "GL_ARB_multitexture GL_ARB_texture_env_combine GL_EXT_texture_env_combine "                   \
+    "GL_ARB_texture_env_dot3"
+#define JGL_SECONDARY_EXTENSIONS "GL_EXT_secondary_color GL_EXT_separate_specular_color"
+#define JGL_FIXED_STATE_EXTENSIONS                                                                 \
+    "GL_EXT_blend_color GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_blend_func_separate "     \
+    "GL_EXT_blend_equation_separate GL_EXT_stencil_wrap GL_ATI_separate_stencil "                  \
+    "GL_ARB_texture_border_clamp GL_ARB_texture_mirrored_repeat GL_EXT_texture_edge_clamp "        \
+    "GL_SGIS_texture_edge_clamp GL_EXT_texture_filter_anisotropic GL_EXT_texture_lod_bias "        \
+    "GL_ARB_point_parameters GL_EXT_point_parameters GL_ARB_point_sprite "                         \
+    "GL_ARB_texture_env_add GL_EXT_texture_env_add"
+/* Each group's terminator byte pays for one separator or the final NUL. */
+static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
+                       sizeof(JGL_FIXED_STATE_EXTENSIONS)];
+static void AppendExtensions(ULONG *at, const char *names) {
+    if (*at)
+        Extensions[(*at)++] = ' ';
+    while (*names)
+        Extensions[(*at)++] = *names++;
+}
+static void NegotiateExtensions(void) {
+    ULONG at = 0;
+    if (HostCapabilities & DG_CAP_GL_MULTITEXTURE)
+        AppendExtensions(&at, JGL_MULTITEXTURE_EXTENSIONS);
+    if (SecondarySupported)
+        AppendExtensions(&at, JGL_SECONDARY_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_FIXED_STATE)
+        AppendExtensions(&at, JGL_FIXED_STATE_EXTENSIONS);
+    Extensions[at] = 0;
+}
+#undef JGL_FIXED_STATE_EXTENSIONS
+#undef JGL_SECONDARY_EXTENSIONS
+#undef JGL_MULTITEXTURE_EXTENSIONS
+const GLubyte *JglExtensions(void) {
+    return (const GLubyte *)Extensions;
+}
 static ULONG QueryCapabilities(void) {
     DG_ESCAPE_REQUEST request;
     DG_ESCAPE_REPLY reply;
@@ -226,11 +271,12 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
         function != FEnum_glVertex4f && function != FEnum_glColor3f &&
         function != FEnum_glColor4f && function != FEnum_glSecondaryColor3f &&
         function != FEnum_glNormal3f && function != FEnum_glTexCoord2f &&
-        function != FEnum_glTexCoord4f && function != FEnum_glMaterialf &&
-        function != FEnum_glEvalCoord1d && function != FEnum_glEvalCoord2d &&
-        function != FEnum_glEvalPoint1 && function != FEnum_glEvalPoint2 &&
-        function != FEnum_glIndexd && function != FEnum_glEdgeFlag &&
-        function != FEnum_glCallList && function != DG_GL_RECORD_ERROR) {
+        function != FEnum_glTexCoord4f && function != FEnum_glMultiTexCoord4f &&
+        function != FEnum_glMaterialf && function != FEnum_glEvalCoord1d &&
+        function != FEnum_glEvalCoord2d && function != FEnum_glEvalPoint1 &&
+        function != FEnum_glEvalPoint2 && function != FEnum_glIndexd &&
+        function != FEnum_glEdgeFlag && function != FEnum_glCallList &&
+        function != DG_GL_RECORD_ERROR) {
         if (function == FEnum_glFlush || function == FEnum_glFinish)
             Error(c, GL_INVALID_OPERATION);
         else
@@ -247,6 +293,28 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
     if (!SecondarySupported && (function == FEnum_glEnable || function == FEnum_glDisable) &&
         *(const ULONG *)arguments == 0x8458) {
         CommandError(c, GL_INVALID_ENUM);
+        return;
+    }
+    /* Both multitexture records lead with the unit enum. Without negotiation
+     * they do not exist; an invalid unit never reaches the host. */
+    if (function == FEnum_glActiveTexture || function == FEnum_glMultiTexCoord4f) {
+        if (!(HostCapabilities & DG_CAP_GL_MULTITEXTURE)) {
+            CommandError(c, GL_INVALID_OPERATION);
+            return;
+        }
+        if (*(const ULONG *)arguments - JGL_TEXTURE0 >= DG_GL_MAX_TEXTURE_UNITS) {
+            CommandError(c, GL_INVALID_ENUM);
+            return;
+        }
+    }
+    /* Fixed-state records do not exist without negotiation; the host
+     * validates their enums. None is legal inside Begin/End (above). */
+    if ((function == FEnum_glBlendColor || function == FEnum_glBlendEquation ||
+         function == FEnum_glBlendEquationSeparate || function == FEnum_glBlendFuncSeparate ||
+         function == FEnum_glStencilFuncSeparate || function == FEnum_glStencilOpSeparate ||
+         function == FEnum_glPointParameterf) &&
+        !(HostCapabilities & DG_CAP_GL_FIXED_STATE)) {
+        CommandError(c, GL_INVALID_OPERATION);
         return;
     }
     if (function == FEnum_glCopyTexImage2D && words == 8 && ((const ULONG *)arguments)[7] &&
@@ -411,6 +479,10 @@ static BOOL CaptureData(ULONG function, const ULONG *arguments, ULONG words, con
             CommandError(c, GL_INVALID_OPERATION);
         return FALSE;
     }
+    if (function == FEnum_glPointParameterfv && !(HostCapabilities & DG_CAP_GL_FIXED_STATE)) {
+        CommandError(c, GL_INVALID_OPERATION);
+        return FALSE;
+    }
     if ((words && !arguments) || (bytes && !payload && !capture) || words > MaxWords - 10 ||
         bytes > JglMaxDataBytes(words)) {
         if (function == FEnum_glDeleteTextures)
@@ -434,7 +506,8 @@ static BOOL CaptureData(ULONG function, const ULONG *arguments, ULONG words, con
         CopyMemory(record + 2 + words, payload, bytes);
     if (c->Arrays.ListMode != GL_COMPILE &&
         (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
-        (function == FEnum_glDrawArrays || function == FEnum_glDrawElements ||
+        (function == FEnum_glDrawArrays || function == FEnum_glDrawArraysEXT ||
+         function == FEnum_glDrawElements ||
          (words == 8 &&
           (function == FEnum_glBitmap ||
            (function == FEnum_glDrawPixels && arguments[2] != GL_DEPTH_COMPONENT &&
@@ -673,9 +746,12 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
         }
         HostCapabilities = QueryCapabilities();
         SecondarySupported = SecondaryAvailable();
+        NegotiateExtensions();
     }
     c->Unpack.Alignment = c->Pack.Alignment = 4;
-    for (i = 0; i < 5; ++i) {
+    for (i = 0; i < JGL_ARRAY_SLOTS; ++i) {
+        if (i == 5 || i == 6)
+            continue;
         c->Arrays.Attribute[i].Size = i == 2 || i == 4 ? 3 : 4;
         c->Arrays.Attribute[i].Type = 0x1406; /* GL_FLOAT */
     }

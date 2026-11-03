@@ -10,19 +10,36 @@ unsafe fn draw(
     data: &[u8],
 ) -> Result<u32, u32> {
     let elements = function == FEnum_glDrawElements;
-    if !elements && function != FEnum_glDrawArrays {
+    // DrawArraysEXT is the compact layout with texture units 1-7 (slots 7-13).
+    let units = function == FEnum_glDrawArraysEXT;
+    if !elements && !units && function != FEnum_glDrawArrays {
         return Err(3);
     }
     let vertices = args[if elements { 3 } else { 2 }];
     let wire_attributes = args[if elements { 4 } else { 3 }];
     let compact = wire_attributes & DG_GL_ARRAY_RAW != 0;
-    let raw = if compact {
+    if units && !compact {
+        return Err(1);
+    }
+    let raw: Option<[raw::Attribute; 16]> = if compact {
         if elements {
             return Err(1);
         }
-        Some(raw::layout(wire_attributes, vertices, data).ok_or(1u32)?)
+        Some(if units {
+            raw::layout_extended(wire_attributes, vertices, data).ok_or(1u32)?
+        } else {
+            let seven = raw::layout(wire_attributes, vertices, data).ok_or(1u32)?;
+            let mut all = [raw::Attribute::default(); 16];
+            all[..7].copy_from_slice(&seven);
+            all
+        })
     } else {
         None
+    };
+    let allowed = if units {
+        DG_GL_ARRAY_EXT_MASK
+    } else {
+        DG_GL_ARRAY_MASK
     };
     let attributes = wire_attributes & !DG_GL_ARRAY_RAW;
     let extended = attributes & (DG_GL_ARRAY_INDEX | DG_GL_ARRAY_EDGE) != 0;
@@ -47,7 +64,7 @@ unsafe fn draw(
     if args[0] > GL_POLYGON
         || vertices > DG_GL_MAX_VERTICES
         || indices > DG_GL_MAX_INDICES
-        || attributes & !DG_GL_ARRAY_MASK != 0
+        || attributes & !allowed != 0
         || attributes & DG_GL_ARRAY_POSITION == 0
         || (!elements && args[1] != 0)
         || (!compact
@@ -80,6 +97,29 @@ unsafe fn draw(
     {
         return Err(3);
     }
+    // Texture coordinates of unit u: unit 0 is slot 3, units 1-7 are slots 7-13.
+    let texcoord_units: u32 = (0..DG_GL_MAX_TEXTURE_UNITS)
+        .filter(|&u| {
+            attributes
+                & if u == 0 {
+                    DG_GL_ARRAY_TEXCOORD
+                } else {
+                    DG_GL_ARRAY_TEXCOORD1 << (u - 1)
+                }
+                != 0
+        })
+        .fold(0, |mask, u| mask | 1 << u);
+    // Current coordinates and client arrays are per texture unit. Any
+    // coordinate array needs explicit unit selection so an active unit other
+    // than zero cannot receive unit 0's coordinates or lose its own state.
+    if texcoord_units != 0
+        && (api.dg_glActiveTexture.is_none()
+            || api.dg_glClientActiveTexture.is_none()
+            || api.dg_glMultiTexCoord4fv.is_none()
+            || api.dg_glGetIntegerv.is_none())
+    {
+        return Err(3);
+    }
     if extended
         && (api.dg_glGetDoublev.is_none()
             || api.dg_glGetBooleanv.is_none()
@@ -102,7 +142,8 @@ unsafe fn draw(
     let mut edge = 0;
     let mut color = [0.0f32; 4];
     let mut normal = [0.0f32; 3];
-    let mut texcoord = [0.0f32; 4];
+    let mut texcoords = [[0.0f32; 4]; DG_GL_MAX_TEXTURE_UNITS as usize];
+    let mut active = GL_TEXTURE0 as i32;
     let mut secondary = [0.0f32; 4];
     unsafe {
         // GL modifies current values only for enabled arrays. Preserve those
@@ -118,8 +159,15 @@ unsafe fn draw(
         if attributes & DG_GL_ARRAY_NORMAL != 0 {
             api.dg_glGetFloatv.unwrap()(GL_CURRENT_NORMAL, normal.as_mut_ptr());
         }
-        if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
-            api.dg_glGetFloatv.unwrap()(GL_CURRENT_TEXTURE_COORDS, texcoord.as_mut_ptr());
+        if texcoord_units != 0 {
+            api.dg_glGetIntegerv.unwrap()(GL_ACTIVE_TEXTURE, &mut active);
+            for (u, saved) in texcoords.iter_mut().enumerate() {
+                if texcoord_units & 1 << u != 0 {
+                    api.dg_glActiveTexture.unwrap()(GL_TEXTURE0 + u as u32);
+                    api.dg_glGetFloatv.unwrap()(GL_CURRENT_TEXTURE_COORDS, saved.as_mut_ptr());
+                }
+            }
+            api.dg_glActiveTexture.unwrap()(active as u32);
         }
         if attributes & DG_GL_ARRAY_INDEX != 0 {
             api.dg_glGetDoublev.unwrap()(GL_CURRENT_INDEX, &mut index);
@@ -128,6 +176,9 @@ unsafe fn draw(
             api.dg_glGetBooleanv.unwrap()(GL_EDGE_FLAG, &mut edge);
         }
         api.dg_glPushClientAttrib.unwrap()(GL_CLIENT_VERTEX_ARRAY_BIT);
+        if units {
+            api.dg_glClientActiveTexture.unwrap()(GL_TEXTURE0);
+        }
         api.dg_glEnableClientState.unwrap()(GL_VERTEX_ARRAY);
         let (size, kind, step, offset) = attribute(0, 4, GL_FLOAT, 0);
         api.dg_glVertexPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
@@ -155,6 +206,25 @@ unsafe fn draw(
             let (size, kind, step, offset) =
                 attribute(3, 4, GL_FLOAT, DG_GL_VERTEX_TEXCOORD as usize);
             api.dg_glTexCoordPointer.unwrap()(size, kind, step, data.as_ptr().add(offset).cast());
+        }
+        // PushClientAttrib saved CLIENT_ACTIVE_TEXTURE and every unit's array;
+        // PopClientAttrib below restores both.
+        if units {
+            for u in 1..DG_GL_MAX_TEXTURE_UNITS as usize {
+                api.dg_glClientActiveTexture.unwrap()(GL_TEXTURE0 + u as u32);
+                if texcoord_units & 1 << u == 0 {
+                    api.dg_glDisableClientState.unwrap()(GL_TEXTURE_COORD_ARRAY);
+                    continue;
+                }
+                let a = raw.as_ref().expect("units are compact")[6 + u];
+                api.dg_glEnableClientState.unwrap()(GL_TEXTURE_COORD_ARRAY);
+                api.dg_glTexCoordPointer.unwrap()(
+                    a.size as i32,
+                    a.kind,
+                    0,
+                    data.as_ptr().add(a.offset).cast(),
+                );
+            }
         }
         if attributes & DG_GL_ARRAY_SECONDARY != 0 {
             let (size, kind, step, offset) =
@@ -211,8 +281,10 @@ unsafe fn draw(
         if attributes & DG_GL_ARRAY_NORMAL != 0 {
             api.dg_glNormal3fv.unwrap()(normal.as_ptr());
         }
-        if attributes & DG_GL_ARRAY_TEXCOORD != 0 {
-            api.dg_glTexCoord4fv.unwrap()(texcoord.as_ptr());
+        for (u, saved) in texcoords.iter().enumerate() {
+            if texcoord_units & 1 << u != 0 {
+                api.dg_glMultiTexCoord4fv.unwrap()(GL_TEXTURE0 + u as u32, saved.as_ptr());
+            }
         }
         if attributes & DG_GL_ARRAY_INDEX != 0 {
             api.dg_glIndexd.unwrap()(index);

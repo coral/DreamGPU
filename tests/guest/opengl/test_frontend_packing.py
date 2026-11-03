@@ -21,7 +21,9 @@ errors = {1: "x87 seed failed", 2: "actual float path changed x87 status",
           5: "actual request/flush failed", 6: "immutable packet differs after reuse",
           7: "actual vector helper packet/bits/status mismatch",
           8: "Begin/End record limit, TLS or x87 mismatch", 9: "byte budget split mismatch",
-          10: "byte-budget immutable payload mismatch", 11: "cached float state changed bits/x87 status", 12: "secondary float state changed bits/x87 status"}
+          10: "byte-budget immutable payload mismatch", 11: "cached float state changed bits/x87 status", 12: "secondary float state changed bits/x87 status",
+          13: "multitexture float state changed bits/x87 status",
+          14: "fixed-state float arguments changed bits/x87 status"}
 
 with tempfile.TemporaryDirectory(prefix="jgl-full-packing-") as temporary:
     root = Path(temporary)
@@ -71,7 +73,8 @@ extern "C" void *memset(void *, int, size_t);
         if result.returncode:
             raise SystemExit(f"{compiler}: " + errors.get(result.returncode, f"exit {result.returncode}"))
         assembly = subprocess.check_output(["objdump", "-d", str(binary)], text=True)
-        for function in ("glColor4f", "glOrtho", "glVertex3f", "glPolygonOffset", "glSecondaryColor3fEXT"):
+        for function in ("glColor4f", "glOrtho", "glVertex3f", "glPolygonOffset", "glSecondaryColor3fEXT",
+                         "glMultiTexCoord4fARB", "glBlendColorEXT", "glPointParameterfARB"):
             match = re.search(r"<" + function + r">:\n(.*?)(?=\n\n|\Z)", assembly, re.S)
             if not match or re.search(r"\b(?:fld|fst)[a-z]*\s", match.group(1)):
                 raise SystemExit(f"{compiler}: actual {function} packet path uses FP loads/stores")

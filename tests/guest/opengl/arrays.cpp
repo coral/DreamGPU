@@ -7,15 +7,20 @@ static JGL_ARRAY_STATE States[2];
 static ULONG Current, Error, Capacity, Calls, Counts[100], Modes[100], Masks[100];
 static GLfloat Positions[100][1024];
 static BYTE Packed[65536];
-static BOOL Ready = TRUE, Stipple, Secondary = TRUE;
+static BOOL Ready = TRUE, Stipple, Secondary = TRUE, Multitexture;
 static GLfloat SecondaryValues[3];
-static ULONG ScalarFunctions[16], ScalarCount;
+static ULONG ScalarFunctions[16], ScalarWords[16][5], ScalarCount;
 static GLdouble CurrentIndex;
 static ULONG CurrentEdge;
 BOOL JglSupportsSecondary(void) {
     return Secondary;
 }
+BOOL JglMultitextureAvailable(void) {
+    return Multitexture;
+}
 void JglScalarVector(ULONG fn, ULONG words, const void *p) {
+    assert(ScalarCount < 16 && words <= 5);
+    memcpy(ScalarWords[ScalarCount], p, words * 4);
     ScalarFunctions[ScalarCount++] = fn;
     if (fn == FEnum_glIndexd) {
         assert(words == 2);
@@ -27,7 +32,7 @@ void JglScalarVector(ULONG fn, ULONG words, const void *p) {
         memcpy(&CurrentEdge, p, 4);
         return;
     }
-    if (fn == FEnum_glVertex4f)
+    if (fn == FEnum_glVertex4f || fn == FEnum_glTexCoord4f || fn == FEnum_glMultiTexCoord4f)
         return;
     assert(fn == FEnum_glSecondaryColor3f && words == 3);
     memcpy(SecondaryValues, p, 12);
@@ -51,35 +56,43 @@ void JglSetError(GLenum error) {
 }
 ULONG JglMaxDataBytes(ULONG words) {
     assert(words == 4);
-    unsigned descriptors[7] = {}, offsets[7], bytes = 0, mask = DG_GL_ARRAY_RAW;
-    for (ULONG i = 0; i < 7; ++i) {
+    unsigned descriptors[DG_GL_ARRAY_EXT_SLOTS] = {}, offsets[DG_GL_ARRAY_EXT_SLOTS], bytes = 0,
+             mask = DG_GL_ARRAY_RAW;
+    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &States[Current].Attribute[i];
         if (a->Enabled) {
             mask |= 1U << i;
             descriptors[i] = ArrayWireType(i, a) | ((ULONG)a->Size << 16);
         }
     }
-    assert(DgRawArrayLayout(mask, Capacity, descriptors, offsets, &bytes));
+    const unsigned slots = (mask & ~(DG_GL_ARRAY_RAW | DG_GL_ARRAY_MASK)) ? 16 : 7;
+    assert(DgRawArrayLayoutSlots(mask, Capacity, descriptors, offsets, &bytes, slots));
     return bytes;
 }
 static BYTE Raw[65536];
-static ULONG RawBytes, CaptureCount;
+static ULONG RawBytes, CaptureCount, RawFunction, RawMask;
 BOOL JglData(ULONG, const ULONG *, ULONG, const void *, ULONG) {
     assert(!"array draws must capture directly, without a scratch copy");
     return FALSE;
 }
 BOOL JglCaptureData(ULONG fn, const ULONG *args, ULONG words, ULONG bytes, JGL_CAPTURE capture,
                     void *opaque) {
-    assert(fn == FEnum_glDrawArrays && words == 4 && args[1] == 0);
-    assert(args[3] & DG_GL_ARRAY_RAW);
+    // Exactly the draws with a unit 1-7 array use the sixteen-slot record.
+    const unsigned slots = fn == FEnum_glDrawArraysEXT ? DG_GL_ARRAY_EXT_SLOTS : 7;
+    assert((fn == FEnum_glDrawArrays || fn == FEnum_glDrawArraysEXT) && words == 4 && !args[1]);
+    assert((args[3] & DG_GL_ARRAY_RAW) &&
+           (slots == 16) == !!(args[3] & DG_GL_ARRAY_EXT_MASK & ~DG_GL_ARRAY_MASK));
     assert(bytes <= sizeof(Raw) && bytes <= JglMaxDataBytes(words) && Calls < 100);
     memset(Raw, 0xa5, sizeof(Raw));
     capture(opaque, Raw);
     ++CaptureCount;
     RawBytes = bytes;
-    unsigned descriptors[7], offsets[7], length;
-    memcpy(descriptors, Raw, 28);
-    assert(DgRawArrayLayout(args[3], args[2], descriptors, offsets, &length) && length == bytes);
+    RawFunction = fn;
+    RawMask = args[3];
+    unsigned descriptors[DG_GL_ARRAY_EXT_SLOTS], offsets[DG_GL_ARRAY_EXT_SLOTS], length;
+    memcpy(descriptors, Raw, slots * 4);
+    assert(DgRawArrayLayoutSlots(args[3], args[2], descriptors, offsets, &length, slots) &&
+           length == bytes);
     Counts[Calls] = args[2];
     Modes[Calls] = args[0];
     Masks[Calls] = args[3] & DG_GL_ARRAY_MASK;
@@ -116,12 +129,20 @@ static void Reset(void) {
     memset(States, 0, sizeof(States));
     Current = Error = Calls = ScalarCount = CaptureCount = 0;
     Ready = TRUE;
+    Multitexture = FALSE;
     Capacity = 1023;
     for (j = 0; j < 2; ++j)
-        for (i = 0; i < 5; ++i) {
+        for (i = 0; i < JGL_ARRAY_SLOTS; ++i) {
+            if (i == 5 || i == 6)
+                continue;
             States[j].Attribute[i].Size = i == 2 || i == 4 ? 3 : 4;
             States[j].Attribute[i].Type = GL_FLOAT;
         }
+}
+static ULONG Bits(GLfloat value) {
+    ULONG bits;
+    memcpy(&bits, &value, 4);
+    return bits;
 }
 static GLfloat Value(ULONG vertex, ULONG offset) {
     GLfloat value;
@@ -329,8 +350,158 @@ int main(void) {
             assert(values[0] == zero[n] && values[1] == 1 && values[2] == -1);
         }
     }
+    {
+        /* Without negotiation the client selector does not exist; unit 0 keeps
+         * every texture-coordinate command and no local enum is answered. */
+        Reset();
+        glClientActiveTextureARB(0x84c1);
+        assert(Error == GL_INVALID_OPERATION && !States[0].ClientTexture);
+        assert(!JglArrayQuery(0x84e1, &value));
+        Error = 0;
+        Multitexture = TRUE;
+        static const GLenum invalid[] = {0x84bf, 0x84c8, 0};
+        for (GLenum unit : invalid) {
+            glClientActiveTexture(unit);
+            assert(Error == GL_INVALID_ENUM && !States[0].ClientTexture);
+            Error = 0;
+        }
+        Ready = FALSE;
+        glClientActiveTextureARB(0x84c1);
+        assert(!States[0].ClientTexture);
+        Ready = TRUE;
+        // The client-active unit owns pointer, enable, queries and GetPointerv.
+        // Eleven entries: the topology split below draws eleven vertices.
+        const GLshort st[11][3] = {{1, -2, 3}, {4, 5, -6}, {7, 8, 9}};
+        const JGL_ARRAY *unit0 = &States[0].Attribute[3], *unit1 = &States[0].Attribute[7],
+                        *unit2 = &States[0].Attribute[8], *unit3 = &States[0].Attribute[9];
+        glClientActiveTextureARB(0x84c2);
+        assert(JglArrayQuery(0x84e1, &value) && value == 0x84c2);
+        assert(!JglArrayQuery(0x84e0, &value) && !JglArrayQuery(0x84e2, &value));
+        glTexCoordPointer(3, GL_SHORT, 6, st);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        assert(unit2->Enabled && unit2->Size == 3 && unit2->Type == GL_SHORT &&
+               unit2->Stride == 6 && unit2->Pointer == st);
+        assert(!unit0->Enabled && unit0->Size == 4 && unit0->Type == GL_FLOAT && !unit0->Pointer);
+        assert(JglArrayQuery(GL_TEXTURE_COORD_ARRAY, &value) && value == 1);
+        assert(JglArrayQuery(GL_TEXTURE_COORD_ARRAY_SIZE, &value) && value == 3);
+        assert(JglArrayQuery(GL_TEXTURE_COORD_ARRAY_TYPE, &value) && value == GL_SHORT);
+        assert(JglArrayQuery(GL_TEXTURE_COORD_ARRAY_STRIDE, &value) && value == 6);
+        glGetPointerv(GL_TEXTURE_COORD_ARRAY_POINTER, &pointer);
+        assert(pointer == st);
+        // Slot-3 type rules bind every unit; a rejected pointer changes nothing.
+        glTexCoordPointer(2, GL_UNSIGNED_BYTE, 0, vertices);
+        glTexCoordPointer(2, GL_BYTE, 0, vertices);
+        assert(Error == GL_INVALID_ENUM && unit2->Pointer == st && unit2->Size == 3);
+        Error = 0;
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        assert(!unit2->Enabled && !unit0->Enabled);
+        glClientActiveTexture(0x84c0);
+        assert(JglArrayQuery(0x84e1, &value) && value == 0x84c0);
+        assert(JglArrayQuery(GL_TEXTURE_COORD_ARRAY_SIZE, &value) && value == 4);
+        glGetPointerv(GL_TEXTURE_COORD_ARRAY_POINTER, &pointer);
+        assert(!pointer);
+
+        // Unit 0 alone keeps the legacy seven-descriptor record, byte for byte.
+        const GLfloat uv[11][2] = {{.25f, .5f}, {.75f, 1}, {-1, 2}};
+        const GLdouble q[22] = {.5, 99, -.25, 99, 4, 99};
+        glVertexPointer(3, GL_FLOAT, 0, vertices);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glTexCoordPointer(2, GL_FLOAT, 0, uv);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        BYTE expected[256];
+        memset(expected, 0, sizeof(expected));
+        const ULONG legacy[7] = {GL_FLOAT | 3U << 16, 0, 0, GL_FLOAT | 2U << 16, 0, 0, 0};
+        memcpy(expected, legacy, 28);
+        memcpy(expected + 28, vertices, 36);
+        memcpy(expected + 64, uv, 24);
+        assert(Calls == 1 && RawFunction == FEnum_glDrawArrays &&
+               RawMask == (DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_TEXCOORD));
+        assert(RawBytes == 88 && !memcmp(Raw, expected, 88) && Raw[88] == 0xa5);
+
+        // Units 1 and 3 select DrawArraysEXT: sixteen descriptors, units at
+        // slots 7-13 after slot 6, component alignment and zero padding.
+        glClientActiveTexture(0x84c1);
+        glTexCoordPointer(3, GL_SHORT, 6, st);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        glClientActiveTextureARB(0x84c3);
+        glTexCoordPointer(1, GL_DOUBLE, 16, q);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        assert(unit1->Enabled && unit3->Enabled && unit0->Enabled && !unit2->Enabled);
+        const ULONG mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_TEXCOORD |
+                           DG_GL_ARRAY_TEXCOORD1 | DG_GL_ARRAY_TEXCOORD1 << 2;
+        ULONG extended[16] = {GL_FLOAT | 3U << 16, 0, 0, GL_FLOAT | 2U << 16};
+        extended[7] = GL_SHORT | 3U << 16;
+        extended[9] = GL_DOUBLE | 1U << 16;
+        memset(expected, 0, sizeof(expected));
+        memcpy(expected, extended, 64);
+        memcpy(expected + 64, vertices, 36);
+        memcpy(expected + 100, uv, 24);
+        memcpy(expected + 124, st, 18);
+        for (ULONG v = 0; v < 3; ++v) // 142-143 pad to the eight-byte section
+            memcpy(expected + 144 + v * 8, q + v * 2, 8);
+        Calls = 0;
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        assert(Calls == 1 && RawFunction == FEnum_glDrawArraysEXT && RawMask == mask);
+        assert(RawBytes == 168 && !memcmp(Raw, expected, 168) && Raw[168] == 0xa5);
+        // Elements gather every unit by index, including strided doubles.
+        const GLubyte order[3] = {2, 0, 1};
+        Calls = 0;
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_BYTE, order);
+        for (ULONG v = 0; v < 3; ++v) {
+            const ULONG at = order[v];
+            memcpy(expected + 64 + v * 12, vertices[at], 12);
+            memcpy(expected + 100 + v * 8, uv[at], 8);
+            memcpy(expected + 124 + v * 6, st[at], 6);
+            memcpy(expected + 144 + v * 8, q + at * 2, 8);
+        }
+        assert(Calls == 1 && RawFunction == FEnum_glDrawArraysEXT && RawMask == mask);
+        assert(RawBytes == 168 && !memcmp(Raw, expected, 168));
+        // Topology splitting is unchanged by the larger descriptor header.
+        Calls = 0;
+        Capacity = 5;
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 11);
+        assert(Calls == 4 && Counts[0] == 4 && Counts[3] == 5 && Positions[3][4] == 10);
+        Capacity = 1023;
+        // Every unit's range is validated before any piece is emitted.
+        glTexCoordPointer(1, GL_DOUBLE, 16, (void *)(~(ULONG_PTR)0 - 8));
+        Calls = 0;
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        assert(!Calls && Error == GL_INVALID_VALUE);
+        Error = 0;
+
+        // ArrayElement: unit 0 keeps TexCoord4f; units 1-7 send the canonical
+        // target-first MultiTexCoord4f; every range is checked before any call.
+        ScalarCount = 0;
+        JglArrayElement(1);
+        assert(!ScalarCount && Error == GL_INVALID_VALUE);
+        Error = 0;
+        glTexCoordPointer(1, GL_DOUBLE, 16, q);
+        JglArrayElement(1);
+        assert(ScalarCount == 4 && ScalarFunctions[0] == FEnum_glTexCoord4f &&
+               ScalarFunctions[1] == FEnum_glMultiTexCoord4f &&
+               ScalarFunctions[2] == FEnum_glMultiTexCoord4f &&
+               ScalarFunctions[3] == FEnum_glVertex4f);
+        const ULONG tex0[4] = {Bits(.75f), Bits(1), 0, Bits(1)};
+        const ULONG tex1[5] = {0x84c1, Bits(4), Bits(5), Bits(-6), Bits(1)};
+        const ULONG tex3[5] = {0x84c3, Bits(-.25f), 0, 0, Bits(1)};
+        assert(!memcmp(ScalarWords[0], tex0, 16) && !memcmp(ScalarWords[1], tex1, 20) &&
+               !memcmp(ScalarWords[2], tex3, 20));
+
+        // InterleavedArrays replaces only the client-active unit's coordinates.
+        alignas(float) BYTE interleaved[64] = {};
+        glClientActiveTexture(0x84c2);
+        JglInterleavedArrays(0x2a27 /* GL_T2F_V3F */, 0, interleaved);
+        assert(unit2->Enabled && unit2->Size == 2 && unit2->Pointer == interleaved &&
+               unit2->Stride == 20 && unit0->Pointer == uv && unit0->Enabled);
+        assert(unit1->Enabled && unit1->Pointer == st && unit3->Enabled);
+        JglInterleavedArrays(0x2a21 /* GL_V3F */, 0, interleaved);
+        assert(!unit2->Enabled && unit2->Pointer == interleaved && unit0->Enabled);
+        assert(!Error);
+    }
     puts("PASS actual client arrays: local state, indexed/strided snapshots, normalization, "
-         "topology across bounded packets, invalid ranges/types, zero draws");
+         "topology across bounded packets, invalid ranges/types, zero draws; per-unit "
+         "routing, legacy unit-0 and exact DrawArraysEXT payloads, ArrayElement units");
     return 0;
 }
 

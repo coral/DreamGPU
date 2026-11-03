@@ -2,14 +2,17 @@
  * Freestanding i686 platform declarations for the actual compatibility.c.
  * Unused arithmetic/transport entrypoints are removed by section GC.
  */
-typedef unsigned int ULONG, GLenum, GLuint;
+typedef unsigned int ULONG, GLenum, GLuint, ULONG_PTR;
 typedef int GLsizei, GLint, BOOL;
 typedef unsigned char GLubyte;
 typedef float GLfloat;
+typedef double GLdouble;
 typedef void *HINSTANCE, *HGLRC;
 typedef const char *LPCSTR;
 typedef void (*PROC)(void);
 #define NULL nullptr
+#define TRUE 1
+#define FALSE 0
 #define APIENTRY __attribute__((stdcall))
 #define WINAPI __attribute__((stdcall))
 #define GL_INVALID_ENUM 0x500
@@ -33,6 +36,8 @@ void JglScalarVector(ULONG, ULONG, const void *);
 BOOL JglData(ULONG, const ULONG *, ULONG, const void *, ULONG);
 ULONG JglMaxDataBytes(ULONG);
 HINSTANCE JglModule(void);
+BOOL JglMultitextureAvailable(void);
+BOOL JglFixedStateAvailable(void);
 HGLRC WINAPI wglGetCurrentContext(void);
 PROC WINAPI GetProcAddress(HINSTANCE, LPCSTR);
 void APIENTRY glColor3f(GLfloat, GLfloat, GLfloat);

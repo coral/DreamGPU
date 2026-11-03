@@ -2042,6 +2042,9 @@ pub const DG_CAP_GL_BULK_READBACK: u32 = 2048;
 pub const DG_CAP_GL_DEPTH_STENCIL_READBACK: u32 = 4096;
 pub const DG_CAP_GL_TEXTURE_IMAGES: u32 = 8192;
 pub const DG_CAP_GL_TEXTURE_BORDERS: u32 = 16384;
+pub const DG_CAP_GL_MULTITEXTURE: u32 = 32768;
+pub const DG_GL_MAX_TEXTURE_UNITS: u32 = 8;
+pub const DG_CAP_GL_FIXED_STATE: u32 = 65536;
 pub const DG_IRQ_GL_COMPLETION: u32 = 2;
 pub const DG_GL_REG_VERSION: u32 = 4352;
 pub const DG_GL_REG_ADDR_LO: u32 = 4356;
@@ -2181,6 +2184,10 @@ pub const DG_GL_VERTEX_SECONDARY: u32 = 64;
 pub const DG_GL_VERTEX_SECONDARY_PAD: u32 = 76;
 pub const DG_GL_VERTEX_SECONDARY_BYTES: u32 = 80;
 pub const DG_GL_ARRAY_RAW: u32 = 2147483648;
+pub const DG_GL_ARRAY_TEXCOORD1: u32 = 128;
+pub const DG_GL_ARRAY_EXT_MASK: u32 = 16383;
+pub const DG_GL_ARRAY_EXT_SLOTS: u32 = 16;
+pub const DG_GL_ARRAY_EXT_DESCRIPTOR_BYTES: u32 = 64;
 pub const DG_GL_ARRAY_DESCRIPTOR_BYTES: u32 = 28;
 pub const DG_GL_MAX_VERTICES: u32 = 65536;
 pub const DG_GL_MAX_EVAL_ORDER: u32 = 8;
@@ -6244,4 +6251,45 @@ pub struct DreamGpuGlApi {
     pub dg_glUniform4fv: ::core::option::Option<
         unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: ::core::ffi::c_int, arg3: *const f32),
     >,
+    pub dg_glClientActiveTexture:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glMultiTexCoord4f: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32, arg3: f32, arg4: f32, arg5: f32),
+    >,
+    pub dg_glMultiTexCoord4fv:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *const f32)>,
+    pub dg_glBlendColor:
+        ::core::option::Option<unsafe extern "C" fn(arg1: f32, arg2: f32, arg3: f32, arg4: f32)>,
+    pub dg_glBlendEquation: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glBlendFuncSeparate: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_uint,
+        ),
+    >,
+    pub dg_glBlendEquationSeparate: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint),
+    >,
+    pub dg_glStencilFuncSeparate: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_uint,
+        ),
+    >,
+    pub dg_glStencilOpSeparate: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_uint,
+        ),
+    >,
+    pub dg_glPointParameterf:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32)>,
+    pub dg_glPointParameterfv:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *const f32)>,
 }

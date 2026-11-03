@@ -363,6 +363,130 @@ JGL_PACKING_ONLY void APIENTRY glCopyTexSubImage2D(GLenum a0, GLint a1, GLint a2
     words[7] = (ULONG)a7;
     Scalar(FEnum_glCopyTexSubImage2D, 8, words);
 }
+JGL_PACKING_ONLY void APIENTRY glActiveTexture(GLenum a0) {
+    ULONG words[1];
+    words[0] = (ULONG)a0;
+    Scalar(FEnum_glActiveTexture, 1, words);
+}
+JGL_PACKING_ONLY void APIENTRY glActiveTextureARB(GLenum a0) {
+    ULONG words[1];
+    words[0] = (ULONG)a0;
+    Scalar(FEnum_glActiveTexture, 1, words);
+}
+JGL_PACKING_ONLY void APIENTRY glMultiTexCoord4f(GLenum a0, GLfloat a1, GLfloat a2, GLfloat a3, GLfloat a4) {
+    ULONG words[5];
+    words[0] = (ULONG)a0;
+    __builtin_memcpy(words + 1, &a1, 4);
+    __builtin_memcpy(words + 2, &a2, 4);
+    __builtin_memcpy(words + 3, &a3, 4);
+    __builtin_memcpy(words + 4, &a4, 4);
+    Scalar(FEnum_glMultiTexCoord4f, 5, words);
+}
+JGL_PACKING_ONLY void APIENTRY glMultiTexCoord4fARB(GLenum a0, GLfloat a1, GLfloat a2, GLfloat a3, GLfloat a4) {
+    ULONG words[5];
+    words[0] = (ULONG)a0;
+    __builtin_memcpy(words + 1, &a1, 4);
+    __builtin_memcpy(words + 2, &a2, 4);
+    __builtin_memcpy(words + 3, &a3, 4);
+    __builtin_memcpy(words + 4, &a4, 4);
+    Scalar(FEnum_glMultiTexCoord4f, 5, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendColor(GLclampf a0, GLclampf a1, GLclampf a2, GLclampf a3) {
+    ULONG words[4];
+    __builtin_memcpy(words + 0, &a0, 4);
+    __builtin_memcpy(words + 1, &a1, 4);
+    __builtin_memcpy(words + 2, &a2, 4);
+    __builtin_memcpy(words + 3, &a3, 4);
+    Scalar(FEnum_glBlendColor, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendColorEXT(GLclampf a0, GLclampf a1, GLclampf a2, GLclampf a3) {
+    ULONG words[4];
+    __builtin_memcpy(words + 0, &a0, 4);
+    __builtin_memcpy(words + 1, &a1, 4);
+    __builtin_memcpy(words + 2, &a2, 4);
+    __builtin_memcpy(words + 3, &a3, 4);
+    Scalar(FEnum_glBlendColor, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendEquation(GLenum a0) {
+    ULONG words[1];
+    words[0] = (ULONG)a0;
+    Scalar(FEnum_glBlendEquation, 1, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendEquationEXT(GLenum a0) {
+    ULONG words[1];
+    words[0] = (ULONG)a0;
+    Scalar(FEnum_glBlendEquation, 1, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendFuncSeparate(GLenum a0, GLenum a1, GLenum a2, GLenum a3) {
+    ULONG words[4];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    Scalar(FEnum_glBlendFuncSeparate, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendFuncSeparateEXT(GLenum a0, GLenum a1, GLenum a2, GLenum a3) {
+    ULONG words[4];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    Scalar(FEnum_glBlendFuncSeparate, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendEquationSeparate(GLenum a0, GLenum a1) {
+    ULONG words[2];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    Scalar(FEnum_glBlendEquationSeparate, 2, words);
+}
+JGL_PACKING_ONLY void APIENTRY glBlendEquationSeparateEXT(GLenum a0, GLenum a1) {
+    ULONG words[2];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    Scalar(FEnum_glBlendEquationSeparate, 2, words);
+}
+JGL_PACKING_ONLY void APIENTRY glStencilOpSeparate(GLenum a0, GLenum a1, GLenum a2, GLenum a3) {
+    ULONG words[4];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    Scalar(FEnum_glStencilOpSeparate, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glStencilOpSeparateATI(GLenum a0, GLenum a1, GLenum a2, GLenum a3) {
+    ULONG words[4];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    Scalar(FEnum_glStencilOpSeparate, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glStencilFuncSeparate(GLenum a0, GLenum a1, GLint a2, GLuint a3) {
+    ULONG words[4];
+    words[0] = (ULONG)a0;
+    words[1] = (ULONG)a1;
+    words[2] = (ULONG)a2;
+    words[3] = (ULONG)a3;
+    Scalar(FEnum_glStencilFuncSeparate, 4, words);
+}
+JGL_PACKING_ONLY void APIENTRY glPointParameterf(GLenum a0, GLfloat a1) {
+    ULONG words[2];
+    words[0] = (ULONG)a0;
+    __builtin_memcpy(words + 1, &a1, 4);
+    Scalar(FEnum_glPointParameterf, 2, words);
+}
+JGL_PACKING_ONLY void APIENTRY glPointParameterfARB(GLenum a0, GLfloat a1) {
+    ULONG words[2];
+    words[0] = (ULONG)a0;
+    __builtin_memcpy(words + 1, &a1, 4);
+    Scalar(FEnum_glPointParameterf, 2, words);
+}
+JGL_PACKING_ONLY void APIENTRY glPointParameterfEXT(GLenum a0, GLfloat a1) {
+    ULONG words[2];
+    words[0] = (ULONG)a0;
+    __builtin_memcpy(words + 1, &a1, 4);
+    Scalar(FEnum_glPointParameterf, 2, words);
+}
 JGL_PACKING_ONLY void APIENTRY glLoadMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixf, 16, matrix); }
 JGL_PACKING_ONLY void APIENTRY glMultMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glMultMatrixf, 16, matrix); }
 JGL_PACKING_ONLY void APIENTRY glLoadMatrixd(const GLdouble *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixd, 32, matrix); }
