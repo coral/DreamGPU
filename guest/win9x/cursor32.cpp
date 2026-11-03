@@ -72,7 +72,7 @@ class cursor_stream final {
             return 0;
         staging_ = false;
         const DWORD words = layout_.Width * layout_.Height * 2;
-        if (!pixels || capacity < words || (layout_.Bits != 1 && bpp != 32))
+        if (!pixels || capacity < words || (layout_.Bits != 1 && layout_.Bits != bpp))
             return 0;
         DWORD output = 0;
         for (DWORD y = 0; y < layout_.Height; ++y) {
@@ -83,7 +83,13 @@ class cursor_stream final {
                 pixels[output++] = (raw_[and_start + x / 8] & mask) ? 0x00ffffffUL : 0;
                 if (layout_.Bits == 1)
                     pixels[output++] = (raw_[xor_start + x / 8] & mask) ? 0x00ffffffUL : 0;
-                else {
+                else if (layout_.Bits == 16) {
+                    const DWORD offset = xor_start + x * 2;
+                    const DWORD v = raw_[offset] | (DWORD(raw_[offset + 1]) << 8);
+                    const DWORD r = v >> 11, g = (v >> 5) & 63, b = v & 31;
+                    pixels[output++] = (((r << 3) | (r >> 2)) << 16) |
+                                       (((g << 2) | (g >> 4)) << 8) | ((b << 3) | (b >> 2));
+                } else {
                     const DWORD offset = xor_start + x * 4;
                     pixels[output++] = raw_[offset] | (DWORD(raw_[offset + 1]) << 8) |
                                        (DWORD(raw_[offset + 2]) << 16);

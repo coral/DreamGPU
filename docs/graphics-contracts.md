@@ -229,8 +229,12 @@ desktops as well as 32-bpp ones: the frontend bind, the 16-bit BitBlt DDI and
 the VxD primary metadata take matching depths, every desktop record carries the
 format word, and a depth change while GPU-owned faults like a size change.
 Before this every 16-bpp exclusive fullscreen DirectDraw/Direct3D primary
-failed (`capd3d6` failed at that step); it now passes at 640×480×16. Colour
-cursors at 16 bpp still fall back to the software cursor.
+failed (`capd3d6` failed at that step); it now passes at 640×480×16. RGB565
+colour cursors stay native: the host composite `(desktop & and) ^ xor` commutes
+exactly with the bit-replicating 565 expansion it already applies to the
+desktop. Previously they fell back to GDI's software cursor, and GL takeover
+then refused every bind while one was shown (Wine's D3D8/9 hardware cursors are
+colour cursors). 8-bpp palette cursors still fall back.
 
 Links 2003 (DirectDraw7 through Wine, Win2000): two defects stopped it. Every
 depth-to-depth Blt into the game's spare Z-buffer returned INVALIDCALL, because

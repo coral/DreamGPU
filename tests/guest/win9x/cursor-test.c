@@ -155,6 +155,51 @@ int main(void) {
         assert(Submits == submits + 1 && Registers[DG_CURSOR_REG_FLAGS / 4] == 0);
         wBpp = Primary.bpp = 32;
     }
+    /* RGB565 color on a 16-bpp desktop stays native (so GL takeover remains
+     * safe): XOR words expand by bit replication, as the desktop does. */
+    {
+        CURSORSHAPE h = {1, 0, 2, 1, 2, 1, 16};
+        memcpy(Shape, &h, 12);
+        Shape[12] = 0x80; /* pixel 0 keeps the desktop, pixel 1 replaces it */
+        Shape[13] = 0xa5; /* AND row padding */
+        Shape[14] = 0xff; /* pixel 0 XOR 0xffff: exact inversion */
+        Shape[15] = 0xff;
+        Shape[16] = 0x45; /* pixel 1: 0x8d45 = r 17, g 42, b 5 */
+        Shape[17] = 0x8d;
+        assert(!Dg9CursorLayout(Shape, 32, &layout));
+        assert(Dg9CursorLayout(Shape, 16, &layout) && layout.XorStride == 4 && layout.Bytes == 6);
+        wBpp = Primary.bpp = 16;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE &&
+               Dg9CursorTakeoverSafe());
+        assert(HostPixels[0] == 0xffffff && HostPixels[1] == 0xffffff);
+        assert(HostPixels[2] == 0 && HostPixels[3] == 0x8caa29);
+        /* Extremes replicate to full range. */
+        Shape[16] = 0x1f;
+        Shape[17] = 0x00;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE && HostPixels[3] == 0x0000ff);
+        Shape[16] = 0xe0;
+        Shape[17] = 0x07;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE && HostPixels[3] == 0x00ff00);
+        Shape[16] = 0x00;
+        Shape[17] = 0x08; /* lowest red bit */
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_NATIVE && HostPixels[3] == 0x080000);
+        /* The same shape on a 32-bpp desktop is a mismatch: GDI gives device-format XOR. */
+        wBpp = Primary.bpp = 32;
+        assert(Dg9CursorSet16((CURSORSHAPE *)Shape) == DG9_CURSOR_FALLBACK &&
+               !Dg9CursorTakeoverSafe());
+        /* A depth change between begin and commit cannot convert stale bytes. */
+        {
+            DWORD w0 = 0, w1 = 0, w2 = 0, k, words[2 * 2];
+            DG9_CURSOR_LAYOUT staged;
+            for (k = 0; k < 12; ++k)
+                (k < 4 ? &w0 : k < 8 ? &w1 : &w2)[0] |= (DWORD)Shape[k] << ((k % 4) * 8);
+            assert(DreamGpuCursorBegin(16, w0, w1, w2, &staged));
+            assert(DreamGpuCursorData(Shape[12] | (DWORD)Shape[13] << 8 | (DWORD)Shape[14] << 16 |
+                                          (DWORD)Shape[15] << 24,
+                                      Shape[16] | (DWORD)Shape[17] << 8, 0));
+            assert(!DreamGpuCursorCommit(32, 0, 0, words, 4));
+        }
+    }
     Mono();
     memcpy(malformed, Shape, 12);
     malformed[4] = 0;

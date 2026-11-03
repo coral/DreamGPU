@@ -32,7 +32,8 @@ static DWORD Dg9CursorWord(const BYTE DG9_CURSOR_LOCAL *bytes) {
 
 /* CURSORSHAPE is the packed DDK12-byte header followed by AND then XOR.
  * cbWidth is the AND stride (also XOR for monochrome), never a guessed width.
- * Color XOR rows use device-pixel width as in the pinned donor/DDK path.
+ * Color XOR rows use device-pixel width as in the pinned donor/DDK path:
+ * 32-bit BGRX on 32-bpp desktops, RGB565 on 16-bpp ones.
  */
 static BOOL Dg9CursorLayout(const BYTE DG9_CURSOR_LOCAL *header, DWORD bpp,
                             DG9_CURSOR_LAYOUT DG9_CURSOR_LOCAL *layout) {
@@ -42,10 +43,13 @@ static BOOL Dg9CursorLayout(const BYTE DG9_CURSOR_LOCAL *header, DWORD bpp,
     if (!w || !h || w > DG_CURSOR_MAX_DIMENSION || h > DG_CURSOR_MAX_DIMENSION || hotx >= w ||
         hoty >= h || header[10] != 1 || stride < (w + 7) / 8 || stride > 256)
         return FALSE;
-    /* Palette/16-bit expansion does not commute with XOR against the desktop. */
-    if (bits != 1 && (bits != 32 || bpp != 32))
+    /* RGB565 expands by bit replication, exactly as the host expands the
+     * desktop. Replication is linear over XOR and AND with an all-zero or
+     * all-one mask, so (desktop & and) ^ xor gives the same pixels as GDI's
+     * software cursor in 565. Palette indices do not commute that way. */
+    if (bits != 1 && (bits != bpp || (bits != 16 && bits != 32)))
         return FALSE;
-    xor_stride = bits == 1 ? stride : w * 4;
+    xor_stride = bits == 1 ? stride : w * (bits / 8);
     if ((stride + xor_stride) * h > DG9_CURSOR_RAW_MAX)
         return FALSE;
     layout->Width = w;
