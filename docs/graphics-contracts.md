@@ -401,7 +401,9 @@ only the device-owned drawable has (patch 0028 defines a zeroed CPU copy
 instead). With multitexture, Wine's fast pretransformed path set the unit-0
 coordinate pointer on whichever client unit Wine's own loaders left selected,
 so every menu tile sampled one texel; it now selects unit 0. Menus and Quick
-Start render correctly; gameplay beyond Quick Start is unverified.
+Start render correctly. With the m24 package (vertex buffer objects) a Kauri
+Cliffs round on Win2000 renders the course, sea, sky, golfer and HUD with
+correct colours, and the computer player completes its first shot.
 
 Game checks on DreamGPU fixtures (2026-11-03, Linux host):
 - **Quake III Arena demo** (OpenGL, Win2000): installs, runs at 640×480, and its
@@ -410,7 +412,10 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
 - **Expendable demo** (D3D6): runs at 640×480×16 on Win2000 and Win98 SE once
   the retro profile hides modern CPUID 0x80000001 EDX bits (Juke 797432a). The
   game's 3DNow! test (`test edx, 0xffffffff`) otherwise selects 3DNow! code that
-  faults on FEMMS. Whether it then enables its EMBM path is unverified.
+  faults on FEMMS. It does not use its EMBM path: with `BumpMapping [1]`, an
+  app-local logging `wined3d.dll` shows gameplay compiling no BUMPENVMAP
+  fragment program. The same trace showed its specular-alpha vertex fog
+  falling back to Wine's per-vertex software emulation on nearly every draw.
 - **SimCity 3000** (DirectDraw, Win2000): reaches its menu and renders a
   starter town's city view, UI and ticker after Wine patch 0032.
 - **Turok 3Dfx demo** (Glide, Win98 SE): faults before its video DLL loads,
