@@ -63,10 +63,16 @@ A chroma-keyed batch with blending off is drawn under an alpha test
 immediate mode, five GL calls per vertex; patch `0006-chromakey-arrays.patch`
 draws them from the same arrays as every other batch, with a three-component
 colour pointer so vertex alpha stays 1 (`tests/guest/glide/test_chromakey_arrays.py`).
-With blending on, keyed texels are not discarded (real Voodoo hardware discards
-them in every blend mode). They are black with texture alpha 0: invisible under
-additive blending, and under source-alpha blending only when the alpha combine
-passes the texture alpha through.
+Voodoo hardware discards keyed pixels in every blend mode; the donor keyed only
+unblended batches. Diablo II draws its menu text with chroma key on and
+multiplicative blending (`ZERO, SRC_COLOR`), so the black around every glyph
+multiplied the stone buttons to black. Patch `0007-chromakey-blended.patch` also
+keys blended batches whose blend factors never read the source alpha while alpha
+writes are off: there the alpha test's replacement fragment alpha cannot reach
+the framebuffer. It restores the application's alpha function after the keyed
+draw (the donor left `GEQUAL 0.5` behind). Blends that read the source alpha
+(`SRC_ALPHA`, `ONE_MINUS_SRC_ALPHA`, `SRC_ALPHA_SATURATE`) or batches with alpha
+writes on still draw keyed texels as black with alpha 0.
 
 ## Glide 3.x provider
 

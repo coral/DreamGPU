@@ -1,0 +1,66 @@
+--- a/GLRender.cpp
++++ b/GLRender.cpp
+@@ -132,6 +132,39 @@
+ #endif
+ }
+ 
++// Voodoo hardware discards chroma-keyed pixels in every blend mode. OpenGLide
++// gives keyed texels texture alpha 0 and alpha-tests a draw whose vertex alpha
++// is 1, which replaces the fragment alpha. That is only invisible when nothing
++// reads the fragment alpha: blending off, or blend factors that never use the
++// source alpha while alpha writes are off (glBlendFunc also blends alpha).
++static bool KeyedAlphaUnused( void )
++{
++    if ( !OpenGL.Blend )
++    {
++        return true;
++    }
++    if ( Glide.State.AlphaMask )
++    {
++        return false;
++    }
++    switch ( OpenGL.SrcBlend )
++    {
++    case GL_ZERO: case GL_ONE: case GL_DST_COLOR: case GL_ONE_MINUS_DST_COLOR:
++    case GL_DST_ALPHA: case GL_ONE_MINUS_DST_ALPHA:
++        break;
++    default:
++        return false;
++    }
++    switch ( OpenGL.DstBlend )
++    {
++    case GL_ZERO: case GL_ONE: case GL_SRC_COLOR: case GL_ONE_MINUS_SRC_COLOR:
++    case GL_DST_ALPHA: case GL_ONE_MINUS_DST_ALPHA:
++        return true;
++    default:
++        return false;
++    }
++}
++
+ // Draw the current saved triangles
+ void RenderDrawTriangles( void )
+ {
+@@ -184,19 +217,21 @@
+         }
+     }
+     
+-    if( !OpenGL.Blend && Glide.State.ChromaKeyMode && InternalConfig.EXT_vertex_array )
++    if( Glide.State.ChromaKeyMode && KeyedAlphaUnused( ) && InternalConfig.EXT_vertex_array )
+     {
+         // The keyed draw below as one array draw. Three-component colours give
+         // every vertex alpha 1, as glColor3fv does, so the alpha test sees only
+         // the keyed texture alpha. Five GL calls per vertex made chroma-keyed
+         // sprite games (Diablo II) pay the immediate-mode cost the normal path
+-        // avoids.
++        // avoids. Blended batches qualify too (Diablo II's multiplied menu
++        // text); the application's alpha function is restored afterwards.
+         glAlphaFunc( GL_GEQUAL, 0.5 );
+         glEnable( GL_ALPHA_TEST );
+         glColorPointer( 3, GL_FLOAT, 4 * sizeof( GLfloat ), &OGLRender.TColor[0] );
+         glDrawArrays( GL_TRIANGLES, 0, OGLRender.NumberOfTriangles * 3 );
+         glColorPointer( 4, GL_FLOAT, 0, &OGLRender.TColor[0] );
+         glDisable( GL_ALPHA_TEST );
++        glAlphaFunc( OpenGL.AlphaTestFunction, OpenGL.AlphaReferenceValue );
+     }
+     else if( !OpenGL.Blend && Glide.State.ChromaKeyMode )
+     {

@@ -28,6 +28,10 @@
     {
       "file": "0006-chromakey-arrays.patch",
       "sha256": "99ab955a22312643da9ab8057c01a492e9c4a6741a8d32280e7534b495670ff9"
+    },
+    {
+      "file": "0007-chromakey-blended.patch",
+      "sha256": "7c46d9cb1e53e27066020b642aca01809fbb46aa906386b2be5810785bbd69dd"
     }
   ],
   "files": {
@@ -49,7 +53,7 @@
     },
     "GLRender.cpp": {
       "before_sha256": "586869fb645f1bebf8e0c4b94e3bf474a085974b699014382bccb42b3f7308c7",
-      "after_sha256": "41fef0ac777d4e7f9bb9231033875593e3211d437d4fdd9eaf8111c50a39b556"
+      "after_sha256": "cf236a790a4e893faeffe36fe209b1115d333dfdf7cad90cce1fa50f3349ceb5"
     },
     "PGTexture.cpp": {
       "before_sha256": "5f79f966cf4866413a0479e0d00c6a9b886b06d5e7add3d96273e17e0eadc481",
