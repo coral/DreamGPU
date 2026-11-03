@@ -9,11 +9,12 @@
 typedef struct {
     ULONG Function, Args[8], Bytes;
     unsigned char *Pixels;
+    BOOL Gathered; /* captured row by row (JglCaptureData), not one span */
 } TILE;
 static TILE Tiles[1024];
 static ULONG Count, Maximum, FailAfter;
 static GLenum Error;
-static BOOL Ready, ImageSupport, BorderSupport;
+static BOOL Ready, ImageSupport, BorderSupport, CompressedSupport;
 static JGL_UNPACK Unpack;
 static JGL_UNPACK Pack;
 static GLint NativeWidth, NativeBorder;
@@ -25,6 +26,9 @@ BOOL JglTextureImagesAvailable(void) {
 }
 BOOL JglTextureBordersAvailable(void) {
     return BorderSupport;
+}
+BOOL JglCompressedTexturesAvailable(void) {
+    return CompressedSupport;
 }
 BOOL JglCompiling(void) {
     return Compiling;
@@ -62,22 +66,37 @@ JGL_UNPACK *JglUnpack(void) {
 JGL_UNPACK *JglPack(void) {
     return &Pack;
 }
-BOOL JglData(ULONG function, const ULONG *args, ULONG words, const void *data, ULONG bytes) {
+static TILE *NewTile(ULONG function, const ULONG *args, ULONG words, ULONG bytes) {
     TILE *tile;
     assert(words == 8 && Count < 1024 && bytes <= Maximum);
     assert((bytes + 3u) / 4u * 4u <= Maximum);
     if (Count == FailAfter) {
         JglSetError(GL_INVALID_OPERATION);
-        return FALSE;
+        return NULL;
     }
     tile = &Tiles[Count++];
     tile->Function = function;
     tile->Bytes = bytes;
+    tile->Gathered = FALSE;
     memcpy(tile->Args, args, sizeof(tile->Args));
     tile->Pixels = (unsigned char *)malloc(bytes ? bytes : 1);
     assert(tile->Pixels);
-    if (bytes)
+    return tile;
+}
+BOOL JglData(ULONG function, const ULONG *args, ULONG words, const void *data, ULONG bytes) {
+    TILE *tile = NewTile(function, args, words, bytes);
+    if (tile && bytes)
         memcpy(tile->Pixels, data, bytes);
+    return tile != NULL;
+}
+BOOL JglCaptureData(ULONG function, const ULONG *args, ULONG words, ULONG bytes,
+                    JGL_CAPTURE capture, void *opaque) {
+    assert(capture && bytes);
+    TILE *tile = NewTile(function, args, words, bytes);
+    if (!tile)
+        return FALSE;
+    capture(opaque, tile->Pixels); /* ASan bounds the capture to exactly bytes */
+    tile->Gathered = TRUE;
     return TRUE;
 }
 static void Reset(ULONG maximum) {
@@ -89,6 +108,7 @@ static void Reset(ULONG maximum) {
     FailAfter = (ULONG)-1;
     Error = 0;
     Ready = ImageSupport = BorderSupport = TRUE;
+    CompressedSupport = FALSE;
     NativeWidth = DG_GL_MAX_TEXTURE_DIMENSION;
     NativeBorder = 0;
     Queries = 0;
@@ -102,6 +122,46 @@ static void Image(GLsizei w, GLsizei h, GLenum format, const void *pixels) {
 }
 static void AssertError(GLenum error) {
     assert(Error == error && Count == 0);
+}
+/* Places sub-image tiles [first, Count) of a rectangle at (x0, y0) with the
+ * given row pitch into image: each tile is its own row-major width x height
+ * block of pixel_bytes pixels. Every pixel must be written exactly once. */
+static void Place(unsigned char *image, ULONG first, GLint x0, GLint y0, ULONG width, ULONG height,
+                  ULONG pixel_bytes) {
+    static unsigned char covered[2050 * 2050];
+    memset(covered, 0, width * height);
+    for (ULONG i = first; i < Count; ++i) {
+        const TILE *t = &Tiles[i];
+        const ULONG x = (ULONG)((GLint)t->Args[2] - x0), y = (ULONG)((GLint)t->Args[3] - y0);
+        assert(t->Function == FEnum_glTexSubImage2D && x < width && y < height && t->Args[4] &&
+               t->Args[5] && t->Args[4] <= width - x && t->Args[5] <= height - y &&
+               t->Bytes == t->Args[4] * t->Args[5] * pixel_bytes);
+        for (ULONG row = 0; row < t->Args[5]; ++row) {
+            memcpy(image + ((y + row) * width + x) * pixel_bytes,
+                   t->Pixels + row * t->Args[4] * pixel_bytes, t->Args[4] * pixel_bytes);
+            for (ULONG column = 0; column < t->Args[4]; ++column)
+                assert(!covered[(y + row) * width + x + column]++);
+        }
+    }
+    for (ULONG i = 0; i < width * height; ++i)
+        assert(covered[i] == 1);
+}
+/* Tiles [first, Count) start on four-pixel boundaries of their rectangle and
+ * are four-pixel multiples except where they reach its edge. */
+static void Aligned(ULONG first, GLint x0, GLint y0, ULONG width, ULONG height) {
+    for (ULONG i = first; i < Count; ++i) {
+        const TILE *t = &Tiles[i];
+        const ULONG x = (ULONG)((GLint)t->Args[2] - x0), y = (ULONG)((GLint)t->Args[3] - y0);
+        assert(!(x % 4) && !(y % 4));
+        assert(!(t->Args[4] % 4) || x + t->Args[4] == width);
+        assert(!(t->Args[5] % 4) || y + t->Args[5] == height);
+    }
+}
+static void ExpectTile(ULONG index, GLint x, GLint y, ULONG width, ULONG height, BOOL gathered) {
+    const TILE *t = &Tiles[index];
+    assert(t->Function == FEnum_glTexSubImage2D && (GLint)t->Args[2] == x &&
+           (GLint)t->Args[3] == y && t->Args[4] == width && t->Args[5] == height &&
+           t->Gathered == gathered);
 }
 
 static void PackedTextures(void) {
@@ -185,9 +245,9 @@ static void PackedTextures(void) {
         Unpack = (JGL_UNPACK){8, 7, 1, 1, 0, 0};
         glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 5, 2, 0, cases[f].Format, cases[f].Type, saved + 1);
         if (bytes == 2) {
-            assert(!Error && Count == 3 && Tiles[1].Bytes == 10 && Tiles[2].Bytes == 10);
-            assert(!memcmp(Tiles[1].Pixels, expected, 10));
-            assert(!memcmp(Tiles[2].Pixels, expected + 10, 10));
+            // Padded rows: one record gathering both rows, not two row records.
+            assert(!Error && Count == 2 && Tiles[1].Bytes == 20 && Tiles[1].Args[5] == 2);
+            assert(Tiles[1].Gathered && !memcmp(Tiles[1].Pixels, expected, 20));
         } else {
             assert(!Error && Count == 2 && Tiles[1].Args[5] == 2 && Tiles[1].Bytes == 40);
             assert(!memcmp(Tiles[1].Pixels, expected, 40));
@@ -354,6 +414,191 @@ static void NegotiatedTextures(void) {
     assert(!Error && Count == 1); // ordinary legacy definitions retain compatibility
 }
 
+/* S3TC and generic COMPRESSED_* internal formats: 2D images and their proxy
+ * only, and only with negotiated compression; the upload itself is unchanged. */
+static void CompressedFormats(void) {
+    static const GLint formats[] = {0x83f0, 0x83f1, 0x83f2, 0x83f3, 0x84e9,
+                                    0x84ea, 0x84eb, 0x84ec, 0x84ed, 0x84ee};
+    const unsigned char pixels[16] = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16};
+    for (GLint format : formats) {
+        Reset(64);
+        glTexImage2D(GL_TEXTURE_2D, 0, format, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        AssertError(GL_INVALID_VALUE);
+        Reset(64);
+        glTexImage2D(0x8064, 0, format, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        AssertError(GL_INVALID_VALUE);
+        // Negotiated, even without the extended image contract.
+        Reset(64);
+        CompressedSupport = TRUE;
+        ImageSupport = FALSE;
+        glTexImage2D(GL_TEXTURE_2D, 1, format, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        assert(!Error && Count == 1 && Tiles[0].Function == FEnum_glTexImage2D &&
+               Tiles[0].Args[1] == 1 && Tiles[0].Args[2] == (ULONG)format &&
+               Tiles[0].Args[6] == GL_RGBA && Tiles[0].Args[7] == GL_UNSIGNED_BYTE &&
+               Tiles[0].Bytes == 16 && !memcmp(Tiles[0].Pixels, pixels, 16));
+        Reset(64);
+        CompressedSupport = TRUE;
+        glTexImage2D(0x8064, 0, format, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        assert(!Error && Count == 1 && Tiles[0].Args[0] == 0x8064 && !Tiles[0].Bytes);
+        // Only S3TC forbids a border; generic formats keep the bordered path.
+        const BOOL s3tc = format <= 0x83f3;
+        for (GLenum target : {(GLenum)GL_TEXTURE_2D, (GLenum)0x8064}) {
+            Reset(64);
+            CompressedSupport = TRUE;
+            glTexImage2D(target, 0, format, 4, 4, 1, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+            if (s3tc)
+                AssertError(GL_INVALID_OPERATION);
+            else
+                assert(!Error && Count == 1 && Tiles[0].Args[5] == 1);
+        }
+        // TexImage1D and the 1D proxy never accept a compressed internal format.
+        Reset(64);
+        CompressedSupport = TRUE;
+        glTexImage1D(GL_TEXTURE_1D, 0, format, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        AssertError(GL_INVALID_VALUE);
+        Reset(64);
+        CompressedSupport = TRUE;
+        glTexImage1D(0x8063, 0, format, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE, NULL);
+        AssertError(GL_INVALID_VALUE);
+    }
+    // Neighbouring enums are not compressed formats.
+    for (GLint format : {0x83ef, 0x83f4, 0x84e8, 0x84ef}) {
+        Reset(64);
+        CompressedSupport = TRUE;
+        glTexImage2D(GL_TEXTURE_2D, 0, format, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels);
+        AssertError(GL_INVALID_VALUE);
+    }
+}
+
+/* Split 2D rectangles: tiles start on four-pixel boundaries of the rectangle,
+ * rows and column chunks are multiples of four, and only the last tile in
+ * each direction takes the remainder (block-aligned for a compressed level). */
+static void AlignedTiles(void) {
+    static unsigned char big[256 * 256 * 4], actual[256 * 256 * 4];
+    for (ULONG i = 0; i < sizeof(big); ++i)
+        big[i] = (unsigned char)(i * 7 + (i >> 9));
+
+    // 256x256 RGBA at the real 64 KB packet: 60-row bands, not 63-row bands.
+    Reset(65464);
+    Image(256, 256, GL_RGBA, big);
+    assert(!Error && Count == 6 && Tiles[0].Function == FEnum_glTexImage2D && !Tiles[0].Bytes);
+    for (ULONG band = 0; band < 4; ++band) {
+        ExpectTile(1 + band, 0, band * 60, 256, 60, FALSE);
+        assert(Tiles[1 + band].Bytes == 61440 &&
+               !memcmp(Tiles[1 + band].Pixels, big + band * 61440, 61440));
+    }
+    ExpectTile(5, 0, 240, 256, 16, FALSE);
+    assert(Tiles[5].Bytes == 16384 && !memcmp(Tiles[5].Pixels, big + 240 * 1024, 16384));
+    Aligned(1, 0, 0, 256, 256);
+
+    // Padded RGB rows (30 of 32 bytes): whole bands gathered into one record.
+    Reset(256);
+    Image(10, 10, GL_RGB, big);
+    assert(!Error && Count == 3);
+    ExpectTile(1, 0, 0, 10, 8, TRUE);
+    ExpectTile(2, 0, 8, 10, 2, TRUE);
+    Place(actual, 1, 0, 0, 10, 10, 3);
+    for (ULONG row = 0; row < 10; ++row)
+        assert(!memcmp(actual + row * 30, big + row * 32, 30));
+    // Smaller records: 4x4 gathered blocks, the last column and row partial.
+    Reset(64);
+    Image(10, 10, GL_RGB, big);
+    assert(!Error && Count == 10);
+    for (ULONG band = 0; band < 3; ++band)
+        for (ULONG chunk = 0; chunk < 3; ++chunk)
+            ExpectTile(1 + band * 3 + chunk, chunk * 4, band * 4, chunk < 2 ? 4 : 2,
+                       band < 2 ? 4 : 2, TRUE);
+    Place(actual, 1, 0, 0, 10, 10, 3);
+    for (ULONG row = 0; row < 10; ++row)
+        assert(!memcmp(actual + row * 30, big + row * 32, 30));
+    Aligned(1, 0, 0, 10, 10);
+
+    // Horizontal split: four full rows do not fit, so 60-wide 4-row chunks.
+    Reset(1000);
+    Image(100, 10, GL_RGBA, big);
+    assert(!Error && Count == 7);
+    for (ULONG band = 0; band < 3; ++band) {
+        ExpectTile(1 + band * 2, 0, band * 4, 60, band < 2 ? 4 : 2, TRUE);
+        ExpectTile(2 + band * 2, 60, band * 4, 40, band < 2 ? 4 : 2, TRUE);
+    }
+    Place(actual, 1, 0, 0, 100, 10, 4);
+    assert(!memcmp(actual, big, 100 * 10 * 4));
+
+    // A bordered image tiles from its origin (-1, -1).
+    Reset(64);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, 6, 6, 1, GL_RGBA, GL_UNSIGNED_BYTE, big);
+    assert(!Error && Count == 5);
+    ExpectTile(1, -1, -1, 4, 4, TRUE);
+    ExpectTile(2, 3, -1, 2, 4, TRUE);
+    ExpectTile(3, -1, 3, 4, 2, TRUE);
+    ExpectTile(4, 3, 3, 2, 2, TRUE);
+    Place(actual, 1, -1, -1, 6, 6, 4);
+    assert(!memcmp(actual, big, 6 * 6 * 4));
+
+    // TexSubImage2D at an offset: tiles start at the rectangle's origin plus
+    // multiples of four. Splitting still preflights the level extent.
+    Reset(256);
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 12, 21, 30, 9, GL_RGBA, GL_UNSIGNED_BYTE, big);
+    assert(!Error && Count == 6 && Queries == 3);
+    for (ULONG band = 0; band < 3; ++band) {
+        // A one-row chunk is contiguous in the caller and copied as one span.
+        ExpectTile(band * 2, 12, 21 + band * 4, 16, band < 2 ? 4 : 1, band < 2);
+        ExpectTile(band * 2 + 1, 28, 21 + band * 4, 14, band < 2 ? 4 : 1, band < 2);
+    }
+    Place(actual, 0, 12, 21, 30, 9, 4);
+    assert(!memcmp(actual, big, 30 * 9 * 4));
+    Aligned(0, 12, 21, 30, 9);
+    Reset(256);
+    Compiling = TRUE;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 12, 21, 30, 9, GL_RGBA, GL_UNSIGNED_BYTE, big);
+    AssertError(GL_OUT_OF_MEMORY); // a split list rectangle still is refused
+
+    // The conversion path: swapped RGB565 at (8, 4), 4x4 blocks of 32 bytes.
+    Reset(32);
+    Unpack.SwapBytes = 1;
+    glTexSubImage2D(GL_TEXTURE_2D, 0, 8, 4, 20, 6, GL_RGB, 0x8363, big);
+    assert(!Error && Count == 10);
+    for (ULONG band = 0; band < 2; ++band)
+        for (ULONG chunk = 0; chunk < 5; ++chunk)
+            ExpectTile(band * 5 + chunk, 8 + chunk * 4, 4 + band * 4, 4, band ? 2 : 4, FALSE);
+    Place(actual, 0, 8, 4, 20, 6, 2);
+    for (ULONG i = 0; i < 20 * 6; ++i)
+        assert(actual[i * 2] == big[i * 2 + 1] && actual[i * 2 + 1] == big[i * 2]);
+
+    // Padded rows that fit one record are no longer split: no preflight and
+    // they compile into a list like any single record.
+    for (ULONG compiling = 0; compiling < 2; ++compiling) {
+        Reset(64);
+        Compiling = compiling;
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 5, 7, 3, 2, GL_RGB, GL_UNSIGNED_BYTE, big);
+        assert(!Error && !Queries && Count == 1);
+        ExpectTile(0, 5, 7, 3, 2, TRUE);
+        assert(!memcmp(Tiles[0].Pixels, big, 9) && !memcmp(Tiles[0].Pixels + 9, big + 12, 9));
+    }
+
+    // 1D keeps its unaligned chunks: 15 pixels per 60-byte record.
+    Reset(60);
+    glTexImage1D(GL_TEXTURE_1D, 0, GL_RGBA, 20, 0, GL_RGBA, GL_UNSIGNED_BYTE, big);
+    assert(!Error && Count == 3 && Tiles[1].Args[2] == 0 && Tiles[1].Args[4] == 15 &&
+           Tiles[2].Args[2] == 15 && Tiles[2].Args[4] == 5);
+    Reset(60);
+    glTexSubImage1D(GL_TEXTURE_1D, 0, 0, 20, GL_RGBA, 0x8035, big);
+    assert(!Error && Count == 2 && Tiles[0].Args[4] == 15 && Tiles[1].Args[2] == 15);
+
+    // Below sixteen pixels per record no aligned tile exists: unaligned rows.
+    Reset(60);
+    Image(8, 8, GL_RGBA, big);
+    assert(!Error && Count == 9);
+    for (ULONG row = 0; row < 8; ++row)
+        ExpectTile(1 + row, 0, row, 8, 1, FALSE);
+    Reset(64);
+    Image(8, 8, GL_RGBA, big);
+    assert(!Error && Count == 5);
+    Aligned(1, 0, 0, 8, 8);
+    Place(actual, 1, 0, 0, 8, 8, 4);
+    assert(!memcmp(actual, big, 8 * 8 * 4));
+}
+
 static void BorderedTextures(void) {
     unsigned char pixels[144], actual[144] = {};
     for (ULONG i = 0; i < sizeof(pixels); ++i)
@@ -426,12 +671,18 @@ static void ScalarTextures(void) {
                 for (ULONG i = 1; i < Count; ++i) {
                     TILE *tile = &Tiles[i];
                     assert(tile->Args[6] == format.Format && tile->Args[7] == type.Type);
-                    memcpy(actual + (tile->Args[3] * 5 + tile->Args[2]) * bpp, tile->Pixels,
-                           tile->Bytes);
                 }
+                Place(actual, 1, 0, 0, 5, 2, bpp);
                 assert(!memcmp(actual, expected, 10 * bpp));
+                // Whole rows fit for bpp <= 3; RGBA8 takes block-aligned 4x2 and 1x2
+                // chunks; wider pixels cannot form an aligned chunk in 32 bytes.
+                assert(Count == (bpp <= 3 ? 2 : bpp == 4 ? 3 : bpp == 6 ? 3 : bpp == 8 ? 5 : 7));
+                if (bpp == 4) {
+                    ExpectTile(1, 0, 0, 4, 2, !swap || type.Unit == 1);
+                    ExpectTile(2, 4, 0, 1, 2, !swap || type.Unit == 1);
+                }
                 memset(source, 0, sizeof(source));
-                assert(!memcmp(Tiles[1].Pixels, expected, Tiles[1].Bytes));
+                assert(!memcmp(Tiles[1].Pixels, expected, Tiles[1].Args[4] * bpp));
             }
     for (ULONG lsb = 0; lsb < 2; ++lsb) {
         unsigned char bits[16] = {0, 0, 0, 0, 0x96, 0x69, 0, 0, 0x5a, 0xa5};
@@ -550,11 +801,11 @@ int main(void) {
     glPixelStorei(GL_UNPACK_SKIP_ROWS, 1);
     glPixelStorei(GL_UNPACK_SKIP_PIXELS, 1);
     Image(3, 2, GL_RGB, pixels);
-    assert(!Error && Count == 3 && Tiles[0].Function == FEnum_glTexImage2D && !Tiles[0].Bytes);
-    assert(Tiles[1].Bytes == 9 && Tiles[2].Bytes == 9);
+    assert(!Error && Count == 2 && Tiles[0].Function == FEnum_glTexImage2D && !Tiles[0].Bytes);
+    ExpectTile(1, 0, 0, 3, 2, TRUE);
+    assert(Tiles[1].Bytes == 18);
     assert(!memcmp(Tiles[1].Pixels, pixels + 19, 9));
-    assert(!memcmp(Tiles[2].Pixels, pixels + 35, 9));
-    assert(Tiles[1].Args[3] == 0 && Tiles[2].Args[3] == 1);
+    assert(!memcmp(Tiles[1].Pixels + 9, pixels + 35, 9));
 
     Reset(48);
     glPixelStorei(GL_UNPACK_SKIP_ROWS, 2);
@@ -595,23 +846,25 @@ int main(void) {
             Image(7, 3, formats[f].Format, pixels);
             assert(!Error && Count > 1 && !Tiles[0].Bytes);
             memset(framebuffer, 0xff, sizeof(framebuffer));
-            for (i = 1; i < Count; ++i) {
-                TILE *t = &Tiles[i];
-                assert(t->Args[6] == formats[f].Format);
-                x = t->Args[2];
-                y = t->Args[3];
-                memcpy(framebuffer + (y * 7 + x) * components, t->Pixels, t->Bytes);
-            }
+            for (i = 1; i < Count; ++i)
+                assert(Tiles[i].Args[6] == formats[f].Format);
+            Place(framebuffer, 1, 0, 0, 7, 3, components);
             assert(!memcmp(framebuffer, pixels + components, 21 * components));
+            if (components == 1) { /* 4x3 and 3x3 gathered block chunks */
+                assert(Count == 3);
+                ExpectTile(1, 0, 0, 4, 3, TRUE);
+                ExpectTile(2, 4, 0, 3, 3, TRUE);
+            }
         }
     }
 
     Reset(64);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 1); /* Short row length may overlap input rows. */
     Image(3, 2, GL_RGB, pixels);
-    assert(!Error && Count == 3);
+    assert(!Error && Count == 2);
+    ExpectTile(1, 0, 0, 3, 2, TRUE);
     assert(!memcmp(Tiles[1].Pixels, pixels, 9));
-    assert(!memcmp(Tiles[2].Pixels, pixels + 4, 9));
+    assert(!memcmp(Tiles[1].Pixels + 9, pixels + 4, 9));
 
     Reset(64);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
@@ -759,6 +1012,8 @@ int main(void) {
     ScalarTextures();
     BorderedTextures();
     NegotiatedTextures();
+    CompressedFormats();
+    AlignedTiles();
     Reset(64);
     puts("Packed RGB332/565, RGBA4444/5551, BGRA4444REV/1555REV pixel/padding oracles passed");
     puts("Texture unpack/tiling tests passed, including1D skip-pixels-only semantics and bounded "

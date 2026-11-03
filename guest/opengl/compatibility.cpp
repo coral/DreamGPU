@@ -12,12 +12,18 @@ extern "C" {
 static BOOL Negotiated(LPCSTR name) {
     static const struct {
         const char *prefix;
-        BOOL fixed; /* DG_CAP_GL_FIXED_STATE, else DG_CAP_GL_MULTITEXTURE */
-    } families[] = {{"glActiveTexture", FALSE},    {"glClientActiveTexture", FALSE},
-                    {"glMultiTexCoord", FALSE},    {"glBlendColor", TRUE},
-                    {"glBlendEquation", TRUE},     {"glBlendFuncSeparate", TRUE},
-                    {"glStencilOpSeparate", TRUE}, {"glStencilFuncSeparate", TRUE},
-                    {"glPointParameter", TRUE}};
+        BOOL (*available)(void);
+    } families[] = {{"glActiveTexture", JglMultitextureAvailable},
+                    {"glClientActiveTexture", JglMultitextureAvailable},
+                    {"glMultiTexCoord", JglMultitextureAvailable},
+                    {"glBlendColor", JglFixedStateAvailable},
+                    {"glBlendEquation", JglFixedStateAvailable},
+                    {"glBlendFuncSeparate", JglFixedStateAvailable},
+                    {"glStencilOpSeparate", JglFixedStateAvailable},
+                    {"glStencilFuncSeparate", JglFixedStateAvailable},
+                    {"glPointParameter", JglFixedStateAvailable},
+                    {"glCompressedTex", JglCompressedTexturesAvailable},
+                    {"glGetCompressedTex", JglCompressedTexturesAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {
@@ -25,7 +31,7 @@ static BOOL Negotiated(LPCSTR name) {
         while (family.prefix[i] && name[i] == family.prefix[i])
             ++i;
         if (!family.prefix[i])
-            return family.fixed ? JglFixedStateAvailable() : JglMultitextureAvailable();
+            return family.available();
     }
     return TRUE;
 }

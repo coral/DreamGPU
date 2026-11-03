@@ -745,7 +745,12 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
     // Legacy non-renderable internal formats use a <=64 KiB zero tile. This is
     // allocation initialization only, never CPU rendering or presentation.
     let row = w as usize * 4;
-    let rows = (h as usize).min(65536 / row);
+    // Bands start on 4-row block boundaries: compressed (S3TC) storage
+    // rejects subimages that start or end inside a block.
+    let rows = match (h as usize).min(65536 / row) {
+        r if r < h as usize && r >= 4 => r & !3,
+        r => r,
+    };
     let Some(zero) = (unsafe { OwnedBytes::zeroed(m, rows * row) }) else {
         return GL_OUT_OF_MEMORY;
     };
@@ -830,18 +835,53 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
     let m = unsafe { &*memory };
     let a = unsafe { &*m.api };
     let encoded_level = level;
+    let compressed = level & crate::texture::READ_COMPRESSED != 0;
     let pixel_bytes = if level & DG_GL_TEXTURE_READ_FLOAT != 0 {
         16
     } else {
         4
     };
-    let level = level & !DG_GL_TEXTURE_READ_FLOAT;
-    if level > DG_GL_MAX_TEXTURE_LEVEL || result.is_null() {
+    let level = level & !(DG_GL_TEXTURE_READ_FLOAT | crate::texture::READ_COMPRESSED);
+    if level > DG_GL_MAX_TEXTURE_LEVEL || result.is_null() || (compressed && pixel_bytes != 4) {
         return DG_GL_ERROR_TEXTURE;
     }
     let level = level as usize;
-    let bytes = unsafe {
-        u64::from((*t).widths[level]) * u64::from((*t).heights[level]) * u64::from(pixel_bytes)
+    let bytes = if compressed {
+        // The level's own compressed size, from the native image. `first`
+        // and the cache then count 32-bit words of that image. Pending guest
+        // errors are drained first so these probes never consume them.
+        if let Err(e) = unsafe { query::remember(a, errors) } {
+            return e;
+        }
+        let mut is_compressed = 0;
+        let mut size = 0;
+        gl!(
+            a,
+            dg_glGetTexLevelParameteriv(
+                target,
+                level as i32,
+                GL_TEXTURE_COMPRESSED,
+                &mut is_compressed
+            )
+        );
+        gl!(
+            a,
+            dg_glGetTexLevelParameteriv(
+                target,
+                level as i32,
+                GL_TEXTURE_COMPRESSED_IMAGE_SIZE,
+                &mut size
+            )
+        );
+        let e = gl!(a, dg_glGetError());
+        if e != 0 || is_compressed == 0 || size <= 0 || size % 4 != 0 {
+            return DG_GL_ERROR_TEXTURE;
+        }
+        size as u64
+    } else {
+        unsafe {
+            u64::from((*t).widths[level]) * u64::from((*t).heights[level]) * u64::from(pixel_bytes)
+        }
     };
     if bytes == 0
         || u64::from(first) * u64::from(pixel_bytes) >= bytes
@@ -880,20 +920,27 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
             Ok(p) => p,
             Err(e) => return e,
         };
-        gl!(
-            a,
-            dg_glGetTexImage(
-                target,
-                level as i32,
-                GL_RGBA,
-                if pixel_bytes == 16 {
-                    GL_FLOAT
-                } else {
-                    GL_UNSIGNED_BYTE
-                },
-                pixels.p.cast()
-            )
-        );
+        if compressed {
+            gl!(
+                a,
+                dg_glGetCompressedTexImage(target, level as i32, pixels.p.cast())
+            );
+        } else {
+            gl!(
+                a,
+                dg_glGetTexImage(
+                    target,
+                    level as i32,
+                    GL_RGBA,
+                    if pixel_bytes == 16 {
+                        GL_FLOAT
+                    } else {
+                        GL_UNSIGNED_BYTE
+                    },
+                    pixels.p.cast()
+                )
+            );
+        }
         let e = gl!(a, dg_glGetError());
         drop(pack);
         if e != 0 {

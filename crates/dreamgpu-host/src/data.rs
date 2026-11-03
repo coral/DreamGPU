@@ -213,8 +213,10 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         if parameter {
             let e = unsafe { api.dg_glGetError.expect("complete API")() };
             if e != 0 {
+                // An invalid value is the guest's GL error, never a record
+                // fault that would fail the batch and the context.
                 unsafe { query::store(errors, e) };
-                return DG_GL_ERROR_TEXTURE;
+                return 0;
             }
             unsafe { dreamgpu_texture_written(m.api, texture, serial) };
         }
@@ -279,6 +281,49 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
             )
         };
         return 0;
+    }
+    if matches!(
+        function,
+        FEnum_glCompressedTexImage2D | FEnum_glCompressedTexSubImage2D
+    ) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        unsafe {
+            if let Err(e) = query::remember(api, errors) {
+                return e;
+            }
+        }
+        if a[0] == GL_PROXY_TEXTURE_2D {
+            // Shape and limits were validated; native GL judges the format.
+            let error = unsafe { crate::texture::compressed_proxy(api, &a) };
+            unsafe {
+                let mask = &mut (*state).proxy_rejected[1];
+                if error == 0 {
+                    *mask &= !(1 << a[1]);
+                }
+                query::store(errors, error);
+            }
+            return 0;
+        }
+        unsafe { dreamgpu_texture_wait(m.api, texture, serial) };
+        let mut gl_error = 0;
+        let e = unsafe {
+            crate::texture::compressed(
+                m,
+                texture,
+                m.bytes,
+                serial,
+                function,
+                &a,
+                data,
+                &mut gl_error,
+            )
+        };
+        unsafe { query::store(errors, gl_error) };
+        return e.map_or_else(|e| e, |()| 0);
     }
     if matches!(function, FEnum_glTexImage1D | FEnum_glTexImage2D)
         && matches!(a[0], GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D)

@@ -143,6 +143,23 @@ unsafe fn generates_mipmaps(api: &DreamGpuGlApi, target: u32) -> bool {
     }
 }
 
+/// Host-internal texture-read level flag: read the native compressed image in
+/// 32-bit words instead of RGBA pixels. Never part of the wire encoding.
+pub(crate) const READ_COMPRESSED: u32 = 0x4000;
+
+/// Bytes per 4x4 block of an S3TC internal format, zero for anything else.
+pub(crate) fn s3tc_block_bytes(format: u32) -> u32 {
+    match format {
+        GL_COMPRESSED_RGB_S3TC_DXT1_EXT | GL_COMPRESSED_RGBA_S3TC_DXT1_EXT => 8,
+        GL_COMPRESSED_RGBA_S3TC_DXT3_EXT | GL_COMPRESSED_RGBA_S3TC_DXT5_EXT => 16,
+        _ => 0,
+    }
+}
+/// Exact compressed image size of a `w`x`h` S3TC image (partial blocks count).
+pub(crate) fn s3tc_bytes(w: u32, h: u32, block: u32) -> u64 {
+    u64::from(w.div_ceil(4)) * u64::from(h.div_ceil(4)) * u64::from(block)
+}
+
 /// Native levels generated below a defined level cost at most a third more.
 fn with_chain(bytes: u64, chain: bool) -> u64 {
     if chain {
@@ -193,7 +210,16 @@ unsafe fn upload(
     };
     // Generated levels are charged with the image that produces them.
     let chain = image && unsafe { generates_mipmaps(api, a[0]) };
-    let allocation = with_chain(u64::from(w) * u64::from(h) * texel_bytes, chain);
+    // S3TC storage is charged at its compressed size.
+    let block = if image { s3tc_block_bytes(a[2]) } else { 0 };
+    let level_bytes = |w: u32, h: u32| {
+        if block != 0 {
+            s3tc_bytes(w, h, block)
+        } else {
+            u64::from(w) * u64::from(h) * texel_bytes
+        }
+    };
+    let allocation = with_chain(level_bytes(w, h), chain);
     let old = unsafe { (*texture).levels[level] };
     let new_total = if image {
         let n = unsafe { *total }
@@ -416,10 +442,7 @@ unsafe fn upload(
             defined_width = width as u32;
             defined_height = height as u32;
             defined_border = border as u32;
-            defined_allocation = with_chain(
-                u64::from(defined_width) * u64::from(defined_height) * texel_bytes,
-                chain,
-            );
+            defined_allocation = with_chain(level_bytes(defined_width, defined_height), chain);
             defined_total = new_total - allocation + defined_allocation;
         }
     }
@@ -471,6 +494,148 @@ unsafe fn upload(
             (*texture).undefined_levels &= !(1 << level);
         }
     }
+    Ok(())
+}
+
+/// Native proxy evaluation of a validated S3TC CompressedTexImage2D.
+pub(crate) unsafe fn compressed_proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 {
+    let (Some(image), Some(error)) = (api.dg_glCompressedTexImage2D, api.dg_glGetError) else {
+        return GL_INVALID_OPERATION;
+    };
+    unsafe {
+        image(
+            GL_PROXY_TEXTURE_2D,
+            a[1] as i32,
+            a[2],
+            a[3] as i32,
+            a[4] as i32,
+            0,
+            a[6] as i32,
+            core::ptr::null(),
+        );
+        error()
+    }
+}
+
+/// CompressedTexImage2D/CompressedTexSubImage2D on the bound 2D texture.
+/// Arguments passed `data_validate`: S3TC format, exact image size, block-aligned
+/// offsets and a payload that is empty (zero-defined image) or exactly the image.
+/// Rules that depend on the level's current image are GL errors, never record
+/// faults; a failed native call leaves the tracked level unchanged.
+///
+/// # Safety
+/// Texture/accounting belong to the render worker; the bound texture is current
+/// and its pending writers were waited on and native errors drained.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "Mirrors the texture upload entry without borrowing render state across calls."
+)]
+pub(crate) unsafe fn compressed(
+    m: &names::Memory,
+    texture: *mut Texture,
+    total: *mut u64,
+    serial: u64,
+    function: u32,
+    a: &[u32; 8],
+    data: &[u8],
+    gl_error: &mut u32,
+) -> Result<(), u32> {
+    let api = unsafe { &*m.api };
+    let get_error = api.dg_glGetError.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let level = a[1] as usize;
+    if level > DG_GL_MAX_TEXTURE_LEVEL as usize {
+        return Err(DG_GL_ERROR_TEXTURE);
+    }
+    if function == FEnum_glCompressedTexImage2D {
+        let image = api
+            .dg_glCompressedTexImage2D
+            .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+        let size = u64::from(a[6]);
+        let n = unsafe { *total }
+            .checked_sub(unsafe { (*texture).levels[level] })
+            .and_then(|v| v.checked_add(size))
+            .ok_or(9u32)?;
+        if n > u64::from(DG_GL_MAX_TEXTURE_BYTES) {
+            return Err(9);
+        }
+        // An omitted payload defines the image as zero blocks (opaque black,
+        // or transparent where the format carries alpha), never stale memory.
+        let zeros;
+        let pixels = if data.is_empty() {
+            zeros = unsafe { crate::resource::OwnedBytes::zeroed(m, a[6] as usize) }
+                .ok_or(DG_GL_ERROR_LIMIT)?;
+            zeros.p.cast_const()
+        } else {
+            data.as_ptr()
+        };
+        unsafe {
+            image(
+                GL_TEXTURE_2D,
+                level as i32,
+                a[2],
+                a[3] as i32,
+                a[4] as i32,
+                0,
+                a[6] as i32,
+                pixels.cast(),
+            );
+        }
+        let error = unsafe { get_error() };
+        if error != 0 {
+            *gl_error = error;
+            return Ok(());
+        }
+        unsafe {
+            *total = n;
+            (*texture).levels[level] = size;
+            (*texture).widths[level] = a[3];
+            (*texture).heights[level] = a[4];
+            (*texture).borders[level] = 0;
+            (*texture).undefined_levels &= !(1 << level);
+            written(api, texture, serial);
+        }
+        return Ok(());
+    }
+    if function != FEnum_glCompressedTexSubImage2D {
+        return Err(DG_GL_ERROR_UNSUPPORTED);
+    }
+    let sub = api
+        .dg_glCompressedTexSubImage2D
+        .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let (width, height) = unsafe { ((*texture).widths[level], (*texture).heights[level]) };
+    let [_, _, x, y, w, h, format, size] = *a;
+    // EXT_texture_compression_s3tc: partial blocks only where the update
+    // reaches the level's edge; the update must lie inside the image.
+    if width == 0
+        || height == 0
+        || u64::from(x) + u64::from(w) > u64::from(width)
+        || u64::from(y) + u64::from(h) > u64::from(height)
+        || (!w.is_multiple_of(4) && x + w != width)
+        || (!h.is_multiple_of(4) && y + h != height)
+    {
+        *gl_error = GL_INVALID_OPERATION;
+        return Ok(());
+    }
+    unsafe {
+        sub(
+            GL_TEXTURE_2D,
+            level as i32,
+            x as i32,
+            y as i32,
+            w as i32,
+            h as i32,
+            format,
+            size as i32,
+            data.as_ptr().cast(),
+        );
+    }
+    let error = unsafe { get_error() };
+    if error != 0 {
+        // Format mismatch with the level's storage, as reported natively.
+        *gl_error = error;
+        return Ok(());
+    }
+    unsafe { written(api, texture, serial) };
     Ok(())
 }
 

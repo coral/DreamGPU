@@ -93,6 +93,9 @@ BOOL JglFixedStateAvailable(void) {
 BOOL JglTextureControlAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_CONTROL);
 }
+BOOL JglCompressedTexturesAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_COMPRESSED_TEXTURES);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -109,9 +112,12 @@ BOOL JglTextureControlAvailable(void) {
     "GL_ARB_texture_env_add GL_EXT_texture_env_add"
 #define JGL_TEXTURE_CONTROL_EXTENSIONS                                                             \
     "GL_ATI_texture_env_combine3 GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap"
+#define JGL_COMPRESSED_TEXTURE_EXTENSIONS                                                          \
+    "GL_ARB_texture_compression GL_EXT_texture_compression_s3tc"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
-                       sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS)];
+                       sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
+                       sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -128,8 +134,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_FIXED_STATE_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_TEXTURE_CONTROL)
         AppendExtensions(&at, JGL_TEXTURE_CONTROL_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_COMPRESSED_TEXTURES)
+        AppendExtensions(&at, JGL_COMPRESSED_TEXTURE_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_COMPRESSED_TEXTURE_EXTENSIONS
 #undef JGL_TEXTURE_CONTROL_EXTENSIONS
 #undef JGL_FIXED_STATE_EXTENSIONS
 #undef JGL_SECONDARY_EXTENSIONS

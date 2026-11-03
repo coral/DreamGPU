@@ -267,6 +267,17 @@ static BOOL InternalFormat(GLint format) {
            (format >= 0x804a && format <= 0x804d) || (format >= 0x804f && format <= 0x805b);
 }
 
+/* COMPRESSED_RGB/RGBA_S3TC_DXT1, COMPRESSED_RGBA_S3TC_DXT3/DXT5 */
+static BOOL S3tcInternalFormat(GLint format) {
+    return format >= 0x83f0 && format <= 0x83f3;
+}
+/* Negotiated compression lets a 2D image (or its proxy) request an S3TC or a
+ * generic COMPRESSED_ALPHA..RGBA internal format; native GL compresses it. */
+static BOOL CompressedInternalFormat2D(GLint format) {
+    return (S3tcInternalFormat(format) || (format >= 0x84e9 && format <= 0x84ee)) &&
+           JglCompressedTexturesAvailable();
+}
+
 static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, GLenum format,
                      GLenum type, ULONG *components, GLint border = 0) {
     if (target != GL_TEXTURE_2D) {
@@ -332,30 +343,77 @@ overflow:
     return FALSE;
 }
 
+/* Rows and columns of every tile of a split rectangle but the last in each
+ * direction, which takes the remainder up to the rectangle's edge. */
+typedef struct {
+    ULONG Rows, Columns;
+} JGL_TILE_SHAPE;
+
+/* A rectangle that fits one record is one tile. Otherwise every 2D tile starts
+ * on a four-pixel boundary relative to the rectangle's origin: tile rows and
+ * column chunks are multiples of four. A compressed native level accepts only
+ * such block-aligned sub-images (EXT_texture_compression_s3tc), and the frontend
+ * cannot know the format of a TexSubImage2D level; elsewhere it is harmless.
+ * Full-width bands are preferred; narrower chunks are four rows high (or the
+ * whole height when it is smaller). Below sixteen pixels per record no aligned
+ * tile exists. Only a packet close to the negotiated 32-word minimum is that
+ * small, never a real host, so that case, like 1D, keeps the unaligned shape:
+ * as many full rows as fit, else single-row chunks. */
+static JGL_TILE_SHAPE TileShape(ULONG width, ULONG height, ULONG pixel_bytes, ULONG capacity,
+                                BOOL aligned) {
+    const ULONG fit = capacity / pixel_bytes / width; /* complete rows per record */
+    JGL_TILE_SHAPE shape = {height, width};
+    if (fit >= height)
+        return shape;
+    if (aligned && fit >= 4) {
+        shape.Rows = fit & ~3UL;
+        return shape;
+    }
+    if (aligned) {
+        shape.Rows = height < 4 ? height : 4;
+        shape.Columns = (capacity / pixel_bytes / shape.Rows) & ~3UL;
+        if (shape.Columns >= 4)
+            return shape;
+        shape.Columns = width;
+    }
+    shape.Rows = fit ? fit : 1;
+    if (!fit)
+        shape.Columns = capacity / pixel_bytes;
+    return shape;
+}
+
+/* Rows of a tile copied from their strided caller layout into its record. */
+typedef struct {
+    const unsigned char *First;
+    ULONG_PTR Stride;
+    ULONG RowBytes, Rows;
+} JGL_GATHER;
+static void GatherRows(void *opaque, BYTE *destination) {
+    const JGL_GATHER *gather = (const JGL_GATHER *)opaque;
+    for (ULONG row = 0; row < gather->Rows; ++row)
+        CopyMemory(destination + row * gather->RowBytes, gather->First + row * gather->Stride,
+                   gather->RowBytes);
+}
+
 static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                          GLsizei height, GLenum format, GLenum type, ULONG components,
                          const JGL_PIXEL_LAYOUT *layout, ULONG capacity) {
     /* Swap complete scalar components, or unpack bitmap/legacy packed inputs.
      * Ordinary component and packed16 rows retain their direct transport path. */
     unsigned char converted[(DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4];
-    ULONG y = 0, x, row, rows, columns, args[8];
+    ULONG y, x, row, rows, columns, args[8];
     BOOL words = Packed16(type);
     ULONG unit = ScalarBytes(type);
     BOOL bitmap = type == 0x1a00;
     ULONG pixelBytes = WirePixelBytes(type, components);
     if (capacity > sizeof(converted))
         capacity = sizeof(converted);
-    while (y < (ULONG)height) {
-        rows = 1;
-        if ((ULONG)width <= capacity / pixelBytes) {
-            rows = capacity / (width * pixelBytes);
-            if (rows > (ULONG)height - y)
-                rows = height - y;
-        }
+    const JGL_TILE_SHAPE shape =
+        TileShape(width, height, pixelBytes, capacity, target != GL_TEXTURE_1D);
+    for (y = 0; y < (ULONG)height; y += rows) {
+        rows = shape.Rows < (ULONG)height - y ? shape.Rows : (ULONG)height - y;
         for (x = 0; x < (ULONG)width; x += columns) {
-            columns = capacity / pixelBytes;
-            if (columns > (ULONG)width - x)
-                columns = width - x;
+            columns = shape.Columns < (ULONG)width - x ? shape.Columns : (ULONG)width - x;
             for (row = 0; row < rows; ++row) {
                 unsigned char *out = converted + row * columns * pixelBytes;
                 const unsigned char *in =
@@ -391,7 +449,6 @@ static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffse
                          args, 8, converted, columns * rows * pixelBytes))
                 return FALSE;
         }
-        y += rows;
     }
     return TRUE;
 }
@@ -399,23 +456,18 @@ static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffse
 static BOOL Upload(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLsizei width,
                    GLsizei height, GLenum format, GLenum type, ULONG components,
                    const JGL_PIXEL_LAYOUT *layout, ULONG capacity) {
-    ULONG y = 0, x, rows, columns, args[8];
+    ULONG y, x, rows, columns, args[8];
+    const ULONG function = target == GL_TEXTURE_1D ? FEnum_glTexSubImage1D : FEnum_glTexSubImage2D;
     if (!DirectPixels(type))
         return UploadPacked(target, level, xoffset, yoffset, width, height, format, type,
                             components, layout, capacity);
 
-    while (y < (ULONG)height) {
-        rows = 1;
-        if (layout->Stride == layout->RowBytes && capacity >= layout->RowBytes) {
-            rows = capacity / layout->RowBytes;
-            if (rows > (ULONG)height - y)
-                rows = height - y;
-        }
-        x = 0;
-        while (x < (ULONG)width) {
-            columns = capacity / components;
-            if (columns > (ULONG)width - x)
-                columns = width - x;
+    const JGL_TILE_SHAPE shape =
+        TileShape(width, height, components, capacity, target != GL_TEXTURE_1D);
+    for (y = 0; y < (ULONG)height; y += rows) {
+        rows = shape.Rows < (ULONG)height - y ? shape.Rows : (ULONG)height - y;
+        for (x = 0; x < (ULONG)width; x += columns) {
+            columns = shape.Columns < (ULONG)width - x ? shape.Columns : (ULONG)width - x;
             args[0] = target;
             args[1] = level;
             args[2] = xoffset + x;
@@ -424,13 +476,19 @@ static BOOL Upload(GLenum target, GLint level, GLint xoffset, GLint yoffset, GLs
             args[5] = rows;
             args[6] = format;
             args[7] = type;
-            if (!JglData(target == GL_TEXTURE_1D ? FEnum_glTexSubImage1D : FEnum_glTexSubImage2D,
-                         args, 8, layout->First + y * layout->Stride + x * components,
-                         columns * rows * components))
+            /* Contiguous caller rows are copied as one span; padded rows and
+             * narrower chunks are gathered row by row into the record. */
+            JGL_GATHER gather = {layout->First + y * layout->Stride + x * components,
+                                 layout->Stride, columns * components, rows};
+            BOOL sent;
+            if (rows == 1 || layout->Stride == gather.RowBytes)
+                sent = JglData(function, args, 8, gather.First, rows * gather.RowBytes);
+            else
+                sent =
+                    JglCaptureData(function, args, 8, rows * gather.RowBytes, GatherRows, &gather);
+            if (!sent)
                 return FALSE;
-            x += columns;
         }
-        y += rows;
     }
     return TRUE;
 }
@@ -502,8 +560,14 @@ static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsize
         return;
     }
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
-        border > 1 || !InternalFormat(internal_format)) {
+        border > 1 ||
+        (!InternalFormat(internal_format) &&
+         !(target == 0x8064 && CompressedInternalFormat2D(internal_format)))) {
         JglSetError(GL_INVALID_VALUE);
+        return;
+    }
+    if (border && target == 0x8064 && S3tcInternalFormat(internal_format)) {
+        JglSetError(GL_INVALID_OPERATION); /* S3TC images have no border. */
         return;
     }
     ULONG args[] = {target,        (ULONG)level,  (ULONG)internal_format,   (ULONG)width,
@@ -524,12 +588,16 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
     if (!JglCommandReady() || !NormalizeType(format, &type) ||
         !Validate(target, level, width, height, format, type, &components, border))
         return;
-    if (width < 2 * border || height < 2 * border || !InternalFormat(internal_format)) {
+    const BOOL compressed = CompressedInternalFormat2D(internal_format);
+    if (width < 2 * border || height < 2 * border ||
+        (!InternalFormat(internal_format) && !compressed)) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
-    if ((border && !JglTextureBordersAvailable()) ||
-        ((!width || !height || !LegacyInternalFormat2D(internal_format)) &&
+    /* S3TC images have no border. Compressed formats belong to their own
+     * negotiated contract, independent of the extended image formats. */
+    if ((border && (!JglTextureBordersAvailable() || S3tcInternalFormat(internal_format))) ||
+        ((!width || !height || !(LegacyInternalFormat2D(internal_format) || compressed)) &&
          !JglTextureImagesAvailable())) {
         JglCommandError(GL_INVALID_OPERATION);
         return;
@@ -591,12 +659,13 @@ void APIENTRY glTexSubImage2D(GLenum target, GLint level, GLint xoffset, GLint y
         return;
     // Splitting must not turn an invalid rectangle into a valid partial write.
     // The image extent is execution-dependent while compiling a display list.
+    // Padded rows no longer split: one record gathers them (Upload).
     ULONG tile_capacity = capacity;
     if (!DirectPixels(type) && tile_capacity > (DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4)
         tile_capacity = (DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4;
-    BOOL split = (DirectPixels(type) && height > 1 && layout.Stride != layout.RowBytes) ||
-                 (ULONG)width > tile_capacity / WirePixelBytes(type, components) ||
-                 (ULONG)height > tile_capacity / WirePixelBytes(type, components) / (ULONG)width;
+    const JGL_TILE_SHAPE shape =
+        TileShape(width, height, WirePixelBytes(type, components), tile_capacity, TRUE);
+    BOOL split = shape.Rows < (ULONG)height || shape.Columns < (ULONG)width;
     if (split && JglCompiling()) {
         JglCommandError(GL_OUT_OF_MEMORY);
         return;

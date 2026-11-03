@@ -86,6 +86,8 @@ BOOL JglMultitextureAvailable(void);
 BOOL JglFixedStateAvailable(void);
 /* ATI_texture_env_combine3, ATI_texture_mirror_once and SGIS_generate_mipmap. */
 BOOL JglTextureControlAvailable(void);
+/* ARB_texture_compression with EXT_texture_compression_s3tc, TEXTURE_2D only. */
+BOOL JglCompressedTexturesAvailable(void);
 /* Value counts of the TexParameter/TexEnv names the host accepts, and Hint
  * validity. Scalar and vector entrypoints share them: an unknown name is a local
  * GL_INVALID_ENUM, never a record the host rejects as malformed (which would
@@ -148,7 +150,8 @@ static inline BOOL JglHintValid(GLenum target, GLenum mode) {
         return FALSE;
     /* PERSPECTIVE_CORRECTION, POINT/LINE/POLYGON_SMOOTH and FOG hints */
     return (target >= 0x0c50 && target <= 0x0c54) ||
-           (target == 0x8192 /* GENERATE_MIPMAP_HINT_SGIS */ && JglTextureControlAvailable());
+           (target == 0x8192 /* GENERATE_MIPMAP_HINT_SGIS */ && JglTextureControlAvailable()) ||
+           (target == 0x84ef /* TEXTURE_COMPRESSION_HINT */ && JglCompressedTexturesAvailable());
 }
 /* Negotiated GL_EXTENSIONS: static storage, valid for the process lifetime. */
 const GLubyte *JglExtensions(void);

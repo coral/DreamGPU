@@ -6292,4 +6292,36 @@ pub struct DreamGpuGlApi {
         ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: f32)>,
     pub dg_glPointParameterfv:
         ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: *const f32)>,
+    pub dg_glCompressedTexImage2D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+            arg7: ::core::ffi::c_int,
+            arg8: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glCompressedTexSubImage2D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: ::core::ffi::c_int,
+            arg4: ::core::ffi::c_int,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+            arg7: ::core::ffi::c_uint,
+            arg8: ::core::ffi::c_int,
+            arg9: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glGetCompressedTexImage: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: *mut ::core::ffi::c_void,
+        ),
+    >,
 }

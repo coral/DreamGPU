@@ -33,6 +33,17 @@
  * queries). Values travel in existing records; native generation of levels below
  * a defined image is charged with that image. */
 #define DG_CAP_GL_TEXTURE_CONTROL 0x20000
+/* Compressed textures: ARB_texture_compression with EXT_texture_compression_s3tc.
+ * CompressedTexImage2D (DATA, seven words: target, level, internalformat, width,
+ * height, border, imageSize) carries either no payload (zero-defined storage) or
+ * exactly imageSize bytes. CompressedTexSubImage2D (DATA, eight words: target,
+ * level, xoffset, yoffset, width, height, format, imageSize) carries exactly
+ * imageSize bytes. GetCompressedTexImage is a QUERY of target, level | words<<16,
+ * first word, returning RESULT_INT words of the native compressed image (zero
+ * words count keeps 128). TexImage2D additionally accepts the S3TC and generic
+ * COMPRESSED_* internal formats. Only TEXTURE_2D (and its proxy) is compressed. */
+#define DG_CAP_GL_COMPRESSED_TEXTURES 0x40000
+#define DG_GL_COMPRESSED_BLOCK 4
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

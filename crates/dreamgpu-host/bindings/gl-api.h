@@ -275,6 +275,9 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glStencilOpSeparate : glStencilOpSeparate) dg_glStencilOpSeparate;
     __typeof__(1 ? glPointParameterf : glPointParameterf) dg_glPointParameterf;
     __typeof__(1 ? glPointParameterfv : glPointParameterfv) dg_glPointParameterfv;
+    __typeof__(1 ? glCompressedTexImage2D : glCompressedTexImage2D) dg_glCompressedTexImage2D;
+    __typeof__(1 ? glCompressedTexSubImage2D : glCompressedTexSubImage2D) dg_glCompressedTexSubImage2D;
+    __typeof__(1 ? glGetCompressedTexImage : glGetCompressedTexImage) dg_glGetCompressedTexImage;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -398,5 +401,8 @@ typedef struct DreamGpuGlApi {
     .dg_glStencilFuncSeparate = glStencilFuncSeparate,                                              \
     .dg_glStencilOpSeparate = glStencilOpSeparate,                                                  \
     .dg_glPointParameterf = glPointParameterf,                                                      \
-    .dg_glPointParameterfv = glPointParameterfv
+    .dg_glPointParameterfv = glPointParameterfv,                                                    \
+    .dg_glCompressedTexImage2D = glCompressedTexImage2D,                                            \
+    .dg_glCompressedTexSubImage2D = glCompressedTexSubImage2D,                                      \
+    .dg_glGetCompressedTexImage = glGetCompressedTexImage
 #endif

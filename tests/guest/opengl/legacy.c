@@ -47,12 +47,15 @@ HINSTANCE JglModule(void) {
 HGLRC wglGetCurrentContext(void) {
     return Ready ? (HGLRC)1 : NULL;
 }
-static BOOL Multitexture, FixedState;
+static BOOL Multitexture, FixedState, Compressed;
 BOOL JglMultitextureAvailable(void) {
     return Multitexture;
 }
 BOOL JglFixedStateAvailable(void) {
     return FixedState;
+}
+BOOL JglCompressedTexturesAvailable(void) {
+    return Compressed;
 }
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
     assert(module == (HINSTANCE)1);
@@ -214,6 +217,23 @@ int main(void) {
                                            "glPointSize"};
         for (const char *name : core)
             assert(wglGetProcAddress(name) == Marker);
+        /* Compressed-texture names follow theirs; 1D/3D variants are never
+         * exported, so lookup still finds nothing for them in the module. */
+        static const char *const compressed[] = {
+            "glCompressedTexImage2D",    "glCompressedTexImage2DARB",
+            "glCompressedTexSubImage2D", "glCompressedTexSubImage2DARB",
+            "glGetCompressedTexImage",   "glGetCompressedTexImageARB"};
+        for (const char *name : compressed) {
+            Multitexture = FixedState = TRUE;
+            Compressed = FALSE;
+            assert(GetProcAddress(JglModule(), name) == Marker && !wglGetProcAddress(name));
+            Compressed = TRUE;
+            Multitexture = FixedState = FALSE;
+            assert(wglGetProcAddress(name) == Marker && !wglGetProcAddress("glBlendColorEXT"));
+        }
+        Compressed = FALSE;
+        assert(wglGetProcAddress("glCompressedTexImage") == NULL &&
+               wglGetProcAddress("glCompressedTe") == Marker);
     }
     Ready = FALSE;
     assert(!wglGetProcAddress("known"));

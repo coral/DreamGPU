@@ -147,7 +147,7 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
     }
     match pname {
         GL_MODELVIEW_MATRIX | GL_PROJECTION_MATRIX | GL_TEXTURE_MATRIX => 16,
-        GL_BLEND_COLOR => 4,
+        GL_BLEND_COLOR | GL_COMPRESSED_TEXTURE_FORMATS => 4,
         GL_POINT_DISTANCE_ATTENUATION => 3,
         GL_CURRENT_RASTER_COLOR
         | GL_CURRENT_RASTER_TEXTURE_COORDS
@@ -218,6 +218,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_MAX_TEXTURE_MAX_ANISOTROPY_EXT
         | GL_MAX_TEXTURE_LOD_BIAS
         | GL_GENERATE_MIPMAP_HINT
+        | GL_TEXTURE_COMPRESSION_HINT
+        | GL_NUM_COMPRESSED_TEXTURE_FORMATS
         | GL_POINT_SIZE_MIN
         | GL_POINT_SIZE_MAX
         | GL_POINT_FADE_THRESHOLD_SIZE
@@ -360,7 +362,11 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glGetTexLevelParameterfv
         | FEnum_glGetTexLevelParameteriv
         | FEnum_glGetTexImage
+        | FEnum_glGetCompressedTexImage
         | FEnum_glReadPixels => DG_GL_FUNCTION_QUERY | 3,
+        // S3TC images (DG_CAP_GL_COMPRESSED_TEXTURES).
+        FEnum_glCompressedTexImage2D => DG_GL_FUNCTION_INLINE_DATA | 7,
+        FEnum_glCompressedTexSubImage2D => DG_GL_FUNCTION_INLINE_DATA | 8,
         FEnum_glDrawArrays | FEnum_glDrawArraysEXT => DG_GL_FUNCTION_INLINE_DATA | 4,
         FEnum_glDrawElements => DG_GL_FUNCTION_INLINE_DATA | 5,
         FEnum_glTexImage1D | FEnum_glTexSubImage1D | FEnum_glTexImage2D | FEnum_glTexSubImage2D => {
@@ -435,6 +441,21 @@ fn copy_1d_internal_format(format: u32) -> bool {
 }
 fn texture_internal_format(format: u32) -> bool {
     (1..=4).contains(&format) || copy_1d_internal_format(format)
+}
+/// 2D images also accept S3TC and the generic compressed formats; native GL
+/// compresses the supplied (or zero) pixels.
+fn texture_2d_internal_format(format: u32) -> bool {
+    texture_internal_format(format)
+        || crate::texture::s3tc_block_bytes(format) != 0
+        || matches!(
+            format,
+            GL_COMPRESSED_ALPHA
+                | GL_COMPRESSED_LUMINANCE
+                | GL_COMPRESSED_LUMINANCE_ALPHA
+                | GL_COMPRESSED_INTENSITY
+                | GL_COMPRESSED_RGB
+                | GL_COMPRESSED_RGBA
+        )
 }
 
 fn buffer_selection(mode: u32, draw: bool) -> bool {
@@ -528,6 +549,7 @@ fn hint_target(target: u32) -> bool {
             | GL_POLYGON_SMOOTH_HINT
             | GL_FOG_HINT
             | GL_GENERATE_MIPMAP_HINT
+            | GL_TEXTURE_COMPRESSION_HINT
     )
 }
 fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
@@ -664,6 +686,12 @@ fn validate_arrays(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     0
 }
 fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
+    if matches!(
+        function,
+        FEnum_glCompressedTexImage2D | FEnum_glCompressedTexSubImage2D
+    ) {
+        return compressed_validate(function, a, data);
+    }
     if function == FEnum_glCallLists {
         return if a[0] <= DG_GL_MAX_CAPTURE_VALUES && data.len() == a[0] as usize * 4 {
             0
@@ -739,7 +767,11 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
             && h <= i32::MAX as u32
             && (!one || h == 1)
             && pixel_bytes != 0
-            && texture_internal_format(a[2])
+            && (if one {
+                texture_internal_format(a[2])
+            } else {
+                texture_2d_internal_format(a[2])
+            })
             && data.is_empty()
         {
             0
@@ -764,7 +796,7 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
                 || !(if one {
                     (1..=4).contains(&a[2]) || copy_1d_internal_format(a[2])
                 } else {
-                    texture_internal_format(a[2])
+                    texture_2d_internal_format(a[2])
                 })
                 || w - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
                 || (!one && h - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1]))))
@@ -772,6 +804,44 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
         DG_GL_ERROR_TEXTURE
     } else {
         0
+    }
+}
+/// Record shape of S3TC uploads. GL rules that depend on the level's current
+/// image (edge-only partial blocks, bounds, format match) are execution-time GL
+/// errors; everything here is fixed by the record and checked by the frontend.
+fn compressed_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
+    let limit = |level: u32| DG_GL_MAX_TEXTURE_DIMENSION >> level.min(31);
+    let ok = if function == FEnum_glCompressedTexImage2D {
+        // target, level, internalformat, width, height, border, imageSize
+        let block = crate::texture::s3tc_block_bytes(a[2]);
+        let proxy = a[0] == GL_PROXY_TEXTURE_2D;
+        (a[0] == GL_TEXTURE_2D || proxy)
+            && block != 0
+            && a[1] <= DG_GL_MAX_TEXTURE_LEVEL
+            && a[3] <= limit(a[1])
+            && a[4] <= limit(a[1])
+            && a[5] == 0
+            && u64::from(a[6]) == crate::texture::s3tc_bytes(a[3], a[4], block)
+            && (data.is_empty() || (!proxy && data.len() as u64 == u64::from(a[6])))
+    } else {
+        // target, level, xoffset, yoffset, width, height, format, imageSize
+        let block = crate::texture::s3tc_block_bytes(a[6]);
+        a[0] == GL_TEXTURE_2D
+            && block != 0
+            && a[1] <= DG_GL_MAX_TEXTURE_LEVEL
+            && a[2].is_multiple_of(4)
+            && a[3].is_multiple_of(4)
+            && a[2] < DG_GL_MAX_TEXTURE_DIMENSION
+            && a[3] < DG_GL_MAX_TEXTURE_DIMENSION
+            && (1..=DG_GL_MAX_TEXTURE_DIMENSION).contains(&a[4])
+            && (1..=DG_GL_MAX_TEXTURE_DIMENSION).contains(&a[5])
+            && u64::from(a[7]) == crate::texture::s3tc_bytes(a[4], a[5], block)
+            && data.len() as u64 == u64::from(a[7])
+    };
+    if ok {
+        0
+    } else {
+        DG_GL_ERROR_TEXTURE
     }
 }
 fn word(bytes: &[u8], offset: usize) -> u32 {
@@ -849,6 +919,22 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 && d < (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
             {
                 n * pixel_words
+            } else {
+                0
+            }
+        }
+        FEnum_glGetCompressedTexImage => {
+            // level, words << 16 (zero keeps 128) and the first word.
+            let n = match b >> DG_GL_TEXTURE_READ_COUNT_SHIFT {
+                0 => DG_GL_MAX_RESULT_BYTES / 4,
+                n => n,
+            };
+            if a == GL_TEXTURE_2D
+                && b & 0xffff <= DG_GL_MAX_TEXTURE_LEVEL
+                && n <= DG_GL_MAX_READBACK_BYTES / 4
+                && d < DG_GL_MAX_TEXTURE_DIMENSION * DG_GL_MAX_TEXTURE_DIMENSION
+            {
+                n
             } else {
                 0
             }
@@ -948,6 +1034,8 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                             | GL_TEXTURE_ALPHA_SIZE
                             | GL_TEXTURE_LUMINANCE_SIZE
                             | GL_TEXTURE_INTENSITY_SIZE
+                            | GL_TEXTURE_COMPRESSED
+                            | GL_TEXTURE_COMPRESSED_IMAGE_SIZE
                     ),
             )
         }

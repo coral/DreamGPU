@@ -75,6 +75,17 @@ and disposable-VM acceptance cycle:
   MODULATECOLOR_ADDALPHA and MULTIPLYADD, MIRRORONCE addressing and
   automatic mipmap generation. The macOS border sampler evaluates the
   combine3 modes itself.
+- Compressed textures (`DG_CAP_GL_COMPRESSED_TEXTURES`) add ARB_texture_compression
+  and EXT_texture_compression_s3tc for 2D images: `CompressedTexImage2D` with an
+  exact payload or none (zero-defined storage), block-row `CompressedTexSubImage2D`
+  bands, `GetCompressedTexImage` through the shared texture read cache, the
+  host's fixed four-format list, and S3TC/generic compressed internal formats for
+  `TexImage2D`. Levels are charged at their compressed size. Every split 2D
+  upload now starts its tiles on 4-pixel boundaries of the rectangle (gathering
+  padded rows instead of sending single rows), and the host's zero fill uses
+  4-row bands, so uncompressed sources into compressed storage stay block
+  aligned. Rules that depend on the level (edge-only partial blocks, bounds,
+  format) are GL errors, never record faults.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
@@ -183,6 +194,11 @@ in a window. macOS CGL, Win98 and XP remain unverified for these capabilities.
 With texture control the installed D3D9 caps add CANAUTOGENMIPMAP (Caps2
 `0x60020000`), TextureOpCaps `0x0386ffff` and MIRRORONCE addressing
 (`0x3f`); the stage probe renders all thirteen claimed cases exactly.
+
+With compressed textures, fresh Win2000 and Windows XP clones (the user's XP
+image, never modified) install to terminal receipts and pass every probe; the
+D3D8/9 probes render DXT1/DXT3/DXT5 blocks exactly on both. Half-Life runs at
+192 FPS on Win2000.
 
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,

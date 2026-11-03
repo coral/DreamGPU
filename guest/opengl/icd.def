@@ -219,6 +219,12 @@ EXPORTS
     glPointParameterfvARB=glPointParameterfvARB@8
     glPointParameterfEXT=glPointParameterfEXT@8
     glPointParameterfvEXT=glPointParameterfvEXT@8
+    glCompressedTexImage2D=glCompressedTexImage2D@32
+    glCompressedTexSubImage2D=glCompressedTexSubImage2D@36
+    glGetCompressedTexImage=glGetCompressedTexImage@12
+    glCompressedTexImage2DARB=glCompressedTexImage2DARB@32
+    glCompressedTexSubImage2DARB=glCompressedTexSubImage2DARB@36
+    glGetCompressedTexImageARB=glGetCompressedTexImageARB@12
     glClearColor=glClearColor@16
     glClear=glClear@4
     glEnable=glEnable@4

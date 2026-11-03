@@ -603,3 +603,66 @@ fn texture_control_names_are_sized_and_hinted() {
     a[1] = GL_GENERATE_MIPMAP;
     assert_eq!(call_validate(FEnum_glHint, &a), DG_GL_ERROR_UNSUPPORTED);
 }
+
+#[test]
+fn s3tc_record_shapes_are_exact_and_level_rules_are_left_to_execution() {
+    let image = |a: [u32; 7], n: usize| {
+        let mut w = [0u32; 8];
+        w[..7].copy_from_slice(&a);
+        data_validate(FEnum_glCompressedTexImage2D, &w, &vec![0u8; n])
+    };
+    let dxt1 = GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
+    let dxt5 = GL_COMPRESSED_RGBA_S3TC_DXT5_EXT;
+    // Partial blocks round up; payload is empty or exactly the image.
+    assert_eq!(image([GL_TEXTURE_2D, 0, dxt1, 6, 5, 0, 32], 32), 0);
+    assert_eq!(image([GL_TEXTURE_2D, 0, dxt1, 6, 5, 0, 32], 0), 0);
+    assert_eq!(image([GL_TEXTURE_2D, 0, dxt5, 4, 4, 0, 16], 16), 0);
+    assert_eq!(image([GL_PROXY_TEXTURE_2D, 0, dxt5, 4, 4, 0, 16], 0), 0);
+    for (bad, n) in [
+        ([GL_PROXY_TEXTURE_2D, 0, dxt5, 4, 4, 0, 16], 16), // proxy with payload
+        ([GL_TEXTURE_2D, 0, dxt1, 6, 5, 0, 24], 24),       // wrong image size
+        ([GL_TEXTURE_2D, 0, dxt1, 6, 5, 0, 32], 31),       // short payload
+        ([GL_TEXTURE_2D, 0, GL_RGBA8, 4, 4, 0, 8], 8),     // not S3TC
+        ([GL_TEXTURE_1D, 0, dxt1, 4, 4, 0, 8], 8),         // 2D only
+        ([GL_TEXTURE_2D, 0, dxt1, 4, 4, 1, 8], 8),         // no borders
+        ([GL_TEXTURE_2D, 1, dxt1, 2048, 4, 0, 4096], 4096), // beyond level 1 limit
+        ([GL_TEXTURE_2D, 12, dxt1, 1, 1, 0, 8], 8),        // beyond the last level
+    ] {
+        assert_eq!(image(bad, n), DG_GL_ERROR_TEXTURE, "{bad:?}");
+    }
+    let sub =
+        |a: [u32; 8], n: usize| data_validate(FEnum_glCompressedTexSubImage2D, &a, &vec![0u8; n]);
+    assert_eq!(sub([GL_TEXTURE_2D, 0, 4, 8, 6, 4, dxt1, 16], 16), 0);
+    for (bad, n) in [
+        ([GL_TEXTURE_2D, 0, 2, 0, 4, 4, dxt1, 8], 8), // unaligned offset
+        ([GL_TEXTURE_2D, 0, 0, 0, 0, 4, dxt1, 0], 0), // empty update
+        ([GL_TEXTURE_2D, 0, 0, 0, 4, 4, dxt1, 8], 0), // missing payload
+        ([GL_TEXTURE_2D, 0, 0, 0, 4, 4, dxt5, 8], 8), // DXT5 block size
+        ([GL_TEXTURE_2D, 0, 0, 0, 4, 4, GL_RGBA, 8], 8),
+    ] {
+        assert_eq!(sub(bad, n), DG_GL_ERROR_TEXTURE, "{bad:?}");
+    }
+    // Width 6 at x=4 is not judged here: whether it reaches the edge depends on
+    // the level, so execution reports GL_INVALID_OPERATION instead.
+    assert_eq!(sub([GL_TEXTURE_2D, 0, 4, 0, 6, 4, dxt1, 16], 16), 0);
+    assert_eq!(
+        dreamgpu_gl_function_words(FEnum_glCompressedTexImage2D),
+        DG_GL_FUNCTION_INLINE_DATA | 7
+    );
+    assert_eq!(
+        dreamgpu_gl_function_words(FEnum_glGetCompressedTexImage),
+        DG_GL_FUNCTION_QUERY | 3
+    );
+    assert_eq!(query_state_count(GL_COMPRESSED_TEXTURE_FORMATS), 4);
+    assert_eq!(query_state_count(GL_NUM_COMPRESSED_TEXTURE_FORMATS), 1);
+    // TexImage2D accepts compressed internal formats for 2D only.
+    let mut t = [GL_TEXTURE_2D, 0, dxt5, 4, 4, 0, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(data_validate(FEnum_glTexImage2D, &t, &[0; 64]), 0);
+    t[2] = GL_COMPRESSED_RGB;
+    assert_eq!(data_validate(FEnum_glTexImage2D, &t, &[]), 0);
+    let one = [GL_TEXTURE_1D, 0, dxt1, 4, 1, 0, GL_RGBA, GL_UNSIGNED_BYTE];
+    assert_eq!(
+        data_validate(FEnum_glTexImage1D, &one, &[0; 16]),
+        DG_GL_ERROR_TEXTURE
+    );
+}

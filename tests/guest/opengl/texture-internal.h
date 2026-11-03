@@ -3,10 +3,13 @@
  */
 #include <stddef.h>
 #include <stdint.h>
+#include <string.h>
 typedef uint32_t ULONG, GLenum;
 typedef uintptr_t ULONG_PTR;
 typedef int32_t GLint, GLsizei;
 typedef int BOOL;
+typedef unsigned char BYTE;
+#define CopyMemory(d, s, n) memcpy((d), (s), (n))
 #define APIENTRY
 #define TRUE 1
 #define FALSE 0
@@ -46,10 +49,13 @@ typedef struct {
 BOOL JglReady(void);
 void JglSetError(GLenum);
 BOOL JglData(ULONG, const ULONG *, ULONG, const void *, ULONG);
+typedef void (*JGL_CAPTURE)(void *opaque, BYTE *destination);
+BOOL JglCaptureData(ULONG, const ULONG *, ULONG, ULONG, JGL_CAPTURE, void *);
 BOOL JglQuery(ULONG, const ULONG *, ULONG, void *, ULONG, ULONG *);
 BOOL JglCompiling(void);
 BOOL JglTextureImagesAvailable(void);
 BOOL JglTextureBordersAvailable(void);
+BOOL JglCompressedTexturesAvailable(void);
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);

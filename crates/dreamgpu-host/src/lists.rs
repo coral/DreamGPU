@@ -402,8 +402,10 @@ unsafe fn capture(
     data: &[u8],
 ) -> bool {
     let s = unsafe { (*c).lists };
-    let proxy = matches!(f, FEnum_glTexImage1D | FEnum_glTexImage2D)
-        && args.len() >= 4
+    let proxy = matches!(
+        f,
+        FEnum_glTexImage1D | FEnum_glTexImage2D | FEnum_glCompressedTexImage2D
+    ) && args.len() >= 4
         && matches!(word(args, 0), GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D);
     if s.is_null() || unsafe { (*s).mode } == 0 || immediate(f) || proxy {
         return true;

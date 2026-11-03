@@ -454,7 +454,7 @@ pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Textu
     let mut slots = [null_mut(); 2 * UNITS];
     unsafe {
         let active = (*state).active_unit as usize;
-        for (unit, pair) in slots.chunks_exact_mut(2).enumerate() {
+        for (unit, pair) in slots.as_chunks_mut::<2>().0.iter_mut().enumerate() {
             if unit == active {
                 pair[0] = addr_of_mut!((*state).bound_texture);
                 pair[1] = addr_of_mut!((*state).bound_texture_1d);

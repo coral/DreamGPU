@@ -22,6 +22,11 @@ static ULONG HostMaxRecords, HostMaxBytes, LargestSubmission;
 /* Typed state queries: the last function/first argument and fixed answers. */
 static ULONG HostInteger, LastQueryFunction, LastQueryArgument;
 static GLboolean HostEnabled;
+/* Optional observers for suites including this fixture: every submitted
+ * record in order, and typed answers to queries modelled below only for their
+ * function (TRUE when the observer filled the reply). Reset clears both. */
+static void (*SubmittedRecord)(const ULONG *record);
+static BOOL (*AnswerQuery)(const ULONG *record, DG_ESCAPE_REPLY *reply, ULONG capacity);
 
 void *TlsGetValue(DWORD key) {
     assert(key == 0);
@@ -285,6 +290,8 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
             ZeroMemory(reply, sizeof(*reply));
             return 0;
         }
+        if (SubmittedRecord)
+            SubmittedRecord(r);
         error = Execute(r);
         if (error) {
             reply->Status = DG_ESCAPE_HOST;
@@ -296,7 +303,9 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
             ++QueryCalls;
             LastQueryFunction = r[8];
             LastQueryArgument = r[9];
-            if (r[8] == FEnum_glReadPixels) {
+            if (AnswerQuery && AnswerQuery(r, reply, request->ResultCapacity)) {
+                assert(reply->ResultBytes <= request->ResultCapacity);
+            } else if (r[8] == FEnum_glReadPixels) {
                 assert(request->ResultCapacity <= HostMaxResultBytes);
                 reply->ResultBytes = request->ResultCapacity;
                 reply->ResultType = DG_GL_RESULT_INT;
@@ -359,6 +368,8 @@ static void Reset(void) {
     HostCaps = CapabilityQueries = CapabilityFailure = 0;
     HostInteger = LastQueryFunction = LastQueryArgument = 0;
     HostEnabled = 0;
+    SubmittedRecord = NULL;
+    AnswerQuery = NULL;
     assert(DllMain(NULL, DLL_PROCESS_ATTACH, NULL));
 }
 static HGLRC Create(void) {

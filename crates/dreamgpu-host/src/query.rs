@@ -196,9 +196,19 @@ unsafe fn execute(
         }
         return Ok(());
     }
-    if function == FEnum_glGetTexImage {
+    if matches!(
+        function,
+        FEnum_glGetTexImage | FEnum_glGetCompressedTexImage
+    ) {
         let read = texture_read.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
-        let error = unsafe { read(opaque, a, b & 0xffff, d, required, result) };
+        // The compressed flag is host-internal: it selects the native compressed
+        // image (and a separate cache identity) inside the shared read cache.
+        let level = if function == FEnum_glGetCompressedTexImage {
+            (b & 0xffff) | crate::texture::READ_COMPRESSED
+        } else {
+            b & 0xffff
+        };
+        let error = unsafe { read(opaque, a, level, d, required, result) };
         if error != 0 {
             return Err(error);
         }
@@ -373,6 +383,13 @@ unsafe fn execute(
                 GL_MAX_TEXTURE_UNITS => {
                     call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
                     integers[0] = integers[0].clamp(1, DG_GL_MAX_TEXTURE_UNITS as i32);
+                }
+                // The S3TC formats DreamGPU guarantees, not the native list.
+                GL_NUM_COMPRESSED_TEXTURE_FORMATS => integers[0] = 4,
+                GL_COMPRESSED_TEXTURE_FORMATS => {
+                    for (i, format) in (GL_COMPRESSED_RGB_S3TC_DXT1_EXT..).take(4).enumerate() {
+                        integers[i] = format as i32;
+                    }
                 }
                 GL_MAX_LIGHTS => integers[0] = 8,
                 GL_MAX_CLIP_PLANES => integers[0] = 6,
