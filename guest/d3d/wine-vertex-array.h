@@ -22,6 +22,12 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     struct dg_wine_vertex vertices[DG_WINE_PACKED_VERTICES];
     unsigned int i;
     BOOL secondary = !!(si->use_map & (1u << WINED3D_FFP_SPECULAR));
+    /* drawStridedSlow takes each fog coordinate from specular alpha exactly
+     * here (the position is always XYZRHW float4 on this path). Any other
+     * fog-coordinate state keeps Wine's own drawing. */
+    BOOL fog = secondary && gl_info->supported[EXT_FOG_COORD] &&
+               state->render_states[WINED3D_RS_FOGENABLE] &&
+               state->render_states[WINED3D_RS_FOGTABLEMODE] == WINED3D_FOG_NONE;
 
     /* In this Wine state, streamsrc() has unloaded every named array. No
      * application owns this GL context. Restore that disabled state below;
@@ -31,7 +37,8 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
         context->numberedArraysLoaded || context->num_untracked_materials ||
         context->d3d_info->xyzrhw || use_ps(state) ||
         gl_info->supported[ARB_VERTEX_BUFFER_OBJECT] ||
-        (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE]) || !state->textures[0] ||
+        (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE] && !fog) ||
+        !state->textures[0] ||
         (si->use_map & ~(required | texture_inputs | (1u << WINED3D_FFP_SPECULAR))) ||
         (si->use_map & required) != required || p->format->id != WINED3DFMT_R32G32B32A32_FLOAT ||
         d->format->id != WINED3DFMT_B8G8R8A8_UNORM || p->data.buffer_object ||
@@ -64,11 +71,6 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
     }
     /* A single unit-0 stage keeps the established path with no unit selection. */
     if (!used || ((used > 1 || units[0] != 0) && !gl_info->supported[ARB_MULTITEXTURE]))
-        return FALSE;
-    /* Explicit fog-coordinate emulation remains in drawStridedSlow. */
-    if (secondary && gl_info->supported[EXT_FOG_COORD] &&
-        state->render_states[WINED3D_RS_FOGENABLE] &&
-        state->render_states[WINED3D_RS_FOGTABLEMODE] == WINED3D_FOG_NONE)
         return FALSE;
     for (i = 0; i < count; ++i) {
         int64_t index = (int64_t)first + i;
@@ -115,6 +117,10 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
                                                vertices[0].specular);
         gl_info->gl_ops.gl.p_glEnableClientState(GL_SECONDARY_COLOR_ARRAY_EXT);
     }
+    if (fog) {
+        GL_EXTCALL(glFogCoordPointerEXT)(GL_FLOAT, sizeof(vertices[0]), &vertices[0].fog);
+        gl_info->gl_ops.gl.p_glEnableClientState(GL_FOG_COORDINATE_ARRAY_EXT);
+    }
     gl_info->gl_ops.gl.p_glDrawArrays(primitive, 0, count);
     gl_info->gl_ops.gl.p_glDisableClientState(GL_VERTEX_ARRAY);
     gl_info->gl_ops.gl.p_glDisableClientState(GL_COLOR_ARRAY);
@@ -137,6 +143,11 @@ static BOOL dg_wine_draw_transformed(const struct wined3d_device *device,
         gl_info->gl_ops.gl.p_glDisableClientState(GL_SECONDARY_COLOR_ARRAY_EXT);
         GL_EXTCALL(glSecondaryColorPointerEXT)(3, GL_UNSIGNED_BYTE, 0, NULL);
         GL_EXTCALL(glSecondaryColor3ubvEXT)(vertices[count - 1].specular);
+    }
+    if (fog) {
+        gl_info->gl_ops.gl.p_glDisableClientState(GL_FOG_COORDINATE_ARRAY_EXT);
+        GL_EXTCALL(glFogCoordPointerEXT)(GL_FLOAT, 0, NULL);
+        GL_EXTCALL(glFogCoordfEXT)(vertices[count - 1].fog);
     }
     /* Array drawing leaves current attributes unspecified. Reproduce the
      * final immediate-mode vertex's values for the following Wine draw. */

@@ -487,6 +487,16 @@ JGL_PACKING_ONLY void APIENTRY glPointParameterfEXT(GLenum a0, GLfloat a1) {
     __builtin_memcpy(words + 1, &a1, 4);
     Scalar(FEnum_glPointParameterf, 2, words);
 }
+JGL_PACKING_ONLY void APIENTRY glFogCoordf(GLfloat a0) {
+    ULONG words[1];
+    __builtin_memcpy(words + 0, &a0, 4);
+    Scalar(FEnum_glFogCoordf, 1, words);
+}
+JGL_PACKING_ONLY void APIENTRY glFogCoordfEXT(GLfloat a0) {
+    ULONG words[1];
+    __builtin_memcpy(words + 0, &a0, 4);
+    Scalar(FEnum_glFogCoordf, 1, words);
+}
 JGL_PACKING_ONLY void APIENTRY glLoadMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixf, 16, matrix); }
 JGL_PACKING_ONLY void APIENTRY glMultMatrixf(const GLfloat *matrix) { if (matrix) Scalar(FEnum_glMultMatrixf, 16, matrix); }
 JGL_PACKING_ONLY void APIENTRY glLoadMatrixd(const GLdouble *matrix) { if (matrix) Scalar(FEnum_glLoadMatrixd, 32, matrix); }

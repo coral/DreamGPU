@@ -16,6 +16,8 @@ mod evaluator;
 mod fixed;
 #[path = "native_qemu/fixed_state.rs"]
 mod fixed_state;
+#[path = "native_qemu/fog_coord.rs"]
+mod fog_coord;
 #[path = "native_qemu/multitexture.rs"]
 mod multitexture;
 #[path = "native_qemu/pixel_image.rs"]

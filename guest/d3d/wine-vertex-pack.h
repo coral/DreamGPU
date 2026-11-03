@@ -15,6 +15,8 @@
 struct dg_wine_vertex {
     float position[4], texture[DG_WINE_PACKED_UNITS][2];
     unsigned char diffuse[4], specular[4];
+    /* Specular alpha as Wine's fog coordinate (drawStridedSlow: alpha >> 24). */
+    float fog;
 };
 
 static inline int dg_wine_vertex_address(const void *base, unsigned int stride, int64_t index,
@@ -59,5 +61,6 @@ static inline void dg_wine_pack_vertex(struct dg_wine_vertex *out, const void *p
     out->specular[1] = s ? s[1] : 0;
     out->specular[2] = s ? s[0] : 0;
     out->specular[3] = 0;
+    out->fog = s ? (float)s[3] : 0.0f;
 }
 #endif

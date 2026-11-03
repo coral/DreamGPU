@@ -23,7 +23,8 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glStencilFuncSeparate", JglFixedStateAvailable},
                     {"glPointParameter", JglFixedStateAvailable},
                     {"glCompressedTex", JglCompressedTexturesAvailable},
-                    {"glGetCompressedTex", JglCompressedTexturesAvailable}};
+                    {"glGetCompressedTex", JglCompressedTexturesAvailable},
+                    {"glFogCoord", JglFogCoordAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {
@@ -88,25 +89,11 @@ void APIENTRY glColor4ubv(const GLubyte *v) {
         glColor4ub(v[0], v[1], v[2], v[3]);
 }
 
-static ULONG FogCount(GLenum pname) {
-    switch (pname) {
-        case GL_FOG_MODE:
-        case GL_FOG_DENSITY:
-        case GL_FOG_START:
-        case GL_FOG_END:
-        case GL_FOG_INDEX:
-            return 1;
-        case GL_FOG_COLOR:
-            return 4;
-        default:
-            return 0;
-    }
-}
 void APIENTRY glFogfv(GLenum pname, const GLfloat *values) {
     ULONG count, args[1] = {pname};
     if (!JglCommandReady())
         return;
-    count = FogCount(pname);
+    count = JglFogCount(pname);
     if (!count) {
         JglCommandError(GL_INVALID_ENUM);
         return;
@@ -120,7 +107,7 @@ void APIENTRY glFogfv(GLenum pname, const GLfloat *values) {
 void APIENTRY glFogi(GLenum pname, GLint value) {
     if (!JglCommandReady())
         return;
-    if (FogCount(pname) != 1) {
+    if (JglFogCount(pname) != 1) {
         JglCommandError(GL_INVALID_ENUM);
         return;
     }
@@ -205,7 +192,7 @@ void APIENTRY glFogiv(GLenum pname, const GLint *values) {
     GLfloat converted[4];
     if (!JglCommandReady())
         return;
-    count = FogCount(pname);
+    count = JglFogCount(pname);
     if (!count) {
         JglCommandError(GL_INVALID_ENUM);
         return;

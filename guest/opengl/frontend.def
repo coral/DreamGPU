@@ -214,6 +214,16 @@ EXPORTS
     glCompressedTexImage2DARB=glCompressedTexImage2DARB@32
     glCompressedTexSubImage2DARB=glCompressedTexSubImage2DARB@36
     glGetCompressedTexImageARB=glGetCompressedTexImageARB@12
+    glFogCoordf=glFogCoordf@4
+    glFogCoordfv=glFogCoordfv@4
+    glFogCoordd=glFogCoordd@8
+    glFogCoorddv=glFogCoorddv@4
+    glFogCoordPointer=glFogCoordPointer@12
+    glFogCoordfEXT=glFogCoordfEXT@4
+    glFogCoordfvEXT=glFogCoordfvEXT@4
+    glFogCoorddEXT=glFogCoorddEXT@8
+    glFogCoorddvEXT=glFogCoorddvEXT@4
+    glFogCoordPointerEXT=glFogCoordPointerEXT@12
     glClearColor=glClearColor@16
     glClear=glClear@4
     glEnable=glEnable@4

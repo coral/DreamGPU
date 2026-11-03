@@ -68,8 +68,8 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                         return 0;
                 // DrawArrays compact descriptor data is checked before DMA on
                 // both NT and Win9x. Other GL semantics remain host admission.
-                // DrawArraysEXT (0x1d6) is the sixteen-slot multitexture form;
-                // it is always compact.
+                // DrawArraysEXT (0x1d6) is the sixteen-slot form (texture units
+                // 1-7, fog coordinate in slot 14); it is always compact.
                 if ((record[8] == 469 && args == 4 && (record[13] & DG_GL_ARRAY_RAW)) ||
                     (record[8] == 0x1d6 && args == 4)) {
                     const unsigned slots = record[8] == 469 ? 7 : DG_GL_ARRAY_EXT_SLOTS;

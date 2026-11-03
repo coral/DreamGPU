@@ -35,7 +35,12 @@ pub(crate) fn material_params(face: u32, pname: u32) -> u32 {
 pub(crate) fn fog_params(pname: u32) -> u32 {
     match pname {
         GL_FOG_COLOR => 4,
-        GL_FOG_MODE | GL_FOG_DENSITY | GL_FOG_START | GL_FOG_END | GL_FOG_INDEX => 1,
+        GL_FOG_MODE
+        | GL_FOG_DENSITY
+        | GL_FOG_START
+        | GL_FOG_END
+        | GL_FOG_INDEX
+        | GL_FOG_COORDINATE_SOURCE => 1,
         _ => 0,
     }
 }
@@ -220,6 +225,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_GENERATE_MIPMAP_HINT
         | GL_TEXTURE_COMPRESSION_HINT
         | GL_NUM_COMPRESSED_TEXTURE_FORMATS
+        | GL_FOG_COORDINATE_SOURCE
+        | GL_CURRENT_FOG_COORDINATE
         | GL_POINT_SIZE_MIN
         | GL_POINT_SIZE_MAX
         | GL_POINT_FADE_THRESHOLD_SIZE
@@ -387,6 +394,8 @@ pub(crate) fn function_words(function: u32) -> u32 {
         // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
         FEnum_glActiveTexture => 1,
         FEnum_glMultiTexCoord4f => 5,
+        // EXT_fog_coord (DG_CAP_GL_FOG_COORD); legal inside Begin/End.
+        FEnum_glFogCoordf => 1,
         // Fixed-function blend, stencil and point state (DG_CAP_GL_FIXED_STATE).
         FEnum_glBlendEquation => 1,
         FEnum_glBlendEquationSeparate | FEnum_glPointParameterf => 2,

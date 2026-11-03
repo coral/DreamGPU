@@ -22,6 +22,7 @@ pub(crate) fn allowed_in_begin(function: u32) -> bool {
             | FEnum_glVertex4f
             | FEnum_glTexCoord4f
             | FEnum_glMultiTexCoord4f
+            | FEnum_glFogCoordf
             | FEnum_glColor3f
             | FEnum_glColor4f
             | FEnum_glSecondaryColor3f
@@ -286,6 +287,7 @@ unsafe fn execute(
         FEnum_glMultiTexCoord4f => unsafe {
             api.dg_glMultiTexCoord4f.ok_or(3u32)?(u(0)?, f(1)?, f(2)?, f(3)?, f(4)?)
         },
+        FEnum_glFogCoordf => unsafe { api.dg_glFogCoordf.ok_or(3u32)?(f(0)?) },
         FEnum_glVertex3f => unsafe { api.dg_glVertex3f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?) },
         FEnum_glVertex4f => unsafe { api.dg_glVertex4f.ok_or(3u32)?(f(0)?, f(1)?, f(2)?, f(3)?) },
         FEnum_glSecondaryColor3f => unsafe {

@@ -36,6 +36,7 @@ using UINT=unsigned; using GLenum=unsigned; using BOOL=int; using DWORD=unsigned
 #define GL_COLOR_ARRAY 1
 #define GL_TEXTURE_COORD_ARRAY 2
 #define GL_SECONDARY_COLOR_ARRAY_EXT 3
+#define GL_FOG_COORDINATE_ARRAY_EXT 4
 #define GL_TEXTURE0_ARB 0x84c0
 #define WINED3D_UNMAPPED_STAGE 0xffffffffu
 #include "dg-wine-vertex-pack.h"
@@ -48,6 +49,9 @@ static void vp(int,unsigned,unsigned s,const void*p){++calls;pointers[0]=p;strid
 static void cp(int,unsigned,unsigned s,const void*p){++calls;pointers[1]=p;strides[1]=s;}
 static void tp(int,unsigned,unsigned s,const void*p){++calls;tex_pointers[client]=p;tex_strides[client]=s;}
 static void sp(int,unsigned,unsigned s,const void*p){++calls;pointers[3]=p;strides[3]=s;}
+static const void *fog_pointer; static unsigned fog_stride; static float last_fog=-1; static std::vector<float> seen_fog;
+static void fp(unsigned type,unsigned s,const void*p){++calls;assert(type==GL_FLOAT);fog_pointer=p;fog_stride=s;}
+static void ff(float v){++calls;last_fog=v;}
 static void en(unsigned i){++calls; if(i==GL_TEXTURE_COORD_ARRAY) tex_enabled|=1u<<client; else enabled|=1u<<i;}
 static void dis(unsigned i){++calls; if(i==GL_TEXTURE_COORD_ARRAY) tex_enabled&=~(1u<<client); else enabled&=~(1u<<i);}
 static void client_active(unsigned unit){++calls;++client_calls;client=unit-GL_TEXTURE0_ARB;}
@@ -59,12 +63,13 @@ static void sec(const unsigned char*p){++calls;memcpy(last_secondary,p,3);}
 static void uv(const float*p){++calls;memcpy(last_uv,p,8);}
 static void draw(unsigned primitive,int first,unsigned n){
     ++calls;++draws; assert(primitive==99&&first==0&&(enabled&3)==3&&(tex_enabled&1));
-    seen.clear();for(unsigned i=0;i<n;++i) {
+    seen.clear();seen_fog.clear();for(unsigned i=0;i<n;++i) {
         dg_wine_vertex v{};
         memcpy(v.position,(const char*)pointers[0]+i*strides[0],16);
         memcpy(v.diffuse,(const char*)pointers[1]+i*strides[1],4);
         for(unsigned u=0;u<2;++u) if(tex_enabled&(1u<<u)) memcpy(v.texture[u],(const char*)tex_pointers[u]+i*tex_strides[u],8);
         if(enabled&8)memcpy(v.specular,(const char*)pointers[3]+i*strides[3],3);
+        if(enabled&16)seen_fog.push_back(*(const float*)((const char*)fog_pointer+i*fog_stride));
         seen.push_back(v);
     }
 }
@@ -82,6 +87,8 @@ struct ext_functions {
  decltype(&sec) p_glSecondaryColor3ubvEXT=sec;
  decltype(&client_active) p_glClientActiveTextureARB=client_active;
  decltype(&multi) p_glMultiTexCoord2fvARB=multi;
+ decltype(&fp) p_glFogCoordPointerEXT=fp;
+ decltype(&ff) p_glFogCoordfEXT=ff;
 };
 struct wined3d_gl_info {bool supported[4]{};struct {unsigned textures=1,texture_coords=1;}limits;struct {gl_functions gl;ext_functions ext;}gl_ops;};
 struct format {unsigned id;};
@@ -150,10 +157,24 @@ int main(){
  assert(!dg_wine_draw_transformed(&dev,&ctx,&si,257,99,(void*)1,2,0));
  ctx.namedArraysLoaded=true;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));ctx.namedArraysLoaded=false;
  ctx.num_untracked_materials=1;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));ctx.num_untracked_materials=0;
- gl.supported[EXT_FOG_COORD]=true;dev.state.render_states[0]=1;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));dev.state.render_states[0]=0;
+ // Fog coordinates without specular to read them from remain Wine's.
+ gl.supported[EXT_FOG_COORD]=true;dev.state.render_states[0]=1;ctx.fog_coord=true;si.use_map&=~(1u<<WINED3D_FFP_SPECULAR);
+ assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));si.use_map|=1u<<WINED3D_FFP_SPECULAR;ctx.fog_coord=false;dev.state.render_states[0]=0;
  gl.supported[ARB_VERTEX_BUFFER_OBJECT]=true;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));gl.supported[ARB_VERTEX_BUFFER_OBJECT]=false;
  dev.state.base_vertex_index=-5;assert(!dg_wine_draw_transformed(&dev,&ctx,&si,2,99,wide,4,0));dev.state.base_vertex_index=0;
- assert(saved==calls);si.use_map &= ~(1u<<WINED3D_FFP_SPECULAR);
+ assert(saved==calls);
+ // Specular-alpha fog: drawStridedSlow's coordinates per vertex as one array,
+ // then the last vertex's coordinate as the current value.
+ ctx.fog_coord=true;dev.state.render_states[0]=1;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));
+ assert(seen_fog.size()==4);for(unsigned i=0;i<4;++i)assert(seen_fog[i]==(float)data[i].spec[3]);
+ assert(enabled==0&&!fog_pointer&&last_fog==32.0f);
+ // Table fog or fog disabled: no coordinate array.
+ dev.state.render_states[1]=3;last_fog=-1;
+ assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)==false);
+ ctx.fog_coord=false;assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0)&&seen_fog.empty()&&last_fog==-1);
+ dev.state.render_states[1]=0;dev.state.render_states[0]=0;gl.supported[EXT_FOG_COORD]=false;
+ si.use_map &= ~(1u<<WINED3D_FFP_SPECULAR);
  assert(dg_wine_draw_transformed(&dev,&ctx,&si,4,99,nullptr,0,0));assert(enabled==0);
  const void *out=nullptr;assert(!dg_wine_vertex_address((void*)(UINTPTR_MAX-3),16,1,4,&out));
  assert(!dg_wine_vertex_address(data,UINT32_MAX,INT64_MAX,4,&out));

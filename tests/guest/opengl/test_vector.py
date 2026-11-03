@@ -24,7 +24,10 @@ with tempfile.TemporaryDirectory(prefix="jgl-vector-") as temporary:
     root = Path(temporary)
     for name in ("compatibility.cpp", "packing.h"):
         shutil.copyfile((HERE.parents[2] / "guest/opengl") / name, root / name)
-    shutil.copyfile(HERE / "vector-internal.h", root / "internal.h")
+    # The shim carries the production fog-name table verbatim.
+    fog = re.search(r"static inline ULONG JglFogCount\(.*?\n}\n",
+                    ((HERE.parents[2] / "guest/opengl") / "internal.h").read_text(), re.S)
+    (root / "internal.h").write_text((HERE / "vector-internal.h").read_text() + fog.group(0))
     shutil.copyfile(HERE / "vector-i686.c", root / "test.cpp")
     for compiler in compilers:
         binary = root / Path(compiler).name

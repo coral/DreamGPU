@@ -120,6 +120,10 @@ unsafe fn draw(
     {
         return Err(3);
     }
+    let fog = attributes & DG_GL_ARRAY_FOG_COORD != 0;
+    if fog && (api.dg_glFogCoordPointer.is_none() || api.dg_glFogCoordf.is_none()) {
+        return Err(3);
+    }
     if extended
         && (api.dg_glGetDoublev.is_none()
             || api.dg_glGetBooleanv.is_none()
@@ -145,6 +149,7 @@ unsafe fn draw(
     let mut texcoords = [[0.0f32; 4]; DG_GL_MAX_TEXTURE_UNITS as usize];
     let mut active = GL_TEXTURE0 as i32;
     let mut secondary = [0.0f32; 4];
+    let mut fog_coordinate = 0.0f32;
     unsafe {
         // GL modifies current values only for enabled arrays. Preserve those
         // values; disabled packet attributes require no native query or restore.
@@ -168,6 +173,9 @@ unsafe fn draw(
                 }
             }
             api.dg_glActiveTexture.unwrap()(active as u32);
+        }
+        if fog {
+            api.dg_glGetFloatv.unwrap()(GL_CURRENT_FOG_COORDINATE, &mut fog_coordinate);
         }
         if attributes & DG_GL_ARRAY_INDEX != 0 {
             api.dg_glGetDoublev.unwrap()(GL_CURRENT_INDEX, &mut index);
@@ -224,6 +232,17 @@ unsafe fn draw(
                     0,
                     data.as_ptr().add(a.offset).cast(),
                 );
+            }
+        }
+        // CLIENT_VERTEX_ARRAY_BIT covers the fog coordinate array (GL 1.4);
+        // only DrawArraysEXT carries it, so other draws leave it untouched.
+        if units {
+            if fog {
+                let a = raw.as_ref().expect("units are compact")[14];
+                api.dg_glEnableClientState.unwrap()(GL_FOG_COORDINATE_ARRAY);
+                api.dg_glFogCoordPointer.unwrap()(a.kind, 0, data.as_ptr().add(a.offset).cast());
+            } else {
+                api.dg_glDisableClientState.unwrap()(GL_FOG_COORDINATE_ARRAY);
             }
         }
         if attributes & DG_GL_ARRAY_SECONDARY != 0 {
@@ -285,6 +304,9 @@ unsafe fn draw(
             if texcoord_units & 1 << u != 0 {
                 api.dg_glMultiTexCoord4fv.unwrap()(GL_TEXTURE0 + u as u32, saved.as_ptr());
             }
+        }
+        if fog {
+            api.dg_glFogCoordf.unwrap()(fog_coordinate);
         }
         if attributes & DG_GL_ARRAY_INDEX != 0 {
             api.dg_glIndexd.unwrap()(index);

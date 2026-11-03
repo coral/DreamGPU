@@ -44,6 +44,12 @@
  * COMPRESSED_* internal formats. Only TEXTURE_2D (and its proxy) is compressed. */
 #define DG_CAP_GL_COMPRESSED_TEXTURES 0x40000
 #define DG_GL_COMPRESSED_BLOCK 4
+/* Fog coordinates: EXT_fog_coord. FogCoordf (one float word) is an ordinary
+ * CALL, legal inside Begin/End and display lists. FOG_COORDINATE_SOURCE is a
+ * Fog parameter. DrawArraysEXT slot 14 (DG_GL_ARRAY_FOG_COORD) carries one FLOAT
+ * or DOUBLE fog coordinate per vertex; the host answers FOG_COORDINATE_SOURCE
+ * and CURRENT_FOG_COORDINATE. */
+#define DG_CAP_GL_FOG_COORD 0x80000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104
@@ -292,10 +298,12 @@
 /* With DG_CAP_GL_MULTITEXTURE, DrawArraysEXT uses the same four scalar words
  * and RAW payload rules with sixteen descriptors. Slots 0-6 match DrawArrays;
  * slots 7-13 are texture coordinates of units 1-7 with the slot-3 rules;
- * slots 14-15 are reserved: their mask bits and descriptors must be zero.
+ * slot 14 is the fog coordinate (one FLOAT or DOUBLE, DG_CAP_GL_FOG_COORD);
+ * slot 15 is reserved: its mask bit and descriptor must be zero.
  * A distinct function keeps older kernels' seven-slot admission intact. */
 #define DG_GL_ARRAY_TEXCOORD1 0x80
-#define DG_GL_ARRAY_EXT_MASK 0x3fff
+#define DG_GL_ARRAY_FOG_COORD 0x4000
+#define DG_GL_ARRAY_EXT_MASK 0x7fff
 #define DG_GL_ARRAY_EXT_SLOTS 16
 #define DG_GL_ARRAY_EXT_DESCRIPTOR_BYTES 64
 #define DG_GL_MAX_VERTICES 65536

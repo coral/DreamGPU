@@ -34,6 +34,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
 #define CONTROL_NAMES                                                                              \
     "GL_ATI_texture_env_combine3 GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap"
 #define COMPRESSED_NAMES "GL_ARB_texture_compression GL_EXT_texture_compression_s3tc"
+#define FOG_COORD_NAMES "GL_EXT_fog_coord"
 #define BLEND 0x0be2U
 #define POINT_SPRITE 0x8861U
 
@@ -115,23 +116,26 @@ int main() {
     BuildCases();
     assert(CaseCount == 14);
 
-    /* GL_EXTENSIONS: exact for all 32 negotiated combinations, built from
+    /* GL_EXTENSIONS: exact for all 64 negotiated combinations, built from
      * the established groups, in one static buffer stable across calls and
      * contexts. Without FIXED_STATE the M1/secondary strings are unchanged. */
     {
         const GLubyte *pointer = NULL;
-        for (ULONG n = 0; n < 32; ++n) {
+        for (ULONG n = 0; n < 64; ++n) {
             Reset();
             HostCaps = (n & 1 ? DG_CAP_GL_MULTITEXTURE : 0) | (n & 4 ? DG_CAP_GL_FIXED_STATE : 0) |
                        (n & 8 ? DG_CAP_GL_TEXTURE_CONTROL : 0) |
-                       (n & 16 ? DG_CAP_GL_COMPRESSED_TEXTURES : 0);
+                       (n & 16 ? DG_CAP_GL_COMPRESSED_TEXTURES : 0) |
+                       (n & 32 ? DG_CAP_GL_FOG_COORD : 0);
             HostSecondaryWords = n & 2 ? 3 : 0;
             HGLRC context = Create();
             char expected[sizeof(MULTITEXTURE_NAMES " " SECONDARY_NAMES " " FIXED_NAMES
-                                                    " " CONTROL_NAMES " " COMPRESSED_NAMES)] = "";
-            static const char *const groups[5] = {MULTITEXTURE_NAMES, SECONDARY_NAMES, FIXED_NAMES,
-                                                  CONTROL_NAMES, COMPRESSED_NAMES};
-            for (ULONG group = 0; group < 5; ++group)
+                                                    " " CONTROL_NAMES " " COMPRESSED_NAMES
+                                                    " " FOG_COORD_NAMES)] = "";
+            static const char *const groups[6] = {MULTITEXTURE_NAMES, SECONDARY_NAMES,
+                                                  FIXED_NAMES,        CONTROL_NAMES,
+                                                  COMPRESSED_NAMES,   FOG_COORD_NAMES};
+            for (ULONG group = 0; group < 6; ++group)
                 if (n & (1U << group)) {
                     if (*expected)
                         strcat(expected, " ");
@@ -152,6 +156,7 @@ int main() {
             assert(JglFixedStateAvailable() == !!(n & 4));
             assert(JglTextureControlAvailable() == !!(n & 8));
             assert(JglCompressedTexturesAvailable() == !!(n & 16));
+            assert(JglFogCoordAvailable() == !!(n & 32));
             assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
         }
         // The earlier combined string, verbatim.

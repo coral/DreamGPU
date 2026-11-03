@@ -7,7 +7,8 @@ static JGL_ARRAY_STATE States[2];
 static ULONG Current, Error, Capacity, Calls, Counts[100], Modes[100], Masks[100];
 static GLfloat Positions[100][1024];
 static BYTE Packed[65536];
-static BOOL Ready = TRUE, Stipple, Secondary = TRUE, Multitexture;
+static BOOL Ready = TRUE, Stipple, Secondary = TRUE, Multitexture, FogCoord;
+static GLdouble Fogs[100][1024];
 static GLfloat SecondaryValues[3];
 static ULONG ScalarFunctions[16], ScalarWords[16][5], ScalarCount;
 static GLdouble CurrentIndex;
@@ -17,6 +18,9 @@ BOOL JglSupportsSecondary(void) {
 }
 BOOL JglMultitextureAvailable(void) {
     return Multitexture;
+}
+BOOL JglFogCoordAvailable(void) {
+    return FogCoord;
 }
 void JglScalarVector(ULONG fn, ULONG words, const void *p) {
     assert(ScalarCount < 16 && words <= 5);
@@ -32,7 +36,8 @@ void JglScalarVector(ULONG fn, ULONG words, const void *p) {
         memcpy(&CurrentEdge, p, 4);
         return;
     }
-    if (fn == FEnum_glVertex4f || fn == FEnum_glTexCoord4f || fn == FEnum_glMultiTexCoord4f)
+    if (fn == FEnum_glVertex4f || fn == FEnum_glTexCoord4f || fn == FEnum_glMultiTexCoord4f ||
+        (fn == FEnum_glFogCoordf && words == 1))
         return;
     assert(fn == FEnum_glSecondaryColor3f && words == 3);
     memcpy(SecondaryValues, p, 12);
@@ -95,6 +100,13 @@ BOOL JglCaptureData(ULONG fn, const ULONG *args, ULONG words, ULONG bytes, JGL_C
            length == bytes);
     Counts[Calls] = args[2];
     Modes[Calls] = args[0];
+    if (args[3] & DG_GL_ARRAY_FOG_COORD) {
+        const ULONG type = descriptors[JGL_FOG_SLOT] & 65535;
+        assert(slots == 16 && descriptors[JGL_FOG_SLOT] >> 16 == 1 &&
+               (type == GL_FLOAT || type == GL_DOUBLE));
+        for (ULONG v = 0; v < args[2]; ++v)
+            Fogs[Calls][v] = Component(Raw + offsets[JGL_FOG_SLOT] + v * TypeBytes(type), type, 0);
+    }
     Masks[Calls] = args[3] & DG_GL_ARRAY_MASK;
     const ULONG stride = DG_GL_VERTEX_SIZE(Masks[Calls]);
     memset(Packed, 0, sizeof(Packed));
@@ -129,13 +141,13 @@ static void Reset(void) {
     memset(States, 0, sizeof(States));
     Current = Error = Calls = ScalarCount = CaptureCount = 0;
     Ready = TRUE;
-    Multitexture = FALSE;
+    Multitexture = FogCoord = FALSE;
     Capacity = 1023;
     for (j = 0; j < 2; ++j)
         for (i = 0; i < JGL_ARRAY_SLOTS; ++i) {
             if (i == 5 || i == 6)
                 continue;
-            States[j].Attribute[i].Size = i == 2 || i == 4 ? 3 : 4;
+            States[j].Attribute[i].Size = i == JGL_FOG_SLOT ? 1 : i == 2 || i == 4 ? 3 : 4;
             States[j].Attribute[i].Type = GL_FLOAT;
         }
 }
@@ -499,9 +511,48 @@ int main(void) {
         assert(!unit2->Enabled && unit2->Pointer == interleaved && unit0->Enabled);
         assert(!Error);
     }
+    {
+        // Fog coordinates (slot 14) split with their vertices across bounded
+        // packets: every piece carries exactly its own vertices' coordinates.
+        static GLdouble fog[2100];
+        for (i = 0; i < 2100; ++i)
+            fog[i] = 2.0 * i + .5;
+        Reset();
+        FogCoord = TRUE;
+        glVertexPointer(3, GL_FLOAT, 0, vertices);
+        glEnableClientState(GL_VERTEX_ARRAY);
+        glFogCoordPointer(GL_DOUBLE, 0, fog);
+        glEnableClientState(0x8457);
+        Capacity = 5;
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 11);
+        assert(Calls == 4 && Counts[0] == 4 && Counts[3] == 5 && Positions[3][4] == 10);
+        assert(RawFunction == FEnum_glDrawArraysEXT &&
+               RawMask == (DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_FOG_COORD));
+        for (ULONG call = 0; call < Calls; ++call)
+            for (ULONG v = 0; v < Counts[call]; ++v)
+                assert(Fogs[call][v] == 2.0 * Positions[call][v] + .5);
+        Capacity = 1023;
+        // The fog range is validated before any piece or scalar is emitted.
+        glFogCoordPointer(GL_DOUBLE, 0, (void *)(~(ULONG_PTR)0 - 8));
+        Calls = 0;
+        glDrawArrays(GL_TRIANGLES, 0, 3);
+        assert(!Calls && Error == GL_INVALID_VALUE);
+        Error = 0;
+        ScalarCount = 0;
+        JglArrayElement(1);
+        assert(!ScalarCount && Error == GL_INVALID_VALUE);
+        Error = 0;
+        // ArrayElement sends the converted coordinate before the vertex.
+        glFogCoordPointer(GL_DOUBLE, 0, fog);
+        JglArrayElement(1);
+        assert(ScalarCount == 2 && ScalarFunctions[0] == FEnum_glFogCoordf &&
+               ScalarWords[0][0] == Bits(2.5f) && ScalarFunctions[1] == FEnum_glVertex4f);
+        assert(!Error);
+    }
     puts("PASS actual client arrays: local state, indexed/strided snapshots, normalization, "
          "topology across bounded packets, invalid ranges/types, zero draws; per-unit "
-         "routing, legacy unit-0 and exact DrawArraysEXT payloads, ArrayElement units");
+         "routing, legacy unit-0 and exact DrawArraysEXT payloads, ArrayElement units, fog "
+         "coordinates across split packets");
     return 0;
 }
 

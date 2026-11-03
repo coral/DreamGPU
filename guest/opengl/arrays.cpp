@@ -1,7 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
- * GL 1.1 client arrays, plus negotiated per-unit texture coordinates. Only
- * guest-local descriptors retain client pointers; immutable draw packets
- * contain packed vertices, never an address. */
+ * GL 1.1 client arrays, plus negotiated per-unit texture coordinates and the
+ * EXT_fog_coord array. Only guest-local descriptors retain client pointers;
+ * immutable draw packets contain packed vertices, never an address. */
 #include "internal.h"
 #include "gl-arrays.h"
 
@@ -27,6 +27,8 @@ static GLint Attribute(const JGL_ARRAY_STATE *state, GLenum cap) {
             return 6;
         case 0x845e:
             return JglSupportsSecondary() ? 4 : -1;
+        case 0x8457: /* FOG_COORDINATE_ARRAY_EXT */
+            return JglFogCoordAvailable() ? JGL_FOG_SLOT : -1;
         default:
             return -1;
     }
@@ -60,6 +62,17 @@ static void Pointer(ULONG index, GLint size, GLenum type, GLsizei stride, const 
     if (index == 4 && size != 3) {
         JglSetError(GL_INVALID_VALUE);
         return;
+    }
+    /* EXT_fog_coord: one FLOAT or DOUBLE coordinate (size is implicit). */
+    if (index == JGL_FOG_SLOT) {
+        if (!JglFogCoordAvailable()) {
+            JglSetError(GL_INVALID_OPERATION);
+            return;
+        }
+        if (type != GL_FLOAT && type != GL_DOUBLE) {
+            JglSetError(GL_INVALID_ENUM);
+            return;
+        }
     }
     if (stride < 0 || size < (index == 0 ? 2 : index == 1 ? 3 : 1) || size > 4) {
         JglSetError(GL_INVALID_VALUE);
@@ -107,6 +120,12 @@ void APIENTRY glTexCoordPointer(GLint size, GLenum type, GLsizei stride, const v
 void APIENTRY glSecondaryColorPointerEXT(GLint size, GLenum type, GLsizei stride,
                                          const void *pointer) {
     Pointer(4, size, type, stride, pointer);
+}
+void APIENTRY glFogCoordPointer(GLenum type, GLsizei stride, const void *pointer) {
+    Pointer(JGL_FOG_SLOT, 1, type, stride, pointer);
+}
+void APIENTRY glFogCoordPointerEXT(GLenum type, GLsizei stride, const void *pointer) {
+    Pointer(JGL_FOG_SLOT, 1, type, stride, pointer);
 }
 static void Enable(GLenum cap, BOOL enabled) {
     GLint index;
@@ -178,6 +197,13 @@ void APIENTRY glGetPointerv(GLenum pname, void **output) {
             }
             index = 4;
             break;
+        case 0x8456: /* FOG_COORDINATE_ARRAY_POINTER_EXT */
+            if (!JglFogCoordAvailable()) {
+                JglSetError(GL_INVALID_ENUM);
+                return;
+            }
+            index = JGL_FOG_SLOT;
+            break;
         default:
             JglSetError(GL_INVALID_ENUM);
             return;
@@ -240,6 +266,13 @@ BOOL JglArrayQuery(GLenum pname, GLint *value) {
             *value = pname == 0x845a   ? state->Attribute[4].Size
                      : pname == 0x845b ? (GLint)state->Attribute[4].Type
                                        : state->Attribute[4].Stride;
+            return TRUE;
+        case 0x8454: /* FOG_COORDINATE_ARRAY_TYPE_EXT */
+        case 0x8455: /* FOG_COORDINATE_ARRAY_STRIDE_EXT */
+            if (!JglFogCoordAvailable())
+                return FALSE;
+            *value = pname == 0x8454 ? (GLint)state->Attribute[JGL_FOG_SLOT].Type
+                                     : state->Attribute[JGL_FOG_SLOT].Stride;
             return TRUE;
         default:
             return FALSE;
@@ -359,7 +392,7 @@ void JglArrayElement(GLint index) {
     }
     for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &state->Attribute[i];
-        if (!a->Enabled || i == 5 || i == 6)
+        if (!a->Enabled || i == 5 || i == 6 || i == JGL_FOG_SLOT)
             continue;
         ULONG unit = TypeBytes(a->Type);
         ULONG stride = a->Stride ? (ULONG)a->Stride : unit * a->Size;
@@ -382,19 +415,36 @@ void JglArrayElement(GLint index) {
         edge = *((const BYTE *)a->Pointer +
                  (ULONG_PTR)(ULONG)index * (a->Stride ? (ULONG)a->Stride : 1)) != 0;
     }
+    /* A FLOAT fog coordinate keeps its bits; a DOUBLE converts like the
+     * other attributes. */
+    ULONG fog = 0;
+    if (state->Attribute[JGL_FOG_SLOT].Enabled) {
+        const JGL_ARRAY *a = &state->Attribute[JGL_FOG_SLOT];
+        const BYTE *p =
+            (const BYTE *)a->Pointer +
+            (ULONG_PTR)(ULONG)index * (a->Stride ? (ULONG)a->Stride : TypeBytes(a->Type));
+        if (a->Type == GL_FLOAT) {
+            CopyMemory(&fog, p, 4);
+        } else {
+            const GLfloat value = Component(p, a->Type, 0);
+            CopyMemory(&fog, &value, 4);
+        }
+    }
     const ULONG functions[5] = {FEnum_glVertex4f, FEnum_glColor4f, FEnum_glNormal3f,
                                 FEnum_glTexCoord4f, FEnum_glSecondaryColor3f};
     // Vertex last: the preceding setters establish this vertex's attributes.
     for (ULONG n = 1; n <= 5; ++n) {
         if (n == 5) {
             // Units 1-7 (slots 7-13) use the canonical target-first record.
-            for (ULONG i = 7; i < JGL_ARRAY_SLOTS; ++i) {
+            for (ULONG i = 7; i < JGL_FOG_SLOT; ++i) {
                 if (!state->Attribute[i].Enabled)
                     continue;
                 ULONG words[5] = {JGL_TEXTURE0 + i - 6};
                 CopyMemory(words + 1, values[i], sizeof(values[i]));
                 JglScalarVector(FEnum_glMultiTexCoord4f, 5, words);
             }
+            if (state->Attribute[JGL_FOG_SLOT].Enabled)
+                JglScalarVector(FEnum_glFogCoordf, 1, &fog);
             if (state->Attribute[5].Enabled)
                 JglScalarVector(FEnum_glIndexd, 2, &color_index);
             if (state->Attribute[6].Enabled)
@@ -461,7 +511,8 @@ void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
         a.Pointer = (const void *)((ULONG_PTR)pointer + offsets[i]);
     }
     next[5].Enabled = next[6].Enabled = FALSE;
-    // Secondary color is an independent EXT array, unchanged by this GL1.1 call.
+    // Secondary color and fog coordinates are independent EXT arrays, unchanged
+    // by this GL1.1 call; enabled, they still accompany the following draws.
     CopyMemory(state->Attribute, next, sizeof(next));
 }
 
@@ -474,8 +525,8 @@ static GLenum ArrayWireType(ULONG index, const JGL_ARRAY *a) {
         return GL_FLOAT;
     return a->Type;
 }
-/* Seven descriptors (DrawArrays) unless a unit 1-7 array is enabled; then
- * sixteen (DrawArraysEXT), with reserved slots 14-15 zero. */
+/* Seven descriptors (DrawArrays) unless a unit 1-7 or the fog coordinate
+ * array is enabled; then sixteen (DrawArraysEXT), with reserved slot 15 zero. */
 struct RawCapture {
     JGL_ARRAY_STATE *state;
     const BYTE *indices;
@@ -596,7 +647,8 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     capture.index_size = index_size;
     capture.first = (ULONG)first;
     capture.mask = mask | DG_GL_ARRAY_RAW;
-    // Unit 0 alone keeps the legacy record that every host admits.
+    // Unit 0 alone keeps the legacy record that every host admits. Elements
+    // and ranges expand into these same packed vertices, fog included.
     capture.slots = (mask & ~DG_GL_ARRAY_MASK) ? DG_GL_ARRAY_EXT_SLOTS : 7;
     const ULONG function = capture.slots == 7 ? FEnum_glDrawArrays : FEnum_glDrawArraysEXT;
     vertex_bytes = 0;

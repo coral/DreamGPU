@@ -12,7 +12,8 @@ pub(crate) fn layout(mask: u32, count: u32, data: &[u8]) -> Option<[Attribute; 7
     layout_slots::<7>(mask, count, data)
 }
 /// Sixteen-slot DrawArraysEXT layout: slots 7-13 are texture coordinates of
-/// units 1-7 with the slot-3 rules; reserved slots 14-15 must stay disabled.
+/// units 1-7 with the slot-3 rules, slot 14 is the fog coordinate (one FLOAT
+/// or DOUBLE); reserved slot 15 must stay disabled.
 pub(crate) fn layout_extended(mask: u32, count: u32, data: &[u8]) -> Option<[Attribute; 16]> {
     layout_slots::<16>(mask, count, data)
 }
@@ -59,6 +60,7 @@ fn layout_slots<const N: usize>(mask: u32, count: u32, data: &[u8]) -> Option<[A
         };
         let valid_type = match i {
             1 | 4 => true,
+            14 => matches!(a.kind, GL_FLOAT | GL_DOUBLE),
             6 => a.kind == GL_UNSIGNED_BYTE,
             5 => matches!(a.kind, GL_SHORT | GL_INT | GL_FLOAT | GL_DOUBLE),
             2 => matches!(a.kind, GL_BYTE | GL_SHORT | GL_INT | GL_FLOAT | GL_DOUBLE),
@@ -116,16 +118,49 @@ pub(crate) mod tests {
         data
     }
     #[test]
+    fn fog_coordinate_slot_is_one_float_or_double() {
+        let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_FOG_COORD;
+        let packet = |kind: u32, size: u32, unit: usize| {
+            let mut data = vec![0u8; 64];
+            data[..4].copy_from_slice(&(GL_FLOAT | (2 << 16)).to_le_bytes());
+            data[56..60].copy_from_slice(&(kind | (size << 16)).to_le_bytes());
+            data.resize(64 + 3 * 8, 0);
+            let at = (data.len() + unit - 1) & !(unit - 1);
+            data.resize(at + 3 * size as usize * unit, 0);
+            data.resize((data.len() + 3) & !3, 0);
+            data
+        };
+        let a = layout_extended(mask, 3, &packet(GL_FLOAT, 1, 4)).unwrap();
+        assert_eq!((a[14].kind, a[14].size, a[14].offset), (GL_FLOAT, 1, 88));
+        let a = layout_extended(mask, 3, &packet(GL_DOUBLE, 1, 8)).unwrap();
+        assert_eq!((a[14].kind, a[14].offset), (GL_DOUBLE, 88));
+        assert!(layout_extended(mask, 3, &packet(GL_FLOAT, 2, 4)).is_none());
+        for kind in [GL_SHORT, GL_INT, GL_UNSIGNED_BYTE] {
+            let unit = if kind == GL_SHORT {
+                2
+            } else if kind == GL_INT {
+                4
+            } else {
+                1
+            };
+            assert!(layout_extended(mask, 3, &packet(kind, 1, unit)).is_none());
+        }
+        // The seven-slot DrawArrays layout never carries a fog coordinate.
+        assert!(layout(mask, 3, &packet(GL_FLOAT, 1, 4)).is_none());
+    }
+    #[test]
     fn extended_texture_unit_slots_follow_texcoord_rules() {
         let data = extended_packet();
         let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_TEXCOORD | 0x200;
         let a = layout_extended(mask, 3, &data).unwrap();
         assert_eq!((a[0].offset, a[3].offset, a[9].offset), (64, 88, 112));
         assert_eq!((a[9].kind, a[9].size, a[9].unit), (GL_SHORT, 3, 2));
-        // Reserved slots 14-15 and their mask bits must stay zero.
-        assert!(layout_extended(mask | 1 << 14, 3, &data).is_none());
+        // Reserved slot 15 and its mask bit must stay zero; the fog slot needs
+        // a descriptor once enabled.
+        assert!(layout_extended(mask | 1 << 15, 3, &data).is_none());
+        assert!(layout_extended(mask | DG_GL_ARRAY_FOG_COORD, 3, &data).is_none());
         let mut reserved = data.clone();
-        reserved[56] = 1;
+        reserved[60] = 1;
         assert!(layout_extended(mask, 3, &reserved).is_none());
         // Texture units use the slot-3 rules: no unsigned or byte coordinates.
         for kind in [GL_UNSIGNED_BYTE, GL_UNSIGNED_SHORT, GL_BYTE] {

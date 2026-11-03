@@ -60,6 +60,7 @@ extern "C" void CallSecondaryRaw(const ULONG *);
 extern "C" void CallMultiTexCoordRaw(const ULONG *);
 extern "C" void CallBlendColorRaw(const ULONG *);
 extern "C" void CallPointParameterRaw(const ULONG *);
+extern "C" void CallFogCoordRaw(const ULONG *);
 __asm__(".text\n"
         ".globl CallColorRaw\nCallColorRaw:\n"
         "movl 4(%esp), %eax\n"
@@ -85,6 +86,10 @@ __asm__(".text\n"
         "movl 4(%esp), %eax\n"
         "pushl 4(%eax)\npushl 0(%eax)\n"
         "call glPointParameterfARB\nret\n"
+        ".globl CallFogCoordRaw\nCallFogCoordRaw:\n"
+        "movl 4(%esp), %eax\n"
+        "pushl 0(%eax)\n"
+        "call glFogCoordfEXT\nret\n"
         ".globl CallOffsetRaw\nCallOffsetRaw:\n"
         "movl 4(%esp), %eax\n"
         "pushl 4(%eax)\npushl 0(%eax)\n"
@@ -207,6 +212,18 @@ static int Test(void) {
                     !RecordEquals(Context.Packet.Words + 13, FEnum_glPointParameterf, point, 2))
                     return 14;
             }
+            HostCapabilities = 0;
+            /* Negotiated fog coordinates: one raw float word, also inside Begin. */
+            Reset(DG_GL_MAX_RECORDS, PACKET_WORDS);
+            HostCapabilities = DG_CAP_GL_FOG_COORD;
+            Context.InBegin = TRUE;
+            CallFogCoordRaw(colors[pattern]);
+            CallFogCoordRaw(colors[pattern] + 3);
+            Context.InBegin = FALSE;
+            if (Status() != before || Context.Records != 2 || Context.Error ||
+                !RecordEquals(Context.Packet.Words, FEnum_glFogCoordf, colors[pattern], 1) ||
+                !RecordEquals(Context.Packet.Words + 10, FEnum_glFogCoordf, colors[pattern] + 3, 1))
+                return 15;
             HostCapabilities = 0;
             /* Cached float state compares raw bits without consuming signaling
              * NaNs/denormals or changing the caller's live x87 exception flags. */

@@ -47,7 +47,8 @@ HINSTANCE JglModule(void) {
 HGLRC wglGetCurrentContext(void) {
     return Ready ? (HGLRC)1 : NULL;
 }
-static BOOL Multitexture, FixedState, Compressed;
+static BOOL Multitexture, FixedState, Compressed, FogCoord;
+static GLenum FogName = GL_FOG_MODE;
 BOOL JglMultitextureAvailable(void) {
     return Multitexture;
 }
@@ -56,6 +57,9 @@ BOOL JglFixedStateAvailable(void) {
 }
 BOOL JglCompressedTexturesAvailable(void) {
     return Compressed;
+}
+BOOL JglFogCoordAvailable(void) {
+    return FogCoord;
 }
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
     assert(module == (HINSTANCE)1);
@@ -102,7 +106,7 @@ void JglScalarVector(ULONG function, ULONG words, const void *arguments) {
     memcpy(Values, arguments, words * sizeof(ULONG));
 }
 void glFogf(GLenum name, GLfloat value) {
-    assert(name == GL_FOG_MODE);
+    assert(name == FogName);
     Values[0] = value;
 }
 BOOL JglData(ULONG fn, const ULONG *args, ULONG words, const void *data, ULONG bytes) {
@@ -113,7 +117,8 @@ BOOL JglData(ULONG fn, const ULONG *args, ULONG words, const void *data, ULONG b
         memcpy(Deleted + DeletedCount, data, bytes);
         DeletedCount += args[0];
     } else {
-        assert(fn == FEnum_glFogfv && args[0] == GL_FOG_COLOR && bytes == 16);
+        assert(fn == FEnum_glFogfv && args[0] == FogName &&
+               bytes == (FogName == GL_FOG_COLOR ? 16 : 4));
         memcpy(Values, data, bytes);
     }
     return TRUE;
@@ -234,6 +239,22 @@ int main(void) {
         Compressed = FALSE;
         assert(wglGetProcAddress("glCompressedTexImage") == NULL &&
                wglGetProcAddress("glCompressedTe") == Marker);
+        /* Fog-coordinate names follow theirs; Fogf/Fogi stay core. */
+        static const char *const fog[] = {
+            "glFogCoordf",       "glFogCoordfEXT",      "glFogCoordfv", "glFogCoordfvEXT",
+            "glFogCoordd",       "glFogCoorddEXT",      "glFogCoorddv", "glFogCoorddvEXT",
+            "glFogCoordPointer", "glFogCoordPointerEXT"};
+        for (const char *name : fog) {
+            Multitexture = FixedState = Compressed = TRUE;
+            FogCoord = FALSE;
+            assert(GetProcAddress(JglModule(), name) == Marker && !wglGetProcAddress(name));
+            FogCoord = TRUE;
+            Multitexture = FixedState = Compressed = FALSE;
+            assert(wglGetProcAddress(name) == Marker);
+        }
+        FogCoord = FALSE;
+        assert(wglGetProcAddress("glFogf") == Marker && wglGetProcAddress("glFogi") == Marker &&
+               wglGetProcAddress("glFogCoo") == Marker);
     }
     Ready = FALSE;
     assert(!wglGetProcAddress("known"));
@@ -249,14 +270,41 @@ int main(void) {
     vector[1] = .5f;
     vector[2] = .75f;
     vector[3] = 1;
+    FogName = GL_FOG_COLOR;
     glFogfv(GL_FOG_COLOR, vector);
     memset(vector, 0, sizeof(vector));
     assert(Values[3] == 1 && Values[0] == .25f);
+    FogName = GL_FOG_MODE;
     glFogi(GL_FOG_MODE, 0x800);
     assert(Values[0] == 2048);
     glFogfv(0, vector);
     assert(Error == GL_INVALID_ENUM);
     Error = 0;
+    {
+        /* FOG_COORDINATE_SOURCE_EXT is a one-value fog name only once
+         * negotiated; its value is the host's to judge. */
+        const GLint source = 0x8451;
+        const GLfloat depth = 33874.0f;
+        const ULONG calls = Calls;
+        FogName = 0x8450;
+        glFogi(0x8450, 0x8451);
+        glFogiv(0x8450, &source);
+        glFogfv(0x8450, &depth);
+        assert(Error == GL_INVALID_ENUM && Calls == calls && Values[0] == 2048);
+        Error = 0;
+        FogCoord = TRUE;
+        glFogi(0x8450, 0x8452);
+        assert(!Error && Values[0] == 33874.0f);
+        glFogiv(0x8450, &source);
+        assert(!Error && Calls == calls + 1 && Values[0] == 33873.0f);
+        glFogfv(0x8450, &depth);
+        assert(!Error && Calls == calls + 2 && Values[0] == 33874.0f);
+        glFogi(0x8453, 0); /* CURRENT_FOG_COORDINATE is a query, not a parameter */
+        assert(Error == GL_INVALID_ENUM);
+        Error = 0;
+        FogCoord = FALSE;
+        FogName = GL_FOG_MODE;
+    }
     Calls = 0;
     glDeleteTextures(8, names);
     memset(names, 0, sizeof(names));

@@ -25,6 +25,7 @@ HINSTANCE JglModule(void);
 BOOL JglMultitextureAvailable(void);
 BOOL JglFixedStateAvailable(void);
 BOOL JglCompressedTexturesAvailable(void);
+BOOL JglFogCoordAvailable(void);
 HGLRC wglGetCurrentContext(void);
 PROC GetProcAddress(HINSTANCE, LPCSTR);
 void glVertex3f(GLfloat, GLfloat, GLfloat);

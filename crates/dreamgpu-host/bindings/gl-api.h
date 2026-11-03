@@ -278,6 +278,8 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glCompressedTexImage2D : glCompressedTexImage2D) dg_glCompressedTexImage2D;
     __typeof__(1 ? glCompressedTexSubImage2D : glCompressedTexSubImage2D) dg_glCompressedTexSubImage2D;
     __typeof__(1 ? glGetCompressedTexImage : glGetCompressedTexImage) dg_glGetCompressedTexImage;
+    __typeof__(1 ? glFogCoordf : glFogCoordf) dg_glFogCoordf;
+    __typeof__(1 ? glFogCoordPointer : glFogCoordPointer) dg_glFogCoordPointer;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -404,5 +406,6 @@ typedef struct DreamGpuGlApi {
     .dg_glPointParameterfv = glPointParameterfv,                                                    \
     .dg_glCompressedTexImage2D = glCompressedTexImage2D,                                            \
     .dg_glCompressedTexSubImage2D = glCompressedTexSubImage2D,                                      \
-    .dg_glGetCompressedTexImage = glGetCompressedTexImage
+    .dg_glGetCompressedTexImage = glGetCompressedTexImage,                                          \
+    .dg_glFogCoordf = glFogCoordf, .dg_glFogCoordPointer = glFogCoordPointer
 #endif

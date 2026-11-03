@@ -180,6 +180,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 }
 #include "stage-probe.inc"
 #include "dxt-probe.inc"
+#include "fog-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -318,6 +319,9 @@ static void Run(void) {
     if (failed)
         return;
     dxt_probe::Run(d3d, device, surface);
+    if (failed)
+        return;
+    fog_probe::Run(device, surface);
     if (failed)
         return;
     Log("STAGE present");

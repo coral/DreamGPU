@@ -97,7 +97,7 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
     if (!JglReady())
         return GL_FALSE;
     if ((cap == GL_VERTEX_ARRAY || cap == GL_COLOR_ARRAY || cap == GL_NORMAL_ARRAY ||
-         cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e) &&
+         cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e || cap == 0x8457) &&
         JglArrayQuery(cap, &local))
         return local != 0;
     JglQuery(FEnum_glIsEnabled, args, DG_GL_RESULT_BOOL, &result, sizeof(result), &bytes);

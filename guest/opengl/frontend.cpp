@@ -96,6 +96,9 @@ BOOL JglTextureControlAvailable(void) {
 BOOL JglCompressedTexturesAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_COMPRESSED_TEXTURES);
 }
+BOOL JglFogCoordAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_FOG_COORD);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -114,10 +117,12 @@ BOOL JglCompressedTexturesAvailable(void) {
     "GL_ATI_texture_env_combine3 GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap"
 #define JGL_COMPRESSED_TEXTURE_EXTENSIONS                                                          \
     "GL_ARB_texture_compression GL_EXT_texture_compression_s3tc"
+#define JGL_FOG_COORD_EXTENSIONS "GL_EXT_fog_coord"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
-                       sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS)];
+                       sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
+                       sizeof(JGL_FOG_COORD_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -136,8 +141,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_TEXTURE_CONTROL_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_COMPRESSED_TEXTURES)
         AppendExtensions(&at, JGL_COMPRESSED_TEXTURE_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_FOG_COORD)
+        AppendExtensions(&at, JGL_FOG_COORD_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_FOG_COORD_EXTENSIONS
 #undef JGL_COMPRESSED_TEXTURE_EXTENSIONS
 #undef JGL_TEXTURE_CONTROL_EXTENSIONS
 #undef JGL_FIXED_STATE_EXTENSIONS
@@ -289,11 +297,11 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
         function != FEnum_glColor4f && function != FEnum_glSecondaryColor3f &&
         function != FEnum_glNormal3f && function != FEnum_glTexCoord2f &&
         function != FEnum_glTexCoord4f && function != FEnum_glMultiTexCoord4f &&
-        function != FEnum_glMaterialf && function != FEnum_glEvalCoord1d &&
-        function != FEnum_glEvalCoord2d && function != FEnum_glEvalPoint1 &&
-        function != FEnum_glEvalPoint2 && function != FEnum_glIndexd &&
-        function != FEnum_glEdgeFlag && function != FEnum_glCallList &&
-        function != DG_GL_RECORD_ERROR) {
+        function != FEnum_glFogCoordf && function != FEnum_glMaterialf &&
+        function != FEnum_glEvalCoord1d && function != FEnum_glEvalCoord2d &&
+        function != FEnum_glEvalPoint1 && function != FEnum_glEvalPoint2 &&
+        function != FEnum_glIndexd && function != FEnum_glEdgeFlag &&
+        function != FEnum_glCallList && function != DG_GL_RECORD_ERROR) {
         if (function == FEnum_glFlush || function == FEnum_glFinish)
             Error(c, GL_INVALID_OPERATION);
         else
@@ -324,6 +332,11 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
             return;
         }
     }
+    /* The fog coordinate record does not exist without negotiation. */
+    if (function == FEnum_glFogCoordf && !(HostCapabilities & DG_CAP_GL_FOG_COORD)) {
+        CommandError(c, GL_INVALID_OPERATION);
+        return;
+    }
     /* Fixed-state records do not exist without negotiation; the host
      * validates their enums. None is legal inside Begin/End (above). */
     if ((function == FEnum_glBlendColor || function == FEnum_glBlendEquation ||
@@ -348,6 +361,11 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
     }
     if (function == FEnum_glHint &&
         !JglHintValid(((const ULONG *)arguments)[0], ((const ULONG *)arguments)[1])) {
+        CommandError(c, GL_INVALID_ENUM);
+        return;
+    }
+    /* Scalar fog names, including FOG_COORDINATE_SOURCE once negotiated. */
+    if (function == FEnum_glFogf && JglFogCount(*(const ULONG *)arguments) != 1) {
         CommandError(c, GL_INVALID_ENUM);
         return;
     }
@@ -786,7 +804,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
     for (i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         if (i == 5 || i == 6)
             continue;
-        c->Arrays.Attribute[i].Size = i == 2 || i == 4 ? 3 : 4;
+        c->Arrays.Attribute[i].Size = i == JGL_FOG_SLOT ? 1 : i == 2 || i == 4 ? 3 : 4;
         c->Arrays.Attribute[i].Type = 0x1406; /* GL_FLOAT */
     }
     for (i = 0; i < MAX_JGL_CONTEXTS && Contexts[i]; ++i) {

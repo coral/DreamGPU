@@ -2185,7 +2185,8 @@ pub const DG_GL_VERTEX_SECONDARY_PAD: u32 = 76;
 pub const DG_GL_VERTEX_SECONDARY_BYTES: u32 = 80;
 pub const DG_GL_ARRAY_RAW: u32 = 2147483648;
 pub const DG_GL_ARRAY_TEXCOORD1: u32 = 128;
-pub const DG_GL_ARRAY_EXT_MASK: u32 = 16383;
+pub const DG_GL_ARRAY_EXT_MASK: u32 = 32767;
+pub const DG_GL_ARRAY_FOG_COORD: u32 = 16384;
 pub const DG_GL_ARRAY_EXT_SLOTS: u32 = 16;
 pub const DG_GL_ARRAY_EXT_DESCRIPTOR_BYTES: u32 = 64;
 pub const DG_GL_ARRAY_DESCRIPTOR_BYTES: u32 = 28;
@@ -6322,6 +6323,14 @@ pub struct DreamGpuGlApi {
             arg1: ::core::ffi::c_uint,
             arg2: ::core::ffi::c_int,
             arg3: *mut ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glFogCoordf: ::core::option::Option<unsafe extern "C" fn(arg1: f32)>,
+    pub dg_glFogCoordPointer: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_int,
+            arg3: *const ::core::ffi::c_void,
         ),
     >,
 }

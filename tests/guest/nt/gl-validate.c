@@ -66,12 +66,18 @@ int main(void) {
         ext[14] = 0x1406 | (2U << 16);
         ext[14 + 9] = 0x1402 | (3U << 16);
         assert(DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
-        ext[13] |= 1U << 14; /* reserved slot bit */
+        ext[13] |= DG_GL_ARRAY_FOG_COORD; /* fog slot enabled without a descriptor */
         assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
-        ext[13] &= ~(1U << 14);
-        ext[14 + 14] = 0x1406 | (1U << 16); /* reserved slot descriptor */
+        ext[13] &= ~DG_GL_ARRAY_FOG_COORD;
+        ext[14 + 14] = 0x1406 | (1U << 16); /* descriptor of the disabled fog slot */
         assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
         ext[14 + 14] = 0;
+        ext[13] |= 1U << 15; /* reserved slot 15 bit */
+        assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[13] &= ~(1U << 15);
+        ext[14 + 15] = 0x1406 | (1U << 16); /* reserved slot 15 descriptor */
+        assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+        ext[14 + 15] = 0;
         ext[14 + 9] = 0x1403 | (3U << 16); /* unsigned coordinates follow slot 3 */
         assert(!DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
         ext[14 + 9] = 0x1402 | (3U << 16);
@@ -80,6 +86,83 @@ int main(void) {
         ext[13] |= DG_GL_ARRAY_RAW;
         ext[36] = 1; /* nonzero final section byte is data, not padding: still valid */
         assert(DgValidateUserGl(ext, sizeof(ext), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* Fog coordinates (slot 14): float2 positions at 64, one FLOAT each at 80. */
+        ULONG fog[36] = {DG_GL_DATA_CALL,
+                         144,
+                         0,
+                         1,
+                         1,
+                         0,
+                         0,
+                         0,
+                         0x1d6,
+                         88,
+                         4,
+                         0,
+                         2,
+                         DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_FOG_COORD};
+        fog[14] = 0x1406 | (2U << 16);
+        fog[14 + 14] = 0x1406 | (1U << 16);
+        assert(DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+        fog[14 + 14] = 0x1406 | (2U << 16); /* exactly one component */
+        assert(!DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+        {
+            /* The same with a payload sized for two components per vertex. */
+            ULONG pair[38];
+            memcpy(pair, fog, sizeof(fog));
+            pair[36] = pair[37] = 0;
+            pair[1] = 152;
+            pair[9] = 96;
+            assert(!DgValidateUserGl(pair, sizeof(pair), 42, 7, &limits, FunctionWords, NULL));
+            pair[14 + 14] = 0x1404 | (2U << 16);
+            assert(!DgValidateUserGl(pair, sizeof(pair), 42, 7, &limits, FunctionWords, NULL));
+            pair[13] = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_TEXCOORD1;
+            pair[14 + 14] = 0;
+            pair[14 + 7] = 0x1406 | (2U << 16); /* the same bytes as a unit-1 coordinate */
+            assert(DgValidateUserGl(pair, sizeof(pair), 42, 7, &limits, FunctionWords, NULL));
+        }
+        static const ULONG others[] = {0x1400, 0x1401, 0x1402, 0x1403, 0x1404, 0x1405};
+        for (unsigned i = 0; i < sizeof(others) / sizeof(others[0]); ++i) {
+            fog[14 + 14] = others[i] | (1U << 16); /* only FLOAT or DOUBLE */
+            assert(!DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+        }
+        fog[14 + 14] = 0x1406 | (1U << 16);
+        fog[8] = 469; /* the seven-slot DrawArrays layout never has the fog slot */
+        assert(!DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+        fog[8] = 0x1d6;
+        assert(DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* One DOUBLE fog coordinate after one float3 position: 8-byte aligned at
+         * 80 behind four zero padding bytes. */
+        ULONG fog[36] = {DG_GL_DATA_CALL,
+                         144,
+                         0,
+                         1,
+                         1,
+                         0,
+                         0,
+                         0,
+                         0x1d6,
+                         88,
+                         0,
+                         0,
+                         1,
+                         DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_FOG_COORD};
+        fog[14] = 0x1406 | (3U << 16);
+        fog[14 + 14] = 0x140a | (1U << 16);
+        fog[14 + 16] = 0x3f800000;
+        fog[14 + 20] = 0x00000000;
+        fog[14 + 21] = 0x3ff00000;
+        assert(DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+        fog[14 + 19] = 1; /* alignment padding before the double */
+        assert(!DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+        fog[14 + 19] = 0;
+        fog[14 + 14] = 0x140a | (1U << 16);
+        fog[13] |= DG_GL_ARRAY_TEXCOORD; /* unit 0 enabled without a descriptor */
+        assert(!DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
     }
     memcpy(words, valid, sizeof(valid));
     assert(DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));

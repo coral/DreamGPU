@@ -86,6 +86,14 @@ and disposable-VM acceptance cycle:
   4-row bands, so uncompressed sources into compressed storage stay block
   aligned. Rules that depend on the level (edge-only partial blocks, bounds,
   format) are GL errors, never record faults.
+- Fog coordinates (`DG_CAP_GL_FOG_COORD`) add EXT_fog_coord: `FogCoordf` inside
+  Begin/End and lists, `FOG_COORDINATE_SOURCE`, and a per-vertex FLOAT/DOUBLE
+  coordinate in DrawArraysEXT slot 14 (slot 15 stays reserved), restoring the
+  current coordinate after array draws. Without it Wine emulated D3D's
+  specular-alpha fog of pretransformed vertices by blending vertex colours toward
+  the fog colour before texturing, so fogged textured geometry darkened instead
+  of fading to the fog colour. Wine's fast vertex path now packs those fog
+  coordinates; other fog-coordinate states still use its strided path.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
@@ -199,6 +207,10 @@ With compressed textures, fresh Win2000 and Windows XP clones (the user's XP
 image, never modified) install to terminal receipts and pass every probe; the
 D3D8/9 probes render DXT1/DXT3/DXT5 blocks exactly on both. Half-Life runs at
 192 FPS on Win2000.
+
+With fog coordinates, a textured pretransformed quad fogs from red to blue
+exactly on Win2000 and XP through D3D8/9; the same probe reads red fading to
+black (the emulation) on the previous build.
 
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,

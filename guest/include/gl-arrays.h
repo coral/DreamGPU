@@ -22,7 +22,9 @@ static inline unsigned DgArrayComponentBytes(unsigned type) {
     }
 }
 /* Slots 7-13 of the extended layout are texture coordinates of units 1-7
- * and follow every rule of slot 3. Slots 14-15 are reserved. */
+ * and follow every rule of slot 3. Slot 14 is the fog coordinate: one FLOAT
+ * or DOUBLE (DG_CAP_GL_FOG_COORD). Slot 15 is reserved: DG_GL_ARRAY_EXT_MASK
+ * excludes its bit and a disabled slot's descriptor must be zero. */
 static inline unsigned DgArraySlotRole(unsigned slot) {
     return slot >= 7 && slot <= 13 ? 3 : slot;
 }
@@ -49,9 +51,10 @@ static inline int DgRawArrayLayoutSlots(unsigned mask, unsigned count, const uns
             n < (i == 0   ? 2U
                  : i == 1 ? 3U
                           : 1U) ||
-            n > 4 || ((i == 2 || i == 4) && n != 3) || ((i == 5 || i == 6) && n != 1))
+            n > 4 || ((i == 2 || i == 4) && n != 3) || ((i == 5 || i == 6 || i == 14) && n != 1))
             return 0;
-        if (i == 6 ? type != 0x1401
+        if (i == 14  ? type != 0x1406 && type != 0x140a
+            : i == 6 ? type != 0x1401
             : i == 5
                 ? (type != 0x1402 && type != 0x1404 && type != 0x1406 && type != 0x140a)
                 : ((i != 1 && i != 4 && (type == 0x1401 || type == 0x1403 || type == 0x1405)) ||
@@ -59,7 +62,7 @@ static inline int DgRawArrayLayoutSlots(unsigned mask, unsigned count, const uns
             return 0;
         at = (at + unit - 1) & ~(unit - 1);
         offsets[slot] = at;
-        // count<=65536, n<=4, unit<=8, at most fourteen attributes: no u32 overflow.
+        // count<=65536, n<=4, unit<=8, at most fifteen attributes: no u32 overflow.
         at += count * n * unit;
     }
     *length = (at + 3) & ~3U;

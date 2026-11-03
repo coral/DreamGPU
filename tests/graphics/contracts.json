@@ -239,6 +239,14 @@
     "guest-dxt": {
       "scope": "installed-api",
       "path": "tools/d3d/dxt-probe.inc"
+    },
+    "gl-fog-coord": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_fog_coord.py"
+    },
+    "guest-fog": {
+      "scope": "installed-api",
+      "path": "tools/d3d/fog-probe.inc"
     }
   },
   "contracts": [
@@ -1301,6 +1309,26 @@
         "guest-stages"
       ],
       "remaining": "Negotiated by DG_CAP_GL_TEXTURE_CONTROL. Native pixel tests cover the three combine3 modes, MIRROR_CLAMP_TO_EDGE_ATI and a generated level; frontend tests cover scalar pre-validation. Generated chains enabled only after definition are not charged until the next image definition. macOS CGL and installed MIRRORONCE/AUTOGENMIPMAP use remain unverified."
+    },
+    {
+      "id": "d3d.vertex-fog",
+      "area": 11,
+      "api": "D3D8/D3D9 (Wine fixed-function pipeline) + EXT_fog_coord",
+      "operation": "pretransformed (XYZRHW) vertex fog from specular alpha, applied after texturing",
+      "format": "D3DCOLOR specular",
+      "resource": "draw",
+      "usage": "render",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-fog-coord",
+        "d3d-vertex-arrays",
+        "native",
+        "guest-fog"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
     }
   ]
 }
