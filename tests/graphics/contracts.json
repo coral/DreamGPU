@@ -979,7 +979,7 @@
         "gl-frontend",
         "fullscreen-activation"
       ],
-      "remaining": "Prepared source verifies windowed activation leaves global mode alone, explicit same-mode fullscreen requests reach the native ownership call, fullscreen Alt+Tab and mode-setting failures preserve state. Both historical defects fail mutation controls. Installed launcher/game handoff, broader recovery and distinct lost-device contracts remain open."
+      "remaining": "Prepared source verifies windowed activation leaves global mode alone, explicit same-mode fullscreen requests reach the native ownership call, fullscreen Alt+Tab and mode-setting failures preserve state. Both historical defects fail mutation controls. Installed launcher/game handoff, broader recovery and distinct lost-device contracts remain open. Linux 2026-11-03: installed Golf Quick Start keeps 800x600 without Alt+Tab repair."
     },
     {
       "id": "gdi.coherence",
@@ -1001,7 +1001,7 @@
         "frontbuffer-coherence",
         "primary-loss"
       ],
-      "remaining": "Prepared-source checks cover GDI completion, primary read/write preservation, and persistent primary loss/restoration across exclusive focus and mode changes. Installed Golf focus/modal recovery remains unverified."
+      "remaining": "Prepared-source checks cover GDI completion, primary read/write preservation, and persistent primary loss/restoration across exclusive focus and mode changes. Installed Win2000 Golf 1999 Quick Start/menus pass; its modal+Alt+Tab artifacts (black terrain until the modal closes, blank YES/NO, missing toolbar half) are identical on Microsoft DirectDraw and on stock Cirrus + Microsoft DirectDraw, so they are game behavior, not a DreamGPU defect. Broader installed GDI/GPU ordering remains unverified."
     },
     {
       "id": "display.modes",

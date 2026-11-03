@@ -126,6 +126,20 @@ hovering to repaint them. A correctly sized launcher menu does not cover this
 handoff. Equal-sized fullscreen mode requests still need the native ownership
 call, and windowed swapchains must not restore a fullscreen display mode.
 
+Linux result (2026-11-03, installer built from patches 0001–0026, QEMU
+`e8e4a38a`): Quick Start keeps 800×600 scanout and renders golfer, terrain and HUD,
+and opening menus/options/preferences no longer erases them. With the preferences
+modal open, guest Win+D then Alt+Tab leaves black terrain apart from GDI-repainted
+rectangles and blank YES/NO boxes until the modal closes. Closing it restores the
+course, but the toolbar's right half stays blank. A bounded call trace shows Golf
+presents with a full-frame `BltFast` from an 800×600 system-memory canvas and
+issues no DirectDraw call at all after reactivation until the modal closes. The
+same sequence is **pixel-identical** with Microsoft's DirectDraw on DreamGPU and
+on a stock QEMU Cirrus adapter with Microsoft's driver and DirectDraw. Those
+artifacts are therefore the game's own Windows 2000 behavior, not a DreamGPU
+defect; do not "fix" them with blanket invalidation. A completed shot is still
+unverified. Evidence: `target/golf-coherence-linux/verification.json`.
+
 `capd3d6` additionally checks fullscreen primary/GDI coherence at 640×480×16.
 It compares exact RGB565 pixels through primary Lock, GetDC, source blits,
 batched GDI writes followed by ReleaseDC, and partial/keyed primary blits over

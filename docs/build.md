@@ -33,6 +33,14 @@ Native QEMU defaults to x86_64, i386, PPC and m68k system binaries. An explicit
 an output parent, otherwise the checkout's `target/` is used. Juke receives the
 native output directory through Cargo dependency metadata.
 
+On Linux, run QEMU through the launchers in `target/qemu-build/bin/`. They execute
+the content-addressed runtime under `target/qemu-build/runtime/` with DreamGPU's
+private patched Mesa. The raw `target/qemu-build/qemu-system-*` Ninja outputs load
+the system OpenGL provider instead. That silently tests a different renderer:
+supplied texture borders and fractional PixelZoom then fail. Ordinary Juke builds
+already resolve the launcher; never point `JUKE_QEMU_PREBUILT` at a raw Linux
+binary. The diskless native tests prefer the launcher automatically.
+
 QEMU's Meson target invokes `rustc` directly for the dependency-free
 `dreamgpu-host` static library. This avoids recursive Cargo locking. Source
 changes remain Meson dependencies. Upstream QEMU itself uses Meson/Python; this
