@@ -508,8 +508,12 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
   app-local logging `wined3d.dll` shows gameplay compiling no BUMPENVMAP
   fragment program. The same trace showed its specular-alpha vertex fog
   falling back to Wine's per-vertex software emulation on nearly every draw.
+  On the m28 package (framebuffer objects, BGRA vertex arrays) its demo runs
+  with correct colours and lighting.
 - **SimCity 3000** (DirectDraw, Win2000): reaches its menu and renders a
-  starter town's city view, UI and ticker after Wine patch 0032.
+  starter town's city view, UI and ticker after Wine patch 0032. The same holds
+  on the m28 package, whose DirectDraw fills and blits go through framebuffer
+  objects.
 - **Turok 3Dfx demo** (Glide, Win98 SE): faults before its video DLL loads,
   identically without any Glide provider and on an emulated Pentium III, so the
   fault is not DreamGPU's. Its cause is unknown.
