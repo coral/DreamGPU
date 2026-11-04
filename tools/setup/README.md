@@ -156,6 +156,18 @@ before removing the driver. Retained private journals/originals support recovery
 this is interruption recovery through Windows APIs, not a claim of atomicity
 under arbitrary power loss or hostile concurrent disk changes.
 
+`%WINDIR%\DreamGPU\lifecycle.bin` is the append-only history of installation
+states, bounded at 16 MiB. A resumed pass appends only its state changes, not
+the items it already applied. When the next append would cross the bound, the
+log is first compacted to the last append of each generation (everything
+loading and rollback can read), written as `lifecycle.new` and swapped in with
+`MoveFileA` through `lifecycle.old`. The next mutable load finishes or undoes an
+interrupted swap and refuses an old/new pair that is not an exact compaction.
+A full or uncompactable journal is reported by name instead of as the failing
+step. Before this, repeated failed activations and rollbacks could fill the log
+so that a later upgrade stopped with exit 26 at "Installing graphics system
+files".
+
 ## Automated acceptance
 
 `scripts/fixtures/system-install.py` drives fixed hash-pinned helpers over serial,
