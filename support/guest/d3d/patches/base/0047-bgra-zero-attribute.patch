@@ -1,0 +1,25 @@
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -5390,6 +5390,22 @@
+ 
+ void zv_bind_by_element(struct wined3d_context *context, const struct wined3d_stream_info_element *element, GLuint czvValue, const GLvoid *pzvValue)
+ {
++    /* DreamGPU: with ARB_vertex_array_bgra a D3DCOLOR's gl_vtx_format is
++     * GL_BGRA, not a component count: zv_create refused it and attribute 0
++     * read a stale or missing array. Shaders then expect RGBA (no swizzle_map),
++     * so bind the swizzled colour as four normalized bytes, like the other
++     * stride 0 attributes in load_numbered_arrays. */
++    if (element->format->gl_vtx_format == GL_BGRA)
++    {
++        DWORD src, c;
++
++        memcpy(&src, pzvValue, sizeof(src));
++        c = src & 0xff00ff00u;
++        c |= (src & 0xff0000u) >> 16;
++        c |= (src & 0xffu) << 16;
++        zv_bind(context, GL_UNSIGNED_BYTE, czvValue, 4, GL_TRUE, &c);
++        return;
++    }
+     zv_bind(context, element->format->gl_vtx_type, czvValue, element->format->gl_vtx_format, element->format->gl_normalized, pzvValue);
+ }
+ 

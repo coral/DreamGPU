@@ -120,6 +120,9 @@ BOOL JglVertexBufferObjectAvailable(void) {
 BOOL JglFramebufferObjectAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_FRAMEBUFFER_OBJECT);
 }
+BOOL JglVertexArrayBgraAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_VERTEX_ARRAY_BGRA);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -146,6 +149,7 @@ BOOL JglFramebufferObjectAvailable(void) {
 #define JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS "GL_ARB_vertex_buffer_object"
 #define JGL_FRAMEBUFFER_OBJECT_EXTENSIONS                                                          \
     "GL_EXT_framebuffer_object GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil"
+#define JGL_VERTEX_ARRAY_BGRA_EXTENSIONS "GL_ARB_vertex_array_bgra"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
@@ -154,7 +158,8 @@ static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDAR
                        sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
                        sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
                        sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) +
-                       sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS)];
+                       sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
+                       sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -187,8 +192,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_FRAMEBUFFER_OBJECT)
         AppendExtensions(&at, JGL_FRAMEBUFFER_OBJECT_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_VERTEX_ARRAY_BGRA)
+        AppendExtensions(&at, JGL_VERTEX_ARRAY_BGRA_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_VERTEX_ARRAY_BGRA_EXTENSIONS
 #undef JGL_FRAMEBUFFER_OBJECT_EXTENSIONS
 #undef JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS
 #undef JGL_TEXTURE_3D_EXTENSIONS

@@ -563,6 +563,10 @@ void JglCommandError(GLenum e) {
 BOOL JglVertexBufferObjectAvailable(void) {
     return FALSE;
 }
+/* No negotiated BGRA arrays (test_vertex_array_bgra.py covers them). */
+BOOL JglVertexArrayBgraAvailable(void) {
+    return FALSE;
+}
 BOOL JglCompiling(void) {
     return FALSE;
 }

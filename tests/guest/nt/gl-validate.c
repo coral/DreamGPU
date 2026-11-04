@@ -23,6 +23,7 @@ static ULONG FunctionWords(void *context, ULONG function) {
         case 0xaec: /* the attribute draw (VertexAttribPointerARB) */
             return DG_GL_FUNCTION_INLINE_DATA | 5;
         case 0x1f5: /* the buffer draw (DrawRangeElements) */
+        case 0x1f7: /* the BGRA buffer draw (DrawRangeElementsEXT) */
             return DG_GL_FUNCTION_INLINE_DATA | 10;
         case 20:
             return DG_GL_FUNCTION_INLINE_DATA | 8;
@@ -214,6 +215,79 @@ int main(void) {
         assert(DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
         draw[10] = 10; /* beyond GL_POLYGON */
         assert(!DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
+        draw[10] = 4;
+        draw[8] = 0x1f7; /* every buffer draw is a BGRA buffer draw too */
+        assert(DgValidateUserGl(draw, 236, 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* The BGRA buffer draw (DG_CAP_GL_VERTEX_ARRAY_BGRA): vertices 5-7 from
+         * buffers only, the position (FLOAT 3) from buffer 9 at 8, BGRA colour
+         * and secondary colour at 20 and 24 (stride 20), generic 2 BGRA from
+         * tight buffer 10. References at words 52-63. */
+        const ULONG bgra = 0x1401 | (4U << 16) | DG_GL_ARRAY_BGRA;
+        ULONG draw[64] = {DG_GL_DATA_CALL,
+                          256,
+                          0,
+                          1,
+                          1,
+                          0,
+                          0,
+                          0,
+                          0x1f7,
+                          176,
+                          4,
+                          5,
+                          3,
+                          DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR |
+                              DG_GL_ARRAY_SECONDARY,
+                          1U << 2,
+                          1 | 1U << 1 | 1U << 4 | 1U << 18,
+                          0,
+                          0,
+                          0,
+                          0};
+        const ULONG references[12] = {9, 8, 20, 9, 20, 20, 9, 24, 20, 10, 0, 0};
+        draw[20] = 0x1406 | (3U << 16);
+        draw[21] = draw[24] = bgra;
+        draw[20 + 18] = bgra | DG_GL_ATTRIB_NORMALIZED;
+        memcpy(draw + 52, references, sizeof(references));
+        assert(DgValidateUserGl(draw, 256, 42, 7, &limits, FunctionWords, NULL));
+        draw[8] = 0x1f5; /* older kernels' buffer draw keeps refusing BGRA */
+        assert(!DgValidateUserGl(draw, 256, 42, 7, &limits, FunctionWords, NULL));
+        draw[8] = 0x1f7;
+        const struct {
+            ULONG word, value;
+        } bad[] = {
+            {20, 0x1406 | (3U << 16) | DG_GL_ARRAY_BGRA}, /* never a position */
+            {21, 0x1401 | (3U << 16) | DG_GL_ARRAY_BGRA}, /* four components */
+            {21, 0x1406 | (4U << 16) | DG_GL_ARRAY_BGRA}, /* UNSIGNED_BYTE only */
+            {21, bgra | DG_GL_ATTRIB_NORMALIZED},         /* colours carry no flag */
+            {24, bgra | (1U << 26)},                      /* no other bit */
+            {38, bgra},                                   /* generic ones normalize */
+            {38, 0x1403 | (4U << 16) | DG_GL_ARRAY_BGRA | DG_GL_ATTRIB_NORMALIZED},
+        };
+        for (unsigned i = 0; i < sizeof(bad) / sizeof(bad[0]); ++i) {
+            const ULONG saved = draw[bad[i].word];
+            draw[bad[i].word] = bad[i].value;
+            assert(!DgValidateUserGl(draw, 256, 42, 7, &limits, FunctionWords, NULL));
+            draw[bad[i].word] = saved;
+        }
+        assert(DgValidateUserGl(draw, 256, 42, 7, &limits, FunctionWords, NULL));
+        /* Only colour, secondary colour and generic slots, and only exactly. */
+        for (unsigned slot = 0; slot < DG_GL_ATTRIB_SLOTS; ++slot) {
+            const int role = slot == 1 || slot == 4 || slot >= DG_GL_ARRAY_EXT_SLOTS;
+            const ULONG d = bgra | (slot >= DG_GL_ARRAY_EXT_SLOTS ? DG_GL_ATTRIB_NORMALIZED : 0);
+            assert(DgRawBgraDescriptor(slot, d) == role);
+            assert(!DgRawBgraDescriptor(slot, d & ~DG_GL_ARRAY_BGRA));
+        }
+        /* A client section stays RGBA: generic 2 from client memory (3 vertices
+         * of four bytes after three references) cannot be BGRA. */
+        draw[15] = 1 | 1U << 1 | 1U << 4;
+        draw[16] = 3;
+        draw[61] = draw[62] = draw[63] = 0x80402010U;
+        assert(!DgValidateUserGl(draw, 256, 42, 7, &limits, FunctionWords, NULL));
+        draw[20 + 18] = 0x1401 | (4U << 16) | DG_GL_ATTRIB_NORMALIZED;
+        assert(DgValidateUserGl(draw, 256, 42, 7, &limits, FunctionWords, NULL));
     }
     {
         /* Fog coordinates (slot 14): float2 positions at 64, one FLOAT each at 80. */

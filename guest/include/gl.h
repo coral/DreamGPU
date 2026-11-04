@@ -258,6 +258,21 @@
 #define DG_GL_MAX_RENDERBUFFERS 4096
 #define DG_GL_MAX_COLOR_ATTACHMENTS 4
 #define DG_GL_MAX_RENDERBUFFER_SIZE 4096
+/* BGRA vertex arrays: ARB_vertex_array_bgra, size BGRA (UNSIGNED_BYTE only)
+ * for colour, secondary colour and generic attribute arrays. The frontend
+ * reorders client memory into the RGBA sections of the existing array records,
+ * so their layouts and admission are unchanged. A draw that reads a BGRA array
+ * from a buffer object uses the BGRA buffer draw, DATA function
+ * DrawRangeElementsEXT: the buffer draw's ten scalar words, payload and rules,
+ * except that a buffer slot's descriptor may add DG_GL_ARRAY_BGRA on the
+ * colour (slot 1), secondary colour (slot 4) and generic attribute slots
+ * (16-31) as exactly UNSIGNED_BYTE with four components, plus
+ * DG_GL_ATTRIB_NORMALIZED (required) for a generic attribute. Native GL reads
+ * that buffer slot with size BGRA; its element is four bytes for every bound.
+ * Client-section descriptors never carry the flag. A distinct function keeps
+ * the buffer draw admission of older kernels and hosts unchanged. */
+#define DG_CAP_GL_VERTEX_ARRAY_BGRA 0x4000000
+#define DG_GL_ARRAY_BGRA 0x02000000U
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

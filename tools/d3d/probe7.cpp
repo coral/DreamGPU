@@ -193,6 +193,220 @@ static void FogBuffers(void) {
     if (vb)
         IDirect3DVertexBuffer7_Release(vb);
 }
+/* D3DCOLOR diffuse and specular arrays of untransformed XYZ | DIFFUSE |
+ * SPECULAR vertices with lighting off, identity transforms and
+ * SPECULARENABLE: each quad is exactly diffuse + specular. Every diffuse and
+ * specular has red != blue, and so does every sum, so a red/blue swap in the
+ * diffuse, the specular or both changes the pixel, as does a dropped specular.
+ * With ARB_vertex_array_bgra (DG_CAP_GL_VERTEX_ARRAY_BGRA) Wine draws these
+ * from GL_BGRA arrays instead of immediate mode. Quads: DrawPrimitive and
+ * DrawIndexedPrimitive from user memory (ddraw's dynamic, system-memory
+ * buffer), DrawPrimitiveVB from vertex 4 and DrawIndexedPrimitiveVB from
+ * start vertex 8 of a D3DVBCAPS_SYSTEMMEMORY buffer and of a video-memory
+ * one (a GL buffer object, its D3DCOLOR bytes no longer converted), and a
+ * video-memory buffer locked with DDLOCK_DISCARDCONTENTS (which Wine turns
+ * into a dynamic, system-memory buffer), drawn, then rewritten beyond that
+ * quad with DDLOCK_NOOVERWRITE and drawn again. Decoy vertices below each
+ * start vertex and between the indices must not appear. Every pixel is
+ * compared except the band along each quad edge. */
+static void ColorArrays(void) {
+    struct ColorVertex {
+        float x, y, z;
+        DWORD diffuse, specular;
+    };
+    struct Area {
+        int left, top, right, bottom;
+    };
+    struct Pair {
+        DWORD diffuse, specular;
+    };
+    static_assert(sizeof(ColorVertex) == 20);
+    static const DWORD fvf = D3DFVF_XYZ | D3DFVF_DIFFUSE | D3DFVF_SPECULAR, background = 0x102030,
+                       decoy_color = 0xffff00ff;
+    /* (r, g, b) of diffuse + specular, e.g. (60,20,10) + (10,40,80) = (70,60,90). */
+    static constexpr Pair pairs[8] = {{0xff602010, 0x00104080}, {0xff10a040, 0x00502008},
+                                      {0xffc01060, 0x00203010}, {0xff3070b0, 0x00401020},
+                                      {0xff20e080, 0x00600810}, {0xffa02000, 0x00106040},
+                                      {0xff0040a0, 0x00801020}, {0xff50f010, 0x00300840}};
+    constexpr auto byte = [](DWORD color, int shift) -> DWORD { return color >> shift & 0xff; };
+    constexpr auto sum = [byte](Pair p) -> DWORD {
+        return (byte(p.diffuse, 16) + byte(p.specular, 16)) << 16 |
+               (byte(p.diffuse, 8) + byte(p.specular, 8)) << 8 |
+               (byte(p.diffuse, 0) + byte(p.specular, 0));
+    };
+    constexpr auto telling = [byte, sum]() -> bool {
+        for (const Pair &p : pairs)
+            if (byte(p.diffuse, 16) == byte(p.diffuse, 0) ||
+                byte(p.specular, 16) == byte(p.specular, 0) ||
+                byte(sum(p), 16) == byte(sum(p), 0) ||
+                byte(p.diffuse, 16) + byte(p.specular, 16) > 255 ||
+                byte(p.diffuse, 8) + byte(p.specular, 8) > 255 ||
+                byte(p.diffuse, 0) + byte(p.specular, 0) > 255)
+                return false;
+        return true;
+    };
+    static_assert(telling() && sum(pairs[0]) == 0x706090);
+    /* Two rows of four; the decoy sits between the rows. */
+    static const Area quads[8] = {{10, 20, 70, 90},     {90, 20, 150, 90},   {170, 20, 230, 90},
+                                  {250, 20, 310, 90},   {10, 150, 70, 220},  {90, 150, 150, 220},
+                                  {170, 150, 230, 220}, {250, 150, 310, 220}};
+    static const Area decoy = {130, 105, 190, 135};
+    static WORD list[6] = {4, 5, 6, 6, 5, 7}, local[6] = {0, 1, 2, 2, 1, 3};
+    const auto corners = [](ColorVertex *out, const Area &area, DWORD diffuse, DWORD specular) {
+        const float left = area.left / 160.f - 1, right = area.right / 160.f - 1;
+        const float top = 1 - area.top / 120.f, bottom = 1 - area.bottom / 120.f;
+        out[0] = {left, top, .5f, diffuse, specular};
+        out[1] = {right, top, .5f, diffuse, specular};
+        out[2] = {left, bottom, .5f, diffuse, specular};
+        out[3] = {right, bottom, .5f, diffuse, specular};
+    };
+    const auto quad = [&](ColorVertex *out, UINT n) {
+        corners(out, quads[n], pairs[n].diffuse, pairs[n].specular);
+    };
+    /* Vertices 0-3 a decoy, 4-7 quad first, 8-11 quad first + 1. */
+    const auto fill = [&](ColorVertex *out, UINT first) {
+        corners(out, decoy, decoy_color, decoy_color);
+        quad(out + 4, first);
+        quad(out + 8, first + 1);
+    };
+    /* Lock vb with flags and let write fill it. */
+    const auto store = [](IDirect3DVertexBuffer7 *vb, DWORD flags, const char *stage,
+                          auto write) -> BOOL {
+        ColorVertex *mapped = NULL;
+        if (!HR(IDirect3DVertexBuffer7_Lock(vb, DDLOCK_WAIT | DDLOCK_WRITEONLY | flags,
+                                            (void **)&mapped, NULL),
+                stage))
+            return FALSE;
+        const BOOL ok = Check(mapped != NULL, stage, 0);
+        if (ok)
+            write(mapped);
+        return HR(IDirect3DVertexBuffer7_Unlock(vb), "FAIL colour vertex buffer unlock") && ok;
+    };
+    IDirect3DVertexBuffer7 *system = NULL, *video = NULL, *dynamic = NULL;
+    ColorVertex user[4], indexed[8];
+    D3DVERTEXBUFFERDESC desc = {};
+    D3DMATRIX identity = {};
+    DDSURFACEDESC2 locked = {};
+    BOOL ok;
+    Log("STAGE colour arrays");
+    identity._11 = identity._22 = identity._33 = identity._44 = 1;
+    quad(user, 0);
+    corners(indexed, decoy, decoy_color, decoy_color);
+    quad(indexed + 4, 1);
+    desc.dwSize = sizeof(desc);
+    desc.dwFVF = fvf;
+    desc.dwNumVertices = 12;
+    desc.dwCaps = D3DVBCAPS_SYSTEMMEMORY;
+    ok = HR(IDirect3D7_CreateVertexBuffer(d3d, &desc, &system, 0),
+            "FAIL colour system-memory vertex buffer creation");
+    desc.dwCaps = D3DVBCAPS_WRITEONLY;
+    ok = ok &&
+         HR(IDirect3D7_CreateVertexBuffer(d3d, &desc, &video, 0),
+            "FAIL colour video-memory vertex buffer creation") &&
+         HR(IDirect3D7_CreateVertexBuffer(d3d, &desc, &dynamic, 0),
+            "FAIL colour discarded vertex buffer creation") &&
+         store(system, 0, "FAIL colour system-memory vertex buffer lock",
+               [&](ColorVertex *out) { fill(out, 2); }) &&
+         store(video, 0, "FAIL colour video-memory vertex buffer lock",
+               [&](ColorVertex *out) { fill(out, 4); });
+    ok = ok &&
+         HR(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_WORLD, &identity),
+            "FAIL colour world") &&
+         HR(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_VIEW, &identity),
+            "FAIL colour view") &&
+         HR(IDirect3DDevice7_SetTransform(device, D3DTRANSFORMSTATE_PROJECTION, &identity),
+            "FAIL colour projection") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_LIGHTING, FALSE),
+            "FAIL colour lighting") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGENABLE, FALSE),
+            "FAIL colour fog") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_ALPHABLENDENABLE, FALSE),
+            "FAIL colour blend") &&
+         HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_SPECULARENABLE, TRUE),
+            "FAIL colour specular") &&
+         HR(IDirect3DDevice7_SetTexture(device, 0, NULL), "FAIL colour texture") &&
+         HR(IDirect3DDevice7_SetTextureStageState(device, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1),
+            "FAIL colour operation") &&
+         HR(IDirect3DDevice7_SetTextureStageState(device, 0, D3DTSS_COLORARG1, D3DTA_DIFFUSE),
+            "FAIL colour argument") &&
+         HR(IDirect3DDevice7_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0xff000000 | background, 1, 0),
+            "FAIL colour clear") &&
+         HR(IDirect3DDevice7_BeginScene(device), "FAIL colour begin scene") &&
+         HR(IDirect3DDevice7_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, fvf, user, 4, 0),
+            "FAIL colour user-memory draw") &&
+         HR(IDirect3DDevice7_DrawIndexedPrimitive(device, D3DPT_TRIANGLELIST, fvf, indexed, 8, list,
+                                                  6, 0),
+            "FAIL colour user-memory indexed draw") &&
+         HR(IDirect3DDevice7_DrawPrimitiveVB(device, D3DPT_TRIANGLESTRIP, system, 4, 4, 0),
+            "FAIL colour system-memory draw from vertex 4") &&
+         HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, system, 8, 4, local,
+                                                    6, 0),
+            "FAIL colour system-memory indexed draw from vertex 8") &&
+         HR(IDirect3DDevice7_DrawPrimitiveVB(device, D3DPT_TRIANGLESTRIP, video, 4, 4, 0),
+            "FAIL colour video-memory draw from vertex 4") &&
+         HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, video, 8, 4, local,
+                                                    6, 0),
+            "FAIL colour video-memory indexed draw from vertex 8") &&
+         store(dynamic, DDLOCK_DISCARDCONTENTS, "FAIL colour DISCARDCONTENTS lock",
+               [&](ColorVertex *out) { quad(out, 6); }) &&
+         HR(IDirect3DDevice7_DrawPrimitiveVB(device, D3DPT_TRIANGLESTRIP, dynamic, 0, 4, 0),
+            "FAIL colour discarded buffer draw") &&
+         store(dynamic, DDLOCK_NOOVERWRITE, "FAIL colour NOOVERWRITE lock",
+               [&](ColorVertex *out) {
+                   corners(out + 4, decoy, decoy_color, decoy_color);
+                   quad(out + 8, 7);
+               }) &&
+         HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, dynamic, 8, 4,
+                                                    local, 6, 0),
+            "FAIL colour NOOVERWRITE indexed draw from vertex 8") &&
+         HR(IDirect3DDevice7_EndScene(device), "FAIL colour end scene");
+    IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_SPECULARENABLE, FALSE);
+    locked.dwSize = sizeof(locked);
+    if (ok &&
+        HR(IDirectDrawSurface7_Lock(target, NULL, &locked, DDLOCK_READONLY | DDLOCK_WAIT, NULL),
+           "FAIL colour readback lock")) {
+        UINT wrong = 0;
+        if (Check(locked.lpSurface && locked.lPitch >= 1280, "FAIL colour readback layout",
+                  locked.lPitch))
+            for (int y = 0; y < 240; ++y)
+                for (int x = 0; x < 320; ++x) {
+                    DWORD expected = background;
+                    BOOL edge = FALSE;
+                    for (UINT i = 0; i < 8; ++i) {
+                        const Area &a = quads[i];
+                        if (x > a.left && x < a.right - 1 && y > a.top && y < a.bottom - 1)
+                            expected = sum(pairs[i]);
+                        else if (x >= a.left - 1 && x <= a.right && y >= a.top - 1 && y <= a.bottom)
+                            edge = TRUE;
+                    }
+                    if (edge)
+                        continue;
+                    const DWORD actual =
+                        *(DWORD *)((BYTE *)locked.lpSurface + y * locked.lPitch + x * 4) & 0xffffff;
+                    if (actual != expected && !wrong++) {
+                        Number("FAIL exact colour pixel", actual);
+                        Number("colour pixel x", (DWORD)x);
+                        Number("colour pixel y", (DWORD)y);
+                        Number("colour pixel expected", expected);
+                    }
+                }
+        if (wrong) {
+            Number("colour wrong pixels", wrong);
+            failed = TRUE;
+        }
+        HR(IDirectDrawSurface7_Unlock(target, NULL), "FAIL colour readback unlock");
+        if (!failed)
+            Log("PASS colour arrays: D3DCOLOR diffuse plus specular of user-memory, "
+                "system-memory, video-memory and DISCARDCONTENTS/NOOVERWRITE buffer quads exact, "
+                "decoys unseen");
+    }
+    if (dynamic)
+        IDirect3DVertexBuffer7_Release(dynamic);
+    if (video)
+        IDirect3DVertexBuffer7_Release(video);
+    if (system)
+        IDirect3DVertexBuffer7_Release(system);
+}
 static void Run(void) {
     typedef HRESULT(WINAPI * CreateDraw)(GUID *, void **, REFIID, IUnknown *);
     HMODULE gl, runtime;
@@ -454,6 +668,8 @@ static void Run(void) {
     }
     if (!failed)
         FogBuffers();
+    if (!failed)
+        ColorArrays();
 }
 extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);

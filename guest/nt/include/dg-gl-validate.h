@@ -127,7 +127,9 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                 }
                 // The buffer draw (DrawRangeElements, 0x1f5) names buffers per
                 // slot and carries only client sections and inline indices.
-                if (record[8] == 0x1f5 && args == 10) {
+                // The BGRA buffer draw (DrawRangeElementsEXT, 0x1f7) also
+                // admits BGRA descriptors on colour and generic buffer slots.
+                if ((record[8] == 0x1f5 || record[8] == 0x1f7) && args == 10) {
                     unsigned descriptors[DG_GL_ATTRIB_SLOTS], offsets[DG_GL_ATTRIB_SLOTS], length,
                         indices, references = 0;
                     const unsigned char *data = (const unsigned char *)record + payload;
@@ -140,10 +142,10 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                     }
                     if (data_bytes < DG_GL_ATTRIB_DESCRIPTOR_BYTES +
                                          references * DG_GL_BUFFER_REFERENCE_BYTES ||
-                        !DgRawBufferLayout(a, descriptors,
-                                           (const unsigned *)record + payload / 4 +
-                                               DG_GL_ATTRIB_SLOTS,
-                                           offsets, &indices, &length) ||
+                        !DgRawBufferLayoutOf(a, descriptors,
+                                             (const unsigned *)record + payload / 4 +
+                                                 DG_GL_ATTRIB_SLOTS,
+                                             offsets, &indices, &length, record[8] == 0x1f7) ||
                         length != data_bytes)
                         return 0;
                     unsigned end =

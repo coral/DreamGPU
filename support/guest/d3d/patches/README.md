@@ -452,17 +452,17 @@ longer marks the copy it just uploaded with `glBufferData` dirty, which sent
 each buffer twice; a needed conversion reloads it regardless.
 
 `0038-vbo-conversion-offsets.patch` repairs fixed-function vertex conversion,
-which every buffer object holding D3DCOLOR (DreamGPU has no BGRA vertex
-arrays) or XYZRHW data needs. This tree's `VBOX_WITH_WINE_FIX_BUFOFFSET`
-conversion never set the stream element's offset or the buffer's stream
-offset, marked only the first byte of each converted attribute and left the
-D3DCOLOR swizzle commented out, so colours reached GL with red and blue
-swapped and pretransformed positions unconverted; it also re-read the whole
-buffer on every declaration check and eventually dropped the buffer object.
-The element offset, the stream offset and every attribute byte are now
-recorded, the swizzle runs, and the upload covers the range widened to whole
-vertices. Without the BUFOFFSET macros the structure layouts would differ
-between units, so the repair stays in that code.
+which every buffer object holding XYZRHW data needs, and D3DCOLOR data without
+BGRA vertex arrays (a host without `DG_CAP_GL_VERTEX_ARRAY_BGRA`). This tree's
+`VBOX_WITH_WINE_FIX_BUFOFFSET` conversion never set the stream element's
+offset or the buffer's stream offset, marked only the first byte of each
+converted attribute and left the D3DCOLOR swizzle commented out, so colours
+reached GL with red and blue swapped and pretransformed positions unconverted;
+it also re-read the whole buffer on every declaration check and eventually
+dropped the buffer object. The element offset, the stream offset and every
+attribute byte are now recorded, the swizzle runs, and the upload covers the
+range widened to whole vertices. Without the BUFOFFSET macros the structure
+layouts would differ between units, so the repair stays in that code.
 
 `0039-vbo-mixed-stream-fallbacks.patch` keeps immediate mode on memory.
 `context_update_stream_info` preloads every stream before taking any buffer
@@ -531,12 +531,13 @@ through the frontend's rejected array, without fog.
 
 Immediate-mode draws no longer set the emulation flag (they already read every
 element from memory), so the `d3d_perf` "Using software emulation because
-manual fog coordinates are provided" warning no longer reports them. DreamGPU
-has no BGRA vertex arrays, so Wine still draws any fixed-function D3DCOLOR
-stream outside buffer objects in immediate mode: UP draws, dynamic and
-system-memory buffers. Textured XYZRHW draws of up to 64 vertices can take the
-packed path, which already fed fog coordinates as an array. `test_fog_coord_arrays.py` runs
-the prepared helpers under ASan/UBSan against a reference read the way
+manual fog coordinates are provided" warning no longer reports them. Without
+BGRA vertex arrays Wine still draws any fixed-function D3DCOLOR stream outside
+buffer objects in immediate mode: UP draws, dynamic and system-memory buffers
+(with them, 0047, those reach this array path too). Textured XYZRHW draws
+of up to 64 vertices can take the packed path, which already fed fog
+coordinates as an array. `test_fog_coord_arrays.py` runs the prepared
+helpers under ASan/UBSan against a reference read the way
 `drawStridedSlow` reads memory and checks the draw and fallback structure; it
 fails without the patch. The installed D3D7 probe and the D3D8/9 vertex buffer
 probe draw specular-alpha fog from buffers and user memory with exact pixels;
@@ -646,3 +647,35 @@ handler through the scalar float form, from its own context. A driver that
 rejects the parameter keeps the warning. `test_fbo_point_sprite_origin.py`
 runs the prepared probe and handler under ASan/UBSan. The diagnostic stack is
 rebased onto 0046.
+
+`0047-bgra-zero-attribute.patch` adapts WineD3D to DreamGPU's BGRA vertex
+arrays (`DG_CAP_GL_VERTEX_ARRAY_BGRA`, `ARB_vertex_array_bgra`). With the
+extension a D3DCOLOR's `gl_vtx_format` is `GL_BGRA`, which upstream Wine
+already passes as the size of colour, secondary colour and generic attribute
+arrays (normalized), so most of the change needs no patch. Fixed-function
+draws no longer take immediate mode for D3DCOLOR diffuse or specular streams
+outside buffer objects (`slow_mask`): D3D8/9 UP draws and dynamic or `SYSTEMMEM`
+buffers, and D3D5-7 `DrawPrimitive` from user memory and system-memory vertex
+buffers, now draw from client arrays, and so reach 0041's fog array.
+Pretransformed (XYZRHW) streams outside buffer objects still take immediate
+mode, since the fixed-function vertex pipeline has no `xyzrhw`, and the packed
+path, which swizzles colours itself, keeps drawing them. D3DCOLOR in buffer
+objects is no longer converted (only XYZRHW positions are, through 0038's
+repaired bookkeeping) and draws from the buffer with `GL_BGRA`. Vertex shaders
+read D3DCOLOR through `GL_BGRA` generic arrays instead of an in-shader
+swizzle (`swizzle_map` stays zero); their stride 0 and immediate-mode
+D3DCOLOR attributes already swizzle to RGBA before `glVertexAttrib4Nubv`.
+
+The patch fixes the one path that took `gl_vtx_format` for a component count.
+VBox's zero attribute (`VBOX_WITH_WINE_FIX_ZEROVERTATTR`) binds a stride 0
+attribute 0 of a vertex shader draw from its own array or buffer, and
+`zv_bind_by_element` passed `GL_BGRA` (0x80e1) as the count: `zv_create`
+refused it, the client array was never built, and attribute 0 pointed at the
+previous zero attribute buffer or at nothing. A `GL_BGRA` element now binds
+its colour swizzled to RGBA as four normalized unsigned bytes, as the other
+stride 0 attributes do; every other format is unchanged.
+`test_vertex_array_bgra.py` runs the prepared zero attribute functions under
+ASan/UBSan against a recording GL, with and without buffer objects, and fails
+without the patch; it also checks the format, swizzle, immediate-mode,
+conversion and array paths above in the prepared source. The diagnostic stack
+is rebased onto 0047 (only its `device.c` hashes change).

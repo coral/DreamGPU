@@ -529,3 +529,44 @@ fn index_bounds_only_rise_and_let_fitting_buffer_only_draws_skip_the_scan() {
     assert_eq!(resolve(&c, 4, 2).err(), Some(GL_INVALID_OPERATION));
     release(m, c);
 }
+
+#[test]
+fn bgra_buffer_slots_are_bounded_as_four_byte_elements() {
+    let f = fixture();
+    let m = &f.memory;
+    let mut c = context(m, null_mut());
+    // Vertices 5-7: position FLOAT 3 at 8 + v * 20 in buffer 4; colour and
+    // secondary colour BGRA at 12 and 16 + v * 20 in buffer 5; generic 1 BGRA
+    // tight in buffer 6.
+    put(m, &mut c, 4, 160, &[]);
+    put(m, &mut c, 5, 160, &[]);
+    put(m, &mut c, 6, 32, &[]);
+    let (a, data) = crate::arrays::raw::tests::bgra_packet();
+    let resolve = |c: &MaybeUninit<ContextState>| {
+        let layout =
+            crate::arrays::raw::layout_buffer_draw(FEnum_glDrawRangeElementsEXT, &a, &data, true)
+                .expect("admitted");
+        unsafe { super::resolve(c.as_ptr(), &a, &layout, &data) }
+    };
+    let natives = |c: &MaybeUninit<ContextState>, name| unsafe { (*find(c.as_ptr(), name)).native };
+    let r = resolve(&c).unwrap();
+    assert_eq!(
+        [r.slots[0], r.slots[1], r.slots[4], r.slots[17]],
+        [
+            natives(&c, 4),
+            natives(&c, 5),
+            natives(&c, 5),
+            natives(&c, 6)
+        ]
+    );
+    // One byte short of the last BGRA element in either buffer is an error.
+    put(m, &mut c, 5, 159, &[]);
+    assert_eq!(resolve(&c).err(), Some(GL_INVALID_OPERATION));
+    put(m, &mut c, 5, 160, &[]);
+    put(m, &mut c, 6, 31, &[]);
+    assert_eq!(resolve(&c).err(), Some(GL_INVALID_OPERATION));
+    put(m, &mut c, 6, 32, &[]);
+    assert!(resolve(&c).is_ok());
+    assert_eq!(errors(&mut c), 0);
+    release(m, c);
+}

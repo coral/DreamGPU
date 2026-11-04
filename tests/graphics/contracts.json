@@ -380,6 +380,26 @@
       "scope": "source",
       "path": "tests/guest/d3d/test_fbo_point_sprite_origin.py"
     },
+    "gl-vertex-array-bgra": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_vertex_array_bgra.py"
+    },
+    "native-vertex-array-bgra": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/vertex_array_bgra.rs"
+    },
+    "d3d-vertex-array-bgra": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_vertex_array_bgra.py"
+    },
+    "guest-bgra": {
+      "scope": "installed-api",
+      "path": "tools/d3d/bgra-probe.inc"
+    },
+    "guest-d3d7": {
+      "scope": "installed-api",
+      "path": "tools/d3d/probe7.cpp"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1509,7 +1529,7 @@
         "d3d-fog-coord-arrays",
         "guest-vbuffer"
       ],
-      "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Wine patch 0041 gives fixed-function array draws (buffer objects) a float fog coordinate array with drawStridedSlow's values instead of emulating them in immediate mode; D3DCOLOR streams outside buffer objects stay in immediate mode without BGRA vertex arrays. The installed D3D7 probe and D3D8/9 vertex buffer probe add exact untransformed buffer and UP fog quads, untested on guests. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
+      "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Wine patch 0041 gives fixed-function array draws (buffer objects) a float fog coordinate array with drawStridedSlow's values instead of emulating them in immediate mode; D3DCOLOR streams outside buffer objects stay in immediate mode without BGRA vertex arrays (with DG_CAP_GL_VERTEX_ARRAY_BGRA they take the fog coordinate array too). The installed D3D7 probe and D3D8/9 vertex buffer probe add exact untransformed buffer and UP fog quads, untested on guests. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
     },
     {
       "id": "gl.cube-map",
@@ -1642,6 +1662,28 @@
         "guest-rtt"
       ],
       "remaining": "Negotiated by DG_CAP_GL_FRAMEBUFFER_OBJECT; without it the extensions, entry points and enums stay hidden. Framebuffer names are virtual and per context; zero stays the host's drawable framebuffer, rebound by the host under the guest's objects on every make-current, exchange and export, so presentation and window readback are unchanged with an object bound. Every command but BlitFramebuffer executes immediately; state-dependent failures are GL errors and completeness is the native GL 3 rules (no INCOMPLETE_DIMENSIONS/FORMATS). Attachments keep deleted images alive until detached; rendering into them is fenced for other contexts and versioned for the texture read cache. Renderbuffers are zero-initialized and charged against the resource budget; reads of uninitialized images are INVALID_FRAMEBUFFER_OPERATION; ReadPixels from an object is clipped by the host to its attachments. 2D textures take depth and packed depth/stencil formats for depth attachments; ARB_depth_texture and depth GetTexImage are not claimed. Wine selects ORM_FBO, and with this tree's always_offscreen every D3D8/9 swapchain renders into an FBO and presents with glBlitFramebuffer; patches 0042-0046 keep NPOT resources in padded 2D textures, give CPU depth transfers an FBO mode, attach larger depth buffers directly, send overlapping self-blits to the CPU blitter and keep point sprites upright through POINT_SPRITE_COORD_ORIGIN below GL 2.0. Native pixel tests pass on Linux; the installed D3D8/9 render-target probe, the existing probes under ORM_FBO, adapter-start format checks (R5G6B5 targets, blending), macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.vertex-array-bgra",
+      "area": 11,
+      "api": "OpenGL 1.1 + ARB_vertex_array_bgra (D3DCOLOR vertex streams through Wine)",
+      "operation": "size BGRA for ColorPointer, SecondaryColorPointerEXT and VertexAttribPointerARB (normalized); its errors; BGRA size queries and CLIENT_VERTEX_ARRAY_BIT; client-memory, buffer-object, display list and ArrayElement draws",
+      "format": "UNSIGNED_BYTE BGRA (D3DCOLOR)",
+      "resource": "vertex array",
+      "usage": "diffuse, specular and generic vertex attributes",
+      "pool": "client memory/buffer object",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-vertex-array-bgra",
+        "native-vertex-array-bgra",
+        "native",
+        "d3d-vertex-array-bgra",
+        "guest-bgra",
+        "guest-d3d7"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_VERTEX_ARRAY_BGRA; without it BGRA stays an invalid size and every draw is unchanged. The frontend reorders client memory into the RGBA sections of the existing array records (a secondary colour as RGB), so older records, kernels and hosts keep their admission; a draw with a BGRA buffer slot uses the BGRA buffer draw (DATA function DrawRangeElementsEXT: the buffer draw plus DG_GL_ARRAY_BGRA on colour, secondary colour and generic buffer slots), which the NT/Win9x kernels and the host check like the buffer draw and which native GL reads with size BGRA. Lists and the record's fallbacks dereference buffers into reordered client draws. Wine then draws fixed-function D3DCOLOR diffuse/specular streams outside buffer objects (D3D8/9 UP, dynamic and SYSTEMMEM buffers, D3D5-7 user memory and system-memory vertex buffers) from arrays instead of immediate mode, stops converting D3DCOLOR in buffer objects, and feeds vertex shaders GL_BGRA generic arrays; XYZRHW streams outside buffer objects keep immediate mode. Wine 0047 fixes the stride-zero D3DCOLOR zero attribute. Native pixel tests pass on Linux; the installed D3D7 and D3D8/9 colour-array probes, macOS CGL (EXT_vertex_array_bgra), Win98/XP guests and game performance remain to be run."
     },
     {
       "id": "glide3.vertex",

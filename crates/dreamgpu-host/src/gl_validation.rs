@@ -440,6 +440,8 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glBufferSubDataARB => DG_GL_FUNCTION_INLINE_DATA | 2,
         FEnum_glDeleteBuffersARB => DG_GL_FUNCTION_INLINE_DATA | 1,
         FEnum_glDrawRangeElements => DG_GL_FUNCTION_INLINE_DATA | 10,
+        // ARB_vertex_array_bgra (DG_CAP_GL_VERTEX_ARRAY_BGRA): the BGRA buffer draw.
+        FEnum_glDrawRangeElementsEXT => DG_GL_FUNCTION_INLINE_DATA | 10,
         // EXT_framebuffer_object, EXT_framebuffer_blit (DG_CAP_GL_FRAMEBUFFER_OBJECT).
         FEnum_glBindFramebuffer | FEnum_glBindRenderbuffer => 2,
         FEnum_glRenderbufferStorage | FEnum_glFramebufferRenderbuffer => 4,
@@ -1550,10 +1552,14 @@ pub unsafe extern "C" fn dreamgpu_gl_data_validate(
     if matches!(function, FEnum_glTexImage3D | FEnum_glTexSubImage3D) {
         return crate::texture::volume::validate(function, &a, data);
     }
-    if function == FEnum_glDrawRangeElements {
-        // The buffer draw (ARB_vertex_buffer_object): the whole record shape,
-        // inline indices within the client vertices included.
-        return if crate::arrays::raw::layout_buffer(&a, data, true).is_some() {
+    if matches!(
+        function,
+        FEnum_glDrawRangeElements | FEnum_glDrawRangeElementsEXT
+    ) {
+        // The buffer draw (ARB_vertex_buffer_object) or the BGRA buffer draw
+        // (ARB_vertex_array_bgra): the whole record shape, inline indices
+        // within the client vertices included.
+        return if crate::arrays::raw::layout_buffer_draw(function, &a, data, true).is_some() {
             0
         } else {
             DG_GL_ERROR_BATCH

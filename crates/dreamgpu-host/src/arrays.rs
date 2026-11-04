@@ -113,9 +113,10 @@ unsafe fn draw(
     }
 }
 
-/// The buffer draw (ARB_vertex_buffer_object): `a` and `layout` are an
-/// admitted record with a nonzero count, `resolved` its bounded native
-/// buffers. Returns the native GL error like the other array draws.
+/// The buffer draw (ARB_vertex_buffer_object) and the BGRA buffer draw: `a`
+/// and `layout` are an admitted record with a nonzero count, `resolved` its
+/// bounded native buffers. Returns the native GL error like the other array
+/// draws.
 ///
 /// # Safety
 /// API belongs to the current native context, which binds no buffer; payload
@@ -312,8 +313,14 @@ unsafe fn execute(api: &DreamGpuGlApi, spec: &Spec, data: &[u8]) -> Result<u32, 
             }
             None => (0, unsafe { data.as_ptr().add(a.offset) }),
         };
+        // A BGRA buffer slot (ARB_vertex_array_bgra) reads UNSIGNED_BYTE 4
+        // with size BGRA.
         (
-            a.size as i32,
+            if a.bgra {
+                GL_BGRA as i32
+            } else {
+                a.size as i32
+            },
             a.kind,
             step,
             pointer.cast::<core::ffi::c_void>(),

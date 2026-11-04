@@ -134,19 +134,21 @@ unsafe fn stage_arrays<'a>(
     }
     Some(storage)
 }
-/// The buffer draw (ARB_vertex_buffer_object). Every state-dependent failure
-/// is the guest's GL error; buffer contents are guest (little-endian) bytes,
-/// so big-endian hosts, which do not advertise the capability, refuse it too.
+/// The buffer draw (ARB_vertex_buffer_object) and the BGRA buffer draw
+/// (ARB_vertex_array_bgra). Every state-dependent failure is the guest's GL
+/// error; buffer contents are guest (little-endian) bytes, so big-endian
+/// hosts, which do not advertise the capability, refuse it too.
 unsafe fn buffer_draw(
     m: &Memory,
     state: *mut ContextState,
     serial: u64,
+    function: u32,
     a: &[u32; 10],
     data: &[u8],
 ) -> u32 {
     let api = unsafe { &*m.api };
     let errors = unsafe { addr_of_mut!((*state).guest_errors) };
-    let Some(layout) = crate::arrays::raw::layout_buffer(a, data, false) else {
+    let Some(layout) = crate::arrays::raw::layout_buffer_draw(function, a, data, false) else {
         return DG_GL_ERROR_BATCH;
     };
     if a[2] == 0 {
@@ -401,13 +403,16 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         };
         return result.map_or_else(|e| e, |()| 0);
     }
-    if function == FEnum_glDrawRangeElements {
+    if matches!(
+        function,
+        FEnum_glDrawRangeElements | FEnum_glDrawRangeElementsEXT
+    ) {
         let data = if bytes == 0 {
             &[]
         } else {
             unsafe { core::slice::from_raw_parts(data, bytes as usize) }
         };
-        return unsafe { buffer_draw(m, state, serial, &wide, data) };
+        return unsafe { buffer_draw(m, state, serial, function, &wide, data) };
     }
     if function == FEnum_glDeleteTextures {
         // A deleted texture leaves this context's bound framebuffers first,

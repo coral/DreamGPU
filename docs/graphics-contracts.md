@@ -289,6 +289,37 @@ and disposable-VM acceptance cycle:
   enumerates a 32-bit Z buffer. The installed render-target probe (render
   targets of 1024x1024 beside a 320x240 window, depth and stencil of that
   size, StretchRect/CopyRects, offscreen surfaces) has not yet run on a guest.
+- BGRA vertex arrays (`DG_CAP_GL_VERTEX_ARRAY_BGRA`) add ARB_vertex_array_bgra:
+  size BGRA for ColorPointer, SecondaryColorPointerEXT and
+  VertexAttribPointerARB, UNSIGNED_BYTE only (other types are
+  GL_INVALID_OPERATION, as is a generic BGRA array that is not normalized;
+  BGRA stays GL_INVALID_VALUE for every other array). The size queries answer
+  BGRA, CLIENT_VERTEX_ARRAY_BIT saves it and InterleavedArrays clears it. The
+  frontend reorders client memory into the RGBA sections of the existing array
+  records while packing (a secondary colour as its RGB), so every older
+  record keeps its admission on older kernels and hosts, and display lists and
+  ArrayElement read B, G, R, A locally. Buffer arrays cannot be reordered
+  without reading them back, so a draw with a BGRA buffer slot uses a fifth
+  array record, the BGRA buffer draw (DATA function DrawRangeElementsEXT): the
+  buffer draw's words, payload and rules plus `DG_GL_ARRAY_BGRA` on colour,
+  secondary colour and generic buffer slots, which the host passes to native
+  GL as size BGRA and bounds as four-byte elements. The NT and Win9x kernels
+  check it like the buffer draw and keep refusing the flag there; client
+  sections never carry it. Native BGRA arrays are required of the host GL
+  (core in GL 3.2; Mesa's compatibility profile has them; macOS CGL's
+  EXT_vertex_array_bgra is unverified), and a native refusal is a GL error.
+  From the Wine source, WineD3D then stops drawing fixed-function draws whose
+  D3DCOLOR diffuse or specular streams are not all in buffer objects in
+  immediate mode (D3D8/9 UP draws, dynamic and SYSTEMMEM buffers, D3D5-7
+  DrawPrimitive from user memory and system-memory vertex buffers), no longer
+  converts D3DCOLOR in buffer objects, and vertex shaders read D3DCOLOR through
+  BGRA generic arrays instead of swizzling in the shader. Pretransformed
+  (XYZRHW) streams outside buffer objects keep immediate mode or the packed
+  path. Wine patch 0047 binds a stride-zero D3DCOLOR attribute 0 correctly
+  (see the patch README). No D3D cap changes. The installed D3D7 and D3D8/9
+  colour-array probes (diffuse plus specular from user memory, dynamic,
+  system-memory and static buffers, and a vs_1_1 D3DCOLOR input) have not yet
+  run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

@@ -439,9 +439,10 @@ unsafe fn capture(
     }
     let execute = unsafe { (*s).mode } == GL_COMPILE_AND_EXECUTE;
     // A list dereferences array data at compile time; the frontend sends
-    // buffer-sourced arrays as client draws there. A buffer draw itself would
-    // read buffers at execution, so it compiles as GL_INVALID_OPERATION.
-    if f == FEnum_glDrawRangeElements {
+    // buffer-sourced arrays as client draws there. A buffer draw itself (BGRA
+    // or not) would read buffers at execution, so it compiles as
+    // GL_INVALID_OPERATION.
+    if matches!(f, FEnum_glDrawRangeElements | FEnum_glDrawRangeElementsEXT) {
         let code = GL_INVALID_OPERATION;
         if unsafe { capture(m, c, 0, DG_GL_RECORD_ERROR, &code.to_le_bytes(), &[]) } {
             unsafe { error(c, code) };

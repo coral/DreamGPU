@@ -1031,7 +1031,6 @@ fn buffer_object_records_and_the_buffer_draw_have_exact_shapes() {
         FEnum_glGetBufferParameterivARB,
         FEnum_glGetBufferPointervARB,
         FEnum_glBufferData,
-        FEnum_glDrawRangeElementsEXT,
     ] {
         assert_eq!(function_words(f), u32::MAX);
     }
@@ -1085,4 +1084,43 @@ fn buffer_object_records_and_the_buffer_draw_have_exact_shapes() {
     let mut bad = a;
     bad[0] = GL_POLYGON + 1;
     assert_eq!(validate(draw, &bad, &inline), DG_GL_ERROR_BATCH);
+}
+#[test]
+fn bgra_buffer_draw_is_the_buffer_draw_with_bgra_buffer_slots() {
+    let word_bytes = |a: &[u32]| a.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+    let validate = |f: u32, a: &[u32], data: &[u8]| {
+        let args = word_bytes(a);
+        unsafe { dreamgpu_gl_data_validate(f, args.as_ptr(), data.as_ptr(), data.len() as u32) }
+    };
+    let ext = FEnum_glDrawRangeElementsEXT;
+    assert_eq!(function_words(ext), DG_GL_FUNCTION_INLINE_DATA | 10);
+    let (a, data) = crate::arrays::raw::tests::bgra_packet();
+    assert_eq!(validate(ext, &a, &data), 0);
+    // The buffer draw keeps its admission: no BGRA descriptor.
+    assert_eq!(
+        validate(FEnum_glDrawRangeElements, &a, &data),
+        DG_GL_ERROR_BATCH
+    );
+    // Every buffer draw rule holds, inline indices within the client vertices included.
+    let mask = crate::arrays::raw::tests::BUFFER_MASK;
+    let i = [
+        GL_TRIANGLE_STRIP,
+        5,
+        4,
+        mask,
+        2,
+        1,
+        3,
+        GL_UNSIGNED_SHORT,
+        0,
+        0,
+    ];
+    let inline = crate::arrays::raw::tests::buffer_packet(3, &[5, 7, 6, 5]);
+    assert_eq!(validate(ext, &i, &inline), 0);
+    let outside = crate::arrays::raw::tests::buffer_packet(3, &[5, 8, 6, 5]);
+    assert_eq!(validate(ext, &i, &outside), DG_GL_ERROR_BATCH);
+    let mut bad = a;
+    bad[0] = GL_POLYGON + 1;
+    assert_eq!(validate(ext, &bad, &data), DG_GL_ERROR_BATCH);
+    assert_eq!(validate(ext, &a, &data[..184]), DG_GL_ERROR_BATCH);
 }

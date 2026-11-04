@@ -9,7 +9,8 @@
  * normalization and doubles convert to float, as native immediate mode does.
  *
  * Generic attribute arrays are client state, never aliased with the
- * conventional arrays except that array 0 is the position; arrays.cpp draws
+ * conventional arrays except that array 0 is the position; size BGRA
+ * (ARB_vertex_array_bgra) takes normalized UNSIGNED_BYTE only. arrays.cpp draws
  * them through the attribute draw, or the buffer draw when an array latched a
  * buffer object (ARB_vertex_buffer_object). Their state queries are answered here, the
  * current values (attributes 1-15; attribute 0 has none) by the host.
@@ -157,7 +158,9 @@ void APIENTRY glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GL
     JGL_ARRAY *a = Array(index);
     if (!a)
         return;
-    if (size < 1 || size > 4 || stride < 0) {
+    /* ARB_vertex_array_bgra: size BGRA, normalized UNSIGNED_BYTE only. */
+    const BOOL bgra = size == JGL_BGRA && JglVertexArrayBgraAvailable();
+    if ((!bgra && (size < 1 || size > 4)) || stride < 0) {
         JglSetError(GL_INVALID_VALUE);
         return;
     }
@@ -175,7 +178,12 @@ void APIENTRY glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GL
             JglSetError(GL_INVALID_ENUM);
             return;
     }
-    a->Size = size;
+    if (bgra && (type != GL_UNSIGNED_BYTE || normalized == GL_FALSE)) {
+        JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
+    a->Size = bgra ? 4 : size;
+    a->Bgra = bgra;
     a->Type = type;
     a->Stride = stride;
     a->Pointer = pointer;
@@ -215,7 +223,7 @@ static ULONG Get(GLuint index, GLenum pname, GLint *state, GLfloat *current) {
             *state = a->Enabled;
             return 1;
         case JGL_ATTRIB_ARRAY_SIZE:
-            *state = a->Size;
+            *state = a->Bgra ? JGL_BGRA : a->Size;
             return 1;
         case JGL_ATTRIB_ARRAY_STRIDE:
             *state = a->Stride;

@@ -672,3 +672,51 @@ fn buffer_draws_bind_each_slot_point_at_offsets_and_unbind() {
     );
     assert!(SEEN.with(|v| v.borrow().is_empty()));
 }
+#[test]
+fn bgra_buffer_slots_read_their_buffers_with_size_bgra() {
+    let mut api = attrib_api();
+    api.dg_glBindBuffer = Some(bind_buffer);
+    let (a, data) = raw::tests::bgra_packet();
+    let layout = raw::layout_buffer_draw(FEnum_glDrawRangeElementsEXT, &a, &data, true).unwrap();
+    let mut resolved = crate::buffer::Resolved {
+        slots: [0; 32],
+        element: 0,
+    };
+    for (slot, native) in [(0, 70), (1, 71), (4, 71), (17, 72)] {
+        resolved.slots[slot] = native;
+    }
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    assert_eq!(
+        unsafe { buffer_draw(&api, &a, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let ops = |op: u32| {
+        seen.iter()
+            .filter(|v| v.0 == op)
+            .map(|v| v.1)
+            .collect::<Vec<_>>()
+    };
+    // Position, colour, secondary colour, then generic 1 and 3: the BGRA
+    // buffer slots pass size BGRA with UNSIGNED_BYTE; the RGBA client section
+    // and the position keep their component counts.
+    let bgra = GL_BGRA as usize;
+    assert_eq!(ops(16), [3, bgra, bgra, bgra, 4]);
+    let ubyte = GL_UNSIGNED_BYTE as usize;
+    assert_eq!(ops(15), [GL_FLOAT as usize, ubyte, ubyte, ubyte, ubyte]);
+    assert_eq!(ops(21), [1, 3]);
+    assert_eq!(ops(22), [1, 1]);
+    // Buffer slots point at their reference offsets with their strides; the
+    // client section starts five vertices before its bytes.
+    let base = data.as_ptr() as usize;
+    assert_eq!(ops(6), [8, 12, 16, 0, (base + 176).wrapping_sub(20)]);
+    assert_eq!(ops(5), [20, 20, 20, 0, 0]);
+    let binds = buffer_calls(&seen)
+        .into_iter()
+        .filter(|c| c.0 == 27)
+        .map(|c| c.2)
+        .collect::<Vec<_>>();
+    assert_eq!(binds, [70, 71, 71, 72, 0, 0, 0]);
+    assert!(seen.contains(&(7, GL_TRIANGLES as usize)));
+}

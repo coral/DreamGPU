@@ -187,6 +187,10 @@
     {
       "file": "0046-point-sprite-origin.patch",
       "sha256": "2a7318ee83b92a346e84fb378859e8af4db76904d40f5d852f2061e0ed168d2e"
+    },
+    {
+      "file": "0047-bgra-zero-attribute.patch",
+      "sha256": "44cbc32b25795df000339e8ade3678c72b45aa4f8cbf4ed87fbb994bdd357ac0"
     }
   ],
   "files": {
@@ -276,7 +280,7 @@
     },
     "wined3d/device.c": {
       "before_sha256": "0a5880a762561579c5a93c36bc32ab51f5f441e4f290f1dbbe83b8064cebf3c4",
-      "after_sha256": "d07347cecc32e562c7b9e720bab678101a168af42a6abe7de922b37670b78798"
+      "after_sha256": "4fc7519b11118ddf540988af2d8d5c3af3e8ac405ce769f611f206f427df3f85"
     },
     "wined3d/context.c": {
       "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",

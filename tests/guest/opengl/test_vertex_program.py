@@ -102,7 +102,9 @@ typedef struct {
     BOOL Enabled, Normalized;
     GLuint Buffer;
     ULONG Serial;
+    BOOL Bgra;
 } JGL_ARRAY;
+#define JGL_BGRA 0x80e1
 typedef struct {
     GLuint Name;
     ULONG Serial;
@@ -116,6 +118,7 @@ extern "C" {
 #endif
 JGL_ARRAY_STATE *JglArrays(void);
 BOOL JglVertexBufferObjectAvailable(void);
+BOOL JglVertexArrayBgraAvailable(void);
 GLfloat JglColorComponent(const BYTE *value, GLenum type);
 BOOL JglQuery(ULONG, const ULONG[3], ULONG, void *, ULONG, ULONG *);
 #ifdef __cplusplus

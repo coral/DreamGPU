@@ -23,7 +23,9 @@ typedef struct {
  * the generic attribute arrays' flag (ARB_vertex_program); conventional
  * arrays leave it zero. With ARB_vertex_buffer_object, Buffer is the
  * ARRAY_BUFFER binding latched by the pointer call (zero: client memory) and
- * Pointer its byte offset; Serial identifies the object it named then. */
+ * Pointer its byte offset; Serial identifies the object it named then. Bgra
+ * is size BGRA (ARB_vertex_array_bgra): Size 4 and Type UNSIGNED_BYTE, the
+ * bytes in B, G, R, A order; queries report BGRA as the size. */
 typedef struct {
     GLint Size, Stride;
     GLenum Type;
@@ -31,6 +33,7 @@ typedef struct {
     BOOL Enabled, Normalized;
     GLuint Buffer;
     ULONG Serial;
+    BOOL Bgra;
 } JGL_ARRAY;
 /* Stack entries borrow the same application-owned client pointers as the live
  * descriptor; snapshots never own/free array storage or copy vertex data. */
@@ -221,6 +224,10 @@ void *JglAllocate(ULONG bytes);
 void JglFree(void *memory);
 /* Reset the current context's bindings of a deleted buffer object. */
 void JglForgetBuffer(GLuint name, ULONG serial);
+/* ARB_vertex_array_bgra: size BGRA for colour, secondary colour and generic
+ * attribute arrays (arrays.cpp, attrib.cpp). */
+BOOL JglVertexArrayBgraAvailable(void);
+#define JGL_BGRA 0x80e1
 /* EXT_framebuffer_object with EXT_framebuffer_blit and EXT_packed_depth_stencil:
  * framebuffer objects of one context, renderbuffers of the share group, their
  * commands and queries (framebuffer.cpp), COLOR_ATTACHMENTn draw and read

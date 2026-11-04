@@ -9,6 +9,9 @@ pub(crate) struct Attribute {
     pub offset: usize,
     /// Generic attributes of the attribute draw only: a normalized integer type.
     pub normalized: bool,
+    /// Buffer slots of the BGRA buffer draw only: UNSIGNED_BYTE 4 read with
+    /// size BGRA (ARB_vertex_array_bgra).
+    pub bgra: bool,
 }
 pub(crate) fn layout(mask: u32, count: u32, data: &[u8]) -> Option<[Attribute; 7]> {
     layout_slots::<7>(mask, count, data)
@@ -89,15 +92,60 @@ pub(crate) fn buffer_index_bytes(kind: u32) -> Option<usize> {
         _ => None,
     }
 }
-/// The buffer draw's complete record shape (guest/include/gl-arrays.h,
-/// DgRawBufferLayout): scalar words, descriptors, references, sections, inline
-/// indices and zero padding. With `indices_checked`, every inline index must
-/// also lie within the client vertices; execution re-parses an admitted record
-/// without repeating that scan.
+/// The buffer draw (DrawRangeElements) alone.
+#[cfg(test)]
 pub(crate) fn layout_buffer(
     a: &[u32; 10],
     data: &[u8],
     indices_checked: bool,
+) -> Option<BufferLayout> {
+    layout_buffer_of(a, data, indices_checked, false)
+}
+/// The complete record shape of the buffer draw (`function`
+/// DrawRangeElements, guest/include/gl-arrays.h DgRawBufferLayout) or the
+/// BGRA buffer draw (DrawRangeElementsEXT, DgRawBufferLayoutOf with bgra),
+/// whose buffer slots may also be BGRA colours and generic attributes:
+/// scalar words, descriptors, references, sections, inline indices and zero
+/// padding. With `indices_checked`, every inline index must also lie within
+/// the client vertices; execution re-parses an admitted record without
+/// repeating that scan.
+pub(crate) fn layout_buffer_draw(
+    function: u32,
+    a: &[u32; 10],
+    data: &[u8],
+    indices_checked: bool,
+) -> Option<BufferLayout> {
+    layout_buffer_of(
+        a,
+        data,
+        indices_checked,
+        function == FEnum_glDrawRangeElementsEXT,
+    )
+}
+/// A BGRA buffer slot's descriptor (DgRawBgraDescriptor): colour or secondary
+/// colour UNSIGNED_BYTE 4, or a normalized generic UNSIGNED_BYTE 4.
+fn bgra_attribute(slot: usize, descriptor: u32) -> Option<Attribute> {
+    let base = GL_UNSIGNED_BYTE | (4 << 16) | DG_GL_ARRAY_BGRA;
+    let generic = slot >= 16;
+    let valid = if generic {
+        descriptor == base | DG_GL_ATTRIB_NORMALIZED
+    } else {
+        matches!(slot, 1 | 4) && descriptor == base
+    };
+    valid.then_some(Attribute {
+        kind: GL_UNSIGNED_BYTE,
+        size: 4,
+        unit: 1,
+        normalized: generic,
+        bgra: true,
+        ..Attribute::default()
+    })
+}
+fn layout_buffer_of(
+    a: &[u32; 10],
+    data: &[u8],
+    indices_checked: bool,
+    bgra: bool,
 ) -> Option<BufferLayout> {
     let [mode, base, count, mask, generic, buffered, vertices, kind, element, element_offset] = *a;
     let enabled = (mask & DG_GL_ARRAY_EXT_MASK) | (generic << 16);
@@ -157,13 +205,19 @@ pub(crate) fn layout_buffer(
             }
             continue;
         }
+        let buffer = buffered & (1 << slot) != 0;
         let attribute = if slot < 16 {
-            conventional(slot, descriptor)?
+            conventional(slot, descriptor)
         } else {
-            generic_attribute(descriptor)?
-        };
+            generic_attribute(descriptor)
+        }
+        .or_else(|| {
+            (bgra && buffer)
+                .then(|| bgra_attribute(slot, descriptor))
+                .flatten()
+        })?;
         layout.slots[slot] = attribute;
-        if buffered & (1 << slot) != 0 {
+        if buffer {
             let r = Reference {
                 name: word(at)?,
                 offset: word(at + 4)?,
@@ -631,6 +685,165 @@ pub(crate) mod tests {
             bad[word] = 1;
             assert!(layout_buffer(&bad, &solo, true).is_none(), "{word}");
         }
+    }
+    /// A BGRA buffer draw of 3 vertices from vertex 5: position (FLOAT 3) from
+    /// buffer 4 at 8, stride 20; colour and secondary colour BGRA from buffer
+    /// 5 at 12 and 16, stride 20; generic 1 BGRA (normalized) from tight
+    /// buffer 6; generic 3 an ordinary UNSIGNED_BYTE 4 normalized client
+    /// section.
+    pub(crate) fn bgra_packet() -> ([u32; 10], Vec<u8>) {
+        let bgra = GL_UNSIGNED_BYTE | (4 << 16) | DG_GL_ARRAY_BGRA;
+        let mut data = vec![0u8; 128];
+        for (slot, descriptor) in [
+            (0, GL_FLOAT | (3 << 16)),
+            (1, bgra),
+            (4, bgra),
+            (17, bgra | DG_GL_ATTRIB_NORMALIZED),
+            (19, GL_UNSIGNED_BYTE | (4 << 16) | DG_GL_ATTRIB_NORMALIZED),
+        ] {
+            data[slot * 4..slot * 4 + 4].copy_from_slice(&descriptor.to_le_bytes());
+        }
+        for word in [4u32, 8, 20, 5, 12, 20, 5, 16, 20, 6, 0, 0] {
+            data.extend_from_slice(&word.to_le_bytes());
+        }
+        data.extend((0..12u8).map(|v| v | 0x80));
+        let mask =
+            DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR | DG_GL_ARRAY_SECONDARY;
+        let a = [
+            GL_TRIANGLES,
+            5,
+            3,
+            mask,
+            1 << 1 | 1 << 3,
+            1 | 1 << 1 | 1 << 4 | 1 << 17,
+            3,
+            0,
+            0,
+            0,
+        ];
+        (a, data)
+    }
+    #[test]
+    fn bgra_buffer_draws_admit_bgra_buffer_slots_alone() {
+        let (a, data) = bgra_packet();
+        let ext = FEnum_glDrawRangeElementsEXT;
+        let l = layout_buffer_draw(ext, &a, &data, true).unwrap();
+        assert_eq!(data.len(), 188);
+        for slot in [1, 4, 17] {
+            let s = l.slots[slot];
+            assert!(s.bgra, "{slot}");
+            assert_eq!((s.kind, s.size, s.unit), (GL_UNSIGNED_BYTE, 4, 1), "{slot}");
+        }
+        assert!(l.slots[17].normalized && !l.slots[1].normalized && !l.slots[4].normalized);
+        assert!(!l.slots[0].bgra && !l.slots[19].bgra && l.slots[19].normalized);
+        assert_eq!(l.slots[19].offset, 176);
+        assert_eq!(
+            [1, 4, 17].map(|slot| l.references[slot]),
+            [
+                Reference {
+                    name: 5,
+                    offset: 12,
+                    stride: 20
+                },
+                Reference {
+                    name: 5,
+                    offset: 16,
+                    stride: 20
+                },
+                Reference {
+                    name: 6,
+                    offset: 0,
+                    stride: 0
+                }
+            ]
+        );
+        // The buffer draw and every older layout keep rejecting the flag.
+        assert!(layout_buffer(&a, &data, true).is_none());
+        assert!(layout_buffer_draw(FEnum_glDrawRangeElements, &a, &data, true).is_none());
+        // Ordinary buffer draws are BGRA buffer draws as well, under the same rules.
+        let plain = buffer_packet(3, &[5, 7, 6, 5]);
+        let i = [
+            GL_TRIANGLE_STRIP,
+            5,
+            4,
+            BUFFER_MASK,
+            2,
+            1,
+            3,
+            GL_UNSIGNED_SHORT,
+            0,
+            0,
+        ];
+        assert!(layout_buffer_draw(ext, &i, &plain, true).is_some());
+        let outside = buffer_packet(3, &[5, 8, 6, 5]);
+        assert!(layout_buffer_draw(ext, &i, &outside, true).is_none());
+        let put = |slot: usize, descriptor: u32| {
+            let mut bad = data.clone();
+            bad[slot * 4..slot * 4 + 4].copy_from_slice(&descriptor.to_le_bytes());
+            bad
+        };
+        let bgra = GL_UNSIGNED_BYTE | (4 << 16) | DG_GL_ARRAY_BGRA;
+        // Exactly UNSIGNED_BYTE 4, normalized for a generic attribute, no
+        // other bit; never a position (or any other conventional role).
+        for (slot, descriptor) in [
+            (1, GL_UNSIGNED_BYTE | (3 << 16) | DG_GL_ARRAY_BGRA),
+            (1, GL_FLOAT | (4 << 16) | DG_GL_ARRAY_BGRA),
+            (1, GL_BYTE | (4 << 16) | DG_GL_ARRAY_BGRA),
+            (1, bgra | DG_GL_ATTRIB_NORMALIZED),
+            (1, bgra | 1 << 26),
+            (4, GL_UNSIGNED_BYTE | (3 << 16) | DG_GL_ARRAY_BGRA),
+            (17, bgra),
+            (
+                17,
+                GL_UNSIGNED_SHORT | (4 << 16) | DG_GL_ARRAY_BGRA | DG_GL_ATTRIB_NORMALIZED,
+            ),
+            (
+                17,
+                GL_UNSIGNED_BYTE | (3 << 16) | DG_GL_ARRAY_BGRA | DG_GL_ATTRIB_NORMALIZED,
+            ),
+            (0, bgra),
+        ] {
+            assert!(
+                layout_buffer_draw(ext, &a, &put(slot, descriptor), true).is_none(),
+                "{slot} {descriptor:#x}"
+            );
+        }
+        // Normal, texture coordinate, unit and fog slots never take BGRA.
+        for slot in [2usize, 3, 9, 14] {
+            let mut b = a;
+            b[3] |= 1 << slot;
+            b[5] |= 1 << slot;
+            let mut bad = put(slot, bgra);
+            let references = 128 + 12 * (1 + [1, 4].iter().filter(|&&s| s < slot).count());
+            bad.splice(
+                references..references,
+                [7u32, 0, 0].map(u32::to_le_bytes).concat(),
+            );
+            assert!(layout_buffer_draw(ext, &b, &bad, true).is_none(), "{slot}");
+            // The same slot with its own descriptor is admitted.
+            let own = if slot == 2 {
+                GL_FLOAT | (3 << 16)
+            } else {
+                GL_FLOAT | (1 << 16)
+            };
+            let good = {
+                let mut g = bad.clone();
+                g[slot * 4..slot * 4 + 4].copy_from_slice(&own.to_le_bytes());
+                g
+            };
+            assert!(layout_buffer_draw(ext, &b, &good, true).is_some(), "{slot}");
+        }
+        // A client section is always RGBA: the flag needs a buffer slot.
+        let mut b = a;
+        b[5] &= !(1 << 17);
+        let mut client = data.clone();
+        client.drain(164..176);
+        client.splice(164..164, [0u8; 12]);
+        assert!(layout_buffer_draw(ext, &b, &client, true).is_none());
+        client[68..72].copy_from_slice(
+            &(GL_UNSIGNED_BYTE | (4 << 16) | DG_GL_ATTRIB_NORMALIZED).to_le_bytes(),
+        );
+        assert!(layout_buffer_draw(ext, &b, &client, true).is_some());
     }
     fn generic_descriptor(descriptor: u32) -> Option<Attribute> {
         generic_attribute(descriptor)

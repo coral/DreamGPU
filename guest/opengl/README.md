@@ -397,6 +397,26 @@ cannot be read back. Without the capability the exports fail locally with
 stays the local `GL_INVALID_ENUM` it was. `tests/guest/opengl/test_framebuffer_object.py`
 covers the contract.
 
+### ARB_vertex_array_bgra
+
+`DG_CAP_GL_VERTEX_ARRAY_BGRA` adds `GL_ARB_vertex_array_bgra`, last in the
+extension string, and no export: `GL_BGRA` becomes a size of `ColorPointer`,
+`SecondaryColorPointerEXT` and `VertexAttribPointerARB`. Only UNSIGNED_BYTE is
+accepted (any other valid type is `GL_INVALID_OPERATION`, as is a generic BGRA
+array that is not normalized); every other array keeps BGRA an invalid size
+(`GL_INVALID_VALUE`), as does every array without the capability. The size
+queries (`COLOR_ARRAY_SIZE`, `SECONDARY_COLOR_ARRAY_SIZE`,
+`VERTEX_ATTRIB_ARRAY_SIZE`) answer `GL_BGRA`; `CLIENT_VERTEX_ARRAY_BIT` saves
+it and `InterleavedArrays` defines an ordinary colour array. Client memory is
+reordered while it is packed: a BGRA colour or generic attribute travels as an
+RGBA section, a BGRA secondary colour as the RGB its slot admits, so client
+draws, display lists and buffer arrays resolved into their copies send exactly
+the records RGBA data would. ArrayElement reads B, G, R, A. A draw that reads a
+BGRA array from a buffer object uses the BGRA buffer draw record (function
+`DrawRangeElementsEXT`), the buffer draw with `DG_GL_ARRAY_BGRA` on those
+buffer slots; a draw without one keeps `DrawRangeElements`.
+`tests/guest/opengl/test_vertex_array_bgra.py` covers the contract.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

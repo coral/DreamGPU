@@ -127,14 +127,22 @@ static inline unsigned DgBufferIndexBytes(unsigned type) {
            : type == 0x1405 ? 4
                             : (unsigned)-1;
 }
-/* The buffer draw (DG_CAP_GL_VERTEX_BUFFER_OBJECT): a[0..9] are its scalar
- * words, descriptors the thirty-two attribute draw descriptors and references
- * the packed (buffer, offset, stride) words of its buffer slots in slot order.
+/* A BGRA buffer slot's descriptor (DG_CAP_GL_VERTEX_ARRAY_BGRA): colour or
+ * secondary colour UNSIGNED_BYTE 4, or a normalized generic UNSIGNED_BYTE 4. */
+static inline int DgRawBgraDescriptor(unsigned slot, unsigned d) {
+    const unsigned base = 0x1401 | (4U << 16) | DG_GL_ARRAY_BGRA;
+    return slot >= DG_GL_ARRAY_EXT_SLOTS ? d == (base | DG_GL_ATTRIB_NORMALIZED)
+                                         : (slot == 1 || slot == 4) && d == base;
+}
+/* The buffer draw (DG_CAP_GL_VERTEX_BUFFER_OBJECT), or with bgra the BGRA
+ * buffer draw (DG_CAP_GL_VERTEX_ARRAY_BGRA): a[0..9] are its scalar words,
+ * descriptors the thirty-two attribute draw descriptors and references the
+ * packed (buffer, offset, stride) words of its buffer slots in slot order.
  * Computes each client section's payload offset (zero for other slots), the
  * inline index offset (zero without inline indices) and the padded length. */
-static inline int DgRawBufferLayout(const unsigned *a, const unsigned *descriptors,
-                                    const unsigned *references, unsigned *offsets,
-                                    unsigned *indices, unsigned *length) {
+static inline int DgRawBufferLayoutOf(const unsigned *a, const unsigned *descriptors,
+                                      const unsigned *references, unsigned *offsets,
+                                      unsigned *indices, unsigned *length, int bgra) {
     const unsigned mask = a[3], generic = a[4], buffered = a[5], vertices = a[6];
     const unsigned enabled = (mask & DG_GL_ARRAY_EXT_MASK) | (generic << DG_GL_ARRAY_EXT_SLOTS);
     const unsigned client = enabled & ~buffered, index = DgBufferIndexBytes(a[7]);
@@ -165,7 +173,8 @@ static inline int DgRawBufferLayout(const unsigned *a, const unsigned *descripto
                 return 0;
             continue;
         }
-        if (!(slot >= DG_GL_ARRAY_EXT_SLOTS ? DgRawAttribDescriptor(d) : DgRawArraySlot(slot, d)))
+        if (!(slot >= DG_GL_ARRAY_EXT_SLOTS ? DgRawAttribDescriptor(d) : DgRawArraySlot(slot, d)) &&
+            !(bgra && ((buffered >> slot) & 1) && DgRawBgraDescriptor(slot, d)))
             return 0;
         if ((buffered >> slot) & 1) {
             const unsigned unit = DgArrayComponentBytes(d & 65535), *r = references + 3 * n++;
@@ -195,5 +204,10 @@ static inline int DgRawBufferLayout(const unsigned *a, const unsigned *descripto
     }
     *length = (at + 3) & ~3U;
     return 1;
+}
+static inline int DgRawBufferLayout(const unsigned *a, const unsigned *descriptors,
+                                    const unsigned *references, unsigned *offsets,
+                                    unsigned *indices, unsigned *length) {
+    return DgRawBufferLayoutOf(a, descriptors, references, offsets, indices, length, 0);
 }
 #endif

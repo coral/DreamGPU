@@ -2,7 +2,9 @@
  * GL 1.1 client arrays, plus negotiated per-unit texture coordinates, the
  * EXT_fog_coord array and ARB_vertex_program generic attribute arrays (state in
  * attrib.cpp). Only guest-local descriptors retain client pointers; immutable
- * draw packets contain packed vertices, never an address. */
+ * draw packets contain packed vertices, never an address. ARB_vertex_array_bgra
+ * arrays are reordered to RGBA while they are packed; only buffer slots of the
+ * BGRA buffer draw reach the host as BGRA. */
 #include "internal.h"
 #include "gl-arrays.h"
 #include "buffers.h"
@@ -57,11 +59,15 @@ static void Pointer(ULONG index, GLint size, GLenum type, GLsizei stride, const 
     JGL_ARRAY *a;
     if (!JglReady())
         return;
+    /* ARB_vertex_array_bgra: size BGRA for colours and secondary colours;
+     * any other array keeps it an invalid size. */
+    const BOOL bgra =
+        size == JGL_BGRA && (index == 1 || index == 4) && JglVertexArrayBgraAvailable();
     if (index == 4 && !JglSupportsSecondary()) {
         JglSetError(GL_INVALID_OPERATION);
         return;
     }
-    if (index == 4 && size != 3) {
+    if (index == 4 && size != 3 && !bgra) {
         JglSetError(GL_INVALID_VALUE);
         return;
     }
@@ -76,7 +82,7 @@ static void Pointer(ULONG index, GLint size, GLenum type, GLsizei stride, const 
             return;
         }
     }
-    if (stride < 0 || size < (index == 0 ? 2 : index == 1 ? 3 : 1) || size > 4) {
+    if (stride < 0 || (!bgra && (size < (index == 0 ? 2 : index == 1 ? 3 : 1) || size > 4))) {
         JglSetError(GL_INVALID_VALUE);
         return;
     }
@@ -95,8 +101,14 @@ static void Pointer(ULONG index, GLint size, GLenum type, GLsizei stride, const 
         JglSetError(GL_INVALID_ENUM);
         return;
     }
+    /* A valid colour type other than UNSIGNED_BYTE cannot be BGRA. */
+    if (bgra && type != GL_UNSIGNED_BYTE) {
+        JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
     a = &JglArrays()->Attribute[index == 3 ? TextureSlot(JglArrays()) : index];
-    a->Size = size;
+    a->Size = bgra ? 4 : size;
+    a->Bgra = bgra;
     a->Type = type;
     a->Stride = stride;
     a->Pointer = pointer;
@@ -250,7 +262,9 @@ BOOL JglArrayQuery(GLenum pname, GLint *value) {
             GET(GL_VERTEX_ARRAY_SIZE, 0, Size);
             GET(GL_VERTEX_ARRAY_TYPE, 0, Type);
             GET(GL_VERTEX_ARRAY_STRIDE, 0, Stride);
-            GET(GL_COLOR_ARRAY_SIZE, 1, Size);
+        case GL_COLOR_ARRAY_SIZE:
+            *value = state->Attribute[1].Bgra ? JGL_BGRA : state->Attribute[1].Size;
+            return TRUE;
             GET(GL_COLOR_ARRAY_TYPE, 1, Type);
             GET(GL_COLOR_ARRAY_STRIDE, 1, Stride);
             GET(GL_NORMAL_ARRAY_TYPE, 2, Type);
@@ -268,7 +282,8 @@ BOOL JglArrayQuery(GLenum pname, GLint *value) {
         case 0x845c:
             if (!JglSupportsSecondary())
                 return FALSE;
-            *value = pname == 0x845a   ? state->Attribute[4].Size
+            *value = pname == 0x845a
+                         ? (state->Attribute[4].Bgra ? JGL_BGRA : state->Attribute[4].Size)
                      : pname == 0x845b ? (GLint)state->Attribute[4].Type
                                        : state->Attribute[4].Stride;
             return TRUE;
@@ -393,6 +408,10 @@ static GLdouble IndexComponent(const BYTE *p, GLenum type) {
 }
 /* A buffer array's element range up to index `high` lies within its object. */
 static BOOL BufferRange(const JGL_ARRAY *a, const JGL_BUFFER *b, ULONG high);
+/* The memory position of RGBA component n: BGRA exchanges red and blue. */
+static GLint BgraComponent(const JGL_ARRAY *a, GLint n) {
+    return a->Bgra && !(n & 1) ? 2 - n : n;
+}
 void JglArrayElement(GLint index) {
     // ArrayElement is legal inside Begin/End; JglReady intentionally is not.
     JGL_ARRAY_STATE *state = JglArrays();
@@ -461,7 +480,7 @@ void JglArrayElement(GLint index) {
         const BYTE *p = (const BYTE *)a->Pointer + (ULONG_PTR)(ULONG)index * stride;
         generic[i][3] = 1.0f;
         for (GLint n = 0; n < a->Size; ++n)
-            generic[i][n] = Component(p + n * unit, a->Type, a->Normalized);
+            generic[i][n] = Component(p + BgraComponent(a, n) * unit, a->Type, a->Normalized);
     }
     for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i) {
         const JGL_ARRAY *a = &attribute[i];
@@ -472,7 +491,8 @@ void JglArrayElement(GLint index) {
         const BYTE *p = (const BYTE *)a->Pointer + (ULONG_PTR)(ULONG)index * stride;
         values[i][3] = 1.0f;
         for (GLint n = 0; n < a->Size; ++n)
-            values[i][n] = Component(p + n * unit, a->Type, i == 1 || i == 2 || i == 4);
+            values[i][n] =
+                Component(p + BgraComponent(a, n) * unit, a->Type, i == 1 || i == 2 || i == 4);
     }
     GLdouble color_index = 0;
     ULONG edge = 0;
@@ -594,6 +614,7 @@ void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
         if (!a.Enabled)
             continue;
         a.Size = sizes[i];
+        a.Bgra = FALSE;
         a.Type = i == 1 ? layout.color_type : GL_FLOAT;
         a.Stride = stride ? stride : layout.bytes;
         a.Pointer = (const void *)((ULONG_PTR)pointer + offsets[i]);
@@ -614,6 +635,11 @@ static GLenum ArrayWireType(ULONG index, const JGL_ARRAY *a) {
         (a->Type == GL_BYTE || a->Type == GL_SHORT || a->Type == GL_INT))
         return GL_FLOAT;
     return a->Type;
+}
+/* Components of a client section: a BGRA secondary colour travels as the RGB
+ * its slot admits, every other array as its size. */
+static GLint ArrayWireSize(ULONG index, const JGL_ARRAY *a) {
+    return a->Bgra && index == 4 ? 3 : a->Size;
 }
 /* Seven descriptors (DrawArrays) unless a unit 1-7 or the fog coordinate
  * array is enabled; then sixteen (DrawArraysEXT), with reserved slot 15 zero.
@@ -648,12 +674,28 @@ static ULONG CaptureSections(const RawCapture *c, BYTE *out, ULONG end) {
             continue;
         ULONG unit = TypeBytes(a->Type);
         ULONG input_bytes = unit * a->Size;
-        ULONG bytes = TypeBytes(ArrayWireType(i, a)) * a->Size;
+        ULONG bytes = TypeBytes(ArrayWireType(i, a)) * ArrayWireSize(i, a);
         ULONG stride = a->Stride ? (ULONG)a->Stride : input_bytes;
         BYTE *destination = out + c->offsets[i];
         if (c->offsets[i] != end)
             ZeroMemory(out + end, c->offsets[i] - end);
-        if (ArrayWireType(i, a) != a->Type) {
+        if (a->Bgra) {
+            /* BGRA bytes become the section's R, G, B (and A). */
+            for (ULONG v = 0; v < c->count; ++v) {
+                ULONG offset = c->fan ? (v == 0   ? 0
+                                         : v == 1 ? c->at - 1
+                                                  : c->at + v - 2)
+                                      : c->at + v;
+                ULONG index = Index(c->indices, c->index_size, c->first, offset);
+                const BYTE *source = (const BYTE *)a->Pointer + (ULONG_PTR)index * stride;
+                BYTE *vertex = destination + v * bytes;
+                vertex[0] = source[2];
+                vertex[1] = source[1];
+                vertex[2] = source[0];
+                if (bytes == 4)
+                    vertex[3] = source[3];
+            }
+        } else if (ArrayWireType(i, a) != a->Type) {
             for (ULONG v = 0; v < c->count; ++v) {
                 ULONG offset = c->fan ? (v == 0   ? 0
                                          : v == 1 ? c->at - 1
@@ -753,11 +795,11 @@ static void ClientDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         if (!a)
             continue;
         const GLenum type = ArrayWireType(i, a);
-        capture.descriptors[i] = type | ((ULONG)a->Size << 16);
+        capture.descriptors[i] = type | ((ULONG)ArrayWireSize(i, a) << 16);
         /* GL ignores normalization of floating-point generic arrays. */
         if (i >= DG_GL_ARRAY_EXT_SLOTS && a->Normalized && type != GL_FLOAT && type != GL_DOUBLE)
             capture.descriptors[i] |= DG_GL_ATTRIB_NORMALIZED;
-        vertex_bytes += TypeBytes(type) * a->Size;
+        vertex_bytes += TypeBytes(type) * ArrayWireSize(i, a);
     }
     ULONG limit = JglMaxDataBytes(words);
     capacity = limit > capture.slots * 4 ? (limit - capture.slots * 4) / vertex_bytes : 0;
@@ -950,6 +992,8 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
     if (record) {
         BufferCapture b = {};
         RawCapture *c = &b.raw;
+        /* A BGRA buffer slot needs the BGRA buffer draw (ARB_vertex_array_bgra). */
+        BOOL bgra = FALSE;
         c->arrays = arrays;
         c->mask = (client & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW;
         c->generic = client >> DG_GL_ARRAY_EXT_SLOTS;
@@ -963,10 +1007,15 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
             if (!a)
                 continue;
             const GLenum type = buffered & (1U << i) ? a->Type : ArrayWireType(i, a);
-            c->descriptors[i] = type | ((ULONG)a->Size << 16);
+            const GLint size = buffered & (1U << i) ? a->Size : ArrayWireSize(i, a);
+            c->descriptors[i] = type | ((ULONG)size << 16);
             if (i >= DG_GL_ARRAY_EXT_SLOTS && a->Normalized && type != GL_FLOAT &&
                 type != GL_DOUBLE)
                 c->descriptors[i] |= DG_GL_ATTRIB_NORMALIZED;
+            if ((buffered & (1U << i)) && a->Bgra) {
+                c->descriptors[i] |= DG_GL_ARRAY_BGRA;
+                bgra = TRUE;
+            }
             if (buffered & (1U << i)) {
                 b.references[references++] = a->Buffer;
                 b.references[references++] = (unsigned)(ULONG_PTR)a->Pointer;
@@ -991,12 +1040,13 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         unsigned words[10], length = 0;
         for (i = 0; i < 10; ++i)
             words[i] = b.args[i];
-        if (DgRawBufferLayout(words, c->descriptors, b.references, c->offsets, &b.index_offset,
-                              &length) &&
+        if (DgRawBufferLayoutOf(words, c->descriptors, b.references, c->offsets, &b.index_offset,
+                                &length, bgra) &&
             length <= JglMaxDataBytes(10)) {
             c->bytes = length;
             JglUnlockShared();
-            JglCaptureData(FEnum_glDrawRangeElements, b.args, 10, length, CaptureBuffer, &b);
+            JglCaptureData(bgra ? FEnum_glDrawRangeElementsEXT : FEnum_glDrawRangeElements, b.args,
+                           10, length, CaptureBuffer, &b);
             return;
         }
     }
