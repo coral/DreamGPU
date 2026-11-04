@@ -513,7 +513,14 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
   fragment program. The same trace showed its specular-alpha vertex fog
   falling back to Wine's per-vertex software emulation on nearly every draw.
   On the m28 package (framebuffer objects, BGRA vertex arrays) its demo runs
-  with correct colours and lighting.
+  with correct colours and lighting. A logging `wined3d.dll` built from m28's
+  Wine sources (app-local, `WINEDEBUG=trace+d3d_perf`, about a minute of play)
+  logs no "manual fog coordinates" emulation (21979 before) and no
+  drawStridedSlow ("slow vertex array code") at all: every draw uses arrays.
+  It does log 258 overlapping blits within one surface taking the CPU path
+  (Wine 0045 under ORM_FBO).
+- **Diablo II 1.12** on m28 (default video mode, Win2000): menu, hero select
+  and the Rogue Encampment render with HUD, lighting and NPCs.
 - **SimCity 3000** (DirectDraw, Win2000): reaches its menu and renders a
   starter town's city view, UI and ticker after Wine patch 0032. The same holds
   on the m28 package, whose DirectDraw fills and blits go through framebuffer
