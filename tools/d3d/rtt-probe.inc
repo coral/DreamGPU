@@ -33,7 +33,8 @@
  * Returning to the backbuffer restores its own depth-stencil surface (this
  * device has none). Target textures of both formats, 1024-texel textures and
  * D24S8 or D16 depth are required; unclaimed plain surfaces are recorded and
- * skipped.
+ * skipped. Without framebuffer objects (no render target in the other desktop
+ * depth, see Run) the whole stage is recorded and skipped.
  */
 #if DG_D3D_VERSION == 8
 typedef D3DVIEWPORT8 TargetViewport;
@@ -809,6 +810,26 @@ static void Run(D3D *d3d, Device *dev, Surface *target) {
     if (!Check(caps.MaxTextureWidth >= (DWORD)Big && caps.MaxTextureHeight >= (DWORD)Big,
                "FAIL render target textures need 1024 texels", caps.MaxTextureWidth))
         return;
+    /* Without framebuffer objects (an older host) WineD3D renders offscreen
+     * targets through the backbuffer, so nothing beyond the window can be
+     * right, and no D3D cap says which mode is in use. Only framebuffer
+     * objects let a target differ from the desktop format: a render-target
+     * surface in the other depth (R5G6B5 on a 32-bit desktop, X8R8G8B8 on a
+     * 16-bit one) is claimed with them and not without. Record and skip. */
+    D3DDISPLAYMODE mode = {};
+    if (!HR(D3D_CALL(GetAdapterDisplayMode, d3d, D3DADAPTER_DEFAULT, &mode),
+            "FAIL render target adapter display mode"))
+        return;
+    const D3DFORMAT other = mode.Format == D3DFMT_R5G6B5 ? D3DFMT_X8R8G8B8 : D3DFMT_R5G6B5;
+    const HRESULT direct = D3D_CALL(CheckDeviceFormat, d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+                                    mode.Format, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, other);
+    Number("desktop format", (DWORD)mode.Format);
+    Number("render target in the other desktop depth (CheckDeviceFormat)", (DWORD)direct);
+    if (FAILED(direct)) {
+        Log("SKIP render targets beyond the window: offscreen targets render through the "
+            "backbuffer (no framebuffer objects)");
+        return;
+    }
     backbuffer = target;
     original_depth = NULL;
     const HRESULT depth = DEVICE(GetDepthStencilSurface, dev, &original_depth);
