@@ -428,8 +428,12 @@ issues no DirectDraw call at all after reactivation until the modal closes. The
 same sequence is **pixel-identical** with Microsoft's DirectDraw on DreamGPU and
 on a stock QEMU Cirrus adapter with Microsoft's driver and DirectDraw. Those
 artifacts are therefore the game's own Windows 2000 behavior, not a DreamGPU
-defect; do not "fix" them with blanket invalidation. A completed shot is still
-unverified. Evidence: `target/golf-coherence-linux/verification.json`.
+defect; do not "fix" them with blanket invalidation. Evidence:
+`target/golf-coherence-linux/verification.json`. On the m28 package (framebuffer
+objects, BGRA vertex arrays; disc 1 inserted through QMP) a Quick Start round
+completes a shot: three clicks on the golfer play the animated swing, the
+result panel reports the ball in play, and after Continue the stroke counter
+shows E (1) with the full toolbar drawn.
 
 Linux multitexture result (2026-11-03, patches 0001–0027, frontend with
 GL1.2 packed uploads, multitexture/fixed-state host): a fresh Win2000 clone
