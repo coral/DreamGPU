@@ -188,6 +188,31 @@ fn immutable_compile_execute_and_immediate_commands() {
     f.call(2);
     assert_eq!(f.h.calls.len(), 4);
 }
+/// ARB_occlusion_query and NV_fence: BeginQuery, EndQuery and SetFenceNV
+/// compile; query and fence deletion executes immediately.
+#[test]
+fn query_and_fence_commands_compile_but_deletion_executes() {
+    let mut f = Fixture::new();
+    f.start(3, GL_COMPILE);
+    f.command(FEnum_glBeginQuery, &[GL_SAMPLES_PASSED, 5], &[]);
+    f.command(FEnum_glEndQuery, &[GL_SAMPLES_PASSED], &[]);
+    f.command(FEnum_glSetFenceNV, &[6, 0x84f2], &[]);
+    assert!(f.h.calls.is_empty());
+    f.command(FEnum_glDeleteQueries, &[1], &5u32.to_le_bytes());
+    f.command(FEnum_glDeleteFencesNV, &[1], &6u32.to_le_bytes());
+    let functions = |f: &Fixture| f.h.calls.iter().map(|c| c.0).collect::<Vec<_>>();
+    assert_eq!(
+        functions(&f),
+        [FEnum_glDeleteQueries, FEnum_glDeleteFencesNV]
+    );
+    f.end();
+    f.call(3);
+    assert_eq!(
+        functions(&f)[2..],
+        [FEnum_glBeginQuery, FEnum_glEndQuery, FEnum_glSetFenceNV]
+    );
+    assert_eq!(word(&f.h.calls[2].1, 1), 5);
+}
 #[test]
 fn failed_replacement_preserves_old_and_credit() {
     let mut f = Fixture::new();

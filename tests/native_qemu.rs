@@ -26,6 +26,8 @@ mod fragment_program;
 mod framebuffer_object;
 #[path = "native_qemu/multitexture.rs"]
 mod multitexture;
+#[path = "native_qemu/occlusion_query.rs"]
+mod occlusion_query;
 #[path = "native_qemu/pixel_image.rs"]
 mod pixel_image;
 #[path = "native_qemu/pixels.rs"]

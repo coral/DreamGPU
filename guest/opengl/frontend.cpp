@@ -53,6 +53,7 @@ typedef struct {
     JGL_UNPACK Unpack, Pack;
     JGL_ARRAY_STATE Arrays;
     JGL_FRAMEBUFFER_STATE Framebuffer;
+    JGL_QUERY_STATE Queries;
     JGL_NAMES *Names;
     JGL_STATE_CACHE State;
     void *LargeQuery;
@@ -123,6 +124,9 @@ BOOL JglFramebufferObjectAvailable(void) {
 BOOL JglVertexArrayBgraAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_VERTEX_ARRAY_BGRA);
 }
+BOOL JglOcclusionQueryAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_OCCLUSION_QUERY);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -150,16 +154,17 @@ BOOL JglVertexArrayBgraAvailable(void) {
 #define JGL_FRAMEBUFFER_OBJECT_EXTENSIONS                                                          \
     "GL_EXT_framebuffer_object GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil"
 #define JGL_VERTEX_ARRAY_BGRA_EXTENSIONS "GL_ARB_vertex_array_bgra"
+#define JGL_OCCLUSION_QUERY_EXTENSIONS "GL_ARB_occlusion_query GL_NV_fence"
 /* Each group's terminator byte pays for one separator or the final NUL. */
-static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
-                       sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
-                       sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) +
-                       sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS) +
-                       sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
-                       sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
-                       sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) +
-                       sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
-                       sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS)];
+static char
+    Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
+               sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
+               sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) + sizeof(JGL_FOG_COORD_EXTENSIONS) +
+               sizeof(JGL_CUBE_MAP_EXTENSIONS) + sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
+               sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
+               sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) +
+               sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
+               sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS) + sizeof(JGL_OCCLUSION_QUERY_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -194,8 +199,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_FRAMEBUFFER_OBJECT_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_VERTEX_ARRAY_BGRA)
         AppendExtensions(&at, JGL_VERTEX_ARRAY_BGRA_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_OCCLUSION_QUERY)
+        AppendExtensions(&at, JGL_OCCLUSION_QUERY_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_OCCLUSION_QUERY_EXTENSIONS
 #undef JGL_VERTEX_ARRAY_BGRA_EXTENSIONS
 #undef JGL_FRAMEBUFFER_OBJECT_EXTENSIONS
 #undef JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS
@@ -620,6 +628,11 @@ void **JglSharedBuffers(void (*release)(void *)) {
 JGL_FRAMEBUFFER_STATE *JglFramebufferState(void) {
     JGL_CONTEXT *c = CurrentContext();
     return c ? &c->Framebuffer : NULL;
+}
+/* Query results and signalled fences the host reported (occlusion.cpp). */
+JGL_QUERY_STATE *JglQueryState(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    return c ? &c->Queries : NULL;
 }
 void **JglSharedRenderbuffers(void) {
     JGL_CONTEXT *c = CurrentContext();
@@ -1434,6 +1447,9 @@ static void ListEffects(JGL_CONTEXT *c) {
     if (c->Arrays.ListMode == GL_COMPILE)
         return;
     ZeroMemory(&c->State, sizeof(c->State));
+    /* A list may begin queries and set fences (ARB_occlusion_query, NV_fence):
+     * what the host reported about them may be stale. */
+    c->Queries.Results.Count = c->Queries.Fences.Count = 0;
     c->Arrays.ListAware = TRUE;
     /* Lists never bind framebuffers: with an object bound for drawing they
      * neither draw into the window nor change its draw buffer (DrawBuffer and

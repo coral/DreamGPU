@@ -2182,6 +2182,12 @@ pub const DG_GL_MAX_COLOR_ATTACHMENTS: u32 = 4;
 pub const DG_GL_MAX_RENDERBUFFER_SIZE: u32 = 4096;
 pub const DG_CAP_GL_VERTEX_ARRAY_BGRA: u32 = 67108864;
 pub const DG_GL_ARRAY_BGRA: u32 = 33554432;
+pub const DG_CAP_GL_OCCLUSION_QUERY: u32 = 134217728;
+pub const DG_GL_MAX_QUERIES: u32 = 4096;
+pub const DG_GL_QUERY_NAME_BATCH: u32 = 128;
+pub const DG_GL_QUERY_REPORTS: u32 = 63;
+pub const DG_GL_QUERY_PENDING: u32 = 1;
+pub const DG_GL_QUERY_AVAILABLE: u32 = 2;
 pub const DG_GL_VERTEX_BYTES: u32 = 64;
 pub const DG_GL_VERTEX_POSITION: u32 = 0;
 pub const DG_GL_VERTEX_COLOR: u32 = 16;
@@ -6530,6 +6536,30 @@ pub struct DreamGpuGlApi {
             arg1: ::core::ffi::c_uint,
             arg2: ::core::ffi::c_uint,
             arg3: *mut ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glGenQueries: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *mut ::core::ffi::c_uint),
+    >,
+    pub dg_glDeleteQueries: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_int, arg2: *const ::core::ffi::c_uint),
+    >,
+    pub dg_glBeginQuery: ::core::option::Option<
+        unsafe extern "C" fn(arg1: ::core::ffi::c_uint, arg2: ::core::ffi::c_uint),
+    >,
+    pub dg_glEndQuery: ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glGetQueryiv: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glGetQueryObjectuiv: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_uint,
         ),
     >,
 }

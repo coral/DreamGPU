@@ -64,7 +64,20 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glFramebufferRenderbuffer", JglFramebufferObjectAvailable},
                     {"glGetFramebufferAttachmentParameter", JglFramebufferObjectAvailable},
                     {"glGenerateMipmap", JglFramebufferObjectAvailable},
-                    {"glBlitFramebuffer", JglFramebufferObjectAvailable}};
+                    {"glBlitFramebuffer", JglFramebufferObjectAvailable},
+                    {"glGenQueries", JglOcclusionQueryAvailable},
+                    {"glDeleteQueries", JglOcclusionQueryAvailable},
+                    {"glIsQuery", JglOcclusionQueryAvailable},
+                    {"glBeginQuery", JglOcclusionQueryAvailable},
+                    {"glEndQuery", JglOcclusionQueryAvailable},
+                    {"glGetQuery", JglOcclusionQueryAvailable},
+                    {"glGenFences", JglOcclusionQueryAvailable},
+                    {"glDeleteFences", JglOcclusionQueryAvailable},
+                    {"glSetFence", JglOcclusionQueryAvailable},
+                    {"glTestFence", JglOcclusionQueryAvailable},
+                    {"glFinishFence", JglOcclusionQueryAvailable},
+                    {"glIsFence", JglOcclusionQueryAvailable},
+                    {"glGetFence", JglOcclusionQueryAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {

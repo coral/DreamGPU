@@ -320,6 +320,12 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? DG_API_GenerateMipmap : DG_API_GenerateMipmap) dg_glGenerateMipmap;
     __typeof__(1 ? DG_API_GetRenderbufferParameteriv
                  : DG_API_GetRenderbufferParameteriv) dg_glGetRenderbufferParameteriv;
+    __typeof__(1 ? glGenQueries : glGenQueries) dg_glGenQueries;
+    __typeof__(1 ? glDeleteQueries : glDeleteQueries) dg_glDeleteQueries;
+    __typeof__(1 ? glBeginQuery : glBeginQuery) dg_glBeginQuery;
+    __typeof__(1 ? glEndQuery : glEndQuery) dg_glEndQuery;
+    __typeof__(1 ? glGetQueryiv : glGetQueryiv) dg_glGetQueryiv;
+    __typeof__(1 ? glGetQueryObjectuiv : glGetQueryObjectuiv) dg_glGetQueryObjectuiv;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -472,5 +478,8 @@ typedef struct DreamGpuGlApi {
     .dg_glFramebufferTexture1D = DG_API_FramebufferTexture1D,                                       \
     .dg_glFramebufferTexture3D = DG_API_FramebufferTexture3D,                                       \
     .dg_glGenerateMipmap = DG_API_GenerateMipmap,                                                   \
-    .dg_glGetRenderbufferParameteriv = DG_API_GetRenderbufferParameteriv
+    .dg_glGetRenderbufferParameteriv = DG_API_GetRenderbufferParameteriv,                           \
+    .dg_glGenQueries = glGenQueries, .dg_glDeleteQueries = glDeleteQueries,                         \
+    .dg_glBeginQuery = glBeginQuery, .dg_glEndQuery = glEndQuery,                                   \
+    .dg_glGetQueryiv = glGetQueryiv, .dg_glGetQueryObjectuiv = glGetQueryObjectuiv
 #endif

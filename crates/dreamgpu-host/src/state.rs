@@ -122,6 +122,9 @@ pub struct ContextState {
     pub renderbuffer: *mut crate::framebuffer::Renderbuffer,
     pub window_framebuffer: u32,
     pub attrib_framebuffers: [[u32; 2]; STACK],
+    /// Rust-only query and fence state (ARB_occlusion_query, NV_fence), owned
+    /// by this context and created on first use.
+    pub queries: *mut crate::occlusion::Queries,
 }
 impl ContextState {
     /// Every unit's (2D, 1D, cube map, 3D) binding, including the active unit's.
@@ -196,6 +199,7 @@ impl ContextState {
         renderbuffer: null_mut(),
         window_framebuffer: 0,
         attrib_framebuffers: [[0; 2]; STACK],
+        queries: null_mut(),
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
@@ -355,6 +359,8 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     // Framebuffer objects reference textures and renderbuffers of the share
     // group: release them while the namespace still exists.
     unsafe { crate::framebuffer::release_context(&*memory, old.framebuffers, old.renderbuffer) };
+    // Native queries and sync objects belong to this context's native context.
+    unsafe { crate::occlusion::release(&*memory, old.queries) };
     assert!(old.attrib_depth as usize <= STACK);
     for (((saved, units), cube), volume) in old.attrib[..old.attrib_depth as usize]
         .iter()
@@ -927,6 +933,10 @@ unsafe fn scalar(
         | FEnum_glBlitFramebuffer
         | FEnum_glCopyPixels => {
             return unsafe { crate::framebuffer::call(memory, state, serial, function, args) };
+        }
+        // ARB_occlusion_query and NV_fence.
+        FEnum_glBeginQuery | FEnum_glEndQuery | FEnum_glSetFenceNV => {
+            return unsafe { crate::occlusion::call(memory, state, function, args) };
         }
         _ => return Err(DG_GL_ERROR_UNSUPPORTED),
     }

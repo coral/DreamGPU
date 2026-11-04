@@ -403,6 +403,15 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         };
         return result.map_or_else(|e| e, |()| 0);
     }
+    if matches!(function, FEnum_glDeleteQueries | FEnum_glDeleteFencesNV) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        let result = unsafe { crate::occlusion::delete(m, state, function, data) };
+        return result.map_or_else(|e| e, |()| 0);
+    }
     if matches!(
         function,
         FEnum_glDrawRangeElements | FEnum_glDrawRangeElementsEXT

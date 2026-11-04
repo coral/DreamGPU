@@ -52,6 +52,28 @@ static ULONG FunctionWords(void *context, ULONG function) {
             return DG_GL_FUNCTION_QUERY | 2;
         case 0x30e: /* GetFramebufferAttachmentParameteriv */
             return DG_GL_FUNCTION_QUERY | 3;
+        /* Occlusion queries and fences (DG_CAP_GL_OCCLUSION_QUERY): core
+         * query numbers, NV fence numbers. */
+        case 0x22:  /* BeginQuery */
+        case 0x824: /* SetFenceNV */
+            return 2;
+        case 0x21f: /* EndQuery */
+            return 1;
+        case 0x1a6: /* DeleteQueries */
+        case 0x195: /* DeleteFencesNV */
+            return DG_GL_FUNCTION_INLINE_DATA | 1;
+        case 0x2a7: /* GenQueries */
+        case 0x4d1: /* IsQuery */
+        case 0x29b: /* GenFencesNV */
+        case 0x4be: /* IsFenceNV */
+        case 0x868: /* TestFenceNV */
+        case 0x242: /* FinishFenceNV */
+            return DG_GL_FUNCTION_QUERY | 1;
+        case 0x3e9: /* GetQueryiv */
+        case 0x2fd: /* GetFenceivNV */
+            return DG_GL_FUNCTION_QUERY | 2;
+        case 0x3f1: /* GetQueryObjectuiv */
+            return DG_GL_FUNCTION_QUERY | 3;
         default:
             return (ULONG)-1;
     }
@@ -434,6 +456,72 @@ int main(void) {
         query[8] = 0x83; /* a CALL function as a QUERY */
         assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
     }
+    {
+        /* Occlusion query and fence CALL records carry exactly their words:
+         * BeginQuery, EndQuery and SetFenceNV in one batch. */
+        ULONG batch[32] = {DG_GL_CALL, 44, 0, 1, 1, 0, 0, 0, 0x22, 0x8914, 5};
+        ULONG *end = batch + 11, *fence = batch + 21;
+        end[0] = fence[0] = DG_GL_CALL;
+        end[1] = 40;
+        fence[1] = 44;
+        end[3] = end[4] = fence[3] = fence[4] = 1;
+        end[8] = 0x21f;
+        end[9] = 0x8914;
+        fence[8] = 0x824;
+        fence[9] = 3;
+        fence[10] = 0x84f2;
+        assert(DgValidateUserGl(batch, 128, 42, 7, &limits, FunctionWords, NULL));
+        assert(batch[2] == 42 && end[2] == 42 && fence[7] == 7);
+        end[1] = 44; /* EndQuery has one word */
+        assert(!DgValidateUserGl(batch, 128, 42, 7, &limits, FunctionWords, NULL));
+        end[1] = 40;
+        batch[8] = 0x1a6; /* DeleteQueries is DATA, never a CALL */
+        assert(!DgValidateUserGl(batch, 128, 42, 7, &limits, FunctionWords, NULL));
+        batch[8] = 0x23; /* BeginQueryARB is not a record: core numbers only */
+        assert(!DgValidateUserGl(batch, 128, 42, 7, &limits, FunctionWords, NULL));
+        batch[8] = 0x22;
+        assert(DgValidateUserGl(batch, 128, 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* DeleteQueries and DeleteFencesNV: a count, then names. */
+        ULONG deleted[13] = {DG_GL_DATA_CALL, 52, 0, 1, 1, 0, 0, 0, 0x1a6, 8, 2, 3, 9};
+        assert(DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[8] = 0x195;
+        assert(DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[9] = 12; /* more names than the record holds */
+        assert(!DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[9] = 8;
+        deleted[0] = DG_GL_CALL; /* a DATA function as a CALL */
+        assert(!DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* Query and fence QUERY records: one, two or three arguments (the
+         * third of GetQueryObjectuiv is the report count), alone in a batch. */
+        ULONG query[24] = {DG_GL_QUERY, 48, 0, 1, 1, 0, 0, 0, 0x3f1, 7, 0x8867, 63};
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[8] = 0x3e9; /* GetQueryiv: target, pname */
+        query[9] = 0x8914;
+        query[10] = 0x8865;
+        assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[11] = 0;
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[8] = 0x2fd; /* GetFenceivNV: fence, pname */
+        query[9] = 4;
+        query[10] = 0x84f3;
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        for (ULONG function = 0; function < 6; ++function) {
+            static const ULONG one[6] = {0x2a7, 0x4d1, 0x29b, 0x4be, 0x868, 0x242};
+            query[8] = one[function];
+            query[9] = 3;
+            query[10] = 0;
+            assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+            query[10] = 1;
+            assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        }
+        query[8] = 0x22; /* a CALL function as a QUERY */
+        query[10] = 0;
+        assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+    }
     memcpy(words, valid, sizeof(valid));
     assert(DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));
     assert(words[2] == 42 && words[7] == 7);
@@ -538,6 +626,28 @@ int main(void) {
         assert(!DgValidateGlResult(DG_GL_RESULT_STRING, sizeof("DreamGPU") - 1, 512, result));
         result[1] = 0;
         assert(!DgValidateGlResult(DG_GL_RESULT_STRING, sizeof("DreamGPU"), 512, result));
+    }
+    {
+        /* Occlusion query answers (gl.h): GetQueryObjectuiv's state, result
+         * and up to 63 (name, result) pairs fill exactly the 512 bytes the
+         * frontend offers; an error is a single zero word, as are the fence
+         * records', whose answers are otherwise two words. */
+        unsigned char result[512];
+        ULONG answer[2 + 2 * DG_GL_QUERY_REPORTS] = {DG_GL_QUERY_AVAILABLE, 0xffffffffU};
+        for (ULONG i = 2; i < 2 + 2 * DG_GL_QUERY_REPORTS; ++i)
+            answer[i] = i * 0x01010101U;
+        assert(sizeof(answer) == DG_GL_MAX_RESULT_BYTES);
+        memcpy(result, answer, sizeof(answer));
+        assert(DgValidateGlResult(DG_GL_RESULT_INT, sizeof(answer), 512, result));
+        assert(DgValidateGlResult(DG_GL_RESULT_INT, 8, 512, result));
+        assert(DgValidateGlResult(DG_GL_RESULT_INT, 4, 512, result));
+        assert(!DgValidateGlResult(DG_GL_RESULT_INT, sizeof(answer) + 4, 512, result));
+        assert(!DgValidateGlResult(DG_GL_RESULT_INT, 10, 512, result));
+        /* IsQuery and IsFenceNV: one canonical boolean. */
+        result[0] = 1;
+        assert(DgValidateGlResult(DG_GL_RESULT_BOOL, 1, 1, result));
+        result[0] = 0xff;
+        assert(!DgValidateGlResult(DG_GL_RESULT_BOOL, 1, 1, result));
     }
     puts("GL user-batch validation tests passed");
     return 0;

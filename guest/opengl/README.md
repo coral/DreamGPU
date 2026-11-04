@@ -417,6 +417,26 @@ BGRA array from a buffer object uses the BGRA buffer draw record (function
 buffer slots; a draw without one keeps `DrawRangeElements`.
 `tests/guest/opengl/test_vertex_array_bgra.py` covers the contract.
 
+### ARB_occlusion_query and NV_fence
+
+`DG_CAP_GL_OCCLUSION_QUERY` adds `GL_ARB_occlusion_query GL_NV_fence`, last in
+the extension string, and the fifteen entry points of both under their
+extension names (`occlusion.cpp`). Query and fence objects belong to one
+context and live on the host, which owns their names, the active query and
+every state-dependent error: Gen, Is and every state query are QUERY records,
+deletion a DATA record executed immediately, and `BeginQueryARB`,
+`EndQueryARB` and `SetFenceNV` CALL records compiled into display lists (their
+local errors are deferred there). A target, condition or pname the host would
+reject as malformed is a local `GL_INVALID_ENUM`. One `GetQueryObject` round
+trip answers availability and the result together and carries the results of
+earlier ended queries that completed meanwhile; the frontend keeps those and
+fences it saw signalled (64 of each per context) and answers repeated polls
+locally until the name is begun, set or deleted or a display list executes.
+`GetQueryObjectivARB` clamps counts beyond `INT_MAX`; a name that is not a
+fence makes `TestFenceNV` answer TRUE. Without the capability the exports fail
+locally with `GL_INVALID_OPERATION` and `wglGetProcAddress` hides them.
+`tests/guest/opengl/test_occlusion_query.py` covers the contract.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

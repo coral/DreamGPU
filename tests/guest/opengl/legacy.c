@@ -79,6 +79,9 @@ BOOL JglVertexBufferObjectAvailable(void) {
 BOOL JglFramebufferObjectAvailable(void) {
     return FALSE;
 }
+BOOL JglOcclusionQueryAvailable(void) {
+    return FALSE;
+}
 BOOL JglReadFramebufferBound(void) {
     return FALSE;
 }

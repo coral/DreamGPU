@@ -408,6 +408,14 @@ fn context_state_c_abi_layout() {
             + 4
             + 16 * 2 * 4
             + 4
+            + pointer
+    );
+    // Then the query and fence state (ARB_occlusion_query, NV_fence): one
+    // void * after the attribute framebuffer names.
+    assert_eq!(
+        core::mem::offset_of!(ContextState, queries),
+        (core::mem::offset_of!(ContextState, attrib_framebuffers) + 16 * 2 * 4)
+            .next_multiple_of(pointer)
     );
     // Then the framebuffer object state: four void * and the window's native
     // framebuffer, then the names saved with each attribute entry.

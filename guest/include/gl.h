@@ -273,6 +273,53 @@
  * the buffer draw admission of older kernels and hosts unchanged. */
 #define DG_CAP_GL_VERTEX_ARRAY_BGRA 0x4000000
 #define DG_GL_ARRAY_BGRA 0x02000000U
+/* Occlusion queries and fences: ARB_occlusion_query (target SAMPLES_PASSED)
+ * and NV_fence (condition ALL_COMPLETED_NV). Query and fence names and objects
+ * belong to one context and the host owns them: a query object exists from its
+ * first BeginQuery, a fence from its first SetFenceNV, of any nonzero name.
+ * Query records use the core function numbers, fence records the NV ones. None
+ * is legal inside Begin/End.
+ * CALL records, compiled into display lists as both extensions require:
+ * BeginQuery (SAMPLES_PASSED, id), EndQuery (SAMPLES_PASSED) and SetFenceNV
+ * (fence, ALL_COMPLETED_NV). DATA records, executed immediately: DeleteQueries
+ * and DeleteFencesNV (count, at most DG_GL_MAX_QUERIES, then names; zero and
+ * unknown names are ignored). QUERY records: GenQueries and GenFencesNV (count
+ * 1..DG_GL_QUERY_NAME_BATCH) return that many unused RESULT_INT names, all zero
+ * on failure; IsQuery and IsFenceNV (name) one RESULT_BOOL; GetQueryiv
+ * (SAMPLES_PASSED, CURRENT_QUERY or QUERY_COUNTER_BITS) one RESULT_INT, at most
+ * 32 bits; TestFenceNV and FinishFenceNV (fence), and GetFenceivNV (fence,
+ * FENCE_STATUS_NV or FENCE_CONDITION_NV), RESULT_INT one, then the status
+ * (FinishFenceNV after waiting) or the condition.
+ * GetQueryObjectuiv (id, QUERY_RESULT or QUERY_RESULT_AVAILABLE, reports at most
+ * DG_GL_QUERY_REPORTS) serves both pnames and both signednesses with RESULT_INT
+ * words: a state (DG_GL_QUERY_PENDING or DG_GL_QUERY_AVAILABLE; QUERY_RESULT
+ * waits for the result), the result (zero while pending; saturated at
+ * 2^32-1), then at most `reports` (name, result) pairs of other queries of the
+ * context whose last EndQuery has become available, oldest first. Each EndQuery
+ * is reported once, as the queried id or as a pair; BeginQuery or deletion of
+ * the name retires it, and the queried id is always answered. A GL error
+ * (GetQueryObjectuiv of a name that is not a query object or is active, a
+ * fence record of a name that is not a fence) answers a single zero word: the
+ * frontend leaves params unchanged and TestFenceNV returns TRUE, as NV_fence
+ * requires. Results stay asynchronous on the host: a pending answer and a
+ * pending TestFenceNV flush native GL, so every result arrives in finite time.
+ * The frontend keeps what the host reported (results, signalled fences) until
+ * the name is begun, set or deleted or a display list executes, so polling
+ * availability then the result costs one round trip and polling several ended
+ * queries usually one.
+ * Everything that depends on GL state is a GL error, never a record fault:
+ * BeginQuery of id zero or while a query is active, EndQuery without one, and
+ * GenQueries or DeleteQueries while one is active (ARB_occlusion_query, which
+ * leaves the names untouched) are INVALID_OPERATION, as are SetFenceNV of name
+ * zero and the fence records of a name that is not a fence; table or budget
+ * exhaustion is OUT_OF_MEMORY.
+ * Each object is charged against the resource budget. */
+#define DG_CAP_GL_OCCLUSION_QUERY 0x8000000
+#define DG_GL_MAX_QUERIES 4096
+#define DG_GL_QUERY_NAME_BATCH 128
+#define DG_GL_QUERY_REPORTS 63
+#define DG_GL_QUERY_PENDING 1
+#define DG_GL_QUERY_AVAILABLE 2
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

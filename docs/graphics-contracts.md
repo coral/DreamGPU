@@ -313,13 +313,51 @@ and disposable-VM acceptance cycle:
   immediate mode (D3D8/9 UP draws, dynamic and SYSTEMMEM buffers, D3D5-7
   DrawPrimitive from user memory and system-memory vertex buffers), no longer
   converts D3DCOLOR in buffer objects, and vertex shaders read D3DCOLOR through
-  BGRA generic arrays instead of swizzling in the shader. Pretransformed
-  (XYZRHW) streams outside buffer objects keep immediate mode or the packed
-  path. Wine patch 0047 binds a stride-zero D3DCOLOR attribute 0 correctly
-  (see the patch README). No D3D cap changes. The installed D3D7 and D3D8/9
-  colour-array probes (diffuse plus specular from user memory, dynamic,
-  system-memory and static buffers, and a vs_1_1 D3DCOLOR input) have not yet
-  run on a guest.
+  BGRA generic arrays instead of swizzling in the shader. Wine patch 0048
+  draws pretransformed (XYZRHW) streams outside buffer objects from arrays too,
+  positions converted as immediate mode converted them (see the patch README;
+  its installed probes have not yet run on a guest). Wine patch 0047 binds a
+  stride-zero D3DCOLOR attribute 0 correctly (see the patch README). No D3D
+  cap changes. The installed D3D7 and D3D8/9 colour-array probes (diffuse
+  plus specular from user memory, dynamic, system-memory and static buffers,
+  and a vs_1_1 D3DCOLOR input) have not yet run on a guest.
+- Occlusion queries and fences (`DG_CAP_GL_OCCLUSION_QUERY`) add
+  ARB_occlusion_query (SAMPLES_PASSED, 32 counter bits) and NV_fence
+  (ALL_COMPLETED_NV) under their extension names. Query and fence objects
+  belong to one context, as both extensions require, even between sharing
+  contexts; the host owns names (GenQueries/GenFencesNV are QUERY records),
+  objects (a query from its first BeginQuery, a fence from its first
+  SetFenceNV, of any nonzero name), the active query and every
+  state-dependent error: BeginQuery while one is active or of zero, EndQuery
+  without one, GenQueries and DeleteQueries while one is active (the extension's
+  rule, which leaves names and the active query untouched), results of the
+  active query or of a non-object, and the fence records of a non-fence are
+  GL errors, never record faults. BeginQuery, EndQuery and SetFenceNV compile
+  into display lists, as the extensions specify (only Gen, Delete, Is and the
+  queries execute immediately); deletion is a DATA record that executes
+  immediately even while compiling. Each object owns a native query, or the
+  native sync object of its last SetFenceNV, in the context's native context,
+  so pending results survive presents, context switches and switching back;
+  host-internal blits and clears count no samples. Results stay asynchronous:
+  the host never waits except for QUERY_RESULT and FinishFenceNV, and a
+  pending availability or fence status flushes native GL so it completes in
+  finite time. One GetQueryObjectuiv QUERY answers both pnames (state, result)
+  and carries up to 63 (name, result) reports of earlier ended queries that
+  completed, oldest first, each reported once; the frontend keeps them and
+  signalled fences per context until the name is begun, set or deleted or a
+  display list executes, so Wine's availability-then-result poll costs one
+  round trip and polling several ended queries usually one. Objects and name
+  tables are charged against the resource budget (4096 names per kind and
+  context). From the Wine source, WineD3D then creates D3DQUERYTYPE_OCCLUSION
+  queries (D3DERR_NOTAVAILABLE before; D3D9 has no caps bit for them) and
+  backs D3DQUERYTYPE_EVENT with NV fences: before, Wine created event queries
+  but an issued one's GetData failed with D3DERR_INVALIDCALL ("Event query
+  created despite lack of GL support"). Timestamp queries stay unavailable
+  (no ARB_timer_query), D3D8 has no queries, and this Wine still answers a
+  pending event S_OK with FALSE where Windows answers S_FALSE. No D3D cap
+  changes and no Wine patch. The installed D3D9 query probe (2000 visible,
+  3200 partially occluded, 0 hidden and 65200 reused samples exactly, and an
+  event polled to signalled) has not yet run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

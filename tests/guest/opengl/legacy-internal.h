@@ -30,6 +30,7 @@ BOOL JglFragmentProgramAvailable(void);
 BOOL JglVertexProgramAvailable(void);
 BOOL JglTexture3DAvailable(void);
 BOOL JglVertexBufferObjectAvailable(void);
+BOOL JglOcclusionQueryAvailable(void);
 BOOL JglReadFramebufferBound(void);
 static inline BOOL JglProgramsAvailable(void) {
     return JglFragmentProgramAvailable() || JglVertexProgramAvailable();

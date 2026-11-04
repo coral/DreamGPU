@@ -187,7 +187,9 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "volume-probe.inc"
 #include "vbuffer-probe.inc"
 #include "bgra-probe.inc"
+#include "xyzrhw-probe.inc"
 #include "rtt-probe.inc"
+#include "query-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -349,9 +351,17 @@ static void Run(void) {
     bgra_probe::Run(device, surface);
     if (failed)
         return;
+    xyzrhw_probe::Run(device, surface);
+    if (failed)
+        return;
     rtt_probe::Run(d3d, device, surface);
     if (failed)
         return;
+#if DG_D3D_VERSION == 9
+    query_probe::Run(d3d, device, surface);
+    if (failed)
+        return;
+#endif
     Log("STAGE present");
     HR(DEVICE(Present, device, NULL, NULL, NULL, NULL), "FAIL present");
 }

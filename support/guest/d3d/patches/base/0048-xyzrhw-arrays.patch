@@ -1,0 +1,463 @@
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -96,6 +96,12 @@
+ 
+ #include "dg-wine-vertex-array.h"
+ 
++/* DreamGPU: pretransformed array draws, defined below with the 0041 fog
++ * coordinate helpers they share. */
++static BOOL dg_xyzrhw_arrays(const struct wined3d_device *device, struct wined3d_context *context,
++        const struct wined3d_stream_info *si, UINT count, GLenum primitive,
++        const void *indices, UINT index_size, UINT start);
++
+ /* Context activation is done by the caller. */
+ static void drawStridedSlow(const struct wined3d_device *device, struct wined3d_context *context,
+         const struct wined3d_stream_info *si, UINT NumVertexes, GLenum glPrimType,
+@@ -121,6 +127,8 @@
+ 
+     if (dg_wine_draw_transformed(device, context, si, NumVertexes, glPrimType, idxData, idxSize, startIdx))
+         return;
++    if (dg_xyzrhw_arrays(device, context, si, NumVertexes, glPrimType, idxData, idxSize, startIdx))
++        return;
+ 
+     TRACE_(d3d_perf)("Using slow vertex array code\n");
+ 
+@@ -809,6 +817,438 @@
+     fog->values = NULL;
+ }
+ 
++/* DreamGPU: pretransformed (XYZRHW) fixed-function draws whose streams are not
++ * all buffer objects took drawStridedSlow (use_immediate_mode_draw): this
++ * fixed-function pipeline has no xyzrhw, so arrays would read positions
++ * unconverted. That is one GL call per vertex for the position and for every
++ * colour, coordinate set and fog coordinate. Such a draw is now one array draw
++ * of exactly the values drawStridedSlow sends. GL array index j is vertex
++ * vertex_base + j of every stream, which is drawStridedSlow's vertex: start + j
++ * for glDrawArrays(0, count), or each index of glDrawElements with the draw's
++ * own indices plus base_vertex_index. The positions are converted into a
++ * client array as position_float4 converts them, the fog coordinates are
++ * 0041's (float)(specular >> 24), and every other attribute is read in place
++ * through the GL array whose values are those of the call drawStridedSlow
++ * makes for it (ops). Stages, defaults and ignored inputs (point size, blend
++ * weights) follow drawStridedSlow. Afterwards the last vertex's attributes
++ * are current again, set by the same calls drawStridedSlow made for it. */
++#define DG_XYZRHW_LOCAL_VERTICES 64
++
++/* A stream element GL reads in place. */
++struct dg_xyzrhw_array
++{
++    const struct wined3d_stream_info_element *element;
++    const BYTE *pointer; /* GL array index 0, vertex vertex_base, which need not exist */
++    DWORD unit; /* texture coordinates: the GL unit */
++};
++
++/* Vertices first..last, each bytes long at offset + vertex * stride, lie
++ * within size bytes. drawStridedSlow repeats a stride zero vertex, which a
++ * GL array would read packed. */
++static BOOL dg_xyzrhw_span(UINT size, ULONG_PTR offset, UINT stride, UINT bytes,
++        int64_t first, int64_t last)
++{
++    return stride && first >= 0 && first <= last && offset <= size && size - offset >= bytes
++            && (uint64_t)last <= (size - offset - bytes) / stride;
++}
++
++/* An element's stream memory and its offset there. draw_primitive replaced
++ * every buffer object of an immediate-mode draw with its system memory copy
++ * (0039), which conversion never writes. */
++static BOOL dg_xyzrhw_memory(struct wined3d_context *context, const struct wined3d_state *state,
++        const struct wined3d_stream_info_element *e, const BYTE **memory, UINT *size, ULONG_PTR *offset)
++{
++    struct wined3d_buffer *buffer = state->streams[e->stream_idx].buffer;
++
++    if (!buffer || e->data.buffer_object || !(*memory = buffer_get_sysmem(buffer, context))
++            || (ULONG_PTR)e->data.addr < (ULONG_PTR)*memory)
++        return FALSE;
++    *size = buffer->resource.size;
++    *offset = (ULONG_PTR)e->data.addr - (ULONG_PTR)*memory;
++    return TRUE;
++}
++
++/* The array pointer of an element read in place for GL array indices
++ * first..last: every one of those vertices lies within its stream. */
++static BOOL dg_xyzrhw_in_place(struct wined3d_context *context, const struct wined3d_state *state,
++        struct dg_xyzrhw_array *array, int64_t first, int64_t last, INT vertex_base)
++{
++    const struct wined3d_stream_info_element *e = array->element;
++    const BYTE *memory;
++    ULONG_PTR offset;
++    int64_t pointer;
++    UINT size;
++
++    if (!dg_xyzrhw_memory(context, state, e, &memory, &size, &offset)
++            || !dg_xyzrhw_span(size, offset, e->stride, e->format->byte_count,
++                    (int64_t)vertex_base + first, (int64_t)vertex_base + last))
++        return FALSE;
++    /* A negative base vertex biases the pointer below the stream. */
++    pointer = (int64_t)(ULONG_PTR)e->data.addr + (int64_t)vertex_base * e->stride;
++    if (pointer < 0)
++        return FALSE;
++    array->pointer = (const BYTE *)(ULONG_PTR)pointer;
++    return TRUE;
++}
++
++/* values[4 * (j - first)] for GL array indices first..last: the position of
++ * vertex vertex_base + j as position_float4 sends it. Nothing is written
++ * unless every vertex lies within. */
++static BOOL dg_xyzrhw_positions(float *values, int64_t first, int64_t last, const BYTE *memory,
++        UINT size, ULONG_PTR offset, UINT stride, INT vertex_base)
++{
++    int64_t vertex = vertex_base + first, end = vertex_base + last;
++
++    if (!memory || !dg_xyzrhw_span(size, offset, stride, 4 * sizeof(float), vertex, end))
++        return FALSE;
++    for (; vertex <= end; ++vertex, values += 4)
++    {
++        float pos[4];
++
++        memcpy(pos, memory + offset + (ULONG_PTR)vertex * stride, sizeof(pos));
++        /* position_float4: glVertex4f(x * w, y * w, z * w, w) with w = 1 / rhw,
++         * or glVertex3fv, whose w is 1, for rhw 0 and 1. */
++        if (pos[3] != 0.0f && pos[3] != 1.0f)
++        {
++            float w = 1.0f / pos[3];
++
++            values[0] = pos[0] * w;
++            values[1] = pos[1] * w;
++            values[2] = pos[2] * w;
++            values[3] = w;
++        }
++        else
++        {
++            values[0] = pos[0];
++            values[1] = pos[1];
++            values[2] = pos[2];
++            values[3] = 1.0f;
++        }
++    }
++    return TRUE;
++}
++
++/* Context activation is done by the caller. FALSE, before any GL call, keeps
++ * drawStridedSlow. */
++static BOOL dg_xyzrhw_arrays(const struct wined3d_device *device, struct wined3d_context *context,
++        const struct wined3d_stream_info *si, UINT count, GLenum primitive,
++        const void *indices, UINT index_size, UINT start)
++{
++    const struct wined3d_state *state = &device->state;
++    const struct wined3d_gl_info *gl_info = context->gl_info;
++    const struct wined3d_d3d_info *d3d_info = context->d3d_info;
++    const struct wined3d_ffp_attrib_ops *ops = &d3d_info->ffp_attrib_ops;
++    const struct wined3d_stream_info_element *position = &si->elements[WINED3D_FFP_POSITION];
++    const struct wined3d_stream_info_element *e;
++    struct dg_xyzrhw_array normal = {0}, diffuse = {0}, specular = {0};
++    struct dg_xyzrhw_array coords[MAX_TEXTURES];
++    unsigned int coord_count = 0, default_count = 0, stage, i;
++    float local[DG_XYZRHW_LOCAL_VERTICES * 5], *positions, *fog = NULL;
++    const BYTE *memory, *fog_memory = NULL;
++    ULONG_PTR offset, fog_offset = 0;
++    int64_t first, last, final, range;
++    DWORD defaults[MAX_TEXTURES];
++    UINT size, fog_size = 0;
++    BOOL secondary = FALSE, specular_fog = FALSE;
++    INT vertex_base;
++    union
++    {
++        DWORD d;
++        struct wined3d_line_pattern lp;
++    } pattern;
++
++    /* Immediate mode unloaded Wine's own arrays (streamsrc), so this draw
++     * owns the client array state; it leaves every array disabled. Generic
++     * attributes take drawStridedSlowVs. */
++    if (!count || !si->position_transformed || !context->use_immediate_mode_draw
++            || context->namedArraysLoaded || context->numberedArraysLoaded
++            || d3d_info->xyzrhw || d3d_info->ffp_generic_attributes
++            || d3d_info->limits.ffp_blend_stages > MAX_TEXTURES
++            || !(si->use_map & (1u << WINED3D_FFP_POSITION))
++            || position->format->id != WINED3DFMT_R32G32B32A32_FLOAT
++            || (index_size && index_size != 2 && index_size != 4) || (!index_size && indices)
++            || (!index_size && start > INT_MAX))
++        return FALSE;
++    /* The frontend splits large draws into packets; a stippled line strip
++     * cannot be split without restarting its pattern. */
++    pattern.d = state->render_states[WINED3D_RS_LINEPATTERN];
++    if (primitive == GL_LINE_STRIP && pattern.lp.repeat_factor)
++        return FALSE;
++
++    /* The inputs drawStridedSlow sends, through arrays of equal values:
++     * glNormal3fv of three floats; glColor3fv, glColor4fv and glColor4ubv;
++     * glColor4ub(R, G, B, A) of a D3DCOLOR as a BGRA array; glSecondaryColor3fvEXT
++     * and glSecondaryColor3ubvEXT(R, G, B) of a D3DCOLOR as a BGRA array, whose
++     * alpha secondary colour arrays drop; glMultiTexCoord{1,2,3,4}fv and
++     * {2,4}sv. Anything else keeps drawStridedSlow, as does a D3DCOLOR that
++     * Wine swizzles (no usable ARB_vertex_array_bgra) and per-vertex material
++     * tracking. */
++    if (si->use_map & (1u << WINED3D_FFP_NORMAL))
++    {
++        e = &si->elements[WINED3D_FFP_NORMAL];
++        if (e->format->emit_idx != WINED3D_FFP_EMIT_FLOAT3 && e->format->emit_idx != WINED3D_FFP_EMIT_FLOAT4)
++            return FALSE;
++        normal.element = e;
++    }
++    if (si->use_map & (1u << WINED3D_FFP_DIFFUSE))
++    {
++        e = &si->elements[WINED3D_FFP_DIFFUSE];
++        if (context->num_untracked_materials)
++            return FALSE;
++        switch (e->format->emit_idx)
++        {
++            case WINED3D_FFP_EMIT_FLOAT3:
++            case WINED3D_FFP_EMIT_FLOAT4:
++            case WINED3D_FFP_EMIT_UBYTE4N:
++                break;
++            case WINED3D_FFP_EMIT_D3DCOLOR:
++                if ((si->swizzle_map & (1u << WINED3D_FFP_DIFFUSE)) || e->format->gl_vtx_format != GL_BGRA)
++                    return FALSE;
++                break;
++            default:
++                return FALSE;
++        }
++        diffuse.element = e;
++    }
++    if (si->use_map & (1u << WINED3D_FFP_SPECULAR))
++    {
++        e = specular.element = &si->elements[WINED3D_FFP_SPECULAR];
++        if (e->format->emit_idx != WINED3D_FFP_EMIT_FLOAT3 && e->format->emit_idx != WINED3D_FFP_EMIT_D3DCOLOR)
++            return FALSE;
++        /* Without secondary colours drawStridedSlow sends none. */
++        secondary = gl_info->supported[EXT_SECONDARY_COLOR];
++        if (secondary && e->format->emit_idx == WINED3D_FFP_EMIT_D3DCOLOR
++                && ((si->swizzle_map & (1u << WINED3D_FFP_SPECULAR)) || e->format->gl_vtx_format != GL_BGRA))
++            return FALSE;
++        /* drawStridedSlow's fog coordinate condition; its vertex fog mode
++         * test always passes for an XYZRHW position. */
++        specular_fog = state->render_states[WINED3D_RS_FOGENABLE]
++                && state->render_states[WINED3D_RS_FOGTABLEMODE] == WINED3D_FOG_NONE
++                && gl_info->supported[EXT_FOG_COORD] && e->format->id == WINED3DFMT_B8G8R8A8_UNORM;
++    }
++    /* gl_compat.c's emulated fog coordinates exist only in immediate mode:
++     * its glVertex wrappers fog each vertex in software (0041 clears the
++     * array entry point). */
++    if ((specular_fog || (context->fog_coord && state->render_states[WINED3D_RS_FOGENABLE]))
++            && !gl_info->gl_ops.ext.p_glFogCoordPointerEXT)
++        return FALSE;
++    /* drawStridedSlow's stage selection. A stage without a coordinate set
++     * gets (0, 0, 0, 1); generated and skipped stages get nothing. */
++    for (stage = 0; stage < d3d_info->limits.ffp_blend_stages; ++stage)
++    {
++        int coord = state->texture_states[stage][WINED3D_TSS_TEXCOORD_INDEX];
++        DWORD unit = context->tex_unit_map[stage];
++
++        if ((!gl_info->supported[ARB_MULTITEXTURE] && stage) || (!use_ps(state) && !state->textures[stage])
++                || unit == WINED3D_UNMAPPED_STAGE || coord > 7 || coord < 0)
++            continue;
++        if (!(si->use_map & (1u << (WINED3D_FFP_TEXCOORD0 + coord))))
++        {
++            defaults[default_count++] = unit;
++            continue;
++        }
++        e = &si->elements[WINED3D_FFP_TEXCOORD0 + coord];
++        switch (e->format->emit_idx)
++        {
++            case WINED3D_FFP_EMIT_FLOAT1:
++            case WINED3D_FFP_EMIT_FLOAT2:
++            case WINED3D_FFP_EMIT_FLOAT3:
++            case WINED3D_FFP_EMIT_FLOAT4:
++            case WINED3D_FFP_EMIT_SHORT2:
++            case WINED3D_FFP_EMIT_SHORT4:
++                break;
++            default:
++                return FALSE;
++        }
++        /* A client array needs a client unit; gl_compat.c's one-unit
++         * multitexture emulation has unit 0 alone. */
++        if (unit >= gl_info->limits.texture_coords)
++            return FALSE;
++        coords[coord_count].element = e;
++        coords[coord_count++].unit = unit;
++    }
++
++    /* The GL array indices drawStridedSlow's vertices are: 0..count - 1 from
++     * vertex start, or the referenced indices (0041's scan, from the index
++     * buffer's memory as draw_primitive passes it) from base_vertex_index. */
++    if (index_size)
++    {
++        UINT entries;
++
++        if (!state->index_buffer || (!indices && !(indices = buffer_get_sysmem(state->index_buffer, context))))
++            return FALSE;
++        entries = state->index_buffer->resource.size / index_size;
++        if (start > entries || count > entries - start)
++            return FALSE;
++        vertex_base = state->base_vertex_index;
++        if (!dg_fog_coord_range(indices, index_size, start, count, 0, &first, &last, &final))
++            return FALSE;
++    }
++    else
++    {
++        vertex_base = start;
++        if (!dg_fog_coord_range(NULL, 0, 0, count, 0, &first, &last, &final))
++            return FALSE;
++    }
++    if ((normal.element && !dg_xyzrhw_in_place(context, state, &normal, first, last, vertex_base))
++            || (diffuse.element && !dg_xyzrhw_in_place(context, state, &diffuse, first, last, vertex_base))
++            || (specular.element && !dg_xyzrhw_in_place(context, state, &specular, first, last, vertex_base)))
++        return FALSE;
++    for (i = 0; i < coord_count; ++i)
++    {
++        if (!dg_xyzrhw_in_place(context, state, &coords[i], first, last, vertex_base))
++            return FALSE;
++    }
++    if (!dg_xyzrhw_memory(context, state, position, &memory, &size, &offset)
++            || !dg_xyzrhw_span(size, offset, position->stride, 4 * sizeof(float),
++                    (int64_t)vertex_base + first, (int64_t)vertex_base + last)
++            || (specular_fog && !dg_xyzrhw_memory(context, state, specular.element,
++                    &fog_memory, &fog_size, &fog_offset)))
++        return FALSE;
++
++    /* Four position floats and a fog coordinate per vertex of the range,
++     * which lies within the position stream. */
++    range = last - first + 1;
++    if ((uint64_t)range > ~(size_t)0 / (5 * sizeof(float)))
++        return FALSE;
++    positions = range <= DG_XYZRHW_LOCAL_VERTICES ? local : malloc((size_t)range * 5 * sizeof(float));
++    if (!positions)
++        return FALSE;
++    if (specular_fog)
++        fog = positions + 4 * range;
++    /* The pointers biased below the storage must not wrap. */
++    if ((uint64_t)first > (ULONG_PTR)positions / (4 * sizeof(float))
++            || (fog && (uint64_t)first > (ULONG_PTR)fog / sizeof(float))
++            || !dg_xyzrhw_positions(positions, first, last, memory, size, offset, position->stride, vertex_base)
++            || (fog && !dg_fog_coord_fill(fog, first, last, fog_memory, fog_size, fog_offset,
++                    specular.element->stride, vertex_base)))
++    {
++        if (positions != local)
++            free(positions);
++        return FALSE;
++    }
++
++    /* Client arrays and client indices. Immediate mode has no buffer object
++     * draws (all_vbo is clear), whose index binding would be zero too. */
++    if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
++    {
++        GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
++        if (index_size)
++            GL_EXTCALL(glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0));
++    }
++    /* drawStridedSlow's values for absent inputs. */
++    if (!normal.element)
++        gl_info->gl_ops.gl.p_glNormal3f(0, 0, 0);
++    if (!diffuse.element)
++        gl_info->gl_ops.gl.p_glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
++    if (!specular.element && gl_info->supported[EXT_SECONDARY_COLOR])
++        GL_EXTCALL(glSecondaryColor3fEXT)(0, 0, 0);
++    for (i = 0; i < default_count; ++i)
++    {
++        if (gl_info->supported[ARB_MULTITEXTURE])
++            GL_EXTCALL(glMultiTexCoord4fARB(GL_TEXTURE0_ARB + defaults[i], 0, 0, 0, 1));
++        else
++            gl_info->gl_ops.gl.p_glTexCoord4f(0, 0, 0, 1);
++    }
++
++    /* GL array index j reads values[j - first]. */
++    gl_info->gl_ops.gl.p_glVertexPointer(4, GL_FLOAT, 0,
++            (const void *)((ULONG_PTR)positions - (ULONG_PTR)first * 4 * sizeof(float)));
++    gl_info->gl_ops.gl.p_glEnableClientState(GL_VERTEX_ARRAY);
++    if (normal.element)
++    {
++        gl_info->gl_ops.gl.p_glNormalPointer(GL_FLOAT, normal.element->stride, normal.pointer);
++        gl_info->gl_ops.gl.p_glEnableClientState(GL_NORMAL_ARRAY);
++    }
++    if (diffuse.element)
++    {
++        gl_info->gl_ops.gl.p_glColorPointer(diffuse.element->format->gl_vtx_format,
++                diffuse.element->format->gl_vtx_type, diffuse.element->stride, diffuse.pointer);
++        gl_info->gl_ops.gl.p_glEnableClientState(GL_COLOR_ARRAY);
++    }
++    if (secondary)
++    {
++        GL_EXTCALL(glSecondaryColorPointerEXT(specular.element->format->gl_vtx_format,
++                specular.element->format->gl_vtx_type, specular.element->stride, specular.pointer));
++        gl_info->gl_ops.gl.p_glEnableClientState(GL_SECONDARY_COLOR_ARRAY_EXT);
++    }
++    if (fog)
++    {
++        GL_EXTCALL(glFogCoordPointerEXT(GL_FLOAT, 0,
++                (const void *)((ULONG_PTR)fog - (ULONG_PTR)first * sizeof(float))));
++        gl_info->gl_ops.gl.p_glEnableClientState(GL_FOG_COORDINATE_ARRAY_EXT);
++    }
++    for (i = 0; i < coord_count; ++i)
++    {
++        /* Wine's own coordinate loaders select the client unit for each. */
++        if (gl_info->supported[ARB_MULTITEXTURE])
++            GL_EXTCALL(glClientActiveTextureARB(GL_TEXTURE0_ARB + coords[i].unit));
++        gl_info->gl_ops.gl.p_glTexCoordPointer(coords[i].element->format->gl_vtx_format,
++                coords[i].element->format->gl_vtx_type, coords[i].element->stride, coords[i].pointer);
++        gl_info->gl_ops.gl.p_glEnableClientState(GL_TEXTURE_COORD_ARRAY);
++    }
++    checkGLcall("pretransformed arrays");
++
++    if (index_size)
++        gl_info->gl_ops.gl.p_glDrawElements(primitive, count,
++                index_size == 2 ? GL_UNSIGNED_SHORT : GL_UNSIGNED_INT,
++                (const BYTE *)indices + (size_t)start * index_size);
++    else
++        gl_info->gl_ops.gl.p_glDrawArrays(primitive, 0, count);
++    checkGLcall("pretransformed array draw");
++
++    /* Every array is disabled again, as streamsrc() left them; no client
++     * descriptor may keep the converted storage. In-place pointers stay, as
++     * Wine's own unload_vertex_data leaves them. */
++    gl_info->gl_ops.gl.p_glDisableClientState(GL_VERTEX_ARRAY);
++    gl_info->gl_ops.gl.p_glVertexPointer(4, GL_FLOAT, 0, NULL);
++    if (normal.element)
++        gl_info->gl_ops.gl.p_glDisableClientState(GL_NORMAL_ARRAY);
++    if (diffuse.element)
++        gl_info->gl_ops.gl.p_glDisableClientState(GL_COLOR_ARRAY);
++    if (secondary)
++        gl_info->gl_ops.gl.p_glDisableClientState(GL_SECONDARY_COLOR_ARRAY_EXT);
++    if (fog)
++    {
++        gl_info->gl_ops.gl.p_glDisableClientState(GL_FOG_COORDINATE_ARRAY_EXT);
++        GL_EXTCALL(glFogCoordPointerEXT(GL_FLOAT, 0, NULL));
++    }
++    /* From the client unit selected last, back to unit 0. */
++    for (i = coord_count; i--;)
++    {
++        if (gl_info->supported[ARB_MULTITEXTURE] && i != coord_count - 1)
++            GL_EXTCALL(glClientActiveTextureARB(GL_TEXTURE0_ARB + coords[i].unit));
++        gl_info->gl_ops.gl.p_glDisableClientState(GL_TEXTURE_COORD_ARRAY);
++    }
++    if (coord_count && coords[0].unit && gl_info->supported[ARB_MULTITEXTURE])
++        GL_EXTCALL(glClientActiveTextureARB(GL_TEXTURE0_ARB));
++
++    /* Array draws leave the arrays' current attributes undefined;
++     * drawStridedSlow leaves its last vertex's. Send that vertex's again,
++     * by the calls drawStridedSlow made for it and in their order. */
++    for (i = 0; i < coord_count; ++i)
++        ops->texcoord[coords[i].element->format->emit_idx](GL_TEXTURE0_ARB + coords[i].unit,
++                coords[i].pointer + (ULONG_PTR)final * coords[i].element->stride);
++    if (diffuse.element)
++        ops->diffuse[diffuse.element->format->emit_idx](diffuse.pointer
++                + (ULONG_PTR)final * diffuse.element->stride);
++    if (specular.element)
++    {
++        ops->specular[specular.element->format->emit_idx](specular.pointer
++                + (ULONG_PTR)final * specular.element->stride);
++        if (fog)
++            GL_EXTCALL(glFogCoordfEXT(fog[final - first]));
++    }
++    if (normal.element)
++        ops->normal[normal.element->format->emit_idx](normal.pointer
++                + (ULONG_PTR)final * normal.element->stride);
++    checkGLcall("pretransformed array draw current attributes");
++
++    if (positions != local)
++        free(positions);
++    return TRUE;
++}
++
+ /* Routine common to the draw primitive and draw indexed primitive routines */
+ void draw_primitive(struct wined3d_device *device, UINT start_idx, UINT index_count,
+         UINT start_instance, UINT instance_count, BOOL indexed)

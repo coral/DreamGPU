@@ -274,6 +274,23 @@ static inline BOOL JglFramebufferQueryRejected(GLenum name) {
             name == 0x84e8) &&
            !JglFramebufferObjectAvailable();
 }
+/* ARB_occlusion_query (SAMPLES_PASSED) and NV_fence (occlusion.cpp). Query
+ * and fence objects belong to one context and live on the host; the frontend
+ * keeps what the host reported, so it answers repeated polls locally: query
+ * results (Values) and fences known signalled (Values unused). Entries are
+ * replaced oldest first and dropped when the name is begun, set or deleted, or
+ * whenever a display list executes (lists may begin queries and set fences). */
+BOOL JglOcclusionQueryAvailable(void);
+#define JGL_SETTLED_SLOTS 64
+typedef struct {
+    ULONG Count, Next;
+    GLuint Names[JGL_SETTLED_SLOTS], Values[JGL_SETTLED_SLOTS];
+} JGL_SETTLED;
+typedef struct {
+    JGL_SETTLED Results, Fences;
+} JGL_QUERY_STATE;
+/* The current context's state; NULL without a context. */
+JGL_QUERY_STATE *JglQueryState(void);
 /* Per-context NUL-terminated PROGRAM_ERROR_STRING_ARB storage (DG_GL_MAX_RESULT_BYTES),
  * stable until the context is deleted; NULL without a context or memory. */
 GLubyte *JglProgramErrorBuffer(void);

@@ -49,12 +49,12 @@
      wined3d_surface_upload_data(surface, gl_info, resource->format,
 --- a/wined3d/drawprim.c
 +++ b/wined3d/drawprim.c
-@@ -844,7 +844,7 @@
+@@ -1284,7 +1284,7 @@
          {
              if (state->render_states[WINED3D_RS_COLORWRITEENABLE])
              {
 -                surface_load_location(target, context, target->container->resource.draw_binding);
-+                dg_surface_load_location(8, 847, target, context, target->container->resource.draw_binding);
++                dg_surface_load_location(8, 1287, target, context, target->container->resource.draw_binding);
                  surface_invalidate_location(target, ~target->container->resource.draw_binding);
              }
              else

@@ -658,8 +658,8 @@ outside buffer objects (`slow_mask`): D3D8/9 UP draws and dynamic or `SYSTEMMEM`
 buffers, and D3D5-7 `DrawPrimitive` from user memory and system-memory vertex
 buffers, now draw from client arrays, and so reach 0041's fog array.
 Pretransformed (XYZRHW) streams outside buffer objects still take immediate
-mode, since the fixed-function vertex pipeline has no `xyzrhw`, and the packed
-path, which swizzles colours itself, keeps drawing them. D3DCOLOR in buffer
+mode, since the fixed-function vertex pipeline has no `xyzrhw`; 0048 draws
+them from arrays. D3DCOLOR in buffer
 objects is no longer converted (only XYZRHW positions are, through 0038's
 repaired bookkeeping) and draws from the buffer with `GL_BGRA`. Vertex shaders
 read D3DCOLOR through `GL_BGRA` generic arrays instead of an in-shader
@@ -679,3 +679,93 @@ ASan/UBSan against a recording GL, with and without buffer objects, and fails
 without the patch; it also checks the format, swizzle, immediate-mode,
 conversion and array paths above in the prepared source. The diagnostic stack
 is rebased onto 0047 (only its `device.c` hashes change).
+
+`0048-xyzrhw-arrays.patch` draws pretransformed (XYZRHW) fixed-function
+vertices outside buffer objects from arrays. Such a draw still selects immediate
+mode (`use_immediate_mode_draw`: this pipeline has no `xyzrhw`, so arrays would
+read the positions unconverted), and `drawStridedSlow` sent every vertex as one
+call per attribute: position, colours, each coordinate set, fog coordinate.
+That covers D3D5-7 `DrawPrimitive`, `DrawIndexedPrimitive` and
+`DrawPrimitiveStrided` from user memory and system-memory vertex buffers, D3D8/9
+UP draws, `DYNAMIC` and `SYSTEMMEM` buffers, and declarations mixing those with
+buffer objects (draw_primitive reads the buffer objects' system memory copies,
+0039): the 2D, UI, sprite and much of the terrain rendering of DX5-7 games.
+`drawStridedSlow` now tries, after 0006's packed path (textured draws of up to 64
+vertices), one array draw of exactly the values it would send. GL array index j is vertex vertex_base + j of every
+stream, which is the vertex `drawStridedSlow` reads: `glDrawArrays(0, count)`
+from vertex `start`, or `glDrawElements` with the draw's own indices (the index
+buffer's system memory) plus `base_vertex_index`; `load_base_vertex_index` plays
+no part, as in `drawStridedSlow`. The positions of the referenced vertex range
+are converted into a client array by `position_float4`'s expression (x, y, z
+times w = 1 / rhw and w, or x, y, z, 1 for rhw 0 and 1); with `-std=c99`'s
+standard excess precision both round w and each product to float the same way
+on the x87. The fog coordinates are 0041's (`dg_fog_coord_range` finds the
+index range, `dg_fog_coord_fill` the values) under `drawStridedSlow`'s
+condition. Every other attribute is read in place through the array whose
+values are those of the immediate-mode call it replaces: `glNormal3fv` (FLOAT3,
+FLOAT4), `glColor3fv`/`glColor4fv`/`glColor4ubv` (FLOAT3, FLOAT4, UBYTE4N),
+`diffuse_d3dcolor` as a `GL_BGRA` colour array, `glSecondaryColor3fvEXT` and
+`specular_d3dcolor` as a `GL_BGRA` secondary colour array (which drops alpha,
+as GL does), `glMultiTexCoord{1,2,3,4}fv` and `{2,4}sv`. Texture stages are
+selected as `drawStridedSlow` selects them (mapped, textured or under a pixel
+shader, application coordinates), textured stages without a coordinate set get
+(0, 0, 0, 1), absent normals, colours and secondary colours get its defaults,
+and point size and blend weights stay ignored. Array draws leave the current
+attributes of their arrays undefined, so the last vertex's attributes are sent
+again by the calls `drawStridedSlow` made for it (a later draw without fog
+coordinates reads the current one). The draw binds `ARRAY_BUFFER` (and for
+indices `ELEMENT_ARRAY_BUFFER`, which immediate mode leaves at zero) to zero,
+disables every array again and clears the converted arrays' pointers, and
+returns the client unit to 0. Up to 64 vertices convert on the stack, larger
+ranges on the heap; nothing GL is called before every check has passed.
+
+These XYZRHW draws keep `drawStridedSlow`: a stride-zero element (D3D repeats
+it, an array reads it packed); a vertex or index outside its stream or index
+buffer, or a negative vertex; a D3DCOLOR that Wine swizzles (no usable
+`ARB_vertex_array_bgra`; 0006 still packs small textured ones); per-vertex
+material tracking; SHORT4N/USHORT4N colours, FLOAT16 coordinates (NV half) or a
+non-FLOAT4 position; fog coordinates emulated by `gl_compat.c` while fog uses
+coordinates; coordinates on a unit beyond the client units (gl_compat.c's
+one-unit multitexture); stippled line strips (the frontend cannot split them
+across packets); named or numbered arrays still loaded; generic attributes
+(`drawStridedSlowVs`). Draws whose streams are all buffer objects keep their
+converted buffers, and 0041's emulated fog stays `drawStridedSlow` too. Buffer
+object conversion (`fixup_transformed_pos`) keeps w = 0 for rhw 0 where
+immediate mode, and so this path, sends w = 1; that difference predates 0048.
+
+`test_xyzrhw_arrays.py` compiles the prepared `drawStridedSlow`, 0041's helpers,
+the new path and `directx.c`'s attribute functions and table under ASan/UBSan
+against a recording GL that assembles vertices as GL does (immediate-mode
+current values, array reads by size, type, stride, BGRA and normalization,
+current values undefined after an array draw). Each case draws once in immediate
+mode and once through 0048 and compares every vertex attribute and the current
+attributes left behind bit for bit: 45 draws (sizes around the local storage up
+to 5998 vertices, 16- and 32-bit indices with positive, zero and negative base
+vertices, rhw 0, 1, -0 and others, four units with swapped, missing, generated,
+remapped and untextured stages, a pixel shader, every accepted format, every fog
+state, two streams, no buffer objects, secondary colour or real multitexture)
+and 30 fallbacks, which must not call GL. It fails without the patch. It also
+prices the recorded calls with the frontend's record format (32-byte headers,
+one CALL record per immediate-mode attribute, one DATA record per array draw as
+`gl-arrays.h` lays it out, 1024 records and 64 KiB per packet):
+
+| Draw | Immediate: calls / records / bytes / packets | Arrays |
+| --- | --- | --- |
+| 1000 TL quads (diffuse, specular fog, one unit), a draw each | 23000 / 23000 / 1116000 / 23 | 25000 / 6000 / 504000 / 8 |
+| 1000 diffuse-only quads, a draw each | 12000 / 12000 / 588000 / 12 | 12000 / 4000 / 312000 / 5 |
+| 300-vertex TL list | 1503 / 1503 / 74128 / 2 | 25 / 6 / 10864 / 1 |
+| 3000-vertex TL list | 15003 / 15003 / 740120 / 15 | 25 / 7 / 105488 / 3 |
+| 64x32 TL grid, 11718 indices | 58593 / 58593 / 2890564 / 58 | 26 / 12 / 411220 / 8 |
+
+The array path's extra calls for a small draw (pointers, enables, the array
+buffer binding) stay in the frontend; it sends a quarter to a third of the
+records and about half the bytes. The installed D3D7 probe and the D3D8/9 probe
+(`xyzrhw-probe.inc`) draw a 312-vertex user-memory list of cells with specular
+plus specular-alpha fog, indexed draws with base vertices and decoys from user
+memory and dynamic and system-memory buffers (D3D7: `DrawIndexedPrimitiveVB`
+start vertices and `DrawPrimitiveStrided`; D3D9: a static POSITIONT stream with
+a system-memory colour stream), and a 322-vertex two-unit textured strip whose
+rhw grows from 1 to 3, so the perspective-correct texel boundary shows a wrong
+1/rhw, with exact pixels. Immediate mode gives the same pixels, so they check
+results, not the path. The diagnostic stack is rebased onto 0048 with its
+`drawprim.c` call-site line renumbered.

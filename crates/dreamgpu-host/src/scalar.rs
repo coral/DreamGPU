@@ -83,7 +83,10 @@ unsafe fn execute(
         | FEnum_glFramebufferRenderbuffer
         | FEnum_glGenerateMipmap
         | FEnum_glBlitFramebuffer
-        | FEnum_glCopyPixels => {
+        | FEnum_glCopyPixels
+        | FEnum_glBeginQuery
+        | FEnum_glEndQuery
+        | FEnum_glSetFenceNV => {
             let error = unsafe { hook(opaque, function, args.as_ptr()) };
             if error != 0 {
                 return Err(error);

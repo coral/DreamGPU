@@ -191,6 +191,10 @@
     {
       "file": "0047-bgra-zero-attribute.patch",
       "sha256": "44cbc32b25795df000339e8ade3678c72b45aa4f8cbf4ed87fbb994bdd357ac0"
+    },
+    {
+      "file": "0048-xyzrhw-arrays.patch",
+      "sha256": "365e9f1c3c805998ffaf2ad001bd22cc3abd57edc0a24a0d97c73479742a35d0"
     }
   ],
   "files": {
@@ -268,7 +272,7 @@
     },
     "wined3d/drawprim.c": {
       "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
-      "after_sha256": "9d10561ad47e325471db97318d028c355ad226ba0b7a57593a132956b1c243bf"
+      "after_sha256": "ee20124c6d4a341b9c51d28b64783676f6b67bb50a78148a390ec4cc3c663b00"
     },
     "ddraw/ddraw.c": {
       "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",

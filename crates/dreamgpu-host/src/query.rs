@@ -219,6 +219,22 @@ unsafe fn execute(
         }
         return Ok(());
     }
+    // ARB_occlusion_query and NV_fence: answers of the context's objects.
+    if crate::occlusion::query_function(function) {
+        if state.context.is_null() || state.memory.is_null() {
+            return Err(DG_GL_ERROR_CONTEXT);
+        }
+        return unsafe {
+            crate::occlusion::query(
+                state.memory,
+                state.context,
+                function,
+                [a, b, d],
+                result,
+                bytes,
+            )
+        };
+    }
     if matches!(
         function,
         FEnum_glGetTexImage | FEnum_glGetCompressedTexImage

@@ -396,9 +396,29 @@
       "scope": "installed-api",
       "path": "tools/d3d/bgra-probe.inc"
     },
+    "gl-occlusion-query": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_occlusion_query.py"
+    },
+    "native-occlusion-query": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/occlusion_query.rs"
+    },
+    "guest-query": {
+      "scope": "installed-api",
+      "path": "tools/d3d/query-probe.inc"
+    },
     "guest-d3d7": {
       "scope": "installed-api",
       "path": "tools/d3d/probe7.cpp"
+    },
+    "d3d-xyzrhw-arrays": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_xyzrhw_arrays.py"
+    },
+    "guest-xyzrhw": {
+      "scope": "installed-api",
+      "path": "tools/d3d/xyzrhw-probe.inc"
     },
     "glide3-core": {
       "scope": "source",
@@ -1681,9 +1701,31 @@
         "native",
         "d3d-vertex-array-bgra",
         "guest-bgra",
-        "guest-d3d7"
+        "guest-d3d7",
+        "d3d-xyzrhw-arrays",
+        "guest-xyzrhw"
       ],
-      "remaining": "Negotiated by DG_CAP_GL_VERTEX_ARRAY_BGRA; without it BGRA stays an invalid size and every draw is unchanged. The frontend reorders client memory into the RGBA sections of the existing array records (a secondary colour as RGB), so older records, kernels and hosts keep their admission; a draw with a BGRA buffer slot uses the BGRA buffer draw (DATA function DrawRangeElementsEXT: the buffer draw plus DG_GL_ARRAY_BGRA on colour, secondary colour and generic buffer slots), which the NT/Win9x kernels and the host check like the buffer draw and which native GL reads with size BGRA. Lists and the record's fallbacks dereference buffers into reordered client draws. Wine then draws fixed-function D3DCOLOR diffuse/specular streams outside buffer objects (D3D8/9 UP, dynamic and SYSTEMMEM buffers, D3D5-7 user memory and system-memory vertex buffers) from arrays instead of immediate mode, stops converting D3DCOLOR in buffer objects, and feeds vertex shaders GL_BGRA generic arrays; XYZRHW streams outside buffer objects keep immediate mode. Wine 0047 fixes the stride-zero D3DCOLOR zero attribute. Native pixel tests pass on Linux; the installed D3D7 and D3D8/9 colour-array probes, macOS CGL (EXT_vertex_array_bgra), Win98/XP guests and game performance remain to be run."
+      "remaining": "Negotiated by DG_CAP_GL_VERTEX_ARRAY_BGRA; without it BGRA stays an invalid size and every draw is unchanged. The frontend reorders client memory into the RGBA sections of the existing array records (a secondary colour as RGB), so older records, kernels and hosts keep their admission; a draw with a BGRA buffer slot uses the BGRA buffer draw (DATA function DrawRangeElementsEXT: the buffer draw plus DG_GL_ARRAY_BGRA on colour, secondary colour and generic buffer slots), which the NT/Win9x kernels and the host check like the buffer draw and which native GL reads with size BGRA. Lists and the record's fallbacks dereference buffers into reordered client draws. Wine then draws fixed-function D3DCOLOR diffuse/specular streams outside buffer objects (D3D8/9 UP, dynamic and SYSTEMMEM buffers, D3D5-7 user memory and system-memory vertex buffers) from arrays instead of immediate mode, stops converting D3DCOLOR in buffer objects, and feeds vertex shaders GL_BGRA generic arrays; Wine 0048 draws XYZRHW streams outside buffer objects from arrays too (positions converted as immediate mode converted them, colours in place as GL_BGRA). Wine 0047 fixes the stride-zero D3DCOLOR zero attribute. Native pixel tests pass on Linux; the installed D3D7 and D3D8/9 colour-array and XYZRHW probes, macOS CGL (EXT_vertex_array_bgra), Win98/XP guests and game performance remain to be run."
+    },
+    {
+      "id": "gl.occlusion-query",
+      "area": 11,
+      "api": "OpenGL 1.1 + ARB_occlusion_query and NV_fence (D3D9 occlusion and event queries through Wine)",
+      "operation": "Gen/Delete/Is/Begin/EndQuery, GetQueryiv (CURRENT_QUERY, QUERY_COUNTER_BITS), GetQueryObject(u)iv (RESULT, RESULT_AVAILABLE) and their errors; Gen/Delete/Set/Test/Finish/IsFenceNV and GetFenceivNV; display lists",
+      "format": "SAMPLES_PASSED counts (32 bits)",
+      "resource": "query and fence objects",
+      "usage": "occlusion culling and GPU synchronization",
+      "pool": "per context",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-occlusion-query",
+        "native-occlusion-query",
+        "native",
+        "guest-query"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_OCCLUSION_QUERY; without it the extensions and entry points stay hidden and every entry point fails locally. Query and fence objects belong to one context and the host owns names, objects and the active query; BeginQuery, EndQuery and SetFenceNV compile into display lists, deletion executes immediately, and every state-dependent failure (nesting, Gen/Delete while active, results of non-objects or the active query) is a GL error. Results stay asynchronous on the host: a pending availability or fence status flushes native GL, QUERY_RESULT and FinishFenceNV wait, and one GetQueryObject round trip carries the result and the results of earlier ended queries, which the frontend keeps with signalled fences until the name is begun, set or deleted or a list executes. Objects are charged against the resource budget, at most 4096 names per kind and context. Wine then creates D3DQUERYTYPE_OCCLUSION queries (D3DERR_NOTAVAILABLE before) and backs D3DQUERYTYPE_EVENT with NV fences (an issued event's GetData failed with D3DERR_INVALIDCALL before); this Wine still answers a pending event S_OK with FALSE. Native pixel tests pass on Linux; the installed D3D9 query probe, macOS CGL, Win98/XP guests and games remain to be run."
     },
     {
       "id": "glide3.vertex",

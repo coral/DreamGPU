@@ -390,7 +390,8 @@ unsafe fn error(c: *mut ContextState, e: u32) {
 // ARB_fragment_program executes DeleteProgramsARB immediately too. Buffer
 // object commands are never compiled (ARB_vertex_buffer_object), nor are the
 // framebuffer and renderbuffer object commands except BlitFramebuffer
-// (EXT_framebuffer_object).
+// (EXT_framebuffer_object). Query and fence deletion executes immediately;
+// BeginQuery, EndQuery and SetFenceNV compile (ARB_occlusion_query, NV_fence).
 fn immediate(f: u32) -> bool {
     matches!(
         f,
@@ -412,6 +413,8 @@ fn immediate(f: u32) -> bool {
             | FEnum_glFramebufferTexture3D
             | FEnum_glFramebufferRenderbuffer
             | FEnum_glGenerateMipmap
+            | FEnum_glDeleteQueries
+            | FEnum_glDeleteFencesNV
     )
 }
 unsafe fn capture(

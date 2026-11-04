@@ -112,6 +112,8 @@ typedef struct DreamGpuContextState {
     void *framebuffers, *draw_framebuffer, *read_framebuffer, *renderbuffer;
     uint32_t window_framebuffer;
     uint32_t attrib_framebuffers[16][2];
+    /* Rust-owned query and fence state (ARB_occlusion_query, NV_fence). */
+    void *queries;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the

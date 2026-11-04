@@ -407,6 +407,346 @@ static void ColorArrays(void) {
     if (system)
         IDirect3DVertexBuffer7_Release(system);
 }
+/* Pretransformed (XYZRHW) vertices outside buffer objects. Wine drew every
+ * such draw in immediate mode; with Wine 0048 they are array draws whose
+ * positions are converted as immediate mode converted them (x, y, z and 1
+ * over rhw). Every quad has rhw other than 1, so unconverted positions or a
+ * wrong 1/rhw show. Every pixel is compared except the band along each quad
+ * edge. Frames:
+ * - batch: one 312-vertex DrawPrimitive triangle list from user memory
+ *   (larger than the 64 vertices of 0006's packed path) of 52 cells with rhw
+ *   from 0.25 to 2 per vertex, red diffuse plus red specular (SPECULARENABLE)
+ *   fogged toward blue by the specular alpha (FOGVERTEXMODE and FOGTABLEMODE
+ *   NONE). Each cell has its own alpha a, so it is exactly (a, 0, 255 - a).
+ * - indexed: DrawIndexedPrimitive from user memory with four decoy vertices
+ *   before the quad (ddraw's dynamic buffer: a base vertex at its ring
+ *   position), DrawIndexedPrimitiveVB from start vertices 8 and 12 of a
+ *   D3DVBCAPS_SYSTEMMEMORY buffer whose first eight vertices are decoys, and
+ *   DrawPrimitiveStrided from separate position and colour arrays.
+ * - perspective: a 322-vertex DrawPrimitive strip of 160 slices forming one
+ *   quad whose rhw grows from 1 on the left to 3 on the right, with two
+ *   point-sampled 4x4 textures of two colour columns on two stages (stage 0
+ *   selects texture 0 by coordinate set 0, stage 1 adds texture 1 by set 1,
+ *   which runs the other way). The perspective-correct texel boundary lies a
+ *   quarter of the way across; an affine or inverted 1/rhw moves it to a half
+ *   or three quarters, a coordinate set on the wrong unit swaps a texture's
+ *   colours. Below two stages or without D3DTOP_ADD the frame is skipped. */
+static void XyzrhwArrays(void) {
+    struct Vertex {
+        float x, y, z, rhw;
+        DWORD diffuse, specular;
+    };
+    struct Textured {
+        float x, y, z, rhw;
+        DWORD diffuse;
+        float u0, v0, u1, v1;
+    };
+    struct Area {
+        int left, top, right, bottom;
+        DWORD color;
+    };
+    static_assert(sizeof(Vertex) == 24 && sizeof(Textured) == 36);
+    static const DWORD fvf = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_SPECULAR,
+                       textured_fvf = D3DFVF_XYZRHW | D3DFVF_DIFFUSE | D3DFVF_TEX2,
+                       background = 0x102030, decoy_color = 0xffff00ff;
+    /* Strip-ordered screen corners with four different rhw. */
+    const auto corners = [](Vertex *out, const Area &area, DWORD diffuse, DWORD specular) {
+        const float left = (float)area.left, right = (float)area.right;
+        const float top = (float)area.top, bottom = (float)area.bottom;
+        out[0] = {left, top, .5f, .5f, diffuse, specular};
+        out[1] = {right, top, .5f, 2.f, diffuse, specular};
+        out[2] = {left, bottom, .5f, 4.f, diffuse, specular};
+        out[3] = {right, bottom, .5f, .25f, diffuse, specular};
+    };
+    /* Clear the target and begin a scene. */
+    const auto begin = [](const char *stage) -> BOOL {
+        return HR(IDirect3DDevice7_Clear(device, 0, NULL, D3DCLEAR_TARGET, 0xff000000 | background,
+                                         1, 0),
+                  stage) &&
+               HR(IDirect3DDevice7_BeginScene(device), stage);
+    };
+    /* Inside each area its colour, outside every area the background, the
+     * band along each area edge unchecked. */
+    const auto verify = [](const char *name, const Area *areas, UINT count) -> BOOL {
+        DDSURFACEDESC2 locked = {};
+        UINT wrong = 0;
+        locked.dwSize = sizeof(locked);
+        if (!HR(IDirectDrawSurface7_Lock(target, NULL, &locked, DDLOCK_READONLY | DDLOCK_WAIT,
+                                         NULL),
+                "FAIL XYZRHW readback lock")) {
+            Log(name);
+            return FALSE;
+        }
+        if (Check(locked.lpSurface && locked.lPitch >= 1280, "FAIL XYZRHW readback layout",
+                  locked.lPitch))
+            for (int y = 0; y < 240; ++y)
+                for (int x = 0; x < 320; ++x) {
+                    DWORD expected = background;
+                    BOOL edge = FALSE;
+                    for (UINT i = 0; i < count; ++i) {
+                        const Area &a = areas[i];
+                        if (x > a.left && x < a.right - 1 && y > a.top && y < a.bottom - 1)
+                            expected = a.color & 0xffffff;
+                        else if (x >= a.left - 1 && x <= a.right && y >= a.top - 1 && y <= a.bottom)
+                            edge = TRUE;
+                    }
+                    if (edge)
+                        continue;
+                    const DWORD actual =
+                        *(DWORD *)((BYTE *)locked.lpSurface + y * locked.lPitch + x * 4) & 0xffffff;
+                    if (actual != expected && !wrong++) {
+                        Log(name);
+                        Number("FAIL exact XYZRHW pixel", actual);
+                        Number("XYZRHW pixel x", (DWORD)x);
+                        Number("XYZRHW pixel y", (DWORD)y);
+                        Number("XYZRHW pixel expected", expected);
+                    }
+                }
+        if (wrong) {
+            Number("XYZRHW wrong pixels", wrong);
+            failed = TRUE;
+        }
+        return HR(IDirectDrawSurface7_Unlock(target, NULL), "FAIL XYZRHW readback unlock") &&
+               !wrong && !failed;
+    };
+    BOOL ok;
+    Log("STAGE XYZRHW arrays");
+
+    /* Batch: 52 cells, each exactly (a, 0, 255 - a). */
+    {
+        static Vertex vertices[312];
+        Area cells[52];
+        for (UINT i = 0; i < 52; ++i) {
+            static const UINT order[6] = {0, 1, 2, 2, 1, 3};
+            const DWORD alpha = (i * 79 + 13) & 0xff; /* distinct: 79 is odd */
+            const int column = (int)(i % 13), row = (int)(i / 13);
+            Vertex quad[4];
+            cells[i] = {4 + 24 * column, 10 + 58 * row, 24 + 24 * column, 50 + 58 * row,
+                        alpha << 16 | (255 - alpha)};
+            corners(quad, cells[i], 0xff800000, alpha << 24 | 0x007f0000);
+            for (UINT k = 0; k < 6; ++k) {
+                vertices[6 * i + k] = quad[order[k]];
+                vertices[6 * i + k].rhw = .25f * (float)(1 + (i + k) % 8);
+            }
+        }
+        ok = HR(IDirect3DDevice7_SetTexture(device, 0, NULL), "FAIL XYZRHW texture") &&
+             HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_SPECULARENABLE, TRUE),
+                "FAIL XYZRHW specular") &&
+             HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGCOLOR, 0xff0000ff),
+                "FAIL XYZRHW fog colour") &&
+             HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGTABLEMODE, D3DFOG_NONE),
+                "FAIL XYZRHW table fog") &&
+             HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGVERTEXMODE, D3DFOG_NONE),
+                "FAIL XYZRHW vertex fog") &&
+             HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGENABLE, TRUE),
+                "FAIL XYZRHW fog enable") &&
+             begin("FAIL XYZRHW batch scene") &&
+             HR(IDirect3DDevice7_DrawPrimitive(device, D3DPT_TRIANGLELIST, fvf, vertices, 312, 0),
+                "FAIL XYZRHW batch draw") &&
+             HR(IDirect3DDevice7_EndScene(device), "FAIL XYZRHW batch end scene");
+        IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_FOGENABLE, FALSE);
+        IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_SPECULARENABLE, FALSE);
+        if (!ok || !verify("XYZRHW batch: 312 vertices, fogged diffuse plus specular", cells, 52))
+            return;
+        Log("PASS XYZRHW arrays batch: 312-vertex DrawPrimitive list of 52 cells, rhw 0.25 to 2, "
+            "specular plus specular-alpha fog exact per cell");
+    }
+
+    /* Indexed: decoys before each quad. */
+    {
+        static const Area quads[4] = {{20, 30, 90, 110, 0x60c020},
+                                      {110, 30, 180, 110, 0x2080e0},
+                                      {200, 30, 270, 110, 0xe04080},
+                                      {20, 140, 90, 220, 0x40e0a0}};
+        static const Area decoy = {200, 140, 300, 220, decoy_color};
+        static WORD up[6] = {4, 5, 6, 6, 5, 7}, local[6] = {0, 1, 2, 2, 1, 3};
+        Vertex user[8], strided[4], *mapped = NULL;
+        struct Position {
+            float x, y, z, rhw;
+        } positions[4];
+        DWORD colors[4];
+        D3DDRAWPRIMITIVESTRIDEDDATA arrays = {};
+        D3DVERTEXBUFFERDESC desc = {};
+        IDirect3DVertexBuffer7 *vb = NULL;
+        corners(user, decoy, decoy_color, 0);
+        corners(user + 4, quads[0], 0xff000000 | quads[0].color, 0);
+        corners(strided, quads[3], 0xff000000 | quads[3].color, 0);
+        for (UINT i = 0; i < 4; ++i) {
+            positions[i] = {strided[i].x, strided[i].y, strided[i].z, strided[i].rhw};
+            colors[i] = strided[i].diffuse;
+        }
+        arrays.position.lpvData = positions;
+        arrays.position.dwStride = sizeof(Position);
+        arrays.diffuse.lpvData = colors;
+        arrays.diffuse.dwStride = sizeof(DWORD);
+        desc.dwSize = sizeof(desc);
+        desc.dwCaps = D3DVBCAPS_SYSTEMMEMORY;
+        desc.dwFVF = fvf;
+        desc.dwNumVertices = 16;
+        ok = HR(IDirect3D7_CreateVertexBuffer(d3d, &desc, &vb, 0),
+                "FAIL XYZRHW system-memory vertex buffer creation") &&
+             HR(IDirect3DVertexBuffer7_Lock(vb, DDLOCK_WAIT | DDLOCK_WRITEONLY, (void **)&mapped,
+                                            NULL),
+                "FAIL XYZRHW system-memory vertex buffer lock");
+        if (ok) {
+            ok = Check(mapped != NULL, "FAIL XYZRHW system-memory vertex buffer pointer", 0);
+            if (ok) {
+                corners(mapped, decoy, decoy_color, 0);
+                corners(mapped + 4, decoy, decoy_color, 0);
+                corners(mapped + 8, quads[1], 0xff000000 | quads[1].color, 0);
+                corners(mapped + 12, quads[2], 0xff000000 | quads[2].color, 0);
+            }
+            ok = HR(IDirect3DVertexBuffer7_Unlock(vb), "FAIL XYZRHW vertex buffer unlock") && ok;
+        }
+        ok = ok && begin("FAIL XYZRHW indexed scene") &&
+             HR(IDirect3DDevice7_DrawIndexedPrimitive(device, D3DPT_TRIANGLELIST, fvf, user, 8, up,
+                                                      6, 0),
+                "FAIL XYZRHW user-memory indexed draw") &&
+             HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, vb, 8, 4, local,
+                                                        6, 0),
+                "FAIL XYZRHW indexed draw from vertex 8") &&
+             HR(IDirect3DDevice7_DrawIndexedPrimitiveVB(device, D3DPT_TRIANGLELIST, vb, 12, 4,
+                                                        local, 6, 0),
+                "FAIL XYZRHW indexed draw from vertex 12") &&
+             HR(IDirect3DDevice7_DrawPrimitiveStrided(device, D3DPT_TRIANGLESTRIP,
+                                                      D3DFVF_XYZRHW | D3DFVF_DIFFUSE, &arrays, 4,
+                                                      0),
+                "FAIL XYZRHW strided draw") &&
+             HR(IDirect3DDevice7_EndScene(device), "FAIL XYZRHW indexed end scene");
+        if (vb)
+            IDirect3DVertexBuffer7_Release(vb);
+        if (!ok || !verify("XYZRHW indexed: user memory, start vertices 8 and 12, strided", quads,
+                           4))
+            return;
+        Log("PASS XYZRHW arrays indexed: user-memory DrawIndexedPrimitive, system-memory "
+            "DrawIndexedPrimitiveVB from vertices 8 and 12 and DrawPrimitiveStrided exact, decoys "
+            "unseen");
+    }
+
+    /* Perspective: the texel boundary at u = 3s / (1 + 2s) = 1/2, s = 1/4. */
+    {
+        static const float left = 40, right = 280, top = 40, bottom = 200, rhw_left = 1,
+                           rhw_right = 3;
+        static const DWORD texture0[2] = {0xff402010, 0xff104020},
+                           texture1[2] = {0xff205080, 0xff803008};
+        /* Stage 1 adds texture 1, whose set runs right to left, to texture 0. */
+        static const Area halves[2] = {{40, 40, 100, 200, 0xc05018}, {100, 40, 280, 200, 0x3090a0}};
+        static Textured strip[322];
+        IDirectDrawSurface7 *textures[2] = {};
+        D3DDEVICEDESC7 caps = {};
+        /* A managed 4x4 X8R8G8B8 texture: columns 0-1 left, 2-3 right. */
+        const auto columns = [](DWORD left_color, DWORD right_color,
+                                IDirectDrawSurface7 **out) -> BOOL {
+            DDSURFACEDESC2 desc = {}, locked = {};
+            desc.dwSize = sizeof(desc);
+            desc.dwFlags = DDSD_CAPS | DDSD_WIDTH | DDSD_HEIGHT | DDSD_PIXELFORMAT;
+            desc.dwWidth = desc.dwHeight = 4;
+            desc.ddsCaps.dwCaps = DDSCAPS_TEXTURE;
+            desc.ddsCaps.dwCaps2 = DDSCAPS2_TEXTUREMANAGE;
+            desc.ddpfPixelFormat.dwSize = sizeof(DDPIXELFORMAT);
+            desc.ddpfPixelFormat.dwFlags = DDPF_RGB;
+            desc.ddpfPixelFormat.dwRGBBitCount = 32;
+            desc.ddpfPixelFormat.dwRBitMask = 0xff0000;
+            desc.ddpfPixelFormat.dwGBitMask = 0xff00;
+            desc.ddpfPixelFormat.dwBBitMask = 0xff;
+            locked.dwSize = sizeof(locked);
+            if (!HR(IDirectDraw7_CreateSurface(draw, &desc, out, NULL),
+                    "FAIL XYZRHW texture creation") ||
+                !HR(IDirectDrawSurface7_Lock(*out, NULL, &locked, DDLOCK_WAIT | DDLOCK_WRITEONLY,
+                                             NULL),
+                    "FAIL XYZRHW texture lock"))
+                return FALSE;
+            const BOOL mapped =
+                Check(locked.lpSurface && locked.lPitch >= 16, "FAIL XYZRHW texture layout",
+                      locked.lPitch);
+            if (mapped)
+                for (int y = 0; y < 4; ++y)
+                    for (int x = 0; x < 4; ++x)
+                        *(DWORD *)((BYTE *)locked.lpSurface + y * locked.lPitch + x * 4) =
+                            x < 2 ? left_color : right_color;
+            return HR(IDirectDrawSurface7_Unlock(*out, NULL), "FAIL XYZRHW texture unlock") &&
+                   mapped;
+        };
+        if (!HR(IDirect3DDevice7_GetCaps(device, &caps), "FAIL XYZRHW device caps"))
+            return;
+        if (caps.wMaxSimultaneousTextures < 2 || !(caps.dwTextureOpCaps & D3DTEXOPCAPS_ADD)) {
+            Number("SKIP XYZRHW perspective: wMaxSimultaneousTextures",
+                   caps.wMaxSimultaneousTextures);
+            return;
+        }
+        /* rhw and u * rhw are linear in screen space, so each slice
+         * interpolates the same perspective-correct coordinates as the quad. */
+        for (UINT i = 0; i <= 160; ++i) {
+            const float s = (float)i / 160, x = left + s * (right - left);
+            const float rhw = rhw_left + s * (rhw_right - rhw_left), u = s * rhw_right / rhw;
+            strip[2 * i] = {x, top, .5f, rhw, 0xffffffff, u, .5f, 1 - u, .5f};
+            strip[2 * i + 1] = {x, bottom, .5f, rhw, 0xffffffff, u, .5f, 1 - u, .5f};
+        }
+        ok = columns(texture0[0], texture0[1], &textures[0]) &&
+             columns(texture1[0], texture1[1], &textures[1]);
+        for (DWORD stage = 0; stage < 2 && ok; ++stage)
+            ok = HR(IDirect3DDevice7_SetTexture(device, stage, textures[stage]),
+                    "FAIL XYZRHW texture bind") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_MAGFILTER,
+                                                          D3DTFG_POINT),
+                    "FAIL XYZRHW magnification filter") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_MINFILTER,
+                                                          D3DTFN_POINT),
+                    "FAIL XYZRHW minification filter") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_MIPFILTER,
+                                                          D3DTFP_NONE),
+                    "FAIL XYZRHW mip filter") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_ADDRESS,
+                                                          D3DTADDRESS_CLAMP),
+                    "FAIL XYZRHW addressing") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_TEXCOORDINDEX,
+                                                          stage),
+                    "FAIL XYZRHW coordinate set") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_COLORARG1,
+                                                          D3DTA_TEXTURE),
+                    "FAIL XYZRHW colour argument") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_ALPHAOP,
+                                                          D3DTOP_SELECTARG1),
+                    "FAIL XYZRHW alpha operation") &&
+                 HR(IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_ALPHAARG1,
+                                                          D3DTA_DIFFUSE),
+                    "FAIL XYZRHW alpha argument");
+        ok = ok &&
+             HR(IDirect3DDevice7_SetTextureStageState(device, 0, D3DTSS_COLOROP,
+                                                      D3DTOP_SELECTARG1),
+                "FAIL XYZRHW stage 0") &&
+             HR(IDirect3DDevice7_SetTextureStageState(device, 1, D3DTSS_COLOROP, D3DTOP_ADD),
+                "FAIL XYZRHW stage 1") &&
+             HR(IDirect3DDevice7_SetTextureStageState(device, 1, D3DTSS_COLORARG2, D3DTA_CURRENT),
+                "FAIL XYZRHW stage 1 current") &&
+             HR(IDirect3DDevice7_SetTextureStageState(device, 2, D3DTSS_COLOROP, D3DTOP_DISABLE),
+                "FAIL XYZRHW stage 2") &&
+             HR(IDirect3DDevice7_SetTextureStageState(device, 2, D3DTSS_ALPHAOP, D3DTOP_DISABLE),
+                "FAIL XYZRHW stage 2 alpha") &&
+             HR(IDirect3DDevice7_SetRenderState(device, D3DRENDERSTATE_TEXTUREPERSPECTIVE, TRUE),
+                "FAIL XYZRHW texture perspective") &&
+             begin("FAIL XYZRHW perspective scene") &&
+             HR(IDirect3DDevice7_DrawPrimitive(device, D3DPT_TRIANGLESTRIP, textured_fvf, strip, 322,
+                                               0),
+                "FAIL XYZRHW perspective draw") &&
+             HR(IDirect3DDevice7_EndScene(device), "FAIL XYZRHW perspective end scene") &&
+             verify("XYZRHW perspective: 322-vertex strip, rhw 1 to 3, two units", halves, 2);
+        for (DWORD stage = 0; stage < 2; ++stage) {
+            IDirect3DDevice7_SetTexture(device, stage, NULL);
+            IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_TEXCOORDINDEX, stage);
+            IDirect3DDevice7_SetTextureStageState(device, stage, D3DTSS_ADDRESS, D3DTADDRESS_WRAP);
+        }
+        IDirect3DDevice7_SetTextureStageState(device, 0, D3DTSS_COLORARG1, D3DTA_DIFFUSE);
+        IDirect3DDevice7_SetTextureStageState(device, 1, D3DTSS_COLOROP, D3DTOP_DISABLE);
+        IDirect3DDevice7_SetTextureStageState(device, 1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
+        for (IDirectDrawSurface7 *texture : textures)
+            if (texture)
+                IDirectDrawSurface7_Release(texture);
+        if (ok)
+            Log("PASS XYZRHW arrays perspective two units: 322-vertex strip with rhw 1 to 3, "
+                "perspective-correct texel boundary of both coordinate sets exact");
+    }
+}
 static void Run(void) {
     typedef HRESULT(WINAPI * CreateDraw)(GUID *, void **, REFIID, IUnknown *);
     HMODULE gl, runtime;
@@ -670,6 +1010,8 @@ static void Run(void) {
         FogBuffers();
     if (!failed)
         ColorArrays();
+    if (!failed)
+        XyzrhwArrays();
 }
 extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);

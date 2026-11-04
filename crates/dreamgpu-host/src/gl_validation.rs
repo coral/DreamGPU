@@ -453,6 +453,18 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glCheckFramebufferStatus => DG_GL_FUNCTION_QUERY | 1,
         FEnum_glGetRenderbufferParameteriv => DG_GL_FUNCTION_QUERY | 2,
         FEnum_glGetFramebufferAttachmentParameteriv => DG_GL_FUNCTION_QUERY | 3,
+        // ARB_occlusion_query and NV_fence (DG_CAP_GL_OCCLUSION_QUERY).
+        FEnum_glBeginQuery | FEnum_glSetFenceNV => 2,
+        FEnum_glEndQuery => 1,
+        FEnum_glDeleteQueries | FEnum_glDeleteFencesNV => DG_GL_FUNCTION_INLINE_DATA | 1,
+        FEnum_glGenQueries
+        | FEnum_glIsQuery
+        | FEnum_glGenFencesNV
+        | FEnum_glIsFenceNV
+        | FEnum_glTestFenceNV
+        | FEnum_glFinishFenceNV => DG_GL_FUNCTION_QUERY | 1,
+        FEnum_glGetQueryiv | FEnum_glGetFenceivNV => DG_GL_FUNCTION_QUERY | 2,
+        FEnum_glGetQueryObjectuiv => DG_GL_FUNCTION_QUERY | 3,
         // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
         FEnum_glActiveTexture => 1,
         FEnum_glMultiTexCoord4f => 5,
@@ -938,6 +950,13 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
             DG_GL_ERROR_BATCH
         };
     }
+    if matches!(function, FEnum_glDeleteQueries | FEnum_glDeleteFencesNV) {
+        return if crate::occlusion::delete_shape(a[0], data.len()) {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     if function == FEnum_glDeleteProgramsARB {
         return if a[0] <= DG_GL_MAX_PROGRAMS && data.len() as u64 == u64::from(a[0]) * 4 {
             0
@@ -1091,6 +1110,9 @@ fn query_string(name: u32) -> Option<&'static [u8]> {
 fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
     let [a, b, d] = a;
     let mut kind = DG_GL_RESULT_INT;
+    if crate::occlusion::query_function(function) {
+        return crate::occlusion::query_shape(function, [a, b, d]);
+    }
     let count = match function {
         FEnum_glNewList | FEnum_glEndList | FEnum_glGenLists | FEnum_glDeleteLists
         | FEnum_glIsList => {
@@ -1476,6 +1498,19 @@ pub extern "C" fn dreamgpu_gl_function_words(function: u32) -> u32 {
 pub unsafe extern "C" fn dreamgpu_gl_call_validate(function: u32, args: *const u8) -> u32 {
     // Capability/function-class rejection belongs to the outer batch validator.
     // Preserve this helper's no-read success for calls without extra constraints.
+    if matches!(
+        function,
+        FEnum_glBeginQuery | FEnum_glEndQuery | FEnum_glSetFenceNV
+    ) {
+        // ARB_occlusion_query and NV_fence: the one target and condition.
+        return unsafe { args_n::<2>(function, args) }.map_or(DG_GL_ERROR_UNSUPPORTED, |a| {
+            if crate::occlusion::call_shape(function, &a) {
+                0
+            } else {
+                DG_GL_ERROR_UNSUPPORTED
+            }
+        });
+    }
     let framebuffer = matches!(
         function,
         FEnum_glBindFramebuffer
