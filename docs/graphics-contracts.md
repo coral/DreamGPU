@@ -462,7 +462,9 @@ coordinate pointer on whichever client unit Wine's own loaders left selected,
 so every menu tile sampled one texel; it now selects unit 0. Menus and Quick
 Start render correctly. With the m24 package (vertex buffer objects) a Kauri
 Cliffs round on Win2000 renders the course, sea, sky, golfer and HUD with
-correct colours, and the computer player completes its first shot.
+correct colours, and the computer player completes its first shot. With m27
+(framebuffer objects, its depth Blt on the GPU) it plays hole 1 to the green
+and continues on hole 2.
 
 Game checks on DreamGPU fixtures (2026-11-03, Linux host):
 - **Quake III Arena demo** (OpenGL, Win2000): installs, runs at 640×480, and its
@@ -501,7 +503,12 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
   Vertex Shader) crashes before issuing a shader or failing D3D call, inside
   3DMark's own `P_VertexShader` cleanup, presumably on the code path chosen by
   its failed CPU detection. The same crash happens with D3D Software T&L and
-  again after upgrading the fixture from m16 to the m23 package.
+  again after upgrading the fixture from m16 to the m23 package. With the m27
+  package (framebuffer objects) Fill Rate (single and multi), High Polygon Count
+  (1 and 8 lights), Environment Bump Mapping and Point Sprites (157.3
+  MSprites/s) run; the test sequence then faults loading DOT3 Bump Mapping in
+  3DMark's `P_Material::~P_Material`, on a garbage pointer from its own
+  `P_VertexBuffer` code (Dr. Watson), as the scene tests do.
 - **GTA Vice City** (Win2000): installs, then exits silently before loading
   D3D8. The executable is SecuROM-protected (`.cms_t`/`.cms_d` sections), and
   SecuROM's physical-disc checks fail on an emulated CD drive.
