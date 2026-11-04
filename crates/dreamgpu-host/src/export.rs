@@ -69,7 +69,7 @@ impl Drop for Restore<'_> {
 pub unsafe extern "C" fn dreamgpu_export(
     api: *const DreamGpuGlApi,
     d: *mut Drawable,
-    state: *const ContextState,
+    state: *mut ContextState,
     framebuffer: u32,
     exchange: u32,
     rectangle: u32,

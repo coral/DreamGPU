@@ -385,6 +385,22 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         };
         return result.map_or_else(|e| e, |()| 0);
     }
+    if matches!(
+        function,
+        FEnum_glDeleteFramebuffers | FEnum_glDeleteRenderbuffers
+    ) {
+        let data = if bytes == 0 {
+            &[]
+        } else {
+            unsafe { core::slice::from_raw_parts(data, bytes as usize) }
+        };
+        let result = if function == FEnum_glDeleteFramebuffers {
+            unsafe { crate::framebuffer::delete_framebuffers(m, state, serial, data) }
+        } else {
+            unsafe { crate::framebuffer::delete_renderbuffers(m, state, serial, data) }
+        };
+        return result.map_or_else(|e| e, |()| 0);
+    }
     if function == FEnum_glDrawRangeElements {
         let data = if bytes == 0 {
             &[]
@@ -394,6 +410,18 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         return unsafe { buffer_draw(m, state, serial, &wide, data) };
     }
     if function == FEnum_glDeleteTextures {
+        // A deleted texture leaves this context's bound framebuffers first,
+        // as native deletion detaches it from them.
+        if bytes != 0 {
+            unsafe {
+                crate::framebuffer::forget_textures(
+                    m,
+                    state,
+                    serial,
+                    core::slice::from_raw_parts(data, bytes as usize),
+                )
+            };
+        }
         // Deleting a texture bound on any unit reverts that unit to default.
         let bindings = unsafe { crate::state::binding_slots(state) };
         unsafe {

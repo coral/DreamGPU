@@ -49,12 +49,13 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
         GLint local;                                                                               \
         if (!output || !JglReady())                                                                \
             return;                                                                                \
-        if (LocalUnpack(pname, &local) || JglArrayQuery(pname, &local)) {                          \
+        if (LocalUnpack(pname, &local) || JglArrayQuery(pname, &local) ||                          \
+            JglFramebufferBinding(pname, &local)) {                                                \
             *output = kind == DG_GL_RESULT_BOOL ? (type)(local != 0) : (type)local;                \
             return;                                                                                \
         }                                                                                          \
         if (JglCubeMapQueryRejected(pname) || JglProgramQueryRejected(pname) ||                    \
-            JglTexture3DQueryRejected(pname)) {                                                    \
+            JglTexture3DQueryRejected(pname) || JglFramebufferQueryRejected(pname)) {              \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \

@@ -217,14 +217,17 @@ pub unsafe extern "C" fn dreamgpu_drawable_release(api: *const DreamGpuGlApi, d:
     }
 }
 /// # Safety
-/// Current render context owns framebuffer/initialized; logical state immutable.
+/// Current render context owns framebuffer/initialized and its state. The
+/// drawable framebuffer is bound for both targets, then the context's
+/// framebuffer object bindings are restored on top of it.
 #[no_mangle]
 pub unsafe extern "C" fn dreamgpu_drawable_bind(
     api: *const DreamGpuGlApi,
     d: *mut Drawable,
     framebuffer: *mut u32,
     initialized: *mut u32,
-    state: *const ContextState,
+    state: *mut ContextState,
+    serial: u64,
 ) -> u32 {
     let a = unsafe { &*api };
     unsafe {
@@ -240,6 +243,7 @@ pub unsafe extern "C" fn dreamgpu_drawable_bind(
             return DG_GL_ERROR_HOST;
         }
         gl!(a, dg_glBindFramebuffer(GL_FRAMEBUFFER, *framebuffer));
+        (*state).window_framebuffer = *framebuffer;
         attachments(a, d);
         let e = dreamgpu_context_select_buffers(api, state);
         if e != 0 {
@@ -255,17 +259,21 @@ pub unsafe extern "C" fn dreamgpu_drawable_bind(
             );
             *initialized = 1;
         }
+        // Another context may have written this one's attachments meanwhile.
+        crate::framebuffer::rebind(a, state);
+        crate::framebuffer::order_bound(a, state, serial);
     }
     0
 }
 /// # Safety
-/// Render-owned drawable/current framebuffer. Exchange changes names, not pixels.
+/// Render-owned drawable/current framebuffer. Exchange changes names, not pixels,
+/// and leaves the context's framebuffer object bindings as they were.
 #[no_mangle]
 pub unsafe extern "C" fn dreamgpu_drawable_exchange(
     api: *const DreamGpuGlApi,
     d: *mut Drawable,
     framebuffer: u32,
-    state: *const ContextState,
+    state: *mut ContextState,
 ) {
     let a = unsafe { &*api };
     unsafe {
@@ -292,6 +300,7 @@ pub unsafe extern "C" fn dreamgpu_drawable_exchange(
             )
         );
         dreamgpu_context_select_buffers(api, state);
+        crate::framebuffer::rebind(a, state);
     }
 }
 /// # Safety
@@ -709,7 +718,14 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
     if !(0..=1).contains(&border) || w < 2 * border as u32 || h < 2 * border as u32 {
         return GL_INVALID_OPERATION;
     }
-    if border == 0 && unsafe { (*t).name != 0 && (*t).deleted == 0 } {
+    // A depth (or packed depth/stencil) image (EXT_packed_depth_stencil) is
+    // zeroed through its own pixel format: four bytes per texel either way.
+    let (format, kind) = match unsafe { depth_image(a, target, level) } {
+        Some(stencil) if stencil => (GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8),
+        Some(_) => (GL_DEPTH_COMPONENT, GL_UNSIGNED_INT),
+        None => (GL_RGBA, GL_UNSIGNED_BYTE),
+    };
+    if format == GL_RGBA && border == 0 && unsafe { (*t).name != 0 && (*t).deleted == 0 } {
         let mut saved = ClearState {
             api: a,
             read: 0,
@@ -791,8 +807,8 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
                 y as i32 - border,
                 w as i32,
                 (rows as u32).min(h - y) as i32,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
+                format,
+                kind,
                 zero.p.cast()
             )
         );
@@ -802,6 +818,24 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         }
     }
     0
+}
+/// Whether the bound image of `target` at `level` is a depth image, and if so
+/// whether it has stencil: Some(stencil). Only 2D images can be depth images.
+unsafe fn depth_image(a: &DreamGpuGlApi, target: u32, level: u32) -> Option<bool> {
+    if target != GL_TEXTURE_2D {
+        return None;
+    }
+    let get = a.dg_glGetTexLevelParameteriv?;
+    let (mut depth, mut stencil) = (0, 0);
+    unsafe {
+        get(target, level as i32, GL_TEXTURE_DEPTH_SIZE, &mut depth);
+        if a.dg_glGetError.expect("complete API")() != GL_NO_ERROR || depth <= 0 {
+            return None;
+        }
+        get(target, level as i32, GL_TEXTURE_STENCIL_SIZE, &mut stencil);
+        let error = a.dg_glGetError.expect("complete API")();
+        Some(error == GL_NO_ERROR && stencil > 0)
+    }
 }
 #[repr(C)]
 pub struct ReadCache {

@@ -155,30 +155,15 @@ fn raster_double_wire_bounds_and_begin_rejection() {
     assert!(take().is_empty());
 }
 
-unsafe extern "C" fn copy_pixels(x: i32, y: i32, w: i32, h: i32, kind: u32) {
-    note(&[
-        x as u32 as u64,
-        y as u32 as u64,
-        w as u64,
-        h as u64,
-        kind as u64,
-    ]);
-}
 #[test]
-fn copy_pixels_signed_coordinates_bounds_and_begin_guard() {
-    let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
-    api.dg_glCopyPixels = Some(copy_pixels);
+fn copy_pixels_reads_through_the_resource_hook_and_obeys_begin() {
+    // CopyPixels reads the read framebuffer, whose admission (and native call)
+    // belongs to the context's resource hook (EXT_framebuffer_object).
+    let api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
     let mut state = 0;
     let args = [u32::MAX, 0x8000_0000, 2, 3, GL_COLOR];
-    for n in 0..5 {
-        assert_eq!(
-            run(&api, &mut state, FEnum_glCopyPixels, &args[..n]),
-            Err(1)
-        );
-        assert!(take().is_empty());
-    }
     run(&api, &mut state, FEnum_glCopyPixels, &args).unwrap();
-    assert_eq!(take(), args.map(u64::from));
+    assert_eq!(take(), [200, FEnum_glCopyPixels as u64]);
     state = 1;
     assert_eq!(run(&api, &mut state, FEnum_glCopyPixels, &args), Err(4));
     assert_eq!(state, 1);
@@ -325,7 +310,14 @@ fn fragment_program_records_route_to_state_or_native_gl() {
         &api,
         &mut state,
         FEnum_glProgramEnvParameter4fARB,
-        &[GL_VERTEX_PROGRAM_ARB, 255, bits[3], bits[2], bits[1], bits[0]],
+        &[
+            GL_VERTEX_PROGRAM_ARB,
+            255,
+            bits[3],
+            bits[2],
+            bits[1],
+            bits[0],
+        ],
     )
     .unwrap();
     let mut expected = vec![400, u64::from(GL_VERTEX_PROGRAM_ARB), 255];
@@ -393,7 +385,12 @@ fn generic_attributes_are_bit_exact_and_legal_inside_begin() {
     take();
     // An index the protocol does not have never reaches native GL.
     assert_eq!(
-        run(&api, &mut state, FEnum_glVertexAttrib4fARB, &[16, 0, 0, 0, 0]),
+        run(
+            &api,
+            &mut state,
+            FEnum_glVertexAttrib4fARB,
+            &[16, 0, 0, 0, 0]
+        ),
         Err(DG_GL_ERROR_UNSUPPORTED)
     );
     assert!(take().is_empty());

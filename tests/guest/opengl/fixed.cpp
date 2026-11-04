@@ -37,6 +37,12 @@ BOOL JglTexture3DAvailable(void) {
 BOOL JglVertexBufferObjectAvailable(void) {
     return FALSE;
 }
+BOOL JglFramebufferObjectAvailable(void) {
+    return FALSE;
+}
+BOOL JglFramebufferBinding(GLenum, GLint *) {
+    return FALSE;
+}
 GLubyte *JglProgramErrorBuffer(void) {
     return NULL;
 }

@@ -38,8 +38,9 @@ typedef struct DreamGpuTextureEntry {
 } DreamGpuTextureEntry;
 typedef struct DreamGpuTextureNamespace {
     uint32_t refs;
-    /* Rust-owned display list, program and buffer object tables of the group. */
-    void *lists, *programs, *buffers;
+    /* Rust-owned display list, program, buffer and renderbuffer object tables
+     * of the group. */
+    void *lists, *programs, *buffers, *renderbuffers;
     DreamGpuTextureEntry entries[8192];
 } DreamGpuTextureNamespace;
 typedef struct DreamGpuTextureMemory {
@@ -104,6 +105,13 @@ typedef struct DreamGpuContextState {
     DreamGpuTexture *units_3d[8];
     DreamGpuTexture *attrib_3d[16][8];
     uint32_t proxy_rejected_3d;
+    /* Rust-owned framebuffer object state: this context's objects, the draw
+     * and read bindings (NULL: the window), the renderbuffer binding, the
+     * native framebuffer of the window and the framebuffer names saved with
+     * each attribute stack entry. */
+    void *framebuffers, *draw_framebuffer, *read_framebuffer, *renderbuffer;
+    uint32_t window_framebuffer;
+    uint32_t attrib_framebuffers[16][2];
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the
@@ -197,10 +205,14 @@ uint32_t dreamgpu_drawable_init(const struct DreamGpuGlApi *, DreamGpuNativeDraw
                                 uint32_t);
 void dreamgpu_drawable_flush(const struct DreamGpuGlApi *, DreamGpuNativeDrawable *);
 void dreamgpu_drawable_release(const struct DreamGpuGlApi *, DreamGpuNativeDrawable *);
+/* Binding and exchange restore the context's framebuffer object bindings. */
 uint32_t dreamgpu_drawable_bind(const struct DreamGpuGlApi *, DreamGpuNativeDrawable *, uint32_t *,
-                                uint32_t *, const DreamGpuContextState *);
+                                uint32_t *, DreamGpuContextState *, uint64_t serial);
 void dreamgpu_drawable_exchange(const struct DreamGpuGlApi *, DreamGpuNativeDrawable *, uint32_t,
-                                const DreamGpuContextState *);
+                                DreamGpuContextState *);
+/* Fence what the current context rendered into its framebuffer objects before
+ * another context runs. */
+void dreamgpu_framebuffer_settle(const struct DreamGpuGlApi *, DreamGpuContextState *, uint64_t);
 uint32_t dreamgpu_texture_copy(const struct DreamGpuGlApi *, DreamGpuTexture *, uint64_t *,
                                uint32_t *, uint64_t, uint32_t, uint32_t, const uint8_t *);
 uint32_t dreamgpu_texture_zero(const DreamGpuTextureMemory *, const DreamGpuTexture *, uint32_t,
@@ -215,8 +227,8 @@ typedef uint32_t (*DreamGpuExportStep)(void *);
 typedef int64_t (*DreamGpuClock)(void *);
 typedef void (*DreamGpuSleep)(void *, uint64_t);
 uint32_t dreamgpu_export(const struct DreamGpuGlApi *, DreamGpuNativeDrawable *,
-                         const DreamGpuContextState *, uint32_t, uint32_t, uint32_t,
-                         DreamGpuExportStep, DreamGpuExportStep, void *);
+                         DreamGpuContextState *, uint32_t, uint32_t, uint32_t, DreamGpuExportStep,
+                         DreamGpuExportStep, void *);
 uint32_t dreamgpu_export_wait(const struct DreamGpuGlApi *, void *, DreamGpuClock, DreamGpuSleep,
                               void *);
 uint32_t dreamgpu_gl_data(const DreamGpuTextureMemory *, DreamGpuContextState *, uint32_t, uint64_t,

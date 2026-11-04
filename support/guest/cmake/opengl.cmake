@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-2.0-or-later
-set(frontend_sources frontend query texture compressed compatibility readback arrays secondary multitexture fog program attrib buffer fixed provider transport transport9-window)
+set(frontend_sources frontend query texture compressed compatibility readback arrays secondary multitexture fog program attrib buffer framebuffer fixed provider transport transport9-window)
 set(frontend_units "${DREAMGPU_GUEST}/nt/memory.cpp")
 foreach(unit IN LISTS frontend_sources)
   list(APPEND frontend_units "${DREAMGPU_GUEST}/opengl/${unit}.cpp")

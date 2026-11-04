@@ -158,7 +158,9 @@ static void APIENTRY AliasGetPixelMapusv(GLenum map, GLushort *values) {
 static void APIENTRY AliasCopyPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum type) {
     if (!JglCommandReady())
         return;
-    if (type != GL_COLOR && type != GL_DEPTH && type != GL_STENCIL) {
+    /* EXT_packed_depth_stencil adds DEPTH_STENCIL, copied natively. */
+    if (type != GL_COLOR && type != GL_DEPTH && type != GL_STENCIL &&
+        !(type == 0x84f9 && JglFramebufferObjectAvailable())) {
         JglCommandError(GL_INVALID_ENUM);
         return;
     }

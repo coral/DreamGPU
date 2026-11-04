@@ -73,7 +73,17 @@ unsafe fn execute(
         | FEnum_glTexEnvi
         | FEnum_glTexEnvf
         | FEnum_glBindProgramARB
-        | FEnum_glProgramLocalParameter4fARB => {
+        | FEnum_glProgramLocalParameter4fARB
+        | FEnum_glBindFramebuffer
+        | FEnum_glBindRenderbuffer
+        | FEnum_glRenderbufferStorage
+        | FEnum_glFramebufferTexture1D
+        | FEnum_glFramebufferTexture2D
+        | FEnum_glFramebufferTexture3D
+        | FEnum_glFramebufferRenderbuffer
+        | FEnum_glGenerateMipmap
+        | FEnum_glBlitFramebuffer
+        | FEnum_glCopyPixels => {
             let error = unsafe { hook(opaque, function, args.as_ptr()) };
             if error != 0 {
                 return Err(error);
@@ -189,15 +199,6 @@ unsafe fn execute(
         FEnum_glIndexMask => unsafe { api.dg_glIndexMask.ok_or(3u32)?(u(0)?) },
         FEnum_glAccum => unsafe { api.dg_glAccum.ok_or(3u32)?(u(0)?, f(1)?) },
         FEnum_glLogicOp => unsafe { api.dg_glLogicOp.ok_or(3u32)?(u(0)?) },
-        FEnum_glCopyPixels => unsafe {
-            api.dg_glCopyPixels.ok_or(3u32)?(
-                u(0)? as i32,
-                u(1)? as i32,
-                u(2)? as i32,
-                u(3)? as i32,
-                u(4)?,
-            )
-        },
         FEnum_glPixelZoom => unsafe { api.dg_glPixelZoom.ok_or(3u32)?(f(0)?, f(1)?) },
         FEnum_glPixelTransferf => unsafe { api.dg_glPixelTransferf.ok_or(3u32)?(u(0)?, f(1)?) },
         FEnum_glPixelTransferi => unsafe {

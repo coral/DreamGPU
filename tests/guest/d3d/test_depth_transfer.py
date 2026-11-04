@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-License-Identifier: GPL-2.0-or-later
 """Execute prepared Wine depth conversions/transfers with sanitizer guard regions."""
-import importlib.util,json,os,shutil,subprocess,tempfile
+import importlib.util,json,os,re,shutil,subprocess,tempfile
 from pathlib import Path
 ROOT=Path(__file__).resolve().parents[3]
 spec=importlib.util.spec_from_file_location('patches',ROOT/'tests/guest/support/patches.py')
@@ -30,6 +30,11 @@ typedef size_t SIZE_T;
 #define WINED3D_LOCATION_DRAWABLE 16
 #define WINED3D_LOCATION_SYSMEM 1
 #define ORM_BACKBUFFER 1
+/* Patch 0043's framebuffer-object mode; the drawable mode never reaches it. */
+#define ORM_FBO 2
+#define WINED3D_LOCATION_TEXTURE_RGB 64
+#define WINED3D_LOCATION_RB_RESOLVED 128
+#define STATE_FRAMEBUFFER 77
 #define WINED3DFMT_D16_LOCKABLE 1
 #define WINED3DFMT_D16_UNORM 2
 #define WINED3DFMT_D32_UNORM 3
@@ -53,9 +58,11 @@ struct wined3d_gl_info {struct {struct {
  GLenum (*p_glGetError)(void);
 } gl;} gl_ops;
  /* Indexed by the extensions the transfer consults (patches 0029, 0033). */
- BOOL supported[2];};
+ BOOL supported[4];};
 #define ARB_FRAGMENT_PROGRAM 0
 #define ARB_VERTEX_PROGRAM 1
+#define EXT_PACKED_DEPTH_STENCIL 2
+#define ARB_FRAMEBUFFER_OBJECT 3
 struct wined3d_context {int valid;struct wined3d_surface *current_rt;const struct wined3d_gl_info *gl_info;BOOL render_offscreen;void *hdc,*glCtx;};
 struct wined3d_device {struct wined3d_surface *onscreen_depth_stencil,*backbuffer_ds_rt;struct wined3d_context *backbuffer_ds_context;void *backbuffer_ds_hdc,*backbuffer_ds_glctx;};
 struct wined3d_bo_address {void *addr;unsigned buffer_object;};
@@ -83,6 +90,13 @@ static void surface_get_drawable_size(struct wined3d_surface *s,struct wined3d_c
 static void surface_get_memory(struct wined3d_surface *s,struct wined3d_bo_address *m,DWORD loc)
 {assert(s&&loc);m->addr=missing?NULL:storage+4;m->buffer_object=pbo;}
 static void surface_validate_location(struct wined3d_surface *s,DWORD loc) {s->locations|=loc;}
+static void wined3d_surface_prepare(struct wined3d_surface *s,struct wined3d_context *c,DWORD loc)
+{(void)s;(void)c;(void)loc;assert(!"drawable transfers never prepare FBO storage");}
+static void context_apply_fbo_state_blit(struct wined3d_context *c,GLenum t,struct wined3d_surface *rt,
+        struct wined3d_surface *ds,DWORD loc)
+{(void)c;(void)t;(void)rt;(void)ds;(void)loc;assert(!"drawable transfers never bind an FBO");}
+static void context_invalidate_state(struct wined3d_context *c,DWORD state)
+{(void)c;(void)state;assert(!"drawable transfers keep the framebuffer state");}
 static void *allocate(size_t size) {return fail_alloc?NULL:malloc(size);}
 #define malloc allocate
 '''
@@ -257,8 +271,8 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-depth-') as directory:
   p=work/name;p.parent.mkdir(parents=True,exist_ok=True);shutil.copyfile(ROOT/'vendor/wine9x'/name,p)
  patches.apply(work,MANIFEST);source=(work/'wined3d/surface.c').read_text()
  owner=function((work/'wined3d/device.c').read_text(),'BOOL device_owns_backbuffer_ds(')
- code=owner+'\n'+'\n'.join(function(source,p) for p in ['static BOOL surface_depth_layout(', 'static void surface_depth_convert(', 'static BOOL surface_depth_transfer_available(', 'static HRESULT surface_transfer_depth('])
- import re
+ fbo=re.search(r'^static const DWORD surface_fbo_depth_locations =[^;]*;',source,re.M)[0]
+ code=owner+'\n'+fbo+'\n'+'\n'.join(function(source,p) for p in ['static BOOL surface_depth_layout(', 'static void surface_depth_convert(', 'static BOOL surface_depth_transfer_available(', 'static HRESULT surface_transfer_depth('])
  transfer=function(source,'static HRESULT surface_transfer_depth(')
  available=function(source,'static BOOL surface_depth_transfer_available(')
  called=set(re.findall(r'\.p_(gl\w+)\(',transfer))

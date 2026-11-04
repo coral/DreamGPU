@@ -1,0 +1,78 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -1757,7 +1757,8 @@
+     if (width > src_width || height > src_height) return;
+ 
+     /* Remove any renderbuffer set if the sizes match */
+-    if (gl_info->supported[ARB_FRAMEBUFFER_OBJECT]
++    /* DreamGPU: or if mixed sizes are complete (check_fbo_mixed_sizes()). */
++    if (gl_info->supported[ARB_FRAMEBUFFER_OBJECT] || gl_info->fbo_mixed_sizes
+             || (width == src_width && height == src_height))
+     {
+         surface->current_renderbuffer = NULL;
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -2706,6 +2706,44 @@
+     return TRUE;
+ }
+ 
++/* DreamGPU: EXT_framebuffer_object requires attachments of one size, so a
++ * depth surface larger than the render target is attached through a separate
++ * renderbuffer of the target's size (surface_set_compatible_renderbuffer()),
++ * which the surface's contents never reach, and loading the surface then
++ * fails. GL 3 (ARB_framebuffer_object) completes mixed sizes, drawing their
++ * common area, as D3D shares one depth buffer between targets of different
++ * sizes. Ask the implementation instead of assuming the EXT rule. */
++/* Context activation is done by the caller. */
++static BOOL check_fbo_mixed_sizes(const struct wined3d_gl_info *gl_info)
++{
++    GLuint fbo, rb[2];
++    GLenum status;
++    unsigned int i;
++
++    if (wined3d_settings.offscreen_rendering_mode != ORM_FBO)
++        return FALSE;
++    if (gl_info->supported[ARB_FRAMEBUFFER_OBJECT])
++        return TRUE;
++
++    gl_info->fbo_ops.glGenFramebuffers(1, &fbo);
++    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, fbo);
++    gl_info->fbo_ops.glGenRenderbuffers(2, rb);
++    gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, rb[0]);
++    gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 16);
++    gl_info->fbo_ops.glBindRenderbuffer(GL_RENDERBUFFER, rb[1]);
++    gl_info->fbo_ops.glRenderbufferStorage(GL_RENDERBUFFER, GL_DEPTH_COMPONENT, 32, 32);
++    gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rb[0]);
++    gl_info->fbo_ops.glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, rb[1]);
++    status = gl_info->fbo_ops.glCheckFramebufferStatus(GL_FRAMEBUFFER);
++    gl_info->fbo_ops.glBindFramebuffer(GL_FRAMEBUFFER, 0);
++    gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
++    gl_info->fbo_ops.glDeleteRenderbuffers(2, rb);
++    for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
++    TRACE("Mixed-size framebuffer attachments: status %#x.\n", status);
++
++    return status == GL_FRAMEBUFFER_COMPLETE;
++}
++
+ /* Context activation is done by the caller. */
+ BOOL wined3d_adapter_init_format_info(struct wined3d_adapter *adapter, struct wined3d_caps_gl_ctx *ctx)
+ {
+@@ -2719,6 +2757,7 @@
+ 
+     apply_format_fixups(adapter, gl_info);
+     init_format_fbo_compat_info(ctx);
++    gl_info->fbo_mixed_sizes = check_fbo_mixed_sizes(gl_info);
+     init_format_filter_info(gl_info, adapter->driver_info.vendor);
+ 
+     /* This backend expands indexed 2D textures and their attached palette to
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1761,6 +1761,8 @@
+     BOOL supported[WINED3D_GL_EXT_COUNT];
+     /* DreamGPU: GL_ARB_texture_rectangle was reported but hidden by full NPOT support. */
+     BOOL texture_rectangle_hidden;
++    /* DreamGPU: framebuffer objects complete attachments of different sizes. */
++    BOOL fbo_mixed_sizes;
+     GLint wrap_lookup[WINED3D_TADDRESS_MIRROR_ONCE - WINED3D_TADDRESS_WRAP + 1];
+     float fixed_polyoffset_scale, float_polyoffset_scale;
+ 

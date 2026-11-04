@@ -47,10 +47,12 @@ typedef struct {
     HWND Window;
     BOOL Created, Drawable, Failed, InBegin, Deleting, Uncertain, FrontDirty, EverCurrent,
         ShareEstablished;
+    /* The window's draw buffer (~0u: unknown), whichever framebuffer is bound. */
     GLenum DrawBuffer;
     GLenum Error;
     JGL_UNPACK Unpack, Pack;
     JGL_ARRAY_STATE Arrays;
+    JGL_FRAMEBUFFER_STATE Framebuffer;
     JGL_NAMES *Names;
     JGL_STATE_CACHE State;
     void *LargeQuery;
@@ -115,6 +117,9 @@ BOOL JglTexture3DAvailable(void) {
 BOOL JglVertexBufferObjectAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT);
 }
+BOOL JglFramebufferObjectAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_FRAMEBUFFER_OBJECT);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -139,6 +144,8 @@ BOOL JglVertexBufferObjectAvailable(void) {
 #define JGL_VERTEX_PROGRAM_EXTENSIONS "GL_ARB_vertex_program"
 #define JGL_TEXTURE_3D_EXTENSIONS "GL_EXT_texture3D"
 #define JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS "GL_ARB_vertex_buffer_object"
+#define JGL_FRAMEBUFFER_OBJECT_EXTENSIONS                                                          \
+    "GL_EXT_framebuffer_object GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
                        sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
@@ -146,7 +153,8 @@ static char Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDAR
                        sizeof(JGL_FOG_COORD_EXTENSIONS) + sizeof(JGL_CUBE_MAP_EXTENSIONS) +
                        sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
                        sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
-                       sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS)];
+                       sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) +
+                       sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -177,8 +185,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_TEXTURE_3D_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT)
         AppendExtensions(&at, JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_FRAMEBUFFER_OBJECT)
+        AppendExtensions(&at, JGL_FRAMEBUFFER_OBJECT_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_FRAMEBUFFER_OBJECT_EXTENSIONS
 #undef JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS
 #undef JGL_TEXTURE_3D_EXTENSIONS
 #undef JGL_VERTEX_PROGRAM_EXTENSIONS
@@ -240,6 +251,8 @@ static void ReleaseNames(JGL_CONTEXT *c) {
     if (c->Names && !--c->Names->References) {
         if (c->Names->FreeBuffers)
             c->Names->FreeBuffers(c->Names->Buffers);
+        if (c->Names->Renderbuffers)
+            HeapFree(Heap, 0, c->Names->Renderbuffers);
         HeapFree(Heap, 0, c->Names);
     }
     c->Names = NULL;
@@ -328,6 +341,13 @@ JGL_INLINE ULONG *Record(JGL_CONTEXT *c, ULONG operation, ULONG context, ULONG d
     ++c->Records;
     return record + 8;
 }
+/* Drawing reaches the window's front buffer: no framebuffer object is bound
+ * for drawing and the window's draw buffer may include the front. */
+JGL_INLINE BOOL DrawsWindowFront(const JGL_CONTEXT *c) {
+    return !c->Framebuffer.Draw &&
+           (c->DrawBuffer == ~0u || c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
+            c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK);
+}
 /* CopyTexImage2D/CopyTexSubImage2D target the 2D image or, once negotiated, a
  * cube map face. A face record is checked here exactly as the host checks it:
  * an invalid one is a local GL error, never a record that fails the batch. */
@@ -336,8 +356,12 @@ static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
     const ULONG width = a[image ? 5 : 6], height = a[image ? 6 : 7];
     if (!JglImage2DTarget(a[0]))
         return GL_INVALID_ENUM;
+    /* TEXTURE_2D: native GL judges the copy, but depth textures
+     * (EXT_packed_depth_stencil) are borderless. */
     if (!JglCubeFace(a[0]))
-        return 0;
+        return image && a[7] && JglFramebufferObjectAvailable() && JglDepthInternalFormat(a[2])
+                   ? GL_INVALID_VALUE
+                   : 0;
     if (a[1] > DG_GL_MAX_TEXTURE_LEVEL || width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1] ||
         height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
         return GL_INVALID_VALUE;
@@ -494,12 +518,13 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
             __builtin_memcpy(record + 1 + i, (const BYTE *)arguments + i * 4, 4);
         if (c->Arrays.ListMode != GL_COMPILE &&
             (c->Arrays.CaptureMode == 0 || c->Arrays.CaptureMode == GL_RENDER) &&
-            (c->DrawBuffer == ~0u || c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
-             c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK) &&
+            DrawsWindowFront(c) &&
             (function == FEnum_glBegin || function == FEnum_glEvalMesh1 ||
              function == FEnum_glEvalMesh2 ||
              (function == FEnum_glCopyPixels && ((const ULONG *)arguments)[4] == GL_COLOR) ||
-             (function == FEnum_glClear && (*(const ULONG *)arguments & GL_COLOR_BUFFER_BIT))))
+             (function == FEnum_glClear && (*(const ULONG *)arguments & GL_COLOR_BUFFER_BIT)) ||
+             (function == FEnum_glBlitFramebuffer &&
+              (((const ULONG *)arguments)[8] & GL_COLOR_BUFFER_BIT))))
             c->FrontDirty = TRUE;
     }
 }
@@ -582,6 +607,39 @@ void **JglSharedBuffers(void (*release)(void *)) {
         names->FreeBuffers = release;
     return &names->Buffers;
 }
+/* Framebuffer objects (framebuffer.cpp): this context's bindings and names,
+ * and the share group's renderbuffer names. */
+JGL_FRAMEBUFFER_STATE *JglFramebufferState(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    return c ? &c->Framebuffer : NULL;
+}
+void **JglSharedRenderbuffers(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    JGL_NAMES *names = c ? TextureNames(c) : NULL;
+    return names ? &names->Renderbuffers : NULL;
+}
+BOOL JglFramebufferBinding(GLenum pname, GLint *value) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c || !JglFramebufferObjectAvailable())
+        return FALSE;
+    switch (pname) {
+        case 0x8ca6: /* FRAMEBUFFER_BINDING_EXT, the draw binding */
+            *value = (GLint)c->Framebuffer.Draw;
+            return TRUE;
+        case 0x8caa: /* READ_FRAMEBUFFER_BINDING_EXT */
+            *value = (GLint)c->Framebuffer.Read;
+            return TRUE;
+        case 0x8ca7: /* RENDERBUFFER_BINDING_EXT */
+            *value = (GLint)c->Framebuffer.Renderbuffer;
+            return TRUE;
+        default:
+            return FALSE;
+    }
+}
+BOOL JglReadFramebufferBound(void) {
+    JGL_CONTEXT *c = CurrentContext();
+    return c && c->Framebuffer.Read;
+}
 void JglLockShared(void) {
     EnterCriticalSection(&Lock);
 }
@@ -639,6 +697,8 @@ GLubyte *JglProgramErrorBuffer(void) {
     return c->ProgramError;
 }
 static void FreeContext(JGL_CONTEXT *c) {
+    if (c->Framebuffer.Names)
+        HeapFree(Heap, 0, c->Framebuffer.Names);
     if (c->ProgramError)
         HeapFree(Heap, 0, c->ProgramError);
     if (c->LargeQuery)
@@ -710,10 +770,9 @@ static BOOL CaptureData(ULONG function, const ULONG *arguments, ULONG words, con
          (words == 8 &&
           (function == FEnum_glBitmap ||
            (function == FEnum_glDrawPixels && arguments[2] != GL_DEPTH_COMPONENT &&
-            arguments[2] != GL_STENCIL_INDEX)) &&
+            arguments[2] != GL_STENCIL_INDEX && arguments[2] != JGL_DEPTH_STENCIL)) &&
           (arguments[6] & 2))) &&
-        (c->DrawBuffer == ~0u || c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
-         c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK))
+        DrawsWindowFront(c))
         c->FrontDirty = TRUE;
     return TRUE;
 }
@@ -1367,8 +1426,13 @@ static void ListEffects(JGL_CONTEXT *c) {
     if (c->Arrays.ListMode == GL_COMPILE)
         return;
     ZeroMemory(&c->State, sizeof(c->State));
-    c->DrawBuffer = ~0u;
     c->Arrays.ListAware = TRUE;
+    /* Lists never bind framebuffers: with an object bound for drawing they
+     * neither draw into the window nor change its draw buffer (DrawBuffer and
+     * PopAttrib apply to the bound framebuffer). */
+    if (c->Framebuffer.Draw)
+        return;
+    c->DrawBuffer = ~0u;
     if (!c->Arrays.CaptureMode || c->Arrays.CaptureMode == GL_RENDER)
         c->FrontDirty = TRUE;
 }
@@ -1407,36 +1471,51 @@ static BOOL PublishFront(JGL_CONTEXT *c) {
     c->FrontDirty = FALSE;
     return TRUE;
 }
+/* The window's colour buffers that ReadBuffer names; DrawBuffer also takes
+ * FRONT_AND_BACK. */
+static BOOL WindowBuffer(GLenum mode, BOOL draw) {
+    return mode == GL_FRONT || mode == GL_FRONT_LEFT || mode == GL_BACK || mode == GL_BACK_LEFT ||
+           mode == GL_LEFT || (draw && mode == GL_FRONT_AND_BACK);
+}
+/* A framebuffer object takes NONE or a colour attachment, a window buffer is
+ * GL_INVALID_OPERATION; the window takes only its buffers (and NONE to draw),
+ * and only with front-buffer presentation. */
+static GLenum BufferError(JGL_CONTEXT *c, GLenum mode, BOOL draw) {
+    if (draw ? c->Framebuffer.Draw : c->Framebuffer.Read) {
+        if (mode == GL_NONE || JglColorAttachment(mode))
+            return 0;
+        return WindowBuffer(mode, draw) ? GL_INVALID_OPERATION : GL_INVALID_ENUM;
+    }
+    if (!(c->Capabilities & DG_WINDOW_CAP_FRONT_ONLY))
+        return GL_INVALID_OPERATION;
+    if (WindowBuffer(mode, draw) || (draw && mode == GL_NONE))
+        return 0;
+    return JglColorAttachment(mode) && JglFramebufferObjectAvailable() ? GL_INVALID_OPERATION
+                                                                       : GL_INVALID_ENUM;
+}
 void APIENTRY glDrawBuffer(GLenum mode) {
     JGL_CONTEXT *c;
+    GLenum error;
     if (!JglCommandReady())
         return;
     c = CurrentContext();
-    if (!(c->Capabilities & DG_WINDOW_CAP_FRONT_ONLY)) {
-        CommandError(c, GL_INVALID_OPERATION);
-        return;
-    }
-    if (mode != GL_FRONT && mode != GL_FRONT_LEFT && mode != GL_BACK && mode != GL_BACK_LEFT &&
-        mode != GL_LEFT && mode != GL_FRONT_AND_BACK && mode != GL_NONE) {
-        CommandError(c, GL_INVALID_ENUM);
+    if ((error = BufferError(c, mode, TRUE))) {
+        CommandError(c, error);
         return;
     }
     ScalarForContext(c, FEnum_glDrawBuffer, 1, &mode);
-    if (c->Arrays.ListMode != GL_COMPILE)
+    /* An object's draw buffer is its own: the window's stays. */
+    if (c->Arrays.ListMode != GL_COMPILE && !c->Framebuffer.Draw)
         c->DrawBuffer = mode;
 }
 void APIENTRY glReadBuffer(GLenum mode) {
     JGL_CONTEXT *c;
+    GLenum error;
     if (!JglCommandReady())
         return;
     c = CurrentContext();
-    if (!(c->Capabilities & DG_WINDOW_CAP_FRONT_ONLY)) {
-        CommandError(c, GL_INVALID_OPERATION);
-        return;
-    }
-    if (mode != GL_FRONT && mode != GL_FRONT_LEFT && mode != GL_BACK && mode != GL_BACK_LEFT &&
-        mode != GL_LEFT) {
-        CommandError(c, GL_INVALID_ENUM);
+    if ((error = BufferError(c, mode, FALSE))) {
+        CommandError(c, error);
         return;
     }
     ScalarForContext(c, FEnum_glReadBuffer, 1, &mode);
@@ -1527,6 +1606,7 @@ void APIENTRY glPushAttrib(GLbitfield mask) {
     if (c->Failed)
         return;
     c->Arrays.ServerMasks[c->Arrays.ServerDepth] = mask;
+    c->Arrays.ServerDrawFramebuffers[c->Arrays.ServerDepth] = c->Framebuffer.Draw;
     c->Arrays.ServerDrawBuffers[c->Arrays.ServerDepth++] = c->DrawBuffer;
 }
 void APIENTRY glPopAttrib(void) {
@@ -1538,7 +1618,11 @@ void APIENTRY glPopAttrib(void) {
         ScalarForContext(c, FEnum_glPopAttrib, 0, NULL);
         if (c->Arrays.ListMode != GL_COMPILE) {
             ZeroMemory(&c->State, sizeof(c->State));
-            c->DrawBuffer = ~0u;
+            /* The host restores a draw buffer only into the framebuffer that
+             * was bound at the push: with an object bound now, never the
+             * window's. */
+            if (!c->Framebuffer.Draw)
+                c->DrawBuffer = ~0u;
         }
         return;
     }
@@ -1553,7 +1637,10 @@ void APIENTRY glPopAttrib(void) {
     /* Pop may restore any subset of these values. Invalidate conservatively
      * instead of shadowing another server attribute stack. */
     ZeroMemory(&c->State, sizeof(c->State));
-    if (c->Arrays.ServerMasks[c->Arrays.ServerDepth] & GL_COLOR_BUFFER_BIT)
+    /* The window's draw buffer returns only when the window was the draw
+     * framebuffer at the push and still is. */
+    if ((c->Arrays.ServerMasks[c->Arrays.ServerDepth] & GL_COLOR_BUFFER_BIT) &&
+        !c->Arrays.ServerDrawFramebuffers[c->Arrays.ServerDepth] && !c->Framebuffer.Draw)
         c->DrawBuffer = c->Arrays.ServerDrawBuffers[c->Arrays.ServerDepth];
 }
 void APIENTRY glBegin(GLenum mode) {

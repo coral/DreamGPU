@@ -179,6 +179,85 @@
 #define DG_GL_MAX_BUFFER_STRIDE 2048
 #define DG_GL_MAX_BUFFER_ELEMENTS 0x01000000
 #define DG_GL_BUFFER_REFERENCE_BYTES 12
+/* Framebuffer objects: EXT_framebuffer_object with EXT_framebuffer_blit and
+ * EXT_packed_depth_stencil. Records use the core function numbers. Framebuffer
+ * names and objects belong to one context; renderbuffer names and objects share
+ * the texture namespace (wglShareLists). Name zero is the context's window
+ * framebuffer (its drawable), which keeps its own draw and read buffers; a
+ * framebuffer object starts with COLOR_ATTACHMENT0 for both. The frontend
+ * reserves names (Gen) and answers Is locally; an object exists from its first
+ * bind. Every command below executes immediately and is never compiled into a
+ * display list, except BlitFramebuffer, which compiles. None is legal inside
+ * Begin/End.
+ * CALL records: BindFramebuffer (target, name) with target FRAMEBUFFER (both
+ * bindings), DRAW_FRAMEBUFFER or READ_FRAMEBUFFER; BindRenderbuffer
+ * (RENDERBUFFER, name); RenderbufferStorage (RENDERBUFFER, internalformat,
+ * width, height, each at most DG_GL_MAX_RENDERBUFFER_SIZE) with RGB, RGBA,
+ * R3_G3_B2, RGB4..RGB16, RGBA2..RGBA16 (0x804f-0x805b), DEPTH_COMPONENT(16/24/
+ * 32), STENCIL_INDEX(1/4/8/16), DEPTH_STENCIL or DEPTH24_STENCIL8, whose
+ * contents are zero-defined; FramebufferTexture1D/2D (target, attachment,
+ * textarget, texture, level) and FramebufferTexture3D (the same and zoffset,
+ * below DG_GL_MAX_3D_TEXTURE_SIZE), textarget TEXTURE_1D, TEXTURE_2D or a
+ * cube map face, and TEXTURE_3D respectively, level at most
+ * DG_GL_MAX_TEXTURE_LEVEL; FramebufferRenderbuffer (target, attachment,
+ * RENDERBUFFER, renderbuffer); GenerateMipmap (TEXTURE_1D, TEXTURE_2D,
+ * TEXTURE_CUBE_MAP or TEXTURE_3D: the active unit's binding); BlitFramebuffer
+ * (srcX0, srcY0, srcX1, srcY1, dstX0, dstY0, dstX1, dstY1 as signed words, mask
+ * of COLOR/DEPTH/STENCIL_BUFFER_BIT, filter NEAREST or LINEAR, LINEAR only for
+ * colour alone). Attachments are COLOR_ATTACHMENT0..DG_GL_MAX_COLOR_ATTACHMENTS-1,
+ * DEPTH_ATTACHMENT and STENCIL_ATTACHMENT; texture or renderbuffer zero
+ * detaches. DATA records: DeleteFramebuffers (count, at most
+ * DG_GL_MAX_FRAMEBUFFERS, then names) and DeleteRenderbuffers (count, at most
+ * DG_GL_MAX_RENDERBUFFERS, then names); zero and unknown names are ignored.
+ * QUERY records, one RESULT_INT each: CheckFramebufferStatus (target);
+ * GetFramebufferAttachmentParameteriv (target, attachment, pname OBJECT_TYPE,
+ * OBJECT_NAME, TEXTURE_LEVEL, TEXTURE_CUBE_MAP_FACE or TEXTURE_3D_ZOFFSET);
+ * GetRenderbufferParameteriv (RENDERBUFFER, pname WIDTH, HEIGHT,
+ * INTERNAL_FORMAT or RED..STENCIL_SIZE). Get*v answers FRAMEBUFFER_BINDING
+ * (the draw binding), READ_FRAMEBUFFER_BINDING, RENDERBUFFER_BINDING,
+ * MAX_COLOR_ATTACHMENTS and MAX_RENDERBUFFER_SIZE (the protocol limits or
+ * smaller native ones). DrawBuffer and ReadBuffer also take
+ * COLOR_ATTACHMENTn, and ReadBuffer NONE.
+ * Everything that depends on GL state is a GL error, never a record fault: an
+ * attachment command, a query of an attachment or a buffer name the bound
+ * framebuffer cannot take (COLOR_ATTACHMENTn for the window, a window buffer
+ * for an object) is INVALID_OPERATION, as are a nonzero texture that is not a
+ * texture object of textarget's target, a renderbuffer that is not an object,
+ * RenderbufferStorage or a renderbuffer query without a bound renderbuffer and
+ * GenerateMipmap of a compressed or bordered level; a level beyond its
+ * target's limit or a renderbuffer beyond the native size is INVALID_VALUE;
+ * table or budget exhaustion is OUT_OF_MEMORY, leaving a binding unchanged and
+ * a renderbuffer without storage. Completeness is the native GL's: attachments of
+ * different sizes or colour formats may be complete, so INCOMPLETE_DIMENSIONS
+ * and INCOMPLETE_FORMATS are not reported. Drawing, clearing, reading or
+ * blitting with an incomplete framebuffer is INVALID_FRAMEBUFFER_OPERATION
+ * (0x0506), as is any read (ReadPixels, CopyPixels, CopyTex*, a blit source) of
+ * a texture level the host could not initialize. Deleting a bound framebuffer
+ * rebinds the window; deleting a bound or attached renderbuffer or texture
+ * unbinds it and detaches it from this context's bound framebuffers only, and
+ * an object attached elsewhere lives until detached. Rendering into a texture
+ * that is also sampled is undefined but harmless. Renderbuffer storage is
+ * charged against the resource budget.
+ * EXT_packed_depth_stencil and the depth attachments: with this capability
+ * TexImage2D/TexSubImage2D and CopyTexImage2D/CopyTexSubImage2D of TEXTURE_2D
+ * (not 1D, cube map or 3D) also take the internal formats DEPTH_COMPONENT(16/24/
+ * 32), DEPTH_STENCIL and DEPTH24_STENCIL8 without a border; images carry format
+ * DEPTH_COMPONENT with BYTE..FLOAT (one component) or DEPTH_STENCIL with
+ * UNSIGNED_INT_24_8 (four bytes), as does DrawPixels. ARB_depth_texture is not
+ * claimed: GetTexImage of a depth level is not supported. ReadPixels DEPTH and
+ * STENCIL modes read a framebuffer object's depth and stencil attachments.
+ * With a framebuffer object bound for reading, a ReadPixels rectangle need not
+ * fit the drawable: x and y stay below DG_GL_MAX_DIMENSION, the host reads the
+ * part inside every attachment and returns zero elsewhere, and an
+ * INVALID_FRAMEBUFFER_OPERATION read returns zeros. The scalar PointParameterf
+ * record takes POINT_SPRITE_COORD_ORIGIN (GL 2.0) to native GL as well; a
+ * renderer drawing upside down into objects keeps point sprites upright with
+ * it, and objects and the window share one native orientation. */
+#define DG_CAP_GL_FRAMEBUFFER_OBJECT 0x2000000
+#define DG_GL_MAX_FRAMEBUFFERS 1024
+#define DG_GL_MAX_RENDERBUFFERS 4096
+#define DG_GL_MAX_COLOR_ATTACHMENTS 4
+#define DG_GL_MAX_RENDERBUFFER_SIZE 4096
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104

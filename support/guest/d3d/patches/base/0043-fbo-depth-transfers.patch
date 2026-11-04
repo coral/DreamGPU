@@ -1,0 +1,145 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -4157,10 +4157,17 @@
+             && gl_info->gl_ops.gl.p_glFinish;
+ }
+ 
++/* DreamGPU: with framebuffer objects an offscreen depth surface has GL storage
++ * of its own, its draw binding: a depth texture or a renderbuffer. */
++static const DWORD surface_fbo_depth_locations = WINED3D_LOCATION_TEXTURE_RGB | WINED3D_LOCATION_RB_RESOLVED;
++
+ /* Transfer the active backbuffer's depth without exposing partially read CPU
+  * memory. A failed upload leaves CPU storage authoritative so a later draw can
+  * retry. Unavailable bindings and unsupported layouts are errors, never copies.
+- * The FBO/depth-texture path remains the upstream implementation. */
++ * With framebuffer objects the surface's own attachment is read or written
++ * instead, alone in an FBO and in offscreen (unflipped) orientation: GetTexImage
++ * cannot read depth without ARB_depth_texture. The drawable/texture copies of
++ * surface_load_ds_location() remain the upstream implementation. */
+ static HRESULT surface_transfer_depth(struct wined3d_surface *surface,
+         struct wined3d_context *context, DWORD location)
+ {
+@@ -4172,22 +4179,30 @@
+     GLuint *depth;
+     BYTE *stencil;
+     SIZE_T count;
+-    BOOL upload = location == WINED3D_LOCATION_DRAWABLE, flip;
++    BOOL fbo = wined3d_settings.offscreen_rendering_mode == ORM_FBO;
++    DWORD binding = !fbo ? WINED3D_LOCATION_DRAWABLE : (location & surface_fbo_depth_locations) ? location
++            : (surface->locations & WINED3D_LOCATION_TEXTURE_RGB) ? WINED3D_LOCATION_TEXTURE_RGB
++            : surface->locations & WINED3D_LOCATION_RB_RESOLVED;
++    BOOL upload = location == binding, flip;
+     GLenum error, cleanup_error;
+     BOOL attrib = FALSE, client = FALSE, projection = FALSE, modelview = FALSE;
+ 
+     if (!context || !context->valid || context_get_current() != context || !context->current_rt
+-            || wined3d_settings.offscreen_rendering_mode != ORM_BACKBUFFER
+-            || !device_owns_backbuffer_ds(surface->resource.device, context, surface)
++            || (fbo ? !binding : wined3d_settings.offscreen_rendering_mode != ORM_BACKBUFFER
++            || !device_owns_backbuffer_ds(surface->resource.device, context, surface))
+             || !surface_depth_layout(surface, &depth_mask, &stencil_mask))
+         return WINED3DERR_INVALIDCALL;
+     if (upload ? !(surface->locations & surface_simple_locations)
+-            : !(surface->locations & WINED3D_LOCATION_DRAWABLE))
++            : !(surface->locations & binding) || !(location & surface_simple_locations))
+         return WINED3DERR_INVALIDCALL;
+     gl_info = context->gl_info;
+     if (!surface_depth_transfer_available(gl_info, upload))
+         return WINED3DERR_INVALIDCALL;
+-    surface_get_drawable_size(context->current_rt, context, &drawable_width, &drawable_height);
++    /* An FBO attachment is the surface's own (at least) surface-sized storage. */
++    drawable_width = width;
++    drawable_height = height;
++    if (!fbo)
++        surface_get_drawable_size(context->current_rt, context, &drawable_width, &drawable_height);
+     if (!width || !height || width > drawable_width || height > drawable_height
+             || width > ~(SIZE_T)0 / height / (sizeof(*depth) + sizeof(*stencil)))
+         return WINED3DERR_INVALIDCALL;
+@@ -4198,12 +4213,21 @@
+     if (!(depth = malloc(count * (sizeof(*depth) + sizeof(*stencil)))))
+         return E_OUTOFMEMORY;
+     stencil = (BYTE *)(depth + count);
+-    flip = !context->render_offscreen;
++    flip = !fbo && !context->render_offscreen;
+     if (upload) surface_depth_convert(surface, memory.addr, depth, stencil, TRUE, flip, depth_mask, stencil_mask);
+     /* Drain prior errors before measuring this transaction, with a bound for a
+      * dead transport that continually reports an error. */
+     for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
+     if (i == 16) { free(depth); return WINED3DERR_INVALIDCALL; }
++    if (fbo)
++    {
++        /* Bind before saving state: draw/read buffers belong to the FBO. Its
++         * errors and completeness count against this transaction. */
++        if (upload)
++            wined3d_surface_prepare(surface, context, binding);
++        context_apply_fbo_state_blit(context, GL_FRAMEBUFFER, NULL, surface, binding);
++        context_invalidate_state(context, STATE_FRAMEBUFFER);
++    }
+     /* Wine's generated wgl.h defines GL_ALL_ATTRIB_BITS as 0xffffffff,
+      * which includes invalid bits in the shipped OpenGL 1.1 interface. Save
+      * only the groups this transfer changes, using their stable GL1.1 bits. */
+@@ -4267,9 +4291,21 @@
+         gl_info->gl_ops.gl.p_glLoadIdentity();
+         gl_info->gl_ops.gl.p_glRasterPos3f(-1.0f, -1.0f, 0.0f);
+         if ((error = gl_info->gl_ops.gl.p_glGetError()) != GL_NO_ERROR) goto cleanup;
+-        gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, depth);
+-        if (stencil_mask)
+-            gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);
++        if (fbo && stencil_mask && (gl_info->supported[EXT_PACKED_DEPTH_STENCIL]
++                || gl_info->supported[ARB_FRAMEBUFFER_OBJECT]))
++        {
++            /* An FBO's stencil is drawn packed with its depth
++             * (EXT_packed_depth_stencil), not as STENCIL_INDEX pixels. */
++            for (i = 0; i < count; ++i)
++                depth[i] = (depth[i] & 0xffffff00u) | stencil[i];
++            gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, depth);
++        }
++        else
++        {
++            gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, depth);
++            if (stencil_mask)
++                gl_info->gl_ops.gl.p_glDrawPixels(width, height, GL_STENCIL_INDEX, GL_UNSIGNED_BYTE, stencil);
++        }
+         /* Completion is part of upload success; queued transfer errors must not
+          * validate the destination before the native driver executes them. */
+         gl_info->gl_ops.gl.p_glFinish();
+@@ -4334,6 +4370,19 @@
+     }
+     if (wined3d_settings.offscreen_rendering_mode != ORM_FBO) return WINED3DERR_INVALIDCALL;
+ 
++    /* DreamGPU: CPU depth (after a Lock, or a defined discarded copy) reaches the
++     * offscreen binding by an FBO transfer, and the drawable through the depth
++     * texture. The copies below only move depth between drawable and texture. */
++    if (!(surface->locations & (location | WINED3D_LOCATION_DISCARDED | WINED3D_LOCATION_DRAWABLE
++            | surface_fbo_depth_locations)) && (surface->locations & surface_simple_locations))
++    {
++        HRESULT hr = surface_transfer_depth(surface, context,
++                location == WINED3D_LOCATION_DRAWABLE ? WINED3D_LOCATION_TEXTURE_RGB : location);
++
++        if (FAILED(hr) || location != WINED3D_LOCATION_DRAWABLE)
++            return hr;
++    }
++
+     if (!(surface->locations & location))
+     {
+         w = surface->ds_current_size.cx;
+@@ -4380,6 +4429,19 @@
+         return WINED3D_OK;
+     }
+ 
++    /* DreamGPU: complete a partly current offscreen binding from the drawable
++     * only when the drawable holds this depth. Framebuffer objects render every
++     * target offscreen here, so the binding is usually all there is (for example
++     * after a depth blit or a clear through a smaller target); copying the
++     * window's depth would replace it. */
++    if (location != WINED3D_LOCATION_DRAWABLE && (surface->locations & location)
++            && !(surface->locations & WINED3D_LOCATION_DRAWABLE))
++    {
++        surface->ds_current_size.cx = surface->resource.width;
++        surface->ds_current_size.cy = surface->resource.height;
++        return WINED3D_OK;
++    }
++
+     if (location == WINED3D_LOCATION_TEXTURE_RGB)
+     {
+         GLint old_binding = 0;

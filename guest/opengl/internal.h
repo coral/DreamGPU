@@ -54,7 +54,9 @@ typedef struct {
     ULONG ListMode, ListAware;
     ULONG ClientDepth;
     JGL_CLIENT_SNAPSHOT ClientStack[16];
-    ULONG ServerDepth, ServerMasks[16], ServerDrawBuffers[16];
+    /* PushAttrib entries: the mask, the window's draw buffer and the draw
+     * framebuffer name (EXT_framebuffer_object; zero is the window). */
+    ULONG ServerDepth, ServerMasks[16], ServerDrawBuffers[16], ServerDrawFramebuffers[16];
     /* position, color, normal, texture coordinate (unit 0), secondary color,
      * index, edge, texture coordinates of units 1-7, fog coordinate */
     JGL_ARRAY Attribute[JGL_ARRAY_SLOTS];
@@ -219,6 +221,52 @@ void *JglAllocate(ULONG bytes);
 void JglFree(void *memory);
 /* Reset the current context's bindings of a deleted buffer object. */
 void JglForgetBuffer(GLuint name, ULONG serial);
+/* EXT_framebuffer_object with EXT_framebuffer_blit and EXT_packed_depth_stencil:
+ * framebuffer objects of one context, renderbuffers of the share group, their
+ * commands and queries (framebuffer.cpp), COLOR_ATTACHMENTn draw and read
+ * buffers, depth textures and DEPTH_STENCIL pixels. */
+BOOL JglFramebufferObjectAvailable(void);
+#define JGL_FRAMEBUFFER 0x8d40
+#define JGL_READ_FRAMEBUFFER 0x8ca8
+#define JGL_DRAW_FRAMEBUFFER 0x8ca9
+#define JGL_RENDERBUFFER 0x8d41
+#define JGL_COLOR_ATTACHMENT0 0x8ce0
+#define JGL_DEPTH_STENCIL 0x84f9
+#define JGL_UNSIGNED_INT_24_8 0x84fa
+/* COLOR_ATTACHMENT0..DG_GL_MAX_COLOR_ATTACHMENTS-1. */
+static inline BOOL JglColorAttachment(GLenum name) {
+    return name - JGL_COLOR_ATTACHMENT0 < DG_GL_MAX_COLOR_ATTACHMENTS;
+}
+/* The depth texture internal formats: DEPTH_COMPONENT(16/24/32), DEPTH_STENCIL
+ * and DEPTH24_STENCIL8 (borderless TEXTURE_2D images only). */
+static inline BOOL JglDepthInternalFormat(GLint format) {
+    return format == 0x1902 || (format >= 0x81a5 && format <= 0x81a7) ||
+           format == JGL_DEPTH_STENCIL || format == 0x88f0;
+}
+/* The current context's bindings: the draw and read framebuffer names (zero:
+ * the window) and the renderbuffer name, with its framebuffer name table. */
+typedef struct {
+    GLuint Draw, Read, Renderbuffer;
+    void *Names; /* framebuffer.cpp's table, freed with the context */
+} JGL_FRAMEBUFFER_STATE;
+JGL_FRAMEBUFFER_STATE *JglFramebufferState(void);
+/* The share group's renderbuffer name table slot of the current context, under
+ * the shared lock; the table is one allocation freed with the group. NULL
+ * without a context or memory. */
+void **JglSharedRenderbuffers(void);
+/* FRAMEBUFFER_BINDING (the draw binding), READ_FRAMEBUFFER_BINDING and
+ * RENDERBUFFER_BINDING of the current context, once negotiated. */
+BOOL JglFramebufferBinding(GLenum pname, GLint *value);
+/* A framebuffer object is bound for reading: ReadPixels need not fit the
+ * drawable. */
+BOOL JglReadFramebufferBound(void);
+/* Those bindings, MAX_COLOR_ATTACHMENTS and MAX_RENDERBUFFER_SIZE as query
+ * names: without negotiation they stay the local GL_INVALID_ENUM. */
+static inline BOOL JglFramebufferQueryRejected(GLenum name) {
+    return (name == 0x8ca6 || name == 0x8ca7 || name == 0x8caa || name == 0x8cdf ||
+            name == 0x84e8) &&
+           !JglFramebufferObjectAvailable();
+}
 /* Per-context NUL-terminated PROGRAM_ERROR_STRING_ARB storage (DG_GL_MAX_RESULT_BYTES),
  * stable until the context is deleted; NULL without a context or memory. */
 GLubyte *JglProgramErrorBuffer(void);

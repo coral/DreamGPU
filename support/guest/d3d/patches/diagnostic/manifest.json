@@ -6,7 +6,7 @@
   "patches": [
     {
       "file": "0001-bounded-copy-diagnostics.patch",
-      "sha256": "3b4b00dfd5fbd7fd7bf7899198113b9c57071206aaacbf5e797a9b0538783af4"
+      "sha256": "3ea7b96d388b6fddede7f5ffafbcb878876774fca039f6f0610e1a5146251c1d"
     }
   ],
   "files": {
@@ -23,8 +23,8 @@
       "after_sha256": "b89dd9542c2ee05a454ee63c43e2a94c70a0ae272077c781917367179bf944a6"
     },
     "wined3d/surface.c": {
-      "before_sha256": "b6e76402a5c16293a377c8c9cedb53dbee2c82e56e83e46f16407de4554be7a9",
-      "after_sha256": "5b8b78ca9df4d0bf8514bf4ecae55813df657183c0ae6c6dd2f9fb055ac04e4c"
+      "before_sha256": "a963a229e8fe2c3ced846a9dab485612c4c3ebd9a35ed59f1b2c35c358a58b11",
+      "after_sha256": "5cd9cbab7a4fce7cc6a2a95cfe4029adae2c1daefb3ee70a9abe1d87b657c30a"
     },
     "wined3d/swapchain.c": {
       "before_sha256": "02df706b44c6b28003ca8cde5883dd1e8601923d1cf793efde2fbb013b558172",
@@ -35,8 +35,8 @@
       "after_sha256": "6cd1e42a29f6dc12624f74d555ff9c4a6373c7d83340a8298a630fb915293284"
     },
     "wined3d/wined3d_private.h": {
-      "before_sha256": "c93a31f11248012854c8165ce42a899abc33418efb68a7f7cb27d79cf60a449e",
-      "after_sha256": "e890c5beed24b2af8adf9df938e92c3598283c787042779545481afec5cd0b08"
+      "before_sha256": "a57c5cb5ec71cc4cff885106c38f933ebc1d34f7e31f2acd736f7436cc9cd9a4",
+      "after_sha256": "9fbf985568a4b9375f73b9781a47ba1d55c078f62961814868d66702d380a0f1"
     }
   },
   "source_ids": {

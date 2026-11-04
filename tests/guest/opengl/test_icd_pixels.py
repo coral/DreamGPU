@@ -29,6 +29,7 @@ static unsigned error=0,calls=0,queries=0,function=0,size=0,words[5],maximum=256
 static unsigned char payload[1024];
 static bool JglReady(){if(!ready)error=GL_INVALID_OPERATION;return ready;}
 static void JglSetError(unsigned e){error=e;}
+static bool JglFramebufferObjectAvailable(){return false;}
 static void JglScalarVector(unsigned f,unsigned n,const void*p){assert(n==2||n==5);++calls;function=f;memcpy(words,p,n*4);}
 static bool JglData(unsigned f,const ULONG*a,unsigned n,const void*p,unsigned bytes){
  assert(n==2&&bytes<=sizeof(payload));++calls;function=f;size=bytes;memcpy(words,a,8);memcpy(payload,p,bytes);return true;}

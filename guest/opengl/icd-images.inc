@@ -49,12 +49,30 @@ static bool DescribeStore(GLsizei width, GLsizei height, GLenum format, GLenum t
         case GL_RGBA:
             components = 4;
             break;
+        case 0x84f9: /* DEPTH_STENCIL (EXT_packed_depth_stencil) */
+            if (!JglFramebufferObjectAvailable()) {
+                fail(GL_INVALID_ENUM);
+                return false;
+            }
+            components = 1;
+            break;
         default:
             fail(GL_INVALID_ENUM);
             return false;
     }
     ULONG unit;
     switch (type) {
+        case 0x84fa: /* UNSIGNED_INT_24_8: one four-byte DEPTH_STENCIL unit */
+            if (!JglFramebufferObjectAvailable()) {
+                fail(GL_INVALID_ENUM);
+                return false;
+            }
+            if (format != 0x84f9) {
+                fail(GL_INVALID_OPERATION);
+                return false;
+            }
+            unit = 4;
+            break;
         case GL_BITMAP:
             unit = 0;
             break;
@@ -75,7 +93,8 @@ static bool DescribeStore(GLsizei width, GLsizei height, GLenum format, GLenum t
             fail(GL_INVALID_ENUM);
             return false;
     }
-    if (!unit && format != GL_COLOR_INDEX && format != GL_STENCIL_INDEX) {
+    if ((!unit && format != GL_COLOR_INDEX && format != GL_STENCIL_INDEX) ||
+        (format == 0x84f9 && type != 0x84fa)) {
         fail(GL_INVALID_ENUM);
         return false;
     }

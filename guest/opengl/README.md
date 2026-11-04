@@ -360,6 +360,43 @@ Without the capability the exports fail locally with `GL_INVALID_OPERATION`,
 are hidden from `wglGetProcAddress`, and the binding queries stay host queries.
 `tests/guest/opengl/test_vertex_buffer_object.py` covers the contract.
 
+### EXT_framebuffer_object
+
+`DG_CAP_GL_FRAMEBUFFER_OBJECT` adds `GL_EXT_framebuffer_object`,
+`GL_EXT_framebuffer_blit` and `GL_EXT_packed_depth_stencil`, last in the
+extension string, and eighteen EXT-named exports (`framebuffer.cpp`; records use
+the core function numbers). Framebuffer names live in a table of the context,
+renderbuffer names in one of the share group; Gen and Is never reach the host,
+an object exists from its first bind, which sends the bind record, and
+`Delete*` sends the names of objects only, in bounded DATA batches, returning
+this context's bindings to the window (or no renderbuffer). The draw, read and
+renderbuffer bindings are answered locally; `MAX_COLOR_ATTACHMENTS` and
+`MAX_RENDERBUFFER_SIZE` are host queries, as are `CheckFramebufferStatus` (zero
+on failure) and both parameter queries. Every target, attachment, texture
+target (cube faces and `TEXTURE_3D` once negotiated, checked even to detach),
+level, zoffset, storage format and size, mipmap target, blit mask and filter
+the host would refuse as malformed is a local error; what depends on state
+(the window bound, missing objects, a texture's target) is the host's GL
+error. Everything executes immediately, with immediate errors, even while
+compiling a display list, except `BlitFramebuffer`, which compiles (a zero
+mask sends nothing). With an object bound `DrawBuffer`/`ReadBuffer` take
+`COLOR_ATTACHMENT0-3` and `NONE` without front-buffer presentation and refuse
+the window's buffers (`GL_INVALID_OPERATION`), and the tracked draw buffer
+stays the window's: drawing into an object, its lists and its attribute pops
+never mark the window's front dirty, while a colour blit into a front window
+buffer does. With an object bound for reading, `ReadPixels` tiles clip below
+`DG_GL_MAX_DIMENSION` instead of the drawable, and `DEPTH_STENCIL` reads as
+`UNSIGNED_INT_24_8` (with `DG_CAP_GL_DEPTH_STENCIL_READBACK`) compose each
+tile's DEPTH and STENCIL replies under the pack state. `TEXTURE_2D` images
+(TexImage2D/TexSubImage2D, CopyTexImage2D) take the depth internal formats
+without a border and depth pixels (`DEPTH_COMPONENT` with one BYTE..FLOAT
+component, `DEPTH_STENCIL` as four-byte `UNSIGNED_INT_24_8` units, swapped as
+one), as do `DrawPixels` and the `CopyPixels` type `DEPTH_STENCIL`; depth levels
+cannot be read back. Without the capability the exports fail locally with
+`GL_INVALID_OPERATION`, are hidden from `wglGetProcAddress`, and every new enum
+stays the local `GL_INVALID_ENUM` it was. `tests/guest/opengl/test_framebuffer_object.py`
+covers the contract.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

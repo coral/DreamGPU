@@ -250,6 +250,11 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_MAX_CUBE_MAP_TEXTURE_SIZE
         | GL_TEXTURE_BINDING_3D
         | GL_MAX_3D_TEXTURE_SIZE
+        | GL_FRAMEBUFFER_BINDING
+        | GL_READ_FRAMEBUFFER_BINDING
+        | GL_RENDERBUFFER_BINDING
+        | GL_MAX_COLOR_ATTACHMENTS
+        | GL_MAX_RENDERBUFFER_SIZE
         | GL_ATTRIB_STACK_DEPTH
         | GL_MAX_ATTRIB_STACK_DEPTH
         | GL_MATRIX_MODE
@@ -435,6 +440,17 @@ pub(crate) fn function_words(function: u32) -> u32 {
         FEnum_glBufferSubDataARB => DG_GL_FUNCTION_INLINE_DATA | 2,
         FEnum_glDeleteBuffersARB => DG_GL_FUNCTION_INLINE_DATA | 1,
         FEnum_glDrawRangeElements => DG_GL_FUNCTION_INLINE_DATA | 10,
+        // EXT_framebuffer_object, EXT_framebuffer_blit (DG_CAP_GL_FRAMEBUFFER_OBJECT).
+        FEnum_glBindFramebuffer | FEnum_glBindRenderbuffer => 2,
+        FEnum_glRenderbufferStorage | FEnum_glFramebufferRenderbuffer => 4,
+        FEnum_glFramebufferTexture1D | FEnum_glFramebufferTexture2D => 5,
+        FEnum_glFramebufferTexture3D => 6,
+        FEnum_glGenerateMipmap => 1,
+        FEnum_glBlitFramebuffer => 10,
+        FEnum_glDeleteFramebuffers | FEnum_glDeleteRenderbuffers => DG_GL_FUNCTION_INLINE_DATA | 1,
+        FEnum_glCheckFramebufferStatus => DG_GL_FUNCTION_QUERY | 1,
+        FEnum_glGetRenderbufferParameteriv => DG_GL_FUNCTION_QUERY | 2,
+        FEnum_glGetFramebufferAttachmentParameteriv => DG_GL_FUNCTION_QUERY | 3,
         // Fixed-function multitexture (DG_CAP_GL_MULTITEXTURE).
         FEnum_glActiveTexture => 1,
         FEnum_glMultiTexCoord4f => 5,
@@ -511,6 +527,13 @@ fn texture_2d_internal_format(format: u32) -> bool {
         )
 }
 
+/// A depth internal format of a borderless TEXTURE_2D image (or its proxy),
+/// with DG_CAP_GL_FRAMEBUFFER_OBJECT.
+fn depth_image(target: u32, format: u32, border: u32) -> bool {
+    matches!(target, GL_TEXTURE_2D | GL_PROXY_TEXTURE_2D)
+        && border == 0
+        && crate::framebuffer::depth_texture_format(format)
+}
 /// Image targets of 2D-shaped records: TEXTURE_2D or one cube map face.
 fn image_2d_target(target: u32) -> bool {
     target == GL_TEXTURE_2D || crate::texture::cube_face(target).is_some()
@@ -523,11 +546,14 @@ fn cube_image_shape(target: u32, width: u32, height: u32, border: u32) -> bool {
         || (width == height && border == 0)
 }
 
+/// Draw and read buffer names. Which of them the bound framebuffer takes (the
+/// window's buffers, or an object's attachments and NONE) is decided at
+/// execution (EXT_framebuffer_object); ReadBuffer NONE exists for objects.
 fn buffer_selection(mode: u32, draw: bool) -> bool {
     match mode {
-        GL_FRONT | GL_FRONT_LEFT | GL_BACK | GL_BACK_LEFT | GL_LEFT => true,
-        GL_NONE | GL_FRONT_AND_BACK => draw,
-        _ => false,
+        GL_FRONT | GL_FRONT_LEFT | GL_BACK | GL_BACK_LEFT | GL_LEFT | GL_NONE => true,
+        GL_FRONT_AND_BACK => draw,
+        _ => crate::framebuffer::color_attachment(mode),
     }
 }
 
@@ -727,7 +753,7 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
                 || a[wi] < 2 * a[7]
                 || a[hi] < 2 * a[7]
                 || a[2] <= 4
-                || !texture_internal_format(a[2])
+                || !(texture_internal_format(a[2]) || depth_image(a[0], a[2], a[7]))
                 || a[wi] - 2 * a[7] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
                 || a[hi] - 2 * a[7] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])))
     {
@@ -924,11 +950,32 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
             DG_GL_ERROR_BATCH
         };
     }
+    if matches!(
+        function,
+        FEnum_glDeleteFramebuffers | FEnum_glDeleteRenderbuffers
+    ) {
+        let limit = if function == FEnum_glDeleteFramebuffers {
+            DG_GL_MAX_FRAMEBUFFERS
+        } else {
+            DG_GL_MAX_RENDERBUFFERS
+        };
+        return if a[0] <= limit && data.len() as u64 == u64::from(a[0]) * 4 {
+            0
+        } else {
+            DG_GL_ERROR_BATCH
+        };
+    }
     let image = matches!(function, FEnum_glTexImage2D | FEnum_glTexImage1D);
     let one = matches!(function, FEnum_glTexImage1D | FEnum_glTexSubImage1D);
     let w = a[if image { 3 } else { 4 }];
     let h = a[if image { 4 } else { 5 }];
-    let pixel_bytes = texture_pixel_bytes(a[6], a[7]);
+    // Depth images exist for TEXTURE_2D only (EXT_packed_depth_stencil).
+    let pixel_bytes = match texture_pixel_bytes(a[6], a[7]) {
+        0 if !one && matches!(a[0], GL_TEXTURE_2D | GL_PROXY_TEXTURE_2D) => {
+            crate::framebuffer::depth_pixel_bytes(a[6], a[7])
+        }
+        n => n,
+    };
     if image
         && (a[0]
             == if one {
@@ -948,7 +995,7 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
             && (if one {
                 texture_internal_format(a[2])
             } else {
-                texture_2d_internal_format(a[2])
+                texture_2d_internal_format(a[2]) || depth_image(a[0], a[2], a[5])
             })
             && data.is_empty()
         {
@@ -978,7 +1025,7 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
                 || !(if one {
                     (1..=4).contains(&a[2]) || copy_1d_internal_format(a[2])
                 } else {
-                    texture_2d_internal_format(a[2])
+                    texture_2d_internal_format(a[2]) || depth_image(a[0], a[2], a[5])
                 })
                 || w - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
                 || (!one && h - 2 * a[5] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1]))))
@@ -1186,6 +1233,18 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             u32::from(b == 0 && d == 0)
         }
         FEnum_glGetProgramivARB => u32::from(program_parameter(a, b) && d == 0),
+        // EXT_framebuffer_object: one value each.
+        FEnum_glCheckFramebufferStatus => {
+            u32::from(crate::framebuffer::framebuffer_target(a) && b == 0 && d == 0)
+        }
+        FEnum_glGetFramebufferAttachmentParameteriv => u32::from(
+            crate::framebuffer::framebuffer_target(a)
+                && crate::framebuffer::slot(b).is_some()
+                && crate::framebuffer::attachment_parameter(d),
+        ),
+        FEnum_glGetRenderbufferParameteriv => u32::from(
+            a == GL_RENDERBUFFER && crate::framebuffer::renderbuffer_parameter(b) && d == 0,
+        ),
         FEnum_glGetProgramEnvParameterfvARB | FEnum_glGetProgramLocalParameterfvARB => {
             kind = DG_GL_RESULT_FLOAT;
             if program_target(a) && d == 0 {
@@ -1415,22 +1474,46 @@ pub extern "C" fn dreamgpu_gl_function_words(function: u32) -> u32 {
 pub unsafe extern "C" fn dreamgpu_gl_call_validate(function: u32, args: *const u8) -> u32 {
     // Capability/function-class rejection belongs to the outer batch validator.
     // Preserve this helper's no-read success for calls without extra constraints.
-    if !matches!(
+    let framebuffer = matches!(
         function,
-        FEnum_glDrawBuffer
-            | FEnum_glReadBuffer
-            | FEnum_glHint
-            | FEnum_glCopyTexImage2D
-            | FEnum_glCopyTexSubImage2D
-            | FEnum_glCopyTexImage1D
-            | FEnum_glCopyTexSubImage1D
-            | FEnum_glBindProgramARB
-            | FEnum_glProgramEnvParameter4fARB
-            | FEnum_glProgramLocalParameter4fARB
-            | FEnum_glVertexAttrib4fARB
-            | FEnum_glCopyTexSubImage3D
-    ) {
+        FEnum_glBindFramebuffer
+            | FEnum_glBindRenderbuffer
+            | FEnum_glRenderbufferStorage
+            | FEnum_glFramebufferTexture1D
+            | FEnum_glFramebufferTexture2D
+            | FEnum_glFramebufferTexture3D
+            | FEnum_glFramebufferRenderbuffer
+            | FEnum_glGenerateMipmap
+            | FEnum_glBlitFramebuffer
+    );
+    if !framebuffer
+        && !matches!(
+            function,
+            FEnum_glDrawBuffer
+                | FEnum_glReadBuffer
+                | FEnum_glHint
+                | FEnum_glCopyTexImage2D
+                | FEnum_glCopyTexSubImage2D
+                | FEnum_glCopyTexImage1D
+                | FEnum_glCopyTexSubImage1D
+                | FEnum_glBindProgramARB
+                | FEnum_glProgramEnvParameter4fARB
+                | FEnum_glProgramLocalParameter4fARB
+                | FEnum_glVertexAttrib4fARB
+                | FEnum_glCopyTexSubImage3D
+        )
+    {
         return 0;
+    }
+    if framebuffer {
+        // EXT_framebuffer_object and EXT_framebuffer_blit record shapes.
+        return unsafe { args_n::<10>(function, args) }.map_or(DG_GL_ERROR_UNSUPPORTED, |a| {
+            if crate::framebuffer::call_shape(function, &a) {
+                0
+            } else {
+                DG_GL_ERROR_UNSUPPORTED
+            }
+        });
     }
     if function == FEnum_glCopyTexSubImage3D {
         return unsafe { args_n::<10>(function, args) }.map_or(DG_GL_ERROR_UNSUPPORTED, |a| {

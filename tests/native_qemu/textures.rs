@@ -1752,14 +1752,20 @@ fn qemu_gl_queries_return_bounded_guest_state_and_hide_host_objects() {
         [0]
     );
 
-    // Unsupported version and native framebuffer-name queries are rejected;
-    // they never copy host capability claims or private object identities.
-    for (function, pname) in [(0x405, 0x1f02), (0x329, 0x8ca6)] {
-        sequence += 1;
-        qemu.batch(sequence, &[(11, vec![function, pname, 0, 0])]);
-        assert_eq!(qemu.read(0x1124), 3);
-        assert_eq!(qemu.read(0x1168), 0);
+    // Framebuffer bindings are the guest's virtual names (zero: the window,
+    // natively the drawable's private framebuffer), never native identities.
+    for pname in [0x8ca6, 0x8caa, 0x8ca7] {
+        assert_eq!(
+            words(&query(&mut qemu, &mut sequence, 0x329, &[pname]).1),
+            [0]
+        );
     }
+    // Unsupported version queries are rejected; they never copy host
+    // capability claims.
+    sequence += 1;
+    qemu.batch(sequence, &[(11, vec![0x405, 0x1f02, 0, 0])]);
+    assert_eq!(qemu.read(0x1124), 3);
+    assert_eq!(qemu.read(0x1168), 0);
     drop(qemu);
     drop(server);
     std::fs::remove_dir_all(directory).unwrap();

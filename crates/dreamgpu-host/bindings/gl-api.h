@@ -23,6 +23,10 @@
 #define DG_API_BindRenderbuffer glBindRenderbufferEXT
 #define DG_API_RenderbufferStorage glRenderbufferStorageEXT
 #define DG_API_FramebufferRenderbuffer glFramebufferRenderbufferEXT
+#define DG_API_FramebufferTexture1D glFramebufferTexture1DEXT
+#define DG_API_FramebufferTexture3D glFramebufferTexture3DEXT
+#define DG_API_GenerateMipmap glGenerateMipmapEXT
+#define DG_API_GetRenderbufferParameteriv glGetRenderbufferParameterivEXT
 #else
 #include <epoxy/gl.h>
 #define DG_API_GenFramebuffers glGenFramebuffers
@@ -36,6 +40,10 @@
 #define DG_API_BindRenderbuffer glBindRenderbuffer
 #define DG_API_RenderbufferStorage glRenderbufferStorage
 #define DG_API_FramebufferRenderbuffer glFramebufferRenderbuffer
+#define DG_API_FramebufferTexture1D glFramebufferTexture1D
+#define DG_API_FramebufferTexture3D glFramebufferTexture3D
+#define DG_API_GenerateMipmap glGenerateMipmap
+#define DG_API_GetRenderbufferParameteriv glGetRenderbufferParameteriv
 #endif
 #include "../../../vendor/qemu/include/standard-headers/dreamgpu/gl-funcs.h"
 #include "../../../vendor/qemu/include/standard-headers/dreamgpu/gl.h"
@@ -305,6 +313,13 @@ typedef struct DreamGpuGlApi {
     __typeof__(1 ? glBindBuffer : glBindBuffer) dg_glBindBuffer;
     __typeof__(1 ? glBufferData : glBufferData) dg_glBufferData;
     __typeof__(1 ? glBufferSubData : glBufferSubData) dg_glBufferSubData;
+    __typeof__(1 ? DG_API_FramebufferTexture1D
+                 : DG_API_FramebufferTexture1D) dg_glFramebufferTexture1D;
+    __typeof__(1 ? DG_API_FramebufferTexture3D
+                 : DG_API_FramebufferTexture3D) dg_glFramebufferTexture3D;
+    __typeof__(1 ? DG_API_GenerateMipmap : DG_API_GenerateMipmap) dg_glGenerateMipmap;
+    __typeof__(1 ? DG_API_GetRenderbufferParameteriv
+                 : DG_API_GetRenderbufferParameteriv) dg_glGetRenderbufferParameteriv;
 } DreamGpuGlApi;
 #define DREAMGPU_GL_API_INIT                                                                       \
     .dg_glListBase = glListBase, .dg_glSelectBuffer = glSelectBuffer,                              \
@@ -453,5 +468,9 @@ typedef struct DreamGpuGlApi {
     .dg_glTexImage3D = glTexImage3D, .dg_glTexSubImage3D = glTexSubImage3D,                         \
     .dg_glCopyTexSubImage3D = glCopyTexSubImage3D, .dg_glGenBuffers = glGenBuffers,                 \
     .dg_glDeleteBuffers = glDeleteBuffers, .dg_glBindBuffer = glBindBuffer,                         \
-    .dg_glBufferData = glBufferData, .dg_glBufferSubData = glBufferSubData
+    .dg_glBufferData = glBufferData, .dg_glBufferSubData = glBufferSubData,                         \
+    .dg_glFramebufferTexture1D = DG_API_FramebufferTexture1D,                                       \
+    .dg_glFramebufferTexture3D = DG_API_FramebufferTexture3D,                                       \
+    .dg_glGenerateMipmap = DG_API_GenerateMipmap,                                                   \
+    .dg_glGetRenderbufferParameteriv = DG_API_GetRenderbufferParameteriv
 #endif

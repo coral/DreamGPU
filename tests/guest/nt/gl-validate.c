@@ -26,6 +26,31 @@ static ULONG FunctionWords(void *context, ULONG function) {
             return DG_GL_FUNCTION_INLINE_DATA | 10;
         case 20:
             return DG_GL_FUNCTION_INLINE_DATA | 8;
+        /* Framebuffer objects (DG_CAP_GL_FRAMEBUFFER_OBJECT), core numbers. */
+        case 0x3c: /* BindFramebuffer */
+        case 0x48: /* BindRenderbuffer */
+            return 2;
+        case 0x7b2: /* RenderbufferStorage */
+        case 0x277: /* FramebufferRenderbuffer */
+            return 4;
+        case 0x27d: /* FramebufferTexture1D */
+        case 0x27f: /* FramebufferTexture2D */
+            return 5;
+        case 0x281: /* FramebufferTexture3D */
+            return 6;
+        case 0x295: /* GenerateMipmap */
+            return 1;
+        case 0x83: /* BlitFramebuffer */
+            return 10;
+        case 0x197: /* DeleteFramebuffers */
+        case 0x1a9: /* DeleteRenderbuffers */
+            return DG_GL_FUNCTION_INLINE_DATA | 1;
+        case 0x94: /* CheckFramebufferStatus */
+            return DG_GL_FUNCTION_QUERY | 1;
+        case 0x3f3: /* GetRenderbufferParameteriv */
+            return DG_GL_FUNCTION_QUERY | 2;
+        case 0x30e: /* GetFramebufferAttachmentParameteriv */
+            return DG_GL_FUNCTION_QUERY | 3;
         default:
             return (ULONG)-1;
     }
@@ -266,6 +291,74 @@ int main(void) {
         fog[14 + 14] = 0x140a | (1U << 16);
         fog[13] |= DG_GL_ARRAY_TEXCOORD; /* unit 0 enabled without a descriptor */
         assert(!DgValidateUserGl(fog, sizeof(fog), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* Framebuffer object CALL records carry exactly their words: a bind,
+         * a 3D attachment and a blit with signed coordinates, in one batch. */
+        ULONG batch[45] = {DG_GL_CALL, 44, 0, 1, 1, 0, 0, 0, 0x3c, 0x8d40, 5};
+        ULONG *attach = batch + 11, *blit = batch + 26;
+        const ULONG attach_words[7] = {0x281, 0x8d40, 0x8ce0, 0x806f, 7, 3, 255};
+        const ULONG blit_words[11] = {0x83, 0xffffffffU, 0, 8, 8, 0, 0, 8, 8, 0x4100, 0x2600};
+        attach[0] = blit[0] = DG_GL_CALL;
+        attach[1] = 60;
+        blit[1] = 76;
+        attach[3] = attach[4] = blit[3] = blit[4] = 1;
+        memcpy(attach + 8, attach_words, sizeof(attach_words));
+        memcpy(blit + 8, blit_words, sizeof(blit_words));
+        assert(DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
+        assert(batch[2] == 42 && attach[2] == 42 && blit[7] == 7);
+        assert(DgValidateUserGl(blit, 76, 42, 7, &limits, FunctionWords, NULL));
+        blit[1] = 72; /* one word short */
+        assert(!DgValidateUserGl(blit, 72, 42, 7, &limits, FunctionWords, NULL));
+        blit[1] = 76;
+        attach[8] = 0x27f; /* the 2D attachment has five words */
+        assert(!DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
+        attach[8] = 0x281;
+        batch[8] = 0x197; /* DeleteFramebuffers is DATA, never a CALL */
+        assert(!DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
+        batch[8] = 0x3c;
+        batch[5] = 1; /* header flags stay zero */
+        assert(!DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
+        batch[5] = 0;
+        assert(DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* DeleteFramebuffers and DeleteRenderbuffers: a count, then names. */
+        ULONG deleted[13] = {DG_GL_DATA_CALL, 52, 0, 1, 1, 0, 0, 0, 0x197, 8, 2, 3, 9};
+        assert(DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[8] = 0x1a9;
+        assert(DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[9] = 12; /* more names than the record holds */
+        assert(!DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[9] = 4; /* surplus words are not padding */
+        assert(!DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[9] = 8;
+        deleted[0] = DG_GL_CALL; /* a DATA function as a CALL */
+        assert(!DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+        deleted[0] = DG_GL_DATA_CALL;
+        deleted[8] = 0x3c; /* a CALL function as DATA */
+        assert(!DgValidateUserGl(deleted, sizeof(deleted), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* Framebuffer queries: one, two or three arguments, alone in a batch. */
+        ULONG query[24] = {DG_GL_QUERY, 48, 0, 1, 1, 0, 0, 0, 0x94, 0x8ca9, 0, 0};
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[10] = 0x8ce0; /* CheckFramebufferStatus has one */
+        assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[8] = 0x3f3; /* GetRenderbufferParameteriv: RENDERBUFFER, pname */
+        query[9] = 0x8d41;
+        query[10] = 0x8d42;
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[11] = 0x8cd0;
+        assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[8] = 0x30e; /* GetFramebufferAttachmentParameteriv: all three */
+        query[9] = 0x8d40;
+        query[10] = 0x8d00;
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        memcpy(query + 12, query, 48); /* never beside another record */
+        assert(!DgValidateUserGl(query, 96, 42, 7, &limits, FunctionWords, NULL));
+        query[8] = 0x83; /* a CALL function as a QUERY */
+        assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
     }
     memcpy(words, valid, sizeof(valid));
     assert(DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));

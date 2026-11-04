@@ -12,6 +12,7 @@ static inline BOOL JglDepthStencilReadbackAvailable(void) { return FALSE; }
 ULONG JglReadbackCapacity(void);
 ULONG *JglReadbackBuffer(void);
 void JglDrawableSize(ULONG *,ULONG *);
+BOOL JglReadFramebufferBound(void);
 BOOL JglQuery(ULONG,const ULONG[3],ULONG,void *,ULONG,ULONG *);
 '''
     (root/'internal.h').write_text('#ifndef TEST_READBACK_H\n#define TEST_READBACK_H\n'+shim+'\n#endif\n')

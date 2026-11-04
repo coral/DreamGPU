@@ -205,9 +205,28 @@ unsafe fn execute(
     }
     if matches!(
         function,
+        FEnum_glCheckFramebufferStatus
+            | FEnum_glGetFramebufferAttachmentParameteriv
+            | FEnum_glGetRenderbufferParameteriv
+    ) {
+        if state.context.is_null() {
+            return Err(DG_GL_ERROR_CONTEXT);
+        }
+        let value = unsafe { crate::framebuffer::query(api, state.context, function, [a, b, d])? };
+        unsafe {
+            core::ptr::copy_nonoverlapping(value.to_le_bytes().as_ptr(), result, 4);
+            *bytes = 4;
+        }
+        return Ok(());
+    }
+    if matches!(
+        function,
         FEnum_glGetTexImage | FEnum_glGetCompressedTexImage
     ) {
         let read = texture_read.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+        // What this context rendered into a texture since its last version
+        // must not be served from the read cache.
+        unsafe { crate::framebuffer::touch(state.context) };
         // The compressed flag is host-internal: it selects the native compressed
         // image (and a separate cache identity) inside the shared read cache.
         let level = if function == FEnum_glGetCompressedTexImage {
@@ -235,6 +254,23 @@ unsafe fn execute(
         };
         let width = d & 0xffff;
         let height = d >> 16;
+        // A framebuffer object bound for reading: the host clips to its
+        // attachments (EXT_framebuffer_object).
+        if !state.context.is_null() && unsafe { !(*state.context).read_framebuffer.is_null() } {
+            unsafe {
+                crate::framebuffer::read_pixels(
+                    api,
+                    state.context,
+                    [x, b, width, height],
+                    format,
+                    pixel_type,
+                    required / (width * height),
+                    result,
+                )?;
+                *bytes = required;
+            }
+            return Ok(());
+        }
         if state.has_drawable == 0
             || x >= state.width
             || b >= state.height
@@ -386,9 +422,42 @@ unsafe fn execute(
                         }
                     } as i32;
                 }
-                GL_DRAW_BUFFER => integers[0] = state.draw_buffer as i32,
-                GL_READ_BUFFER => integers[0] = state.read_buffer as i32,
-                GL_DOUBLEBUFFER => integers[0] = 1,
+                // The bound framebuffers' buffers (EXT_framebuffer_object).
+                GL_DRAW_BUFFER | GL_READ_BUFFER | GL_DOUBLEBUFFER => {
+                    let (draw, read, window) = if state.context.is_null() {
+                        (state.draw_buffer, state.read_buffer, true)
+                    } else {
+                        let (draw, read) = unsafe { crate::framebuffer::buffers(state.context) };
+                        (draw, read, unsafe {
+                            (*state.context).draw_framebuffer.is_null()
+                        })
+                    };
+                    integers[0] = match a {
+                        GL_DRAW_BUFFER => draw,
+                        GL_READ_BUFFER => read,
+                        _ => u32::from(window),
+                    } as i32;
+                }
+                GL_FRAMEBUFFER_BINDING | GL_READ_FRAMEBUFFER_BINDING | GL_RENDERBUFFER_BINDING => {
+                    if state.context.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    let [draw, read] = unsafe { crate::framebuffer::binding_names(state.context) };
+                    integers[0] = match a {
+                        GL_FRAMEBUFFER_BINDING => draw,
+                        GL_READ_FRAMEBUFFER_BINDING => read,
+                        _ => unsafe { crate::framebuffer::renderbuffer_name(state.context) },
+                    } as i32;
+                }
+                // The protocol limits, or smaller native ones.
+                GL_MAX_COLOR_ATTACHMENTS => {
+                    call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
+                    integers[0] = integers[0].clamp(1, DG_GL_MAX_COLOR_ATTACHMENTS as i32);
+                }
+                GL_MAX_RENDERBUFFER_SIZE => {
+                    call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
+                    integers[0] = integers[0].clamp(0, DG_GL_MAX_RENDERBUFFER_SIZE as i32);
+                }
                 GL_STEREO | GL_AUX_BUFFERS => (),
                 GL_TEXTURE_BINDING_1D => integers[0] = state.binding_1d as i32,
                 GL_TEXTURE_BINDING_2D => integers[0] = state.binding_2d as i32,
@@ -495,7 +564,12 @@ unsafe fn execute(
         for i in 0..count {
             doubles[i] = if matches!(
                 a,
-                GL_TEXTURE_BINDING_2D | GL_TEXTURE_BINDING_CUBE_MAP | GL_TEXTURE_BINDING_3D
+                GL_TEXTURE_BINDING_2D
+                    | GL_TEXTURE_BINDING_CUBE_MAP
+                    | GL_TEXTURE_BINDING_3D
+                    | GL_FRAMEBUFFER_BINDING
+                    | GL_READ_FRAMEBUFFER_BINDING
+                    | GL_RENDERBUFFER_BINDING
             ) {
                 integers[i] as u32 as f64
             } else {

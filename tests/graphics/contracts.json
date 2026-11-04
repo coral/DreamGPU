@@ -348,6 +348,38 @@
       "scope": "installed-api",
       "path": "tools/d3d/vbuffer-probe.inc"
     },
+    "gl-framebuffer-object": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_framebuffer_object.py"
+    },
+    "native-framebuffer-object": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/framebuffer_object.rs"
+    },
+    "guest-rtt": {
+      "scope": "installed-api",
+      "path": "tools/d3d/rtt-probe.inc"
+    },
+    "d3d-fbo-padded-targets": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fbo_padded_targets.py"
+    },
+    "d3d-fbo-depth-transfers": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fbo_depth_transfers.py"
+    },
+    "d3d-fbo-mixed-size-attachments": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fbo_mixed_size_attachments.py"
+    },
+    "d3d-fbo-blit-destinations": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fbo_blit_destinations.py"
+    },
+    "d3d-fbo-point-sprite-origin": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fbo_point_sprite_origin.py"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -866,7 +898,8 @@
         "depth-transfer",
         "guest-depth",
         "native",
-        "depth-ownership"
+        "depth-ownership",
+        "d3d-fbo-depth-transfers"
       ],
       "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
     },
@@ -887,7 +920,8 @@
         "depth-transfer",
         "guest-depth",
         "native",
-        "depth-ownership"
+        "depth-ownership",
+        "d3d-fbo-depth-transfers"
       ],
       "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
     },
@@ -908,7 +942,8 @@
         "depth-transfer",
         "guest-depth",
         "native",
-        "depth-ownership"
+        "depth-ownership",
+        "d3d-fbo-depth-transfers"
       ],
       "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
     },
@@ -929,7 +964,8 @@
         "depth-transfer",
         "guest-depth",
         "native",
-        "depth-ownership"
+        "depth-ownership",
+        "d3d-fbo-depth-transfers"
       ],
       "remaining": "Normalized backbuffer CPU depth/stencil transfers and guarded owner/context/target switching are implemented. Unprovable cross-context preservation fails closed. FBO/PBO CPU transfers remain unsupported; installed format and precision combinations require live verification."
     },
@@ -948,7 +984,8 @@
       "tests": [
         "native",
         "depth-ownership",
-        "d3d-discarded-depth"
+        "d3d-discarded-depth",
+        "d3d-fbo-depth-transfers"
       ],
       "remaining": "Verify real depth and stencil contents and target A/B/A through installed APIs. A discarded offscreen depth surface (no GL storage without depth textures) now maps to a defined zeroed CPU copy (patch 0028), so DirectDraw depth-to-depth Blts succeed; Links 2003 copies its course depth this way. Depth contents written by the GPU into offscreen depth surfaces remain unreadable."
     },
@@ -1194,7 +1231,8 @@
         "fullscreen-probe",
         "guest-fullscreen",
         "frontbuffer-coherence",
-        "primary-loss"
+        "primary-loss",
+        "d3d-fbo-blit-destinations"
       ],
       "remaining": "Prepared-source checks cover GDI completion, primary read/write preservation, and persistent primary loss/restoration across exclusive focus and mode changes. Installed Win2000 Golf 1999 Quick Start/menus pass; its modal+Alt+Tab artifacts (black terrain until the modal closes, blank YES/NO, missing toolbar half) are identical on Microsoft DirectDraw and on stock Cirrus + Microsoft DirectDraw, so they are game behavior, not a DreamGPU defect. Broader installed GDI/GPU ordering remains unverified."
     },
@@ -1334,10 +1372,12 @@
       "usage": "n/a",
       "pool": "n/a",
       "mandatory": false,
-      "advertised": false,
-      "implementation": "unsupported",
-      "tests": [],
-      "remaining": "Outside baseline; do not infer public support from host implementation."
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-framebuffer-object"
+      ],
+      "remaining": "EXT_framebuffer_object, EXT_framebuffer_blit and EXT_packed_depth_stencil only (gl.framebuffer-object); ARB_framebuffer_object, multisample renderbuffers and draw buffers are not advertised."
     },
     {
       "id": "snapshot.live",
@@ -1577,6 +1617,31 @@
         "guest-vbuffer"
       ],
       "remaining": "Negotiated by DG_CAP_GL_VERTEX_BUFFER_OBJECT; without it the extension and entry points are hidden and every draw is unchanged. BufferData/BufferSubData/DeleteBuffers name their buffer and execute immediately (never compiled); contents up to DG_GL_MAX_BUFFER_BYTES travel in bounded BufferSubData slabs and are charged against the resource budget. Bindings, array latches and mappings are frontend client state; the frontend keeps a copy of every buffer, so maps return it (16-byte aligned), Unmap re-sends it unless READ_ONLY, and reads never wait for the host. Draws reading buffers use the buffer draw (DATA function DrawRangeElements: references per slot, client sections of the indexed vertex range, inline or element-buffer indices), so older kernels keep every existing admission; the host bounds every read against current sizes, scanning element-buffer indices in its own copy, and state-dependent failures are GL errors. Display list compilation and anything the record cannot express (unaligned offsets, strides beyond 2048, oversized client sections) dereference the buffers into client draws. BufferData on a mapped buffer unmaps it, as in Mesa; buffers deleted in another context end its draws with GL_INVALID_OPERATION. Wine patches 0037-0040 double-buffer buffer objects with dirty-range BufferSubData uploads, repair this tree's fixed-function D3DCOLOR/XYZRHW conversion, keep immediate mode on memory and size/delete the zero attribute buffer; dynamic buffers stay in system memory without ARB_map_buffer_range. Native pixel tests, the installed D3D8/9 vertex buffer probe, macOS CGL and games remain to be run on guests."
+    },
+    {
+      "id": "gl.framebuffer-object",
+      "area": 10,
+      "api": "OpenGL 1.1 + EXT_framebuffer_object, EXT_framebuffer_blit, EXT_packed_depth_stencil (D3D8/D3D9 render targets through Wine ORM_FBO)",
+      "operation": "framebuffer objects per context and renderbuffers in the shared namespace: Gen/Delete/Is/Bind (FRAMEBUFFER, DRAW/READ_FRAMEBUFFER), RenderbufferStorage, FramebufferTexture1D/2D/3D (cube faces, 3D slices), FramebufferRenderbuffer, CheckFramebufferStatus, GetFramebufferAttachmentParameteriv, GetRenderbufferParameteriv, GenerateMipmap, BlitFramebuffer, per-framebuffer draw/read buffers, binding queries, ReadPixels/CopyTex*/CopyPixels from objects, 2D depth and packed depth/stencil textures",
+      "format": "RGB/RGBA sized colour, DEPTH_COMPONENT16/24/32, STENCIL_INDEX1-16, DEPTH24_STENCIL8",
+      "resource": "framebuffer object/renderbuffer/texture level",
+      "usage": "render target, depth-stencil and blit source/destination",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-framebuffer-object",
+        "native-framebuffer-object",
+        "native",
+        "d3d-fbo-padded-targets",
+        "d3d-fbo-depth-transfers",
+        "d3d-fbo-mixed-size-attachments",
+        "d3d-fbo-blit-destinations",
+        "d3d-fbo-point-sprite-origin",
+        "guest-rtt"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_FRAMEBUFFER_OBJECT; without it the extensions, entry points and enums stay hidden. Framebuffer names are virtual and per context; zero stays the host's drawable framebuffer, rebound by the host under the guest's objects on every make-current, exchange and export, so presentation and window readback are unchanged with an object bound. Every command but BlitFramebuffer executes immediately; state-dependent failures are GL errors and completeness is the native GL 3 rules (no INCOMPLETE_DIMENSIONS/FORMATS). Attachments keep deleted images alive until detached; rendering into them is fenced for other contexts and versioned for the texture read cache. Renderbuffers are zero-initialized and charged against the resource budget; reads of uninitialized images are INVALID_FRAMEBUFFER_OPERATION; ReadPixels from an object is clipped by the host to its attachments. 2D textures take depth and packed depth/stencil formats for depth attachments; ARB_depth_texture and depth GetTexImage are not claimed. Wine selects ORM_FBO, and with this tree's always_offscreen every D3D8/9 swapchain renders into an FBO and presents with glBlitFramebuffer; patches 0042-0046 keep NPOT resources in padded 2D textures, give CPU depth transfers an FBO mode, attach larger depth buffers directly, send overlapping self-blits to the CPU blitter and keep point sprites upright through POINT_SPRITE_COORD_ORIGIN below GL 2.0. Native pixel tests pass on Linux; the installed D3D8/9 render-target probe, the existing probes under ORM_FBO, adapter-start format checks (R5G6B5 targets, blending), macOS CGL, Win98/XP guests and games remain to be run."
     },
     {
       "id": "glide3.vertex",

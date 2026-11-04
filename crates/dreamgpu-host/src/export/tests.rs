@@ -186,7 +186,7 @@ fn export_restores_every_state_and_deletes_temporary_objects_on_each_failure_sta
         depth: 9,
         last_write: core::ptr::null_mut(),
     };
-    let state: ContextState = unsafe { core::mem::zeroed() };
+    let mut state: ContextState = unsafe { core::mem::zeroed() };
     for rectangle in [0, 1] {
         for stage in 0..4 {
             N.with(|v| {
@@ -213,7 +213,7 @@ fn export_restores_every_state_and_deletes_temporary_objects_on_each_failure_sta
                 dreamgpu_export(
                     &a,
                     &mut d,
-                    &state,
+                    &mut state,
                     42,
                     0,
                     rectangle,
@@ -296,7 +296,7 @@ fn completion_poll_is_immediate_or_sleeps_bounded_and_always_consumes_fence() {
 #[test]
 fn zero_export_names_do_not_bind_os_image_or_blit_default_framebuffer() {
     let a = api();
-    let state: ContextState = unsafe { core::mem::zeroed() };
+    let mut state: ContextState = unsafe { core::mem::zeroed() };
     let mut d = Drawable {
         width: 640,
         height: 480,
@@ -332,7 +332,7 @@ fn zero_export_names_do_not_bind_os_image_or_blit_default_framebuffer() {
                     dreamgpu_export(
                         &a,
                         &mut d,
-                        &state,
+                        &mut state,
                         42,
                         0,
                         rectangle,

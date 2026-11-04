@@ -76,6 +76,12 @@ BOOL JglTexture3DAvailable(void) {
 BOOL JglVertexBufferObjectAvailable(void) {
     return FALSE;
 }
+BOOL JglFramebufferObjectAvailable(void) {
+    return FALSE;
+}
+BOOL JglReadFramebufferBound(void) {
+    return FALSE;
+}
 PROC GetProcAddress(HINSTANCE module, LPCSTR name) {
     assert(module == (HINSTANCE)1);
     if (!((ULONG_PTR)name >> 16))

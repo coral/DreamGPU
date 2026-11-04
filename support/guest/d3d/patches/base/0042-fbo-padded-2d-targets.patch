@@ -1,0 +1,18 @@
+--- a/wined3d/resource.c
++++ b/wined3d/resource.c
+@@ -131,9 +131,15 @@
+                 WARN("Format %s cannot be used for texturing.\n", debug_d3dformat(format->id));
+                 continue;
+             }*/
++            /* DreamGPU: skip 2D only to try a rectangle texture. Without one the
++             * next candidate is a renderbuffer, which this tree takes for every
++             * NPOT resource (the texture usage check is disabled above) and can
++             * only load by resolving a multisampled one, and swapchain_blit()
++             * presents from the texture. Keep the padded 2D texture instead. */
+             if (((width & (width - 1)) || (height & (height - 1)))
+                     && !gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO]
+                     && !gl_info->supported[WINED3D_GL_NORMALIZED_TEXRECT]
++                    && gl_info->supported[ARB_TEXTURE_RECTANGLE]
+                     && gl_type == WINED3D_GL_RES_TYPE_TEX_2D)
+             {
+                 TRACE("Skipping 2D texture type to try texture rectangle.\n");

@@ -18,6 +18,9 @@ typedef struct {
      * (buffer.cpp sets both when it creates the table). */
     void *Buffers;
     void (*FreeBuffers)(void *buffers);
+    /* EXT_framebuffer_object renderbuffer names of the share group: one
+     * allocation (framebuffer.cpp), freed with the group. */
+    void *Renderbuffers;
     JGL_NAME Entries[JGL_NAME_SLOTS];
 } JGL_NAMES;
 

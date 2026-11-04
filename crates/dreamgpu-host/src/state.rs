@@ -110,6 +110,18 @@ pub struct ContextState {
     pub attrib_3d: [[*mut Texture; UNITS]; STACK],
     /// PROXY_TEXTURE_3D levels rejected by the virtual limits.
     pub proxy_rejected_3d: u32,
+    /// Rust-only framebuffer object state (EXT_framebuffer_object): this
+    /// context's objects, the draw and read bindings (null: the window,
+    /// natively `window_framebuffer`, the platform's drawable framebuffer),
+    /// the renderbuffer binding (one reference) and the guest names of the
+    /// draw and read framebuffers saved with each `attrib` entry.
+    /// `draw_buffer`/`read_buffer` above stay the window's buffers.
+    pub framebuffers: *mut crate::framebuffer::Framebuffers,
+    pub draw_framebuffer: *mut crate::framebuffer::Framebuffer,
+    pub read_framebuffer: *mut crate::framebuffer::Framebuffer,
+    pub renderbuffer: *mut crate::framebuffer::Renderbuffer,
+    pub window_framebuffer: u32,
+    pub attrib_framebuffers: [[u32; 2]; STACK],
 }
 impl ContextState {
     /// Every unit's (2D, 1D, cube map, 3D) binding, including the active unit's.
@@ -178,6 +190,12 @@ impl ContextState {
         units_3d: [null_mut(); UNITS],
         attrib_3d: [[null_mut(); UNITS]; STACK],
         proxy_rejected_3d: 0,
+        framebuffers: null_mut(),
+        draw_framebuffer: null_mut(),
+        read_framebuffer: null_mut(),
+        renderbuffer: null_mut(),
+        window_framebuffer: 0,
+        attrib_framebuffers: [[0; 2]; STACK],
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
@@ -334,6 +352,9 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     unsafe { crate::pixel_image::release(&*memory, &mut old.image) };
     unsafe { crate::selection::release(&*memory, &mut old.capture) };
     unsafe { crate::lists::release(&*memory, old.lists) };
+    // Framebuffer objects reference textures and renderbuffers of the share
+    // group: release them while the namespace still exists.
+    unsafe { crate::framebuffer::release_context(&*memory, old.framebuffers, old.renderbuffer) };
     assert!(old.attrib_depth as usize <= STACK);
     for (((saved, units), cube), volume) in old.attrib[..old.attrib_depth as usize]
         .iter()
@@ -383,10 +404,12 @@ fn attachment(buffer: u32) -> u32 {
         GL_COLOR_ATTACHMENT1
     }
 }
-unsafe fn select(api: &DreamGpuGlApi, state: *const ContextState) -> Result<(), u32> {
+/// The window's draw buffer on the natively bound draw framebuffer (the
+/// drawable's): the back buffer is COLOR_ATTACHMENT0, the front one
+/// COLOR_ATTACHMENT1.
+unsafe fn select_window_draw(api: &DreamGpuGlApi, state: *const ContextState) -> Result<(), u32> {
     let draw = api.dg_glDrawBuffer.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
     let draws = api.dg_glDrawBuffers.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
-    let read = api.dg_glReadBuffer.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
     let buffer = unsafe { (*state).draw_buffer };
     unsafe {
         if matches!(buffer, GL_FRONT_AND_BACK | GL_LEFT) {
@@ -398,10 +421,33 @@ unsafe fn select(api: &DreamGpuGlApi, state: *const ContextState) -> Result<(), 
                 attachment(buffer)
             });
         }
-        read(attachment((*state).read_buffer));
     }
     Ok(())
 }
+/// The draw and read buffers of the bound framebuffers, each on its native
+/// framebuffer: the window's mapped onto the drawable's attachments, an
+/// object's as they are.
+unsafe fn select(api: &DreamGpuGlApi, state: *const ContextState) -> Result<(), u32> {
+    let draw = api.dg_glDrawBuffer.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let read = api.dg_glReadBuffer.ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    unsafe {
+        let (draw_fb, read_fb) = ((*state).draw_framebuffer, (*state).read_framebuffer);
+        if draw_fb.is_null() {
+            select_window_draw(api, state)?;
+        } else {
+            draw((*draw_fb).draw_buffer);
+        }
+        read(if read_fb.is_null() {
+            attachment((*state).read_buffer)
+        } else {
+            (*read_fb).read_buffer
+        });
+    }
+    Ok(())
+}
+/// The window's draw and read buffers on the drawable framebuffer, which the
+/// platform has just bound for both drawing and reading.
+///
 /// # Safety
 /// Read-only state belongs to current render context; native API is complete.
 #[no_mangle]
@@ -412,8 +458,15 @@ pub unsafe extern "C" fn dreamgpu_context_select_buffers(
     if api.is_null() || state.is_null() {
         return DG_GL_ERROR_CONTEXT;
     }
-    match unsafe { select(&*api, state) } {
-        Ok(()) => 0,
+    let a = unsafe { &*api };
+    let Some(read) = a.dg_glReadBuffer else {
+        return DG_GL_ERROR_UNSUPPORTED;
+    };
+    match unsafe { select_window_draw(a, state) } {
+        Ok(()) => {
+            unsafe { read(attachment((*state).read_buffer)) };
+            0
+        }
         Err(e) => e,
     }
 }
@@ -448,10 +501,12 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
         unsafe { error(state, code) };
         return Ok(());
     }
+    // The bound framebuffers' buffers, restored only into the same ones.
+    let (draw_buffer, read_buffer) = unsafe { crate::framebuffer::buffers(state) };
     let mut saved = Attrib {
         mask,
-        draw_buffer: unsafe { (*state).draw_buffer },
-        read_buffer: unsafe { (*state).read_buffer },
+        draw_buffer,
+        read_buffer,
         ..Attrib::EMPTY
     };
     if mask & (GL_FOG_BIT | GL_ENABLE_BIT) != 0 {
@@ -491,6 +546,7 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
         (*state).unit_attrib[depth] = units;
         (*state).cube_attrib[depth] = cube;
         (*state).attrib_3d[depth] = volume;
+        (*state).attrib_framebuffers[depth] = crate::framebuffer::binding_names(state);
         (*state).attrib_depth += 1;
     }
     Ok(())
@@ -546,11 +602,12 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
         }
     }
     unsafe {
+        let [draw_owner, read_owner] = (*state).attrib_framebuffers[depth - 1];
         if saved.mask & GL_COLOR_BUFFER_BIT != 0 {
-            (*state).draw_buffer = saved.draw_buffer;
+            crate::framebuffer::restore_buffer(state, saved.draw_buffer, draw_owner, true);
         }
         if saved.mask & GL_PIXEL_MODE_BIT != 0 {
-            (*state).read_buffer = saved.read_buffer;
+            crate::framebuffer::restore_buffer(state, saved.read_buffer, read_owner, false);
         }
         if !saved.texture.is_null() {
             let old_two = (*state).bound_texture;
@@ -583,6 +640,7 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
         (*state).unit_attrib[depth - 1] = UnitAttrib::EMPTY;
         (*state).cube_attrib[depth - 1] = [null_mut(); UNITS];
         (*state).attrib_3d[depth - 1] = [null_mut(); UNITS];
+        (*state).attrib_framebuffers[depth - 1] = [0; 2];
         (*state).attrib_depth -= 1;
         select(api, state)?;
     }
@@ -732,12 +790,10 @@ unsafe fn scalar(
                 return Err(DG_GL_ERROR_UNSUPPORTED);
             }
             unsafe {
-                if draw {
-                    (*state).draw_buffer = mode
-                } else {
-                    (*state).read_buffer = mode
+                // Which values are valid depends on the bound framebuffer.
+                if crate::framebuffer::select_buffer(state, mode, draw) {
+                    select(api, state)?;
                 }
-                select(api, state)?;
             }
         }
         FEnum_glHint => {
@@ -800,6 +856,10 @@ unsafe fn scalar(
         | FEnum_glCopyTexImage1D
         | FEnum_glCopyTexSubImage1D
         | FEnum_glCopyTexSubImage3D => {
+            // A framebuffer object image the host never initialized is unreadable.
+            if !unsafe { crate::framebuffer::readable(state) } {
+                return Ok(());
+            }
             let result =
                 unsafe { copy.ok_or(DG_GL_ERROR_UNSUPPORTED)?(opaque, function, args.as_ptr()) };
             if result != 0 {
@@ -853,6 +913,20 @@ unsafe fn scalar(
         FEnum_glProgramLocalParameter4fARB => {
             let v = [2, 3, 4, 5].map(|i| f32::from_bits(word(i)));
             return unsafe { crate::program::local(&*memory, state, word(0), word(1), v) };
+        }
+        // EXT_framebuffer_object and EXT_framebuffer_blit; CopyPixels reads
+        // the read framebuffer.
+        FEnum_glBindFramebuffer
+        | FEnum_glBindRenderbuffer
+        | FEnum_glRenderbufferStorage
+        | FEnum_glFramebufferTexture1D
+        | FEnum_glFramebufferTexture2D
+        | FEnum_glFramebufferTexture3D
+        | FEnum_glFramebufferRenderbuffer
+        | FEnum_glGenerateMipmap
+        | FEnum_glBlitFramebuffer
+        | FEnum_glCopyPixels => {
+            return unsafe { crate::framebuffer::call(memory, state, serial, function, args) };
         }
         _ => return Err(DG_GL_ERROR_UNSUPPORTED),
     }

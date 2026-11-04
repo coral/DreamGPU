@@ -18,7 +18,7 @@ expected = {"glTexImage3D": 40, "glTexImage3DEXT": 40, "glTexSubImage3D": 44,
             "glTexSubImage3DEXT": 44, "glCopyTexSubImage3D": 36, "glCopyTexSubImage3DEXT": 36}
 for filename in ("frontend.def", "icd.def"):
     exported = dict(re.findall(r"^\s+(\w+)=\w+@(\d+)$", (SOURCE / filename).read_text(), re.M))
-    found = {name: int(size) for name, size in exported.items() if "3D" in name}
+    found = {name: int(size) for name, size in exported.items() if "Image3D" in name}
     assert found == expected, (filename, found)
 scalar = (SOURCE / "scalar.inc").read_text()
 for name in ("glCopyTexSubImage3D", "glCopyTexSubImage3DEXT"):

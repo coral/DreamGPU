@@ -68,9 +68,47 @@ static ULONG ScalarBytes(GLenum type) {
     }
 }
 
-/* GL 1.2 packed inputs; anything outside 16-bit direct transport is expanded to RGBA8. */
-static ULONG PixelBytes(GLenum format, GLenum type, BOOL immediate = FALSE) {
+/* UNSIGNED_INT_24_8 (EXT_packed_depth_stencil) travels like a scalar: one
+ * four-byte unit, unchanged or swapped as a whole. Only depth images take it. */
+static ULONG UnitBytes(GLenum type) {
+    return type == JGL_UNSIGNED_INT_24_8 ? 4 : ScalarBytes(type);
+}
+
+/* Depth images (EXT_packed_depth_stencil, TEXTURE_2D): DEPTH_COMPONENT with
+ * one BYTE..FLOAT component, or DEPTH_STENCIL as UNSIGNED_INT_24_8. */
+static ULONG DepthPixelBytes(GLenum format, GLenum type, void (*error)(GLenum)) {
+    if (format == JGL_DEPTH_STENCIL) {
+        if (type == JGL_UNSIGNED_INT_24_8)
+            return 4;
+        error(GL_INVALID_ENUM);
+        return 0;
+    }
+    if (type == JGL_UNSIGNED_INT_24_8) {
+        error(format == 0x1902 || Components(format) ? GL_INVALID_OPERATION : GL_INVALID_ENUM);
+        return 0;
+    }
+    if (ScalarBytes(type))
+        return ScalarBytes(type); /* DEPTH_COMPONENT */
+    /* GL 1.2 packed types are colour formats; BITMAP is no depth type. */
+    error((type >= 0x8032 && type <= 0x8036) || (type >= 0x8362 && type <= 0x8368)
+              ? GL_INVALID_OPERATION
+              : GL_INVALID_ENUM);
+    return 0;
+}
+
+/* GL 1.2 packed inputs; anything outside 16-bit direct transport is expanded to
+ * RGBA8. Depth images only where depth is set. */
+static ULONG PixelBytes(GLenum format, GLenum type, BOOL immediate = FALSE, BOOL depth = FALSE) {
     void (*error)(GLenum) = immediate ? JglSetError : JglCommandError;
+    if (depth && (format == 0x1902 /* DEPTH_COMPONENT */ || format == JGL_DEPTH_STENCIL ||
+                  type == JGL_UNSIGNED_INT_24_8)) {
+        if (((ScalarBytes(type) && type != GL_UNSIGNED_BYTE) || type == JGL_UNSIGNED_INT_24_8) &&
+            !JglTextureImagesAvailable()) {
+            error(GL_INVALID_OPERATION);
+            return 0;
+        }
+        return DepthPixelBytes(format, type, error);
+    }
     if (((ScalarBytes(type) && type != GL_UNSIGNED_BYTE) || type == 0x1a00 || format == 0x1900 ||
          (format >= 0x1903 && format <= 0x1905)) &&
         !JglTextureImagesAvailable()) {
@@ -125,19 +163,18 @@ static BOOL Packed16(GLenum type) {
 }
 
 static BOOL DirectPixels(GLenum type) {
-    return ScalarBytes(type) == 1 ||
-           ((ScalarBytes(type) || Packed16(type)) && !JglUnpack()->SwapBytes);
+    return UnitBytes(type) == 1 || ((UnitBytes(type) || Packed16(type)) && !JglUnpack()->SwapBytes);
 }
 
 static ULONG WirePixelBytes(GLenum type, ULONG components) {
-    return ScalarBytes(type) || Packed16(type) || type == 0x1a00 ? components : 4;
+    return UnitBytes(type) || Packed16(type) || type == 0x1a00 ? components : 4;
 }
 
 static GLenum WireFormat(GLenum format, GLenum type) {
-    return ScalarBytes(type) || Packed16(type) || type == 0x1a00 ? format : GL_RGBA;
+    return UnitBytes(type) || Packed16(type) || type == 0x1a00 ? format : GL_RGBA;
 }
 static GLenum WireType(GLenum type) {
-    return ScalarBytes(type) || Packed16(type) ? type : GL_UNSIGNED_BYTE;
+    return UnitBytes(type) || Packed16(type) ? type : GL_UNSIGNED_BYTE;
 }
 
 static unsigned char Expand(ULONG value, ULONG maximum) {
@@ -278,6 +315,14 @@ static BOOL CompressedInternalFormat2D(GLint format) {
            JglCompressedTexturesAvailable();
 }
 
+/* Depth textures (EXT_packed_depth_stencil): TEXTURE_2D images only. */
+static BOOL DepthTarget(GLenum target) {
+    return target == GL_TEXTURE_2D && JglFramebufferObjectAvailable();
+}
+static BOOL DepthPixels(GLenum format) {
+    return format == 0x1902 /* DEPTH_COMPONENT */ || format == JGL_DEPTH_STENCIL;
+}
+
 /* 2D records target TEXTURE_2D or, once negotiated, one cube map face. */
 static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, GLenum format,
                      GLenum type, ULONG *components, GLint border = 0) {
@@ -285,7 +330,7 @@ static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, 
         JglCommandError(GL_INVALID_ENUM);
         return FALSE;
     }
-    if (!(*components = PixelBytes(format, type)))
+    if (!(*components = PixelBytes(format, type, FALSE, DepthTarget(target))))
         return FALSE;
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
         border > 1 || (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * border ||
@@ -404,7 +449,7 @@ static BOOL UploadPacked(GLenum target, GLint level, GLint xoffset, GLint yoffse
     unsigned char converted[(DG_GL_MAX_TEXTURE_DIMENSION + 2) * 4];
     ULONG y, x, row, rows, columns, args[8];
     BOOL words = Packed16(type);
-    ULONG unit = ScalarBytes(type);
+    ULONG unit = UnitBytes(type);
     BOOL bitmap = type == 0x1a00;
     ULONG pixelBytes = WirePixelBytes(type, components);
     if (capacity > sizeof(converted))
@@ -610,11 +655,17 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
         !Validate(target, level, width, height, format, type, &components, border))
         return;
     const BOOL compressed = CompressedInternalFormat2D(internal_format);
-    /* Cube map faces are square and borderless. */
+    const BOOL depth = DepthTarget(target) && JglDepthInternalFormat(internal_format);
+    /* Cube map faces are square and borderless, as are depth textures. */
     if (width < 2 * border || height < 2 * border ||
-        (JglCubeFace(target) && (width != height || border)) ||
-        (!InternalFormat(internal_format) && !compressed)) {
+        (JglCubeFace(target) && (width != height || border)) || (depth && border) ||
+        (!InternalFormat(internal_format) && !compressed && !depth)) {
         JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    /* Depth textures take depth pixels, and only they do. */
+    if (depth != DepthPixels(format)) {
+        JglCommandError(GL_INVALID_OPERATION);
         return;
     }
     /* S3TC images have no border. Compressed formats belong to their own
@@ -920,7 +971,7 @@ static BOOL Layout3D(GLsizei width, GLsizei height, GLsizei depth, ULONG compone
  * (the same forms as the 2D records). */
 static void WireRow(BYTE *out, const unsigned char *in, ULONG columns, ULONG components,
                     GLenum format, GLenum type) {
-    const ULONG unit = ScalarBytes(type);
+    const ULONG unit = UnitBytes(type);
     if (DirectPixels(type)) {
         CopyMemory(out, in, columns * components);
     } else if (unit) {

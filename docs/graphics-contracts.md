@@ -230,6 +230,65 @@ and disposable-VM acceptance cycle:
   reads memory instead of buffer offsets, and the zero attribute buffer covers
   every vertex and dies with its contexts. No D3D cap changes. The installed
   vertex buffer probe has not yet run on a guest.
+- Framebuffer objects (`DG_CAP_GL_FRAMEBUFFER_OBJECT`) add
+  EXT_framebuffer_object, EXT_framebuffer_blit and EXT_packed_depth_stencil.
+  Framebuffer names are virtual and private to each context; renderbuffers
+  share the texture namespace. The guest's framebuffer zero stays the host's
+  drawable framebuffer (back buffer COLOR_ATTACHMENT0, front COLOR_ATTACHMENT1,
+  packed depth/stencil): the host owns the draw and read bindings, rebinds the
+  guest's objects natively whenever the platform rebinds the drawable (make
+  current, SwapBuffers, export) and binds the drawable again for zero, so
+  presentation, front/back selection and window readback are unchanged with an
+  object bound. Draw and read buffers are per framebuffer: the window keeps
+  its own, an object starts with COLOR_ATTACHMENT0, and PopAttrib restores a
+  saved buffer only into the framebuffer it came from. Names reach the host
+  only through Bind (the frontend answers Gen/Is), every command but
+  BlitFramebuffer executes immediately, and everything that depends on state
+  (attachments of the window, wrong or missing objects, levels beyond a
+  target's limit, storage beyond the native limit, a window buffer for an
+  object) is a GL error. Completeness is native GL 3's, so mixed sizes and
+  formats can be complete. Attachments hold their textures and renderbuffers:
+  an image deleted while attached to an unbound framebuffer lives until
+  detached, and deletion detaches from this context's bound framebuffers
+  only. Rendering into attachments is fenced when the context stops drawing
+  into them (rebinding, detaching, deleting, switching contexts) and versioned
+  before texture reads, so other contexts and the texture read cache see it.
+  Renderbuffers are zero-initialized and charged against the resource budget;
+  reads (ReadPixels, CopyPixels, CopyTex*, blit sources) of an image the host
+  never initialized are INVALID_FRAMEBUFFER_OPERATION. ReadPixels from an
+  object is clipped by the host to its attachments, so reads beyond the
+  window work. GenerateMipmapEXT defines and charges the generated chain. For
+  depth attachments, TEXTURE_2D images also take the depth and packed
+  depth/stencil internal formats (DEPTH_COMPONENT/BYTE..FLOAT and
+  DEPTH_STENCIL/UNSIGNED_INT_24_8 pixels, CopyTexImage from the read
+  framebuffer's depth, zero-defined storage); ARB_depth_texture is not
+  claimed and depth GetTexImage is unsupported. Native tests cover
+  render-to-texture with depth and stencil, cube faces, 3D slices, 1D,
+  renderbuffers, status, scaled, flipped, depth and out-of-bounds blits, the
+  window after binding zero including presentation, deletion, sharing,
+  GenerateMipmap, lists, depth textures and the point sprite origin (Linux
+  host). The scalar PointParameterf record passes POINT_SPRITE_COORD_ORIGIN
+  (GL 2.0) to native GL, and objects and the window share one orientation.
+  From the Wine source, WineD3D then selects ORM_FBO instead of backbuffer
+  offscreen rendering. With this tree's always_offscreen every D3D8/9
+  swapchain renders into an FBO texture and presents with
+  `glBlitFramebuffer`; offscreen targets, depth surfaces and DirectDraw
+  surfaces get their own textures, colour and depth blits use the FBO blitter,
+  and adapter initialization decides render-target and post-pixel-shader
+  blending support per format with FBO checks (several hundred synchronous
+  queries). Wine patches 0042-0046 adapt it (see the patch README): NPOT
+  resources stay padded 2D textures instead of falling to renderbuffers,
+  CPU depth transfers (0017) gain an FBO mode, a depth buffer larger than
+  its target is attached directly, overlapping self-blits go to the CPU
+  blitter, and point sprites stay upright below GL 2.0. Expected caps changes:
+  D3DCAPS8/9 and the reported card are unchanged; CheckDeviceFormat render
+  targets follow attachable formats instead of the window's pixel format
+  (R5G6B5, A2B10G10R10 and, on D3D9, A2R10G10B10 and A16B16G16R16 on a 32-bit
+  desktop; the 32-bit formats on a 16-bit one), D16_LOCKABLE and D32 join the
+  depth formats, every render-target/depth pair matches, and DirectDraw
+  enumerates a 32-bit Z buffer. The installed render-target probe (render
+  targets of 1024x1024 beside a 320x240 window, depth and stencil of that
+  size, StretchRect/CopyRects, offscreen surfaces) has not yet run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

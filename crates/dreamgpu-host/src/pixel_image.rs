@@ -44,6 +44,14 @@ pub(crate) fn byte_count(function: u32, w: u32, h: u32, format: u32, kind: u32) 
     if function == FEnum_glBitmap && (format != GL_COLOR_INDEX || kind != GL_BITMAP) {
         return None;
     }
+    // EXT_packed_depth_stencil: one packed 24/8 word per pixel.
+    if function == FEnum_glDrawPixels && format == GL_DEPTH_STENCIL {
+        if kind != GL_UNSIGNED_INT_24_8 {
+            return None;
+        }
+        let bytes = u64::from(w) * u64::from(h) * 4;
+        return (bytes <= u64::from(LIMIT)).then_some(bytes as u32);
+    }
     let components = match format {
         GL_COLOR_INDEX | GL_STENCIL_INDEX | GL_DEPTH_COMPONENT | GL_RED | GL_GREEN | GL_BLUE
         | GL_ALPHA | GL_LUMINANCE => 1u64,
@@ -223,6 +231,14 @@ unsafe fn draw(m: &Memory, s: &State, errors: *mut u32) -> Result<(), u32> {
     let error = unsafe { get_error() };
     if error != 0 {
         unsafe { query::store(errors, error) };
+        // The bound framebuffer decides these (EXT_framebuffer_object): an
+        // incomplete one, or packed depth/stencil pixels for a framebuffer
+        // without both buffers. They are the guest's GL errors.
+        if error == GL_INVALID_FRAMEBUFFER_OPERATION
+            || (s.descriptor[2] == GL_DEPTH_STENCIL && error == GL_INVALID_OPERATION)
+        {
+            return Ok(());
+        }
         return Err(DG_GL_ERROR_HOST);
     };
     Ok(())

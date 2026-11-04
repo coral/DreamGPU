@@ -2175,6 +2175,11 @@ pub const DG_GL_MAX_BUFFER_BYTES: u32 = 134217728;
 pub const DG_GL_MAX_BUFFER_STRIDE: u32 = 2048;
 pub const DG_GL_MAX_BUFFER_ELEMENTS: u32 = 16777216;
 pub const DG_GL_BUFFER_REFERENCE_BYTES: u32 = 12;
+pub const DG_CAP_GL_FRAMEBUFFER_OBJECT: u32 = 33554432;
+pub const DG_GL_MAX_FRAMEBUFFERS: u32 = 1024;
+pub const DG_GL_MAX_RENDERBUFFERS: u32 = 4096;
+pub const DG_GL_MAX_COLOR_ATTACHMENTS: u32 = 4;
+pub const DG_GL_MAX_RENDERBUFFER_SIZE: u32 = 4096;
 pub const DG_GL_VERTEX_BYTES: u32 = 64;
 pub const DG_GL_VERTEX_POSITION: u32 = 0;
 pub const DG_GL_VERTEX_COLOR: u32 = 16;
@@ -6495,6 +6500,34 @@ pub struct DreamGpuGlApi {
             arg2: isize,
             arg3: isize,
             arg4: *const ::core::ffi::c_void,
+        ),
+    >,
+    pub dg_glFramebufferTexture1D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_uint,
+            arg5: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glFramebufferTexture3D: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: ::core::ffi::c_uint,
+            arg4: ::core::ffi::c_uint,
+            arg5: ::core::ffi::c_int,
+            arg6: ::core::ffi::c_int,
+        ),
+    >,
+    pub dg_glGenerateMipmap:
+        ::core::option::Option<unsafe extern "C" fn(arg1: ::core::ffi::c_uint)>,
+    pub dg_glGetRenderbufferParameteriv: ::core::option::Option<
+        unsafe extern "C" fn(
+            arg1: ::core::ffi::c_uint,
+            arg2: ::core::ffi::c_uint,
+            arg3: *mut ::core::ffi::c_int,
         ),
     >,
 }

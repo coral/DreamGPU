@@ -1,0 +1,53 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -7829,6 +7829,16 @@
+     if (src_pool == WINED3D_POOL_SYSTEM_MEM || dst_pool == WINED3D_POOL_SYSTEM_MEM)
+         return FALSE;
+ 
++    /* DreamGPU: with framebuffer objects an offscreen destination is drawn in
++     * its own texture. One the FBO cannot attach would drop the blit while the
++     * destination is marked current; without FBOs the drawable took it. */
++    if (wined3d_settings.offscreen_rendering_mode == ORM_FBO && !(dst_usage & WINED3DUSAGE_RENDERTARGET)
++            && !(dst_format->flags[WINED3D_GL_RES_TYPE_TEX_2D] & WINED3DFMT_FLAG_FBO_ATTACHABLE))
++    {
++        TRACE("Destination format is not FBO attachable.\n");
++        return FALSE;
++    }
++
+     src_fixup = get_complex_fixup(src_format->color_fixup);
+     if (TRACE_ON(d3d_shader) && TRACE_ON(d3d))
+     {
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -5870,6 +5870,18 @@
+     cpu_blit_blit_surface,
+ };
+ 
++/* DreamGPU: with framebuffer objects a surface that is its own source is one
++ * GL image: GL leaves a blit, copy or textured draw between overlapping regions
++ * of it undefined (without FBOs the destination was the drawable). The CPU
++ * blitter copies overlapping rectangles in a safe order. */
++static BOOL dg_surface_blt_self_overlap(const struct wined3d_surface *src_surface, const RECT *src_rect,
++        const struct wined3d_surface *dst_surface, const RECT *dst_rect)
++{
++    return wined3d_settings.offscreen_rendering_mode == ORM_FBO && src_surface == dst_surface
++            && src_rect->left < dst_rect->right && dst_rect->left < src_rect->right
++            && src_rect->top < dst_rect->bottom && dst_rect->top < src_rect->bottom;
++}
++
+ /* ORM_BACKBUFFER borrows the window drawable for offscreen rendering.
+  * A desktop-sized DirectDraw primary can exceed that drawable. Rendering it
+  * there clips before its texture copy, even with a larger GL viewport. Keep
+@@ -6024,6 +6036,12 @@
+         goto cpu;
+     }
+ 
++    if (dg_surface_blt_self_overlap(src_surface, &src_rect, dst_surface, &dst_rect))
++    {
++        WARN_(d3d_perf)("Overlapping blit within one surface, using CPU blit.\n");
++        goto cpu;
++    }
++
+     /* We want to avoid invalidating the sysmem location for converted
+      * surfaces, since otherwise we'd have to convert the data back when
+      * locking them. */

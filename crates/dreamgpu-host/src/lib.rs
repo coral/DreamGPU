@@ -41,6 +41,7 @@ mod desktop;
 mod device;
 mod evaluator;
 mod export;
+mod framebuffer;
 mod gl;
 #[allow(
     non_snake_case,

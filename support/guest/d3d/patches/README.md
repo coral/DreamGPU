@@ -543,3 +543,106 @@ probe draw specular-alpha fog from buffers and user memory with exact pixels;
 the emulation produced the same pixels, so they check results, not the path.
 The diagnostic stack is rebased onto 0041 with its call-site line numbers
 renumbered.
+
+Patches 0042-0045 adapt WineD3D to DreamGPU's framebuffer objects
+(`DG_CAP_GL_FRAMEBUFFER_OBJECT`: `EXT_framebuffer_object`,
+`EXT_framebuffer_blit`, `EXT_packed_depth_stencil`). With the extension Wine
+selects `ORM_FBO` instead of backbuffer offscreen rendering. Because this tree
+defaults to `always_offscreen`, every swapchain with a backbuffer then renders
+into an FBO and presents with `glBlitFramebuffer` (`swapchain_blit`), and the
+window's pixel format carries no depth buffer; offscreen surfaces render into
+their own textures, `fbo_blit` handles GPU colour and depth blits, and
+`check_fbo_compat` decides render-target and post-pixel-shader-blending support
+per format at adapter initialization. DreamGPU reports neither NPOT nor
+rectangle textures nor `ARB_depth_texture`, so depth surfaces are depth
+textures that cannot be sampled or read with `GetTexImage`.
+
+`0042-fbo-padded-2d-targets.patch` keeps NPOT resources in padded 2D textures.
+`resource_init` skips the 2D type of an NPOT resource "to try texture
+rectangle"; without rectangles the next candidate was a renderbuffer, and since
+this tree disables the texture usage check, every NPOT resource took it:
+backbuffers, depth buffers, DirectDraw offscreen plain surfaces and textures. A
+renderbuffer draw binding (`WINED3D_LOCATION_RB_RESOLVED`) is loaded only by
+resolving a multisampled renderbuffer, so CPU uploads and partial blits into
+such a surface were lost, and `swapchain_blit` presents from the texture. The
+2D type is now skipped only when rectangles exist; a renderbuffer remains the
+fallback for a format whose 2D texture the FBO cannot attach. This is the
+padded texture 0001 already selected without framebuffer objects. NPOT targets
+are therefore limited by `GL_MAX_TEXTURE_SIZE` after padding (2048), not by the
+renderbuffer limit. `test_fbo_padded_targets.py` runs the prepared
+`resource_init` under ASan/UBSan.
+
+`0043-fbo-depth-transfers.patch` gives 0017's CPU depth transfers an FBO mode.
+An offscreen depth surface now has GL storage of its own, its draw binding, but
+0017 read and wrote only the device-owned drawable, and `GetTexImage` cannot
+read depth here: locking a depth surface failed, and CPU depth (a Lock/Unlock,
+0028's defined discarded copy) never reached the GPU. `surface_transfer_depth`
+now attaches the surface's own texture or renderbuffer alone to an FBO (no
+draw or read buffer) and reads `DEPTH_COMPONENT`/`STENCIL_INDEX` or draws
+`DEPTH_COMPONENT` pixels in offscreen, unflipped orientation, with the same
+state saving, entry-point preflight (0022, 0023), program disabling (0029,
+0033) and failure handling. Stencil formats are drawn packed as
+`DEPTH_STENCIL`/`UNSIGNED_INT_24_8`: the GL contract has no `STENCIL_INDEX`
+DrawPixels on an FBO. Storage is allocated before an upload; ownership of the
+drawable is not involved. `surface_load_ds_location` (draws, clears, depth
+blits) uploads a CPU-only surface to the requested binding, or to the depth
+texture before upstream's texture-to-drawable copy. Upstream completed a partly
+current binding by copying the window's depth over it, which only makes sense
+when the drawable holds that depth; otherwise (always here) the binding is now
+complete as it is, for example a depth `Blt`/`StretchRect` destination whose
+size Wine leaves at zero. The drawable/texture copies and the discarded
+shortcut are unchanged. `test_fbo_depth_transfers.py` runs the prepared
+functions in all seven depth layouts through texture and renderbuffer
+attachments; `test_depth_transfer.py` keeps covering the drawable mode, which
+never binds an FBO.
+
+`0044-fbo-mixed-size-attachments.patch` attaches a shared depth surface
+directly. `EXT_framebuffer_object` requires attachments of one size, so Wine
+attached a depth surface larger than the render target through a separate
+renderbuffer of the target's size: the surface's contents never reached it,
+and `surface_load_ds_location` then refused to load the surface, which skips
+draws and clears. D3D shares one depth buffer between targets of different
+sizes (a reflection, shadow or glow target with the auto depth buffer).
+DreamGPU's completeness follows GL 3 rules, so adapter initialization now asks
+the implementation (a 16x16 colour and 32x32 depth renderbuffer, one
+`CheckFramebufferStatus`); `ARB_framebuffer_object` implies the answer, and an
+implementation that reports `INCOMPLETE_DIMENSIONS` keeps the substitution.
+`test_fbo_mixed_size_attachments.py` runs the prepared probe and
+`surface_set_compatible_renderbuffer`.
+
+`0045-fbo-blit-destinations.patch` covers blits that drew into the window
+drawable before. A surface that is its own source is one GL image under FBOs:
+GL leaves a blit, copy or textured draw between overlapping regions of it
+undefined (DirectDraw scrolling within a surface). `wined3d_surface_blt` sends
+such a blit to the CPU blitter, which copies overlapping rectangles in a safe
+order; non-overlapping blits within a surface keep `glBlitFramebuffer`. The
+arbfp blitter drew into any destination, and one the FBO cannot attach dropped
+the blit while the destination was marked current; it now declines such a
+destination unless it is a render target, as `fbo_blit_supported` and the
+fixed-function colour fill already do. `test_fbo_blit_destinations.py` runs the
+prepared helper and `arbfp_blit_supported` and checks the guard's place. The
+diagnostic stack is rebased onto 0045 with its call-site line numbers
+renumbered.
+
+Under `ORM_FBO` the drawable-specific adaptations stay in place but are
+dormant: 0002 (backbuffer blit bounds), 0017's drawable transfers and 0020's
+ownership tracking apply only to `ORM_BACKBUFFER`. Alpha blending into an
+offscreen target requires the format's post-pixel-shader-blending flag, which
+`check_fbo_compat` now measures by drawing a blended quad into each format and
+reading it back.
+
+`0046-point-sprite-origin.patch` keeps point sprite textures upright. Wine
+flips offscreen rendering vertically and compensates point sprites with
+`GL_POINT_SPRITE_COORD_ORIGIN` (`LOWER_LEFT` offscreen, `UPPER_LEFT`
+onscreen), but sets it only on GL 2.0. With framebuffer objects every D3D
+target renders offscreen, so on DreamGPU's GL 1.1 every point sprite texture
+was upside down (without them only offscreen targets were). DreamGPU's scalar
+`glPointParameterfARB` (`ARB_point_parameters`) takes the origin, while
+`glPointParameteri` is not exported. Adapter initialization therefore asks once
+below GL 2.0 with `ARB_point_sprite`: it sets `LOWER_LEFT`, checks for a GL
+error and restores the default. When the driver accepts it, the state handler
+that only warned (`psorigin_w`) sets the same origin as upstream's GL 2.0
+handler through the scalar float form, from its own context. A driver that
+rejects the parameter keeps the warning. `test_fbo_point_sprite_origin.py`
+runs the prepared probe and handler under ASan/UBSan. The diagnostic stack is
+rebased onto 0046.

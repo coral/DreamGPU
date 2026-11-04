@@ -250,6 +250,10 @@ fn scalar_buffer_selection_hints_copy_texture_and_null_abi() {
     let mut a = [0; 8];
     a[0] = GL_NONE;
     assert_eq!(call_validate(FEnum_glDrawBuffer, &a), 0);
+    // ReadBuffer(NONE) exists for framebuffer objects (EXT_framebuffer_object);
+    // the window rejects it at execution as GL_INVALID_ENUM.
+    assert_eq!(call_validate(FEnum_glReadBuffer, &a), 0);
+    a[0] = GL_FRONT_AND_BACK;
     assert_eq!(
         call_validate(FEnum_glReadBuffer, &a),
         DG_GL_ERROR_UNSUPPORTED

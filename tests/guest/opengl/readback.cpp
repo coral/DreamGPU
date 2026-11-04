@@ -15,6 +15,12 @@ BOOL JglTextureCubeMapAvailable(void) {
 BOOL JglTexture3DAvailable(void) {
     return FALSE; /* 3D levels: tests/guest/opengl/texture-3d.cpp. */
 }
+BOOL JglFramebufferObjectAvailable(void) {
+    return FALSE; /* Framebuffer reads: tests/guest/opengl/framebuffer-object.cpp. */
+}
+BOOL JglReadFramebufferBound(void) {
+    return FALSE;
+}
 void JglSetError(GLenum e) {
     error = e;
 }

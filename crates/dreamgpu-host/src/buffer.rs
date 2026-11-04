@@ -121,7 +121,7 @@ unsafe fn remove(ns: *mut Namespace, index: usize) {
 }
 
 /// Reserve budget bytes; false when the shared resource budget is exhausted.
-unsafe fn charge(m: &Memory, bytes: u64) -> bool {
+pub(crate) unsafe fn charge(m: &Memory, bytes: u64) -> bool {
     let used = unsafe { *m.bytes };
     if bytes > u64::from(DG_GL_MAX_TEXTURE_BYTES).saturating_sub(used) {
         return false;
@@ -129,7 +129,7 @@ unsafe fn charge(m: &Memory, bytes: u64) -> bool {
     unsafe { *m.bytes = used + bytes };
     true
 }
-unsafe fn uncharge(m: &Memory, bytes: u64) {
+pub(crate) unsafe fn uncharge(m: &Memory, bytes: u64) {
     unsafe {
         *m.bytes = (*m.bytes)
             .checked_sub(bytes)

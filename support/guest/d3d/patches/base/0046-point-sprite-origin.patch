@@ -1,0 +1,79 @@
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -3533,6 +3533,35 @@
+     }
+ }
+ 
++/* DreamGPU: GL_POINT_SPRITE_COORD_ORIGIN is GL 2.0 state, so Wine sets it only
++ * there. Offscreen rendering (every target with framebuffer objects) is
++ * flipped vertically, and without the origin every point sprite texture comes
++ * out upside down. A GL below 2.0 may still take it through the scalar
++ * ARB_point_parameters entry point; ask once whether it does. */
++/* Context activation is done by the caller. */
++static BOOL wined3d_check_point_sprite_origin(const struct wined3d_gl_info *gl_info)
++{
++    unsigned int i;
++    BOOL supported;
++
++    if (gl_info->supported[WINED3D_GL_VERSION_2_0] || !gl_info->supported[ARB_POINT_SPRITE]
++            || !gl_info->gl_ops.ext.p_glPointParameterfARB)
++        return FALSE;
++
++    for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
++    if (i == 16)
++        return FALSE;
++    GL_EXTCALL(glPointParameterfARB(GL_POINT_SPRITE_COORD_ORIGIN, (GLfloat)GL_LOWER_LEFT));
++    supported = gl_info->gl_ops.gl.p_glGetError() == GL_NO_ERROR;
++    /* Leave the GL default: contexts set the origin with their first draw. */
++    if (supported)
++        GL_EXTCALL(glPointParameterfARB(GL_POINT_SPRITE_COORD_ORIGIN, (GLfloat)GL_UPPER_LEFT));
++    for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i) {}
++    TRACE("Point sprite coordinate origin through glPointParameterfARB: %s.\n", supported ? "yes" : "no");
++
++    return supported;
++}
++
+ /* Context activation is done by the caller. */
+ static BOOL wined3d_adapter_init_gl_caps(struct wined3d_adapter *adapter)
+ {
+@@ -3863,6 +3892,7 @@
+     }
+ 
+     wined3d_adapter_init_limits(gl_info);
++    gl_info->point_sprite_origin_arb = wined3d_check_point_sprite_origin(gl_info);
+ 
+     if (gl_info->supported[ARB_VERTEX_PROGRAM] && test_arb_vs_offset_limit(gl_info))
+         gl_info->quirks |= WINED3D_QUIRK_ARB_VS_OFFSET_LIMIT;
+--- a/wined3d/state.c
++++ b/wined3d/state.c
+@@ -4833,8 +4833,19 @@
+ 
+ static void psorigin_w(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+ {
++    const struct wined3d_gl_info *gl_info = context->gl_info;
+     static BOOL warned;
+ 
++    /* DreamGPU: below GL 2.0 the scalar ARB entry point may take the origin
++     * (wined3d_check_point_sprite_origin()); keep psorigin()'s orientation. */
++    if (gl_info->point_sprite_origin_arb)
++    {
++        GL_EXTCALL(glPointParameterfARB(GL_POINT_SPRITE_COORD_ORIGIN,
++                (GLfloat)(context->render_offscreen ? GL_LOWER_LEFT : GL_UPPER_LEFT)));
++        checkGLcall("glPointParameterfARB(GL_POINT_SPRITE_COORD_ORIGIN, ...)");
++        return;
++    }
++
+     if (!warned)
+     {
+         WARN("Point sprite coordinate origin switching not supported.\n");
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1763,6 +1763,8 @@
+     BOOL texture_rectangle_hidden;
+     /* DreamGPU: framebuffer objects complete attachments of different sizes. */
+     BOOL fbo_mixed_sizes;
++    /* DreamGPU: glPointParameterfARB sets GL_POINT_SPRITE_COORD_ORIGIN below GL 2.0. */
++    BOOL point_sprite_origin_arb;
+     GLint wrap_lookup[WINED3D_TADDRESS_MIRROR_ONCE - WINED3D_TADDRESS_WRAP + 1];
+     float fixed_polyoffset_scale, float_polyoffset_scale;
+ 

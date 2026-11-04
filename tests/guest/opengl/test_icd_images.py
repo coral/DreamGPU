@@ -38,6 +38,7 @@ static bool JglReady(){if(!ready)error=GL_INVALID_OPERATION;return ready;}
 static void JglSetError(unsigned e){error=e;}
 static JGL_UNPACK* JglUnpack(){return &unpack;}
 static JGL_ARRAY_STATE* JglArrays(){return &arrays;}
+static bool JglFramebufferObjectAvailable(){return false;}
 static ULONG JglMaxDataBytes(ULONG n){assert(n==8);return capacity;}
 static ULONG JglNextImageId(){if(identity==0xffffffff){error=GL_OUT_OF_MEMORY;return 0;}return ++identity;}
 static bool JglData(ULONG f,const ULONG*a,ULONG n,const void*p,ULONG bytes){

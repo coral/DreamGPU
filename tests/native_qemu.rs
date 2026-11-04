@@ -22,6 +22,8 @@ mod fixed_state;
 mod fog_coord;
 #[path = "native_qemu/fragment_program.rs"]
 mod fragment_program;
+#[path = "native_qemu/framebuffer_object.rs"]
+mod framebuffer_object;
 #[path = "native_qemu/multitexture.rs"]
 mod multitexture;
 #[path = "native_qemu/pixel_image.rs"]

@@ -404,6 +404,24 @@ fn context_state_c_abi_layout() {
             + pointer
             + (2 + 8 + 16 * 8) * pointer
             + pointer
+            + 4 * pointer
+            + 4
+            + 16 * 2 * 4
+            + 4
+    );
+    // Then the framebuffer object state: four void * and the window's native
+    // framebuffer, then the names saved with each attribute entry.
+    assert_eq!(
+        core::mem::offset_of!(ContextState, framebuffers),
+        core::mem::offset_of!(ContextState, proxy_rejected_3d) + pointer
+    );
+    assert_eq!(
+        core::mem::offset_of!(ContextState, window_framebuffer),
+        core::mem::offset_of!(ContextState, framebuffers) + 4 * pointer
+    );
+    assert_eq!(
+        core::mem::offset_of!(ContextState, attrib_framebuffers),
+        core::mem::offset_of!(ContextState, window_framebuffer) + 4
     );
     // Appended ARB_fragment_program state: void *, int32_t, uint32_t in C.
     assert_eq!(

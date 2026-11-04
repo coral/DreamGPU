@@ -48,7 +48,23 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glMapBufferARB", JglVertexBufferObjectAvailable},
                     {"glUnmapBufferARB", JglVertexBufferObjectAvailable},
                     {"glGetBufferParameterivARB", JglVertexBufferObjectAvailable},
-                    {"glGetBufferPointervARB", JglVertexBufferObjectAvailable}};
+                    {"glGetBufferPointervARB", JglVertexBufferObjectAvailable},
+                    {"glIsRenderbuffer", JglFramebufferObjectAvailable},
+                    {"glBindRenderbuffer", JglFramebufferObjectAvailable},
+                    {"glDeleteRenderbuffers", JglFramebufferObjectAvailable},
+                    {"glGenRenderbuffers", JglFramebufferObjectAvailable},
+                    {"glRenderbufferStorage", JglFramebufferObjectAvailable},
+                    {"glGetRenderbufferParameter", JglFramebufferObjectAvailable},
+                    {"glIsFramebuffer", JglFramebufferObjectAvailable},
+                    {"glBindFramebuffer", JglFramebufferObjectAvailable},
+                    {"glDeleteFramebuffers", JglFramebufferObjectAvailable},
+                    {"glGenFramebuffers", JglFramebufferObjectAvailable},
+                    {"glCheckFramebufferStatus", JglFramebufferObjectAvailable},
+                    {"glFramebufferTexture", JglFramebufferObjectAvailable},
+                    {"glFramebufferRenderbuffer", JglFramebufferObjectAvailable},
+                    {"glGetFramebufferAttachmentParameter", JglFramebufferObjectAvailable},
+                    {"glGenerateMipmap", JglFramebufferObjectAvailable},
+                    {"glBlitFramebuffer", JglFramebufferObjectAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {

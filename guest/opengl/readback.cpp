@@ -40,6 +40,8 @@ static ULONG ReadComponents(GLenum format, BOOL texture) {
         case 0x1901: /* STENCIL_INDEX */
         case 0x1902: /* DEPTH_COMPONENT */
             return texture ? 0 : 1;
+        case JGL_DEPTH_STENCIL: /* EXT_packed_depth_stencil, framebuffers only */
+            return texture || !JglFramebufferObjectAvailable() ? 0 : 1;
         default:
             return 0;
     }
@@ -54,7 +56,19 @@ static ULONG ReadPixelBytes(GLenum format, GLenum type, BOOL texture) {
         JglSetError(GL_INVALID_ENUM);
         return 0;
     }
+    /* DEPTH_STENCIL is read only as UNSIGNED_INT_24_8. */
+    if (format == JGL_DEPTH_STENCIL) {
+        if (type == JGL_UNSIGNED_INT_24_8)
+            return 4;
+        JglSetError(GL_INVALID_ENUM);
+        return 0;
+    }
     switch (type) {
+        case JGL_UNSIGNED_INT_24_8: /* DEPTH_STENCIL only */
+            if (!texture && JglFramebufferObjectAvailable())
+                break;
+            JglSetError(GL_INVALID_ENUM);
+            return 0;
         case 0x1a00: /* BITMAP: only integer stencil indices are exposed. */
             if (!texture && format == 0x1901)
                 return 1;
@@ -241,6 +255,21 @@ static void StoreReadPixel(BYTE *dest, const ULONG *source, GLenum format, GLenu
         StoreReadScalar(dest, source[0], type, swap, TRUE);
         return;
     }
+    if (format == JGL_DEPTH_STENCIL) {
+        /* UNSIGNED_INT_24_8: depth (float32 word) in the high 24 bits, the
+         * stencil index (uint32 word) in the low 8, one 32-bit unit. */
+        union {
+            float f;
+            ULONG u;
+        } depth;
+        depth.u = source[0];
+        const double value = depth.f;
+        const ULONG z = !(value > 0.0) ? 0
+                        : value >= 1.0 ? 0xffffff
+                                       : (ULONG)(value * 0xffffff + 0.5);
+        StoreReadWord(dest, z << 8 | (source[1] & 0xff), 4, swap);
+        return;
+    }
     if (!wide) {
         StoreReadByteColor(dest, source[0], format, type, swap, texture);
         return;
@@ -350,18 +379,23 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
     BYTE *output;
     ULONG mode = 0, kind = DG_GL_RESULT_INT, wire_bytes = 4;
     BOOL wide = FALSE, bitmap = type == 0x1a00;
+    /* DEPTH_STENCIL composes a DEPTH and a STENCIL read of each tile: eight
+     * wire bytes per pixel, the depth words then the stencil words. */
+    const BOOL packed = format == JGL_DEPTH_STENCIL;
     if (!JglReady())
         return;
     pixel_bytes = ReadPixelBytes(format, type, FALSE);
     if (!pixel_bytes)
         return;
-    if (format == 0x1902 || format == 0x1901) {
+    if (format == 0x1902 || format == 0x1901 || packed) {
         if (!JglDepthStencilReadbackAvailable()) {
             JglSetError(GL_INVALID_OPERATION);
             return;
         }
-        mode = format == 0x1902 ? DG_GL_READ_DEPTH : DG_GL_READ_STENCIL;
-        kind = format == 0x1902 ? DG_GL_RESULT_FLOAT : DG_GL_RESULT_INT;
+        mode = format == 0x1901 ? DG_GL_READ_STENCIL : DG_GL_READ_DEPTH;
+        kind = format == 0x1901 ? DG_GL_RESULT_INT : DG_GL_RESULT_FLOAT;
+        if (packed)
+            wire_bytes = 8;
     } else if (WideReadColor(type)) {
         if (!JglDepthStencilReadbackAvailable()) {
             JglSetError(GL_INVALID_OPERATION);
@@ -403,7 +437,12 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
         !Add(first, span, &end) || !Add((ULONG_PTR)pixels, end, &end))
         goto invalid;
     output = (BYTE *)pixels + first;
-    JglDrawableSize(&drawable_width, &drawable_height);
+    /* A framebuffer object bound for reading need not fit the drawable: the
+     * host reads what lies inside its attachments and zero-fills the rest. */
+    if (JglReadFramebufferBound())
+        drawable_width = drawable_height = DG_GL_MAX_DIMENSION;
+    else
+        JglDrawableSize(&drawable_width, &drawable_height);
     capacity = JglReadbackCapacity();
     rgba = JglReadbackBuffer();
     if (!rgba)
@@ -430,28 +469,43 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
             if (clipped_right > clipped_left && clipped_top > clipped_bottom) {
                 clipped_width = (ULONG)(clipped_right - clipped_left);
                 clipped_height = (ULONG)(clipped_top - clipped_bottom);
+                const ULONG count = clipped_width * clipped_height, reply = packed ? 4 : wire_bytes;
                 args[0] = (ULONG)clipped_left | mode;
                 args[1] = (ULONG)clipped_bottom;
                 args[2] = clipped_width | (clipped_height << 16);
-                if (!JglQuery(FEnum_glReadPixels, args, kind, rgba,
-                              clipped_width * clipped_height * wire_bytes, &bytes))
+                if (!JglQuery(FEnum_glReadPixels, args, kind, rgba, count * reply, &bytes))
                     return;
-                if (bytes != clipped_width * clipped_height * wire_bytes) {
+                if (bytes != count * reply) {
                     JglSetError(GL_INVALID_OPERATION);
                     return;
+                }
+                if (packed) {
+                    args[0] = (ULONG)clipped_left | DG_GL_READ_STENCIL;
+                    if (!JglQuery(FEnum_glReadPixels, args, DG_GL_RESULT_INT, rgba + count,
+                                  count * 4, &bytes))
+                        return;
+                    if (bytes != count * 4) {
+                        JglSetError(GL_INVALID_OPERATION);
+                        return;
+                    }
                 }
             }
             for (j = 0; j < rows; ++j)
                 for (i = 0; i < columns; ++i) {
-                    ULONG zero[4] = {0, 0, 0, 0};
-                    const ULONG *pixel = zero;
+                    ULONG value[4] = {0, 0, 0, 0};
+                    const ULONG *pixel = value;
                     BYTE *dest = output + (row + j) * stride;
                     if (clipped_width && clipped_height && left + i >= clipped_left &&
                         left + i < clipped_right && bottom + j >= clipped_bottom &&
-                        bottom + j < clipped_top)
-                        pixel = rgba + ((ULONG)(bottom + j - clipped_bottom) * clipped_width +
-                                        (ULONG)(left + i - clipped_left)) *
-                                           (wire_bytes / 4);
+                        bottom + j < clipped_top) {
+                        const ULONG at = (ULONG)(bottom + j - clipped_bottom) * clipped_width +
+                                         (ULONG)(left + i - clipped_left);
+                        if (packed) {
+                            value[0] = rgba[at];
+                            value[1] = rgba[clipped_width * clipped_height + at];
+                        } else
+                            pixel = rgba + at * (wire_bytes / 4);
+                    }
                     if (bitmap) {
                         ULONG bit = (pack->SkipPixels & 7) + column + i;
                         BYTE mask = (BYTE)(1u << (pack->LsbFirst ? bit % 8 : 7 - bit % 8));

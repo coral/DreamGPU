@@ -72,6 +72,14 @@ BOOL JglTexture3DAvailable(void);
 #define JGL_TEXTURE_3D 0x806f
 #define JGL_PROXY_TEXTURE_3D 0x8070
 #define JGL_TEXTURE_WRAP_R 0x8072
+/* Depth textures and DEPTH_STENCIL pixels, as in guest/opengl/internal.h. */
+BOOL JglFramebufferObjectAvailable(void);
+#define JGL_DEPTH_STENCIL 0x84f9
+#define JGL_UNSIGNED_INT_24_8 0x84fa
+static inline BOOL JglDepthInternalFormat(GLint format) {
+    return format == 0x1902 || (format >= 0x81a5 && format <= 0x81a7) ||
+           format == JGL_DEPTH_STENCIL || format == 0x88f0;
+}
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);
