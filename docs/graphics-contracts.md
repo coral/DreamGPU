@@ -537,7 +537,10 @@ Game checks on DreamGPU fixtures (2026-11-03, Linux host):
 - **Unreal Tournament GOTY** (Glide, Win98 SE): renders CityIntro through the
   system glide2x provider. With the m20 package its first-time configuration
   picks "3dfx Glide for Windows", the intro runs full screen at 640×480, and
-  quitting from the console restores the 1024×768 desktop. A stale application-local `glide2x.dll` in the
+  quitting from the console restores the 1024×768 desktop. With
+  `GameRenderDevice=D3DDrv.D3DRenderDevice` on the m28 package (framebuffer
+  objects, BGRA vertex arrays) its Direct3D renderer draws CityIntro on Win98
+  with lit buildings, billboards, coronas, smoke and sky. A stale application-local `glide2x.dll` in the
   image's `UT99\System` (an old OpenGLide 0.09rc9 build) hung it in
   `grSstOpen`; it is not part of DreamGPU.
 - **3DMark2001 SE** (Win2000, build 330 Pro): its bundled SystemInfo reports
