@@ -190,6 +190,22 @@ widths,64/80-byte draws, context/attribute restoration and DMA canaries on both
 hosts. The public `dgwgl -arrays` probe adds192 exact pixels through the actual
 Windows exports; see the current run manifest for runtime acceptance.
 
+### Extension string order
+
+`GL_EXTENSIONS` names only negotiated contracts, each name under its own
+contract's gate, ordered by age rather than by contract. Games of 1997-2001
+copy the string into fixed buffers and search only that copy (Quake III 1.11:
+`Q_strncpyz` into 1024 bytes), so the names they probe come first:
+`GL_ARB_multitexture`, `GL_EXT_compiled_vertex_array`, the texture
+environment add/combine/dot3 names, anisotropy, edge clamp, point parameters,
+`GL_ARB_texture_compression`/S3TC, secondary colour and fog coordinates, then
+cube maps and the other fixed-function names of that era, then 3D textures,
+texture control, and last the program, buffer object, framebuffer object,
+BGRA, query and rectangle extensions that later titles find anywhere in the
+string. With every contract negotiated the string is 1108 characters and the
+legacy names end by character 461; `tests/guest/opengl/extension-names.h` is
+the suites' model and `test_compiled_vertex_array.py` checks that prefix.
+
 ### ARB_multitexture
 
 `DG_CAP_GL_MULTITEXTURE` enables `GL_ARB_multitexture` (eight units),
@@ -315,7 +331,7 @@ hidden from `wglGetProcAddress`, and the vertex program modes stay local
 `GL_INVALID_ENUM`. `tests/guest/opengl/test_vertex_program.py` covers the
 contract and the i686 wrappers.
 
-`DG_CAP_GL_TEXTURE_3D` adds `GL_EXT_texture3D`, last in the extension string,
+`DG_CAP_GL_TEXTURE_3D` adds `GL_EXT_texture3D`, in the extension string,
 and six exports under core and EXT names: `TexImage3D`, `TexSubImage3D` (by
 hand, `texture.cpp`) and `CopyTexSubImage3D` (generated scalars). `TEXTURE_3D`
 becomes a binding, enable and parameter target, `PROXY_TEXTURE_3D` an
@@ -337,7 +353,7 @@ covers the contract.
 
 ### ARB_vertex_buffer_object
 
-`DG_CAP_GL_VERTEX_BUFFER_OBJECT` adds `GL_ARB_vertex_buffer_object`, last in
+`DG_CAP_GL_VERTEX_BUFFER_OBJECT` adds `GL_ARB_vertex_buffer_object`, in
 the extension string, and eleven ARB-named exports (`buffer.cpp`; no core
 names, which WineD3D then maps to the ARB ones). Buffer objects live in a
 per-share-group table beside the texture names (`buffers.h`), each with a
@@ -370,8 +386,8 @@ colours and normals as floats, as in the expansion), then the indices inline.
 It is chosen when it is no larger than the per-index expansion and fits one
 packet; sparse ranges, ranges beyond `DG_GL_MAX_VERTICES`, more than
 `DG_GL_MAX_INDICES` indices, display list compilation and every error keep the
-expansion. `GL_EXT_compiled_vertex_array` follows every other group in the
-extension string; `glLockArraysEXT`/`glUnlockArraysEXT` (EXT names only) and
+expansion. `GL_EXT_compiled_vertex_array` is second in the extension string,
+after `GL_ARB_multitexture` (see below); `glLockArraysEXT`/`glUnlockArraysEXT` (EXT names only) and
 `ARRAY_ELEMENT_LOCK_FIRST/COUNT_EXT` are client state saved by
 `CLIENT_VERTEX_ARRAY_BIT`, never recorded or compiled, and a locked draw
 submits the unlocked draw's records. Quake III-engine renderers choose
@@ -386,7 +402,7 @@ batch along each path.
 ### EXT_framebuffer_object
 
 `DG_CAP_GL_FRAMEBUFFER_OBJECT` adds `GL_EXT_framebuffer_object`,
-`GL_EXT_framebuffer_blit` and `GL_EXT_packed_depth_stencil`, last in the
+`GL_EXT_framebuffer_blit` and `GL_EXT_packed_depth_stencil`, in the
 extension string, and eighteen EXT-named exports (`framebuffer.cpp`; records use
 the core function numbers). Framebuffer names live in a table of the context,
 renderbuffer names in one of the share group; Gen and Is never reach the host,
@@ -422,7 +438,7 @@ covers the contract.
 
 ### ARB_vertex_array_bgra
 
-`DG_CAP_GL_VERTEX_ARRAY_BGRA` adds `GL_ARB_vertex_array_bgra`, last in the
+`DG_CAP_GL_VERTEX_ARRAY_BGRA` adds `GL_ARB_vertex_array_bgra`, in the
 extension string, and no export: `GL_BGRA` becomes a size of `ColorPointer`,
 `SecondaryColorPointerEXT` and `VertexAttribPointerARB`. Only UNSIGNED_BYTE is
 accepted (any other valid type is `GL_INVALID_OPERATION`, as is a generic BGRA
@@ -442,7 +458,7 @@ buffer slots; a draw without one keeps `DrawRangeElements`.
 
 ### ARB_occlusion_query and NV_fence
 
-`DG_CAP_GL_OCCLUSION_QUERY` adds `GL_ARB_occlusion_query GL_NV_fence`, last in
+`DG_CAP_GL_OCCLUSION_QUERY` adds `GL_ARB_occlusion_query GL_NV_fence`, in
 the extension string, and the fifteen entry points of both under their
 extension names (`occlusion.cpp`). Query and fence objects belong to one
 context and live on the host, which owns their names, the active query and
@@ -463,7 +479,7 @@ locally with `GL_INVALID_OPERATION` and `wglGetProcAddress` hides them.
 ### ARB_texture_rectangle and NV_texture_rectangle
 
 `DG_CAP_GL_TEXTURE_RECTANGLE` adds `GL_ARB_texture_rectangle
-GL_NV_texture_rectangle`, last in the extension string, and no entry points:
+GL_NV_texture_rectangle`, in the extension string, and no entry points:
 `TEXTURE_RECTANGLE` becomes a target of `BindTexture`, `TexParameter`,
 `TexImage2D`/`TexSubImage2D`, `CopyTexImage2D`/`CopyTexSubImage2D`,
 `GetTexImage`, `GetTexLevelParameter` and `FramebufferTexture2DEXT`, and

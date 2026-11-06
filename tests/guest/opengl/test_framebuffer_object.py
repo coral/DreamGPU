@@ -88,6 +88,7 @@ with tempfile.TemporaryDirectory(prefix="dreamgpu-framebuffer-object-") as tempo
         shutil.copyfile(SOURCE / name, root / name)
     shutil.copyfile(HERE / "frontend.cpp", root / "frontend-harness.cpp")
     shutil.copyfile(HERE / "frontend-windows.h", root / "windows.h")
+    shutil.copyfile(HERE / "extension-names.h", root / "extension-names.h")
     # The fixture's GL header gains the GL 1.1 names these sources use, with
     # the host's values.
     header = (HERE / "frontend-gl.h").read_text()

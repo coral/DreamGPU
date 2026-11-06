@@ -242,9 +242,15 @@ and disposable-VM acceptance cycle:
   frontend then offers EXT_compiled_vertex_array (LockArraysEXT,
   UnlockArraysEXT, ARRAY_ELEMENT_LOCK_FIRST/COUNT_EXT under EXT names only,
   saved by CLIENT_VERTEX_ARRAY_BIT, executed immediately, never recorded); a
-  locked draw submits exactly the unlocked draw's records. Quake III-engine
-  games then draw with DrawElements instead of strips of ArrayElement
-  (r_ext_compiled_vertex_array 0 keeps their old path); without the
+  locked draw submits exactly the unlocked draw's records. GL_EXTENSIONS lists
+  names by age, not contract, each under its own gate: the names games of
+  1997-2001 probe (multitexture, compiled vertex arrays, texture environments,
+  anisotropy, edge clamp, point parameters, compression, secondary colour, fog
+  coordinates, cube maps) end by character 461, inside Quake III 1.11's
+  1023-character copy, and the newer program, buffer, framebuffer, BGRA, query
+  and rectangle names follow (1108 characters with every contract). Quake
+  III-engine games then draw with DrawElements instead of strips of
+  ArrayElement (r_ext_compiled_vertex_array 0 keeps their old path); without the
   capability the extension stays hidden and every record is unchanged.
   ArrayElement keeps its records, built without per-component dispatch.
   Native pixel tests show the buffer draw and the expansion drawing identical

@@ -38,6 +38,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 #include "dg-gl-validate.h"
 
 constexpr GLenum ARRAY_BUFFER = 0x8892, ELEMENT_BUFFER = 0x8893, STATIC_DRAW = 0x88e4;
@@ -237,10 +238,8 @@ static void Negotiation(void) {
     HostSecondaryWords = 3;
     HGLRC context = Create();
     const char *all = (const char *)glGetString(GL_EXTENSIONS);
-    /* EXT_compiled_vertex_array follows every group with the buffer draw. */
-    const char *tail =
-        "GL_EXT_packed_depth_stencil GL_ARB_vertex_array_bgra GL_EXT_compiled_vertex_array";
-    assert(strlen(all) > strlen(tail) && !strcmp(all + strlen(all) - strlen(tail), tail));
+    /* Every name in its place and under its gate (extension-names.h). */
+    assert(!strcmp(all, ExpectedExtensions(HostCaps, TRUE)));
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
 }
 

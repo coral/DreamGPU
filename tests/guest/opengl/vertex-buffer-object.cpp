@@ -35,6 +35,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 #include "dg-gl-validate.h"
 
 constexpr GLenum ARRAY_BUFFER = 0x8892, ELEMENT_BUFFER = 0x8893;
@@ -459,9 +460,9 @@ static void Unnegotiated(void) {
 static void Negotiation(void) {
     JGL_CONTEXT *c = Open(VBO);
     assert(JglVertexBufferObjectAvailable() && !JglVertexProgramAvailable());
-    /* EXT_compiled_vertex_array comes with the buffer draw, as the last group. */
+    /* EXT_compiled_vertex_array comes with the buffer draw, among the legacy names. */
     assert(!strcmp((const char *)glGetString(GL_EXTENSIONS),
-                   "GL_ARB_vertex_buffer_object GL_EXT_compiled_vertex_array"));
+                   "GL_EXT_compiled_vertex_array GL_ARB_vertex_buffer_object"));
     for (const char *name : Entries)
         assert(wglGetProcAddress(name) == Marker);
     assert(!wglGetProcAddress("glVertexAttribPointerARB"));
@@ -475,8 +476,8 @@ static void Negotiation(void) {
     HostSecondaryWords = 3;
     HGLRC context = Create();
     const char *all = (const char *)glGetString(GL_EXTENSIONS);
-    const char *tail = "GL_EXT_texture3D GL_ARB_vertex_buffer_object GL_EXT_compiled_vertex_array";
-    assert(strlen(all) > strlen(tail) && !strcmp(all + strlen(all) - strlen(tail), tail));
+    /* Every name in its place and under its gate (extension-names.h). */
+    assert(!strcmp(all, ExpectedExtensions(HostCaps, TRUE)));
     for (const char *name : Entries)
         assert(wglGetProcAddress(name) == Marker);
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));

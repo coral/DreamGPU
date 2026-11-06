@@ -31,6 +31,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 #include "dg-gl-validate.h"
 
 constexpr GLenum TEX_RECT = 0x84f5, BINDING_RECT = 0x84f6, PROXY_RECT = 0x84f7, MAX_RECT = 0x84f8;
@@ -332,7 +333,7 @@ static void Unnegotiated(void) {
     Close(c);
 }
 
-/* Negotiated: the extension group is appended last, alone or after all others. */
+/* Negotiated: the extension names alone, and among all others in their place. */
 static void Negotiation(void) {
     JGL_CONTEXT *c = Open(RECTANGLE);
     assert(JglTextureRectangleAvailable());
@@ -340,11 +341,9 @@ static void Negotiation(void) {
     Close(c);
     c = Open(OTHERS | RECTANGLE);
     const char *names = (const char *)glGetString(GL_EXTENSIONS);
-    /* EXT_compiled_vertex_array follows every group with the buffer draw. */
-    const char *tail =
-        "GL_ARB_occlusion_query GL_NV_fence " RECTANGLE_NAMES " GL_EXT_compiled_vertex_array";
-    assert(strlen(names) > strlen(tail) && !strcmp(names + strlen(names) - strlen(tail), tail) &&
-           !strncmp(names, "GL_ARB_multitexture ", 20));
+    /* Every name in its place and under its gate (extension-names.h); this
+     * host has no secondary colour. */
+    assert(!strcmp(names, ExpectedExtensions(HostCaps, FALSE)));
     Close(c);
 }
 

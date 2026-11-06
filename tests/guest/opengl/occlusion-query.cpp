@@ -293,11 +293,7 @@ static void Negotiation(void) {
         JGL_CONTEXT *c = Open(caps);
         const char *extensions = (const char *)glGetString(GL_EXTENSIONS);
         const char *found = strstr(extensions, "GL_ARB_occlusion_query GL_NV_fence");
-        /* EXT_compiled_vertex_array follows every group with the buffer draw. */
-        assert(found && !strcmp(found, caps & DG_CAP_GL_VERTEX_BUFFER_OBJECT
-                                           ? "GL_ARB_occlusion_query GL_NV_fence "
-                                             "GL_EXT_compiled_vertex_array"
-                                           : "GL_ARB_occlusion_query GL_NV_fence"));
+        assert(found && !strcmp(found, "GL_ARB_occlusion_query GL_NV_fence"));
         assert(caps == QUERIES ? found == extensions : found > extensions && found[-1] == ' ');
         for (const char *name : Entries)
             assert(wglGetProcAddress(name) == Marker);

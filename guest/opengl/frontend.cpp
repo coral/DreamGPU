@@ -48,6 +48,11 @@ typedef struct {
     HWND Window;
     BOOL Created, Drawable, Failed, InBegin, Deleting, Uncertain, FrontDirty, EverCurrent,
         ShareEstablished;
+    /* The host associated this drawable with the context (MAKE_CURRENT
+     * completed); Binding was made for this drawable and DC. Both last until
+     * the drawable is replaced, so making the context current again needs
+     * neither a host round trip nor a new window binding. */
+    BOOL Attached, Bound;
     /* Set by any thread whose request reported this context's failed
      * asynchronous batch; the owning thread fails the context at its next
      * flush, as if that flush had failed. */
@@ -139,105 +144,86 @@ BOOL JglTextureRectangleAvailable(void) {
 }
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
- * every returned pointer stays valid. Groups keep their established order. */
-#define JGL_MULTITEXTURE_EXTENSIONS                                                                \
-    "GL_ARB_multitexture GL_ARB_texture_env_combine GL_EXT_texture_env_combine "                   \
-    "GL_ARB_texture_env_dot3"
-#define JGL_SECONDARY_EXTENSIONS "GL_EXT_secondary_color GL_EXT_separate_specular_color"
-#define JGL_FIXED_STATE_EXTENSIONS                                                                 \
-    "GL_EXT_blend_color GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_blend_func_separate "     \
-    "GL_EXT_blend_equation_separate GL_EXT_stencil_wrap GL_ATI_separate_stencil "                  \
-    "GL_ARB_texture_border_clamp GL_ARB_texture_mirrored_repeat GL_EXT_texture_edge_clamp "        \
-    "GL_SGIS_texture_edge_clamp GL_EXT_texture_filter_anisotropic GL_EXT_texture_lod_bias "        \
-    "GL_ARB_point_parameters GL_EXT_point_parameters GL_ARB_point_sprite "                         \
-    "GL_ARB_texture_env_add GL_EXT_texture_env_add"
-#define JGL_TEXTURE_CONTROL_EXTENSIONS                                                             \
-    "GL_ATI_texture_env_combine3 GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap"
-#define JGL_COMPRESSED_TEXTURE_EXTENSIONS                                                          \
-    "GL_ARB_texture_compression GL_EXT_texture_compression_s3tc"
-#define JGL_FOG_COORD_EXTENSIONS "GL_EXT_fog_coord"
-#define JGL_CUBE_MAP_EXTENSIONS "GL_ARB_texture_cube_map GL_EXT_texture_cube_map"
-#define JGL_FRAGMENT_PROGRAM_EXTENSIONS "GL_ARB_fragment_program"
-#define JGL_VERTEX_PROGRAM_EXTENSIONS "GL_ARB_vertex_program"
-#define JGL_TEXTURE_3D_EXTENSIONS "GL_EXT_texture3D"
-#define JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS "GL_ARB_vertex_buffer_object"
-#define JGL_FRAMEBUFFER_OBJECT_EXTENSIONS                                                          \
-    "GL_EXT_framebuffer_object GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil"
-#define JGL_VERTEX_ARRAY_BGRA_EXTENSIONS "GL_ARB_vertex_array_bgra"
-#define JGL_OCCLUSION_QUERY_EXTENSIONS "GL_ARB_occlusion_query GL_NV_fence"
-#define JGL_TEXTURE_RECTANGLE_EXTENSIONS "GL_ARB_texture_rectangle GL_NV_texture_rectangle"
-#define JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS "GL_EXT_compiled_vertex_array"
-/* Each group's terminator byte pays for one separator or the final NUL. */
-static char Extensions
-    [sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
-     sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
-     sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) + sizeof(JGL_FOG_COORD_EXTENSIONS) +
-     sizeof(JGL_CUBE_MAP_EXTENSIONS) + sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
-     sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
-     sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) + sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
-     sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS) + sizeof(JGL_OCCLUSION_QUERY_EXTENSIONS) +
-     sizeof(JGL_TEXTURE_RECTANGLE_EXTENSIONS) + sizeof(JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS)];
-static void AppendExtensions(ULONG *at, const char *names) {
+ * every returned pointer stays valid. Each name keeps its contract's gate; the
+ * order is by age, not by contract. Games of 1997-2001 copy the string into
+ * fixed buffers (Quake III 1.11: 1024 bytes) and search only that prefix, so
+ * the names they probe come first, as era drivers listed them: multitexture,
+ * compiled vertex arrays, the texture environments, anisotropy, edge clamp,
+ * point parameters, compression, secondary colour and fog coordinates. Then
+ * the other fixed-function names of that era, then the program, buffer,
+ * framebuffer, query and rectangle extensions later titles find anywhere.
+ * EXT_compiled_vertex_array comes with the buffer draw, which carries indexed
+ * client-array draws in bulk: offered only then, applications choosing their
+ * path by it (Quake III's DrawElements instead of strips of ArrayElement) keep
+ * older hosts' path. */
+#define JGL_CAP(name) (HostCapabilities & DG_CAP_GL_##name)
+#define JGL_EXTENSION_NAMES(X)                                                                     \
+    X("GL_ARB_multitexture", JGL_CAP(MULTITEXTURE))                                                \
+    X("GL_EXT_compiled_vertex_array", JGL_CAP(VERTEX_BUFFER_OBJECT))                               \
+    X("GL_ARB_texture_env_add", JGL_CAP(FIXED_STATE))                                              \
+    X("GL_EXT_texture_env_add", JGL_CAP(FIXED_STATE))                                              \
+    X("GL_ARB_texture_env_combine", JGL_CAP(MULTITEXTURE))                                         \
+    X("GL_EXT_texture_env_combine", JGL_CAP(MULTITEXTURE))                                         \
+    X("GL_ARB_texture_env_dot3", JGL_CAP(MULTITEXTURE))                                            \
+    X("GL_EXT_texture_filter_anisotropic", JGL_CAP(FIXED_STATE))                                   \
+    X("GL_EXT_texture_edge_clamp", JGL_CAP(FIXED_STATE))                                           \
+    X("GL_SGIS_texture_edge_clamp", JGL_CAP(FIXED_STATE))                                          \
+    X("GL_ARB_point_parameters", JGL_CAP(FIXED_STATE))                                             \
+    X("GL_EXT_point_parameters", JGL_CAP(FIXED_STATE))                                             \
+    X("GL_ARB_texture_compression", JGL_CAP(COMPRESSED_TEXTURES))                                  \
+    X("GL_EXT_texture_compression_s3tc", JGL_CAP(COMPRESSED_TEXTURES))                             \
+    X("GL_EXT_secondary_color", SecondarySupported)                                                \
+    X("GL_EXT_separate_specular_color", SecondarySupported)                                        \
+    X("GL_EXT_fog_coord", JGL_CAP(FOG_COORD))                                                      \
+    X("GL_ARB_texture_cube_map", JGL_CAP(TEXTURE_CUBE_MAP))                                        \
+    X("GL_EXT_texture_cube_map", JGL_CAP(TEXTURE_CUBE_MAP))                                        \
+    X("GL_EXT_blend_color", JGL_CAP(FIXED_STATE))                                                  \
+    X("GL_EXT_blend_minmax", JGL_CAP(FIXED_STATE))                                                 \
+    X("GL_EXT_blend_subtract", JGL_CAP(FIXED_STATE))                                               \
+    X("GL_EXT_stencil_wrap", JGL_CAP(FIXED_STATE))                                                 \
+    X("GL_EXT_texture_lod_bias", JGL_CAP(FIXED_STATE))                                             \
+    X("GL_EXT_texture3D", JGL_CAP(TEXTURE_3D))                                                     \
+    X("GL_ARB_texture_border_clamp", JGL_CAP(FIXED_STATE))                                         \
+    X("GL_ARB_texture_mirrored_repeat", JGL_CAP(FIXED_STATE))                                      \
+    X("GL_EXT_blend_func_separate", JGL_CAP(FIXED_STATE))                                          \
+    X("GL_EXT_blend_equation_separate", JGL_CAP(FIXED_STATE))                                      \
+    X("GL_ATI_separate_stencil", JGL_CAP(FIXED_STATE))                                             \
+    X("GL_ARB_point_sprite", JGL_CAP(FIXED_STATE))                                                 \
+    X("GL_ATI_texture_env_combine3", JGL_CAP(TEXTURE_CONTROL))                                     \
+    X("GL_ATI_texture_mirror_once", JGL_CAP(TEXTURE_CONTROL))                                      \
+    X("GL_SGIS_generate_mipmap", JGL_CAP(TEXTURE_CONTROL))                                         \
+    X("GL_ARB_fragment_program", JGL_CAP(FRAGMENT_PROGRAM))                                        \
+    X("GL_ARB_vertex_program", JGL_CAP(VERTEX_PROGRAM))                                            \
+    X("GL_ARB_vertex_buffer_object", JGL_CAP(VERTEX_BUFFER_OBJECT))                                \
+    X("GL_EXT_framebuffer_object", JGL_CAP(FRAMEBUFFER_OBJECT))                                    \
+    X("GL_EXT_framebuffer_blit", JGL_CAP(FRAMEBUFFER_OBJECT))                                      \
+    X("GL_EXT_packed_depth_stencil", JGL_CAP(FRAMEBUFFER_OBJECT))                                  \
+    X("GL_ARB_vertex_array_bgra", JGL_CAP(VERTEX_ARRAY_BGRA))                                      \
+    X("GL_ARB_occlusion_query", JGL_CAP(OCCLUSION_QUERY))                                          \
+    X("GL_NV_fence", JGL_CAP(OCCLUSION_QUERY))                                                     \
+    X("GL_ARB_texture_rectangle", JGL_CAP(TEXTURE_RECTANGLE))                                      \
+    X("GL_NV_texture_rectangle", JGL_CAP(TEXTURE_RECTANGLE))
+/* Each name's terminator byte pays for one separator or the final NUL. */
+#define JGL_EXTENSION_BYTES(name, gate) +sizeof(name)
+static char Extensions[0 JGL_EXTENSION_NAMES(JGL_EXTENSION_BYTES)];
+#undef JGL_EXTENSION_BYTES
+static void AppendExtension(ULONG *at, const char *name) {
     if (*at)
         Extensions[(*at)++] = ' ';
-    while (*names)
-        Extensions[(*at)++] = *names++;
+    while (*name)
+        Extensions[(*at)++] = *name++;
 }
 static void NegotiateExtensions(void) {
     ULONG at = 0;
-    if (HostCapabilities & DG_CAP_GL_MULTITEXTURE)
-        AppendExtensions(&at, JGL_MULTITEXTURE_EXTENSIONS);
-    if (SecondarySupported)
-        AppendExtensions(&at, JGL_SECONDARY_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_FIXED_STATE)
-        AppendExtensions(&at, JGL_FIXED_STATE_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_TEXTURE_CONTROL)
-        AppendExtensions(&at, JGL_TEXTURE_CONTROL_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_COMPRESSED_TEXTURES)
-        AppendExtensions(&at, JGL_COMPRESSED_TEXTURE_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_FOG_COORD)
-        AppendExtensions(&at, JGL_FOG_COORD_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_TEXTURE_CUBE_MAP)
-        AppendExtensions(&at, JGL_CUBE_MAP_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_FRAGMENT_PROGRAM)
-        AppendExtensions(&at, JGL_FRAGMENT_PROGRAM_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_VERTEX_PROGRAM)
-        AppendExtensions(&at, JGL_VERTEX_PROGRAM_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_TEXTURE_3D)
-        AppendExtensions(&at, JGL_TEXTURE_3D_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT)
-        AppendExtensions(&at, JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_FRAMEBUFFER_OBJECT)
-        AppendExtensions(&at, JGL_FRAMEBUFFER_OBJECT_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_VERTEX_ARRAY_BGRA)
-        AppendExtensions(&at, JGL_VERTEX_ARRAY_BGRA_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_OCCLUSION_QUERY)
-        AppendExtensions(&at, JGL_OCCLUSION_QUERY_EXTENSIONS);
-    if (HostCapabilities & DG_CAP_GL_TEXTURE_RECTANGLE)
-        AppendExtensions(&at, JGL_TEXTURE_RECTANGLE_EXTENSIONS);
-    /* Indexed client-array draws travel in bulk as buffer draws; offered
-     * only then, so applications choosing their path by it (Quake III's
-     * DrawElements instead of strips of ArrayElement) keep older hosts' path. */
-    if (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT)
-        AppendExtensions(&at, JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS);
+#define JGL_APPEND_EXTENSION(name, gate)                                                           \
+    if (gate)                                                                                      \
+        AppendExtension(&at, name);
+    JGL_EXTENSION_NAMES(JGL_APPEND_EXTENSION)
+#undef JGL_APPEND_EXTENSION
     Extensions[at] = 0;
 }
-#undef JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS
-#undef JGL_TEXTURE_RECTANGLE_EXTENSIONS
-#undef JGL_OCCLUSION_QUERY_EXTENSIONS
-#undef JGL_VERTEX_ARRAY_BGRA_EXTENSIONS
-#undef JGL_FRAMEBUFFER_OBJECT_EXTENSIONS
-#undef JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS
-#undef JGL_TEXTURE_3D_EXTENSIONS
-#undef JGL_VERTEX_PROGRAM_EXTENSIONS
-#undef JGL_FRAGMENT_PROGRAM_EXTENSIONS
-#undef JGL_CUBE_MAP_EXTENSIONS
-#undef JGL_FOG_COORD_EXTENSIONS
-#undef JGL_COMPRESSED_TEXTURE_EXTENSIONS
-#undef JGL_TEXTURE_CONTROL_EXTENSIONS
-#undef JGL_FIXED_STATE_EXTENSIONS
-#undef JGL_SECONDARY_EXTENSIONS
-#undef JGL_MULTITEXTURE_EXTENSIONS
+#undef JGL_EXTENSION_NAMES
+#undef JGL_CAP
 const GLubyte *JglExtensions(void) {
     return (const GLubyte *)Extensions;
 }
@@ -374,16 +360,33 @@ static BOOL CompletionKnown(const DG_ESCAPE_REPLY *reply) {
 JGL_INLINE ULONG Stream(const JGL_CONTEXT *c) {
     return (TransportFeatures & DG_ESCAPE_FEATURE_QUEUE) ? c->Id : 0;
 }
-static BOOL Flush(JGL_CONTEXT *c, ULONG mode = FLUSH_SYNC) {
-    DG_ESCAPE_REPLY reply;
-    BOOL result;
-    if (c->DeferredFault && mode != FLUSH_CONTROL) {
+/* Another request reported this context's failed asynchronous batch: fail it
+ * exactly as a failed synchronous flush would have. */
+JGL_INLINE void TakeDeferredFault(JGL_CONTEXT *c) {
+    if (c->DeferredFault) {
         c->DeferredFault = 0;
         if (!c->Failed) {
             c->Failed = TRUE;
             Error(c, GL_INVALID_OPERATION);
         }
     }
+}
+/* WGL flushes a context when it stops being current. With the queued
+ * transport that flush is deferred (ReleaseCurrent): the released context's
+ * packet stays here, current to no thread, until any context submits
+ * anything (Flush submits it first, so batches keep the order in which their
+ * commands were issued) or a thread makes it current again and continues the
+ * same packet. Releasing and re-acquiring a context, as WineD3D does around
+ * every call, then sends nothing. Lock protects it and that packet. */
+static JGL_CONTEXT *volatile Released;
+static void SubmitReleased(JGL_CONTEXT *c);
+static BOOL Flush(JGL_CONTEXT *c, ULONG mode = FLUSH_SYNC) {
+    DG_ESCAPE_REPLY reply;
+    BOOL result;
+    if (Released)
+        SubmitReleased(c);
+    if (mode != FLUSH_CONTROL)
+        TakeDeferredFault(c);
     if (c->Failed)
         return FALSE;
     if (!c->Used)
@@ -399,6 +402,19 @@ static BOOL Flush(JGL_CONTEXT *c, ULONG mode = FLUSH_SYNC) {
         Error(c, GL_INVALID_OPERATION);
     }
     return result;
+}
+/* Before c submits: the released context's batch first, asynchronously like
+ * the glFlush it stands for (a failure reaches that context as any
+ * asynchronous one does). When c is the released context, its own packet is
+ * about to go out. Lock is recursive; WGL entry points already hold it. */
+static void SubmitReleased(JGL_CONTEXT *c) {
+    JGL_CONTEXT *released;
+    EnterCriticalSection(&Lock);
+    released = Released;
+    Released = NULL;
+    if (released && released != c)
+        Flush(released, FLUSH_ASYNC);
+    LeaveCriticalSection(&Lock);
 }
 JGL_INLINE ULONG *Record(JGL_CONTEXT *c, ULONG operation, ULONG context, ULONG drawable,
                          ULONG words) {
@@ -682,6 +698,24 @@ static BOOL FlushCurrent(JGL_CONTEXT *c, ULONG mode = FLUSH_SYNC) {
         return FALSE;
     record[0] = FEnum_glFlush;
     return Flush(c, mode) && (!c->FrontDirty || !MatchingGeometry(c) || PublishFront(c));
+}
+/* Under Lock, when the thread's healthy current context stops being current.
+ * Without the queue (or with front-buffer drawing to publish, or a failure
+ * already reported) this is a synchronous flush, as before. With it the
+ * implicit flush is deferred (Released), replacing any older released
+ * context, whose batch goes first. */
+static BOOL ReleaseCurrent(JGL_CONTEXT *c) {
+    JGL_CONTEXT *released;
+    if (!Stream(c) || c->FrontDirty || c->DeferredFault)
+        return FlushCurrent(c);
+    if (c->Used) {
+        released = Released;
+        Released = NULL;
+        if (released)
+            Flush(released, FLUSH_ASYNC);
+        Released = c;
+    }
+    return TRUE;
 }
 static void Unbind(JGL_CONTEXT *c) {
     TlsSetValue(Current, NULL);
@@ -1049,6 +1083,7 @@ static BOOL Bind(JGL_CONTEXT *c) {
         JglTransportUnbind(c->Binding);
     c->Binding = reply.Binding;
     c->Capabilities = reply.Capabilities;
+    c->Bound = TRUE;
     return TRUE;
 }
 /* Only the display driver can distinguish a retired binding from a failed
@@ -1379,8 +1414,8 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
         goto done;
     }
     /* Releasing a failed context must still release its thread ownership.
-     * Healthy releases also flush host GL, even with an empty guest packet. */
-    if (old && !old->Failed && !FlushCurrent(old))
+     * Healthy releases flush it (ReleaseCurrent). */
+    if (old && !old->Failed && !ReleaseCurrent(old))
         goto done;
     Unbind(old);
     if (!handle) {
@@ -1388,6 +1423,10 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
         goto done;
     }
     c = Lookup(handle);
+    /* A failure already reported for this context fails this call, as the
+     * synchronous flush below would; that flush is often unnecessary now. */
+    if (c)
+        TakeDeferredFault(c);
     if (!c || !c->Created || c->Failed || c->Deleting || c->InBegin ||
         (c->Owner && c->Owner != thread) || !WindowGeometry(dc, &window, &width, &height))
         goto done;
@@ -1413,7 +1452,10 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
             goto done;
         c->Drawable = FALSE;
         c->FrontDirty = FALSE;
+        c->Attached = c->Bound = FALSE;
     }
+    if (c->DC != dc)
+        c->Bound = FALSE;
     c->DC = dc;
     c->Window = window;
     c->Width = width;
@@ -1424,12 +1466,26 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
         if (!Control(c, DG_GL_CREATE_DRAWABLE, 0, c->Id, size, 2))
             goto done;
         c->Drawable = TRUE;
+        c->Attached = c->Bound = FALSE;
     }
     c->EverCurrent = TRUE;
-    if (!Record(c, DG_GL_MAKE_CURRENT, c->Id, c->Id, 0) || !Flush(c) || (visible && !Bind(c)))
+    /* The host keeps the context's drawable from MAKE_CURRENT until either is
+     * destroyed (every record names both), so only a new drawable needs it,
+     * synchronously: its failure fails this call. The window binding is
+     * renewed for a new drawable or DC; one the display driver retired
+     * meanwhile is renewed at presentation (DG_WINDOW_PRESENT_REBIND). */
+    if (!c->Attached) {
+        if (!Record(c, DG_GL_MAKE_CURRENT, c->Id, c->Id, 0) || !Flush(c))
+            goto done;
+        c->Attached = TRUE;
+    }
+    if (visible && (!c->Bound || !c->Binding) && !Bind(c))
         goto done;
     if (!TlsSetValue(Current, c))
         goto done;
+    /* Its released packet, if any, continues on this thread. */
+    if (Released == c)
+        Released = NULL;
     InterlockedExchange(&c->Owner, thread);
     result = TRUE;
 done:
@@ -1462,6 +1518,8 @@ BOOL WINAPI wglDeleteContext(HGLRC handle) {
      * can destroy its host context even when drawing has been rejected. */
     c->Used = c->Records = 0;
     c->InBegin = FALSE;
+    if (Released == c)
+        Released = NULL;
     if (c->Uncertain)
         goto done;
     if (c->Binding) {
@@ -1818,7 +1876,10 @@ void APIENTRY glFlush(void) {
     if (c) {
         if (c->InBegin)
             Error(c, GL_INVALID_OPERATION);
-        else
+        /* Flush promises only that issued commands execute in finite time:
+         * with none unsubmitted (earlier batches are queued in order) and no
+         * front-buffer drawing to publish, there is nothing to send. */
+        else if (c->Used || c->FrontDirty || c->DeferredFault)
             FlushCurrent(c, FLUSH_ASYNC);
     }
 }

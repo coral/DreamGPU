@@ -41,6 +41,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 
 #define VOLUME 0x806fU
 #define PROXY_VOLUME 0x8070U
@@ -279,10 +280,8 @@ static void Negotiation(void) {
     HostSecondaryWords = 3;
     HGLRC context = Create();
     const char *names = (const char *)glGetString(GL_EXTENSIONS);
-    const char *tail = "GL_ARB_texture_cube_map GL_EXT_texture_cube_map GL_ARB_fragment_program "
-                       "GL_ARB_vertex_program " TEXTURE_3D_NAME;
-    assert(strlen(names) > strlen(tail) && !strcmp(names + strlen(names) - strlen(tail), tail) &&
-           !strncmp(names, "GL_ARB_multitexture ", 20));
+    /* Every name in its place and under its gate (extension-names.h). */
+    assert(!strcmp(names, ExpectedExtensions(HostCaps, TRUE)));
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
 }
 

@@ -55,13 +55,17 @@ void InitializeCriticalSection(CRITICAL_SECTION *lock) {
 void DeleteCriticalSection(CRITICAL_SECTION *lock) {
     assert(!lock->Locked);
 }
+/* Windows critical sections are recursive for their owning thread; another
+ * simulated thread entering a held one would deadlock. */
+static ULONG LockOwner;
 void EnterCriticalSection(CRITICAL_SECTION *lock) {
-    assert(!lock->Locked);
-    lock->Locked = 1;
+    assert(!lock->Locked || LockOwner == Thread);
+    LockOwner = Thread;
+    ++lock->Locked;
 }
 void LeaveCriticalSection(CRITICAL_SECTION *lock) {
-    assert(lock->Locked);
-    lock->Locked = 0;
+    assert(lock->Locked && LockOwner == Thread);
+    --lock->Locked;
 }
 LONG InterlockedExchange(volatile LONG *p, LONG value) {
     LONG old = *p;
@@ -374,6 +378,7 @@ static void Reset(void) {
             FreeContext(Contexts[i]);
             Contexts[i] = NULL;
         }
+    Released = NULL;
     assert(!Allocations);
     ZeroMemory(PixelFormats, sizeof(PixelFormats));
     ZeroMemory(Tls, sizeof(Tls));
@@ -420,6 +425,137 @@ static void CapturePacket(void *opaque, BYTE *destination) {
            destination + 3 <= (BYTE *)(c->Packet.Words + MaxWords));
     memcpy(destination, opaque, 3);
     ++Captures;
+}
+/* Submitted records in order: context and function (opcode | high bit for
+ * anything but CALL). */
+static ULONG Logged, LoggedContext[512], LoggedFunction[512];
+static void LogRecord(const ULONG *r) {
+    if (Logged < 512) {
+        LoggedContext[Logged] = r[3];
+        LoggedFunction[Logged] = r[0] == DG_GL_CALL ? r[8] : 0x80000000UL | r[0];
+    }
+    ++Logged;
+}
+static ULONG LoggedOperations(ULONG operation) {
+    ULONG i, found = 0;
+    for (i = 0; i < Logged && i < 512; ++i)
+        found += LoggedFunction[i] == (0x80000000UL | operation);
+    return found;
+}
+/* WineD3D acquires and releases its context around every call (patch 0012):
+ * with the queue that costs no submission, binding or host round trip, while
+ * a released context's commands still precede any later submission. */
+static void LazyRelease(void) {
+    HGLRC context, other;
+    JGL_CONTEXT *c, *o;
+    ULONG calls, binds, async, sync, presents, i;
+    Reset();
+    HostFeatures = DG_ESCAPE_FEATURE_QUEUE;
+    HostMaxBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    other = wglCreateContext((HDC)2);
+    assert(other && wglMakeCurrent((HDC)2, other));
+    context = Create();
+    c = Lookup(context);
+    o = Lookup(other);
+    assert(c->Attached && c->Bound && o->Attached && o->Bound && !Released);
+    /* glFlush with nothing unsubmitted sends nothing; with commands, one
+     * asynchronous batch. */
+    calls = Calls;
+    glFlush();
+    assert(Calls == calls && !c->Used);
+    async = AsyncSubmits;
+    glColor4f(0, 0, 0, 0);
+    glFlush();
+    assert(Calls == calls + 1 && AsyncSubmits == async + 1 && !c->Used);
+    Logged = 0;
+    SubmittedRecord = LogRecord;
+    calls = Calls;
+    binds = Binds;
+    for (i = 0; i < 100; ++i) {
+        assert(wglMakeCurrent(NULL, NULL) && !wglGetCurrentContext() && !c->Owner);
+        assert(Released == (i ? c : NULL) && !Lock.Locked);
+        assert(wglMakeCurrent((HDC)1, context) && c->Owner == 1 && !Released);
+        glColor4f((float)i, 0, 0, 1);
+    }
+    /* Re-binding the current context is the same release and acquisition. */
+    assert(wglMakeCurrent((HDC)1, context) && !Released);
+    assert(Calls == calls && Binds == binds && !Logged && c->Records == 100);
+    /* Another thread continues the same packet after the handoff. */
+    assert(wglMakeCurrent(NULL, NULL) && Released == c);
+    Thread = 1;
+    assert(wglMakeCurrent((HDC)1, context) && !Released && c->Owner == 2);
+    glColor4f(1, 1, 1, 1);
+    assert(wglMakeCurrent(NULL, NULL) && Released == c);
+    Thread = 0;
+    assert(Calls == calls && !Logged && c->Records == 101);
+    /* Making another context current sends nothing either; its first
+     * submission sends the released batch first, asynchronously. */
+    assert(wglMakeCurrent((HDC)2, other) && Released == c);
+    assert(Calls == calls && Binds == binds && !Logged);
+    async = AsyncSubmits;
+    sync = SyncStreamSubmits;
+    glColor4f(0, 1, 0, 1);
+    glFinish();
+    assert(AsyncSubmits == async + 1 && SyncStreamSubmits == sync + 1 && !Released);
+    assert(Logged == 103 && !c->Used && !c->Failed && !Lock.Locked);
+    for (i = 0; i < 101; ++i)
+        assert(LoggedContext[i] == c->Id && LoggedFunction[i] == FEnum_glColor4f);
+    assert(LoggedContext[101] == o->Id && LoggedFunction[102] == FEnum_glFinish);
+    /* A second released context replaces the first, which goes out first. */
+    glColor4f(0, 0, 1, 1);
+    assert(wglMakeCurrent((HDC)1, context) && Released == o);
+    glColor4f(0, 0, 0, 1);
+    Logged = 0;
+    assert(wglMakeCurrent(NULL, NULL) && Released == c);
+    assert(Logged == 1 && LoggedContext[0] == o->Id && AsyncSubmits == async + 2);
+    /* Deleting a released context submits its batch with its cleanup. */
+    i = c->Id;
+    assert(wglDeleteContext(context) && !Released && Logged == 4);
+    assert(LoggedContext[1] == i && LoggedFunction[1] == FEnum_glColor4f);
+    assert(LoggedOperations(DG_GL_DESTROY_CONTEXT) == 1 && !Lock.Locked);
+    /* A failure reported while released fails the next acquisition, as the
+     * synchronous flush that acquisition no longer needs would have. */
+    context = Create();
+    c = Lookup(context);
+    assert(wglMakeCurrent(NULL, NULL) && !Released);
+    assert(wglMakeCurrent((HDC)2, other));
+    DeferStream = c->Id;
+    glColor4f(1, 0, 1, 1);
+    glFlush();
+    assert(c->DeferredFault && !DeferStream && !o->Failed);
+    assert(wglMakeCurrent(NULL, NULL));
+    assert(!wglMakeCurrent((HDC)1, context) && c->Failed && !c->DeferredFault);
+    assert(c->Error == GL_INVALID_OPERATION && !wglGetCurrentContext());
+    assert(wglDeleteContext(context));
+    /* Pending front-buffer drawing is still published, synchronously. */
+    context = Create();
+    c = Lookup(context);
+    glDrawBuffer(GL_FRONT);
+    glClear(GL_COLOR_BUFFER_BIT);
+    presents = Presents;
+    sync = SyncStreamSubmits;
+    assert(c->FrontDirty && wglMakeCurrent(NULL, NULL) && !Released);
+    assert(Presents == presents + 1 && PresentFlags == DG_WINDOW_PRESENT_FRONT_ONLY);
+    assert(SyncStreamSubmits == sync + 1 && !c->FrontDirty && !c->Used);
+    /* A resized window gets a new drawable, host association and binding. */
+    binds = Binds;
+    Logged = 0;
+    Width = 640;
+    assert(wglMakeCurrent((HDC)1, context) && c->Width == 640 && Binds == binds + 1);
+    assert(LoggedOperations(DG_GL_DESTROY_DRAWABLE) == 1);
+    assert(LoggedOperations(DG_GL_CREATE_DRAWABLE) == 1);
+    assert(LoggedOperations(DG_GL_MAKE_CURRENT) == 1);
+    /* A binding the display driver retired is renewed at presentation. */
+    RetiredPresents = 1;
+    binds = Binds;
+    assert(wglSwapBuffers((HDC)1) && Binds == binds + 1 && !c->Failed);
+    assert(wglMakeCurrent(NULL, NULL) && wglMakeCurrent((HDC)1, context) && Binds == binds + 1);
+    SubmittedRecord = NULL;
+    assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context) && wglDeleteContext(other));
+    assert(!Allocations && !Released && !Lock.Locked);
+    Width = 320;
+    BindCapabilities = 0;
 }
 int main(void) {
     HGLRC context, other;
@@ -1147,12 +1283,13 @@ int main(void) {
     assert(AsyncSubmits + SyncStreamSubmits == calls); /* failed: nothing more is sent */
     assert(wglDeleteContext(other));
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+    LazyRelease();
 
     Reset();
     assert(DllMain(NULL, DLL_PROCESS_DETACH, NULL));
     puts("PASS actual frontend: error drain, native flush, ownership, rejected allocation, "
          "independent teardown, uncertain completion, Begin batches, loader cleanup, queued "
-         "transport streams, asynchronous flushes and deferred failures");
+         "transport streams, asynchronous flushes, deferred failures and lazy release");
     return 0;
 }
 

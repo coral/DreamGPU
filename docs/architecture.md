@@ -132,9 +132,21 @@ The kernel enables the queue when the host offers it and falls back to the
 register transport otherwise; older drivers never see it. A frontend that
 sees `DG_ESCAPE_FEATURE_QUEUE` at OPEN names its context as a stream in every
 submission and submits full packets and `glFlush` asynchronously. Everything
-whose API result depends on the batch (SwapBuffers, MakeCurrent, Finish,
-queries, context cleanup) stays synchronous. A failed asynchronous batch is
-reported once, as `DG_ESCAPE_DEFERRED`, to that client's next submission; the
+whose API result depends on the batch (SwapBuffers, MakeCurrent of a new
+drawable, Finish, queries, context cleanup) stays synchronous.
+
+The implicit flush of a context that stops being current is deferred: its
+packet waits, current to no thread, until any context submits (that
+submission sends it first, so batches keep issue order) or a thread makes it
+current again and continues the packet. The host keeps a context's drawable
+association, and the display driver its window binding, until the drawable
+is replaced, so making a context current again sends nothing. WineD3D
+releases and re-acquires its context around every call (patch 0012); each
+cycle used to cost two waited batches and, on Win98, a GDI window binding.
+Front-buffer drawing is still published, synchronously, at release, and a
+`glFlush` with nothing unsubmitted sends nothing.
+
+A failed asynchronous batch is reported once, as `DG_ESCAPE_DEFERRED`, to that client's next submission; the
 frontend then fails the named context exactly as a failed synchronous flush
 would. The host skips that stream's later queued batches, so nothing after
 the failure executes. Engine reset discards unfinished entries; the kernel

@@ -19,6 +19,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 
 #define MULTITEXTURE_NAMES                                                                         \
     "GL_ARB_multitexture GL_ARB_texture_env_combine GL_EXT_texture_env_combine "                   \
@@ -118,9 +119,9 @@ int main() {
     BuildCases();
     assert(CaseCount == 14);
 
-    /* GL_EXTENSIONS: exact for all 256 negotiated combinations, built from
-     * the established groups, in one static buffer stable across calls and
-     * contexts. Without FIXED_STATE the M1/secondary strings are unchanged. */
+    /* GL_EXTENSIONS: exact for all 256 negotiated combinations, every name
+     * under its group's gate, in one static buffer stable across calls and
+     * contexts. Without FIXED_STATE the M1/secondary names are unchanged. */
     {
         const GLubyte *pointer = NULL;
         for (ULONG n = 0; n < 256; ++n) {
@@ -133,18 +134,26 @@ int main() {
                        (n & 128 ? DG_CAP_GL_FRAGMENT_PROGRAM : 0);
             HostSecondaryWords = n & 2 ? 3 : 0;
             HGLRC context = Create();
-            char expected[sizeof(MULTITEXTURE_NAMES " " SECONDARY_NAMES " " FIXED_NAMES
-                                                    " " CONTROL_NAMES " " COMPRESSED_NAMES
-                                                    " " FOG_COORD_NAMES " " CUBE_MAP_NAMES
-                                                    " " FRAGMENT_PROGRAM_NAMES)] = "";
+            /* Exactly the model's names, in its order (extension-names.h)... */
+            char expected[2048];
+            strcpy(expected, ExpectedExtensions(HostCaps, n & 2));
+            /* ...and every name of a contract's group present exactly when
+             * that contract is negotiated. */
             static const char *const groups[8] = {
                 MULTITEXTURE_NAMES, SECONDARY_NAMES, FIXED_NAMES,    CONTROL_NAMES,
                 COMPRESSED_NAMES,   FOG_COORD_NAMES, CUBE_MAP_NAMES, FRAGMENT_PROGRAM_NAMES};
             for (ULONG group = 0; group < 8; ++group)
-                if (n & (1U << group)) {
-                    if (*expected)
-                        strcat(expected, " ");
-                    strcat(expected, groups[group]);
+                for (const char *name = groups[group]; *name;) {
+                    const size_t length = strcspn(name, " ");
+                    char word[64] = "";
+                    assert(length < sizeof(word));
+                    memcpy(word, name, length);
+                    bool present = false;
+                    for (const char *at = expected; (at = strstr(at, word)); ++at)
+                        present = present || ((at == expected || at[-1] == ' ') &&
+                                              (at[length] == ' ' || !at[length]));
+                    assert(present == !!(n & (1U << group)));
+                    name += length + (name[length] == ' ');
                 }
             const GLubyte *value = glGetString(GL_EXTENSIONS);
             assert(!strcmp((const char *)value, expected));

@@ -39,6 +39,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 
 #define CUBE 0x8513U
 #define BINDING_CUBE 0x8514U
@@ -259,18 +260,8 @@ static void Negotiation(void) {
                DG_CAP_GL_COMPRESSED_TEXTURES | DG_CAP_GL_FOG_COORD | DG_CAP_GL_TEXTURE_CUBE_MAP;
     HostSecondaryWords = 3;
     HGLRC context = Create();
-    assert(!strcmp(
-        (const char *)glGetString(GL_EXTENSIONS),
-        "GL_ARB_multitexture GL_ARB_texture_env_combine GL_EXT_texture_env_combine "
-        "GL_ARB_texture_env_dot3 GL_EXT_secondary_color GL_EXT_separate_specular_color "
-        "GL_EXT_blend_color GL_EXT_blend_minmax GL_EXT_blend_subtract GL_EXT_blend_func_separate "
-        "GL_EXT_blend_equation_separate GL_EXT_stencil_wrap GL_ATI_separate_stencil "
-        "GL_ARB_texture_border_clamp GL_ARB_texture_mirrored_repeat GL_EXT_texture_edge_clamp "
-        "GL_SGIS_texture_edge_clamp GL_EXT_texture_filter_anisotropic GL_EXT_texture_lod_bias "
-        "GL_ARB_point_parameters GL_EXT_point_parameters GL_ARB_point_sprite "
-        "GL_ARB_texture_env_add GL_EXT_texture_env_add GL_ATI_texture_env_combine3 "
-        "GL_ATI_texture_mirror_once GL_SGIS_generate_mipmap GL_ARB_texture_compression "
-        "GL_EXT_texture_compression_s3tc GL_EXT_fog_coord " CUBE_NAMES));
+    /* Every name in its place and under its gate (extension-names.h). */
+    assert(!strcmp((const char *)glGetString(GL_EXTENSIONS), ExpectedExtensions(HostCaps, TRUE)));
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
 }
 

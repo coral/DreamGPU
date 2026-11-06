@@ -41,6 +41,7 @@ extern "C" PROC GetProcAddress(HINSTANCE, LPCSTR name) {
     return name[0] == 'g' && name[1] == 'l' ? Marker : nullptr;
 }
 #include "compatibility.cpp"
+#include "extension-names.h"
 #include "dg-gl-validate.h"
 
 constexpr GLenum SECONDARY_ARRAY = 0x845e, FOG_ARRAY = 0x8457, TEXTURE0 = 0x84c0;
@@ -354,8 +355,9 @@ static void Unnegotiated(void) {
 static void LockState(void) {
     JGL_CONTEXT *c = Open(NEW);
     const char *names = (const char *)glGetString(GL_EXTENSIONS);
-    const char *found = strstr(names, "GL_EXT_compiled_vertex_array");
-    assert(found && !strcmp(found, "GL_EXT_compiled_vertex_array") && found[-1] == ' ');
+    /* Second, right after GL_ARB_multitexture (extension-names.h). */
+    assert(!strncmp(names, "GL_ARB_multitexture GL_EXT_compiled_vertex_array ", 49));
+    assert(!strcmp(names, ExpectedExtensions(NEW, TRUE)));
     assert(wglGetProcAddress("glLockArraysEXT") == Marker &&
            wglGetProcAddress("glUnlockArraysEXT") == Marker);
     Log.clear();
@@ -403,6 +405,58 @@ static void LockState(void) {
     Quiet(c);
     assert(JglListMode(0));
     assert(Integer(LOCK_COUNT) == 0);
+    Close(c);
+}
+
+/* Games of 1997-2001 search a fixed-size copy of GL_EXTENSIONS (Quake III
+ * 1.11: Q_strncpyz into 1024 bytes, 1023 characters). With every contract
+ * negotiated, the names they probe lie wholly within that prefix. */
+static void LegacyPrefix(void) {
+    constexpr ULONG ALL =
+        DG_CAP_GL_MULTITEXTURE | DG_CAP_GL_FIXED_STATE | DG_CAP_GL_TEXTURE_CONTROL |
+        DG_CAP_GL_COMPRESSED_TEXTURES | DG_CAP_GL_FOG_COORD | DG_CAP_GL_TEXTURE_CUBE_MAP |
+        DG_CAP_GL_FRAGMENT_PROGRAM | DG_CAP_GL_VERTEX_PROGRAM | DG_CAP_GL_TEXTURE_3D | VBO |
+        DG_CAP_GL_FRAMEBUFFER_OBJECT | DG_CAP_GL_VERTEX_ARRAY_BGRA | DG_CAP_GL_OCCLUSION_QUERY |
+        DG_CAP_GL_TEXTURE_RECTANGLE | DG_CAP_GL_TEXTURE_IMAGES | DG_CAP_GL_TEXTURE_BORDERS |
+        DG_CAP_GL_BULK_READBACK | DG_CAP_GL_DEPTH_STENCIL_READBACK;
+    static const char *const legacy[] = {"GL_ARB_multitexture",
+                                         "GL_EXT_compiled_vertex_array",
+                                         "GL_ARB_texture_env_add",
+                                         "GL_EXT_texture_env_add",
+                                         "GL_ARB_texture_env_combine",
+                                         "GL_EXT_texture_env_combine",
+                                         "GL_EXT_texture_filter_anisotropic",
+                                         "GL_EXT_texture_edge_clamp",
+                                         "GL_SGIS_texture_edge_clamp",
+                                         "GL_ARB_point_parameters",
+                                         "GL_EXT_point_parameters",
+                                         "GL_ARB_texture_compression",
+                                         "GL_EXT_texture_compression_s3tc",
+                                         "GL_EXT_secondary_color",
+                                         "GL_EXT_fog_coord",
+                                         "GL_ARB_texture_cube_map"};
+    JGL_CONTEXT *c = Open(ALL);
+    const char *names = (const char *)glGetString(GL_EXTENSIONS);
+    assert(!strcmp(names, ExpectedExtensions(ALL, TRUE)));
+    /* Every model name exactly once, as a whole word. */
+    for (const JGL_TEST_EXTENSION &e : ExtensionNames) {
+        const char *at = strstr(names, e.Name);
+        const size_t length = strlen(e.Name);
+        assert(at && (at == names || at[-1] == ' ') && (at[length] == ' ' || !at[length]));
+        assert(!strstr(at + length, e.Name));
+    }
+    char copy[1024];
+    strncpy(copy, names, sizeof(copy) - 1);
+    copy[sizeof(copy) - 1] = 0;
+    for (const char *name : legacy) {
+        const char *at = strstr(copy, name);
+        const size_t length = strlen(name);
+        assert(at && (at == copy || at[-1] == ' ') && (at[length] == ' ' || !at[length]));
+        printf("  %-34s at %4zu..%4zu\n", name, (size_t)(at - copy), (size_t)(at - copy) + length);
+    }
+    printf("  all contracts: %zu characters; the legacy names end by %zu\n", strlen(names),
+           (size_t)(strstr(names, "GL_ARB_texture_cube_map") - names) +
+               strlen("GL_ARB_texture_cube_map"));
     Close(c);
 }
 
@@ -711,6 +765,7 @@ int main(int argc, char **argv) {
     }
     Unnegotiated();
     LockState();
+    LegacyPrefix();
     LockedDraws();
     Equivalence();
     Fallbacks();

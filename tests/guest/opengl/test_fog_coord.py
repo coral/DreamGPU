@@ -37,6 +37,7 @@ with tempfile.TemporaryDirectory(prefix="dreamgpu-fog-coord-") as temporary:
         shutil.copyfile(SOURCE / name, root / name)
     shutil.copyfile(HERE / "frontend.cpp", root / "frontend-harness.cpp")
     shutil.copyfile(HERE / "frontend-windows.h", root / "windows.h")
+    shutil.copyfile(HERE / "extension-names.h", root / "extension-names.h")
     shutil.copyfile(HERE / "frontend-gl.h", root / "GL/gl.h")
     shutil.copyfile(HERE / "fog-coord.cpp", root / "test.cpp")
     subprocess.run([os.environ.get("CXX", "c++"), "-std=c++23", "-O1", "-Wall", "-Wextra", "-Werror",
