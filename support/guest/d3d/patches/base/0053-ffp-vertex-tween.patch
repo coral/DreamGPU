@@ -1,0 +1,474 @@
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -3015,6 +3015,13 @@
+         *regnum = WINED3D_FFP_SPECULAR;
+     else if (usage == WINED3D_DECL_USAGE_TEXCOORD && usage_idx < WINED3DDP_MAXTEXCOORD)
+         *regnum = WINED3D_FFP_TEXCOORD0 + usage_idx;
++    /* DreamGPU: the second position and normal of vertex tweening, which
++     * drawprim.c reads from the declaration itself (0053). */
++    else if ((usage == WINED3D_DECL_USAGE_POSITION || usage == WINED3D_DECL_USAGE_NORMAL) && usage_idx == 1)
++    {
++        *regnum = ~0U;
++        return FALSE;
++    }
+     else
+     {
+         FIXME("Unsupported input stream [usage=%s, usage_idx=%u].\n", debug_d3ddeclusage(usage), usage_idx);
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -101,6 +101,11 @@
+ static BOOL dg_xyzrhw_arrays(const struct wined3d_device *device, struct wined3d_context *context,
+         const struct wined3d_stream_info *si, UINT count, GLenum primitive,
+         const void *indices, UINT index_size, UINT start);
++/* DreamGPU 0053: the second streams of an immediate-mode tweened draw,
++ * defined with the blended array helpers. */
++struct dg_vertex_blend;
++static BOOL dg_vertex_tween_immediate(struct dg_vertex_blend *blend, struct wined3d_context *context,
++        const struct wined3d_state *state, const void *indices, UINT index_size, UINT start, UINT count);
+ 
+ /* DreamGPU: fixed-function vertex blending without GL_ARB_vertex_blend,
+  * which DreamGPU's host (Mesa) does not have and a GeForce FX never listed
+@@ -117,13 +122,30 @@
+  * sizes read eye coordinates, which are unchanged: view * sum(w_i WORLDi v)
+  * is sum(w_i (view WORLDi) v), and the normals' inverse transposes factor
+  * the same way for affine world matrices. Draws without blending, and draws
+- * whose inputs this does not read (FIXME once), draw exactly as before. */
++ * whose inputs this does not read (FIXME once), draw exactly as before.
++ *
++ * DreamGPU 0053: vertex tweening (D3DRS_VERTEXBLEND D3DVBF_TWEENING, which
++ * excludes weighted blending) takes the same path with matrices 0. Direct3D
++ * defines POSITION = POSITION1 * (1 - TWEENFACTOR) + POSITION2 * TWEENFACTOR,
++ * normals likewise, before lighting and clipping; its second position and
++ * normal are declaration elements of usage index 1 (D3D9 POSITION1 and
++ * NORMAL1, D3D8 D3DVSDE_POSITION2 and NORMAL2), which Wine's fixed-function
++ * stream info has no slot for. They are read from their streams' system
++ * memory copies (0037), and the tweened positions and normals replace Wine's
++ * own in object space: the modelview stays WORLD and VIEW, as Wine set it. */
+ struct dg_vertex_blend
+ {
+-    unsigned int matrices; /* WORLD..WORLD(matrices - 1): 2 to MAX_VERTEX_BLENDS */
++    unsigned int matrices; /* WORLD..WORLD(matrices - 1): 2 to MAX_VERTEX_BLENDS; 0 tweens */
+     const struct wined3d_stream_info_element *weights, *position, *normal; /* normal: NULL without */
+     float world[MAX_VERTEX_BLENDS][4][4]; /* Direct3D rows: v' = v * world */
+     float normal_matrix[MAX_VERTEX_BLENDS][3][3]; /* n'[j] = sum_k normal_matrix[j][k] * n[k] */
++    /* Tweening: the second position and normal (NULL: that one is copied),
++     * their vertex 0 in system memory (dg_vertex_tween_sources) and the
++     * tween factor. weights is NULL. */
++    const struct wined3d_vertex_declaration_element *position2, *normal2;
++    const BYTE *position2_data, *normal2_data;
++    UINT position2_stride, normal2_stride;
++    float tween;
+ };
+ 
+ /* The inverse of m's upper 3x3: a row vector normal n becomes n * inverse^T,
+@@ -158,11 +180,81 @@
+             inverse[i][j] = c[j][i] * scale;
+ }
+ 
+-/* Whether a draw with these streams blends, and its matrices. Blending needs
+- * weights in the vertex; tweening, 0 weights (indexed blending, which is not
+- * claimed) and DISABLE draw unblended, as do vertex shaders, pretransformed
+- * vertices, Wine's own ARB_vertex_blend path and a generic-attribute
+- * (GLSL) pipeline, which blends itself. No GL call. */
++/* Whether a float position (three or four components) or normal (three are
++ * read) element can be blended or tweened. */
++static BOOL dg_vertex_blend_float3(const struct wined3d_format *format)
++{
++    return format->id == WINED3DFMT_R32G32B32_FLOAT || format->id == WINED3DFMT_R32G32B32A32_FLOAT;
++}
++
++/* DreamGPU 0053: whether a draw tweens (D3DRS_VERTEXBLEND D3DVBF_TWEENING),
++ * and its second position and normal. Direct3D requires one of them in the
++ * declaration; without either, or with formats or per-instance data this
++ * does not read, the draw stays untweened. A second normal without a first
++ * is ignored. Its system memory is found later (dg_vertex_tween_sources).
++ * No GL call. */
++static BOOL dg_vertex_tween_init(struct dg_vertex_blend *blend, const struct wined3d_state *state,
++        const struct wined3d_stream_info *si)
++{
++    const struct wined3d_vertex_declaration *declaration = state->vertex_declaration;
++    const struct wined3d_vertex_declaration_element *e;
++    static BOOL warned;
++    unsigned int i;
++
++    if (!declaration || !(si->use_map & (1u << WINED3D_FFP_POSITION)))
++        return FALSE;
++    blend->matrices = 0;
++    blend->weights = NULL;
++    blend->position = &si->elements[WINED3D_FFP_POSITION];
++    blend->normal = si->use_map & (1u << WINED3D_FFP_NORMAL) ? &si->elements[WINED3D_FFP_NORMAL] : NULL;
++    blend->position2 = blend->normal2 = NULL;
++    blend->position2_data = blend->normal2_data = NULL;
++    blend->position2_stride = blend->normal2_stride = 0;
++    for (i = 0; i < declaration->element_count; ++i)
++    {
++        e = &declaration->elements[i];
++        if (e->usage_idx != 1 || e->input_slot >= MAX_STREAMS)
++            continue;
++        if (e->usage == WINED3D_DECL_USAGE_POSITION && !blend->position2)
++            blend->position2 = e;
++        else if (e->usage == WINED3D_DECL_USAGE_NORMAL && !blend->normal2)
++            blend->normal2 = e;
++    }
++    if (!blend->normal)
++        blend->normal2 = NULL;
++    if (!blend->position2 && !blend->normal2)
++        return FALSE;
++    if (!dg_vertex_blend_float3(blend->position->format)
++            || (blend->normal && !dg_vertex_blend_float3(blend->normal->format))
++            || (blend->position2 && !dg_vertex_blend_float3(blend->position2->format))
++            || (blend->normal2 && !dg_vertex_blend_float3(blend->normal2->format)))
++    {
++        if (!warned++)
++            FIXME("Vertex tweening of position %s, normal %s is not supported.\n",
++                    debug_d3dformat(blend->position->format->id),
++                    blend->normal ? debug_d3dformat(blend->normal->format->id) : "none");
++        return FALSE;
++    }
++    if (blend->position->divisor || (blend->normal && blend->normal->divisor))
++        return FALSE;
++    for (i = 0; i < 2; ++i)
++    {
++        if (!(e = i ? blend->normal2 : blend->position2))
++            continue;
++        if (e->input_slot_class != WINED3D_INPUT_PER_VERTEX_DATA
++                || (state->streams[e->input_slot].flags & WINED3DSTREAMSOURCE_INSTANCEDATA))
++            return FALSE;
++    }
++    memcpy(&blend->tween, &state->render_states[WINED3D_RS_TWEENFACTOR], sizeof(blend->tween));
++    return TRUE;
++}
++
++/* Whether a draw with these streams blends or tweens, and its matrices.
++ * Blending needs weights in the vertex; 0 weights (indexed blending, which
++ * is not claimed) and DISABLE draw unblended, as do vertex shaders,
++ * pretransformed vertices, Wine's own ARB_vertex_blend path (which does not
++ * tween either) and a generic-attribute (GLSL) pipeline, which blends
++ * itself. No GL call. */
+ static BOOL dg_vertex_blend_init(struct dg_vertex_blend *blend, const struct wined3d_context *context,
+         const struct wined3d_state *state, const struct wined3d_stream_info *si)
+ {
+@@ -170,8 +262,11 @@
+     static BOOL warned;
+     unsigned int i;
+ 
+-    if (context->gl_info->supported[ARB_VERTEX_BLEND] || context->d3d_info->ffp_generic_attributes
+-            || use_vs(state) || si->position_transformed
++    if (context->d3d_info->ffp_generic_attributes || use_vs(state) || si->position_transformed)
++        return FALSE;
++    if (mode == WINED3D_VBF_TWEENING)
++        return dg_vertex_tween_init(blend, state, si);
++    if (context->gl_info->supported[ARB_VERTEX_BLEND]
+             || mode < WINED3D_VBF_1WEIGHTS || mode > WINED3D_VBF_3WEIGHTS
+             || (si->use_map & ((1u << WINED3D_FFP_POSITION) | (1u << WINED3D_FFP_BLENDWEIGHT)))
+                     != ((1u << WINED3D_FFP_POSITION) | (1u << WINED3D_FFP_BLENDWEIGHT)))
+@@ -197,10 +292,8 @@
+                         debug_d3dformat(blend->weights->format->id));
+             return FALSE;
+     }
+-    if ((blend->position->format->id != WINED3DFMT_R32G32B32_FLOAT
+-            && blend->position->format->id != WINED3DFMT_R32G32B32A32_FLOAT)
+-            || (blend->normal && blend->normal->format->id != WINED3DFMT_R32G32B32_FLOAT
+-            && blend->normal->format->id != WINED3DFMT_R32G32B32A32_FLOAT))
++    if (!dg_vertex_blend_float3(blend->position->format)
++            || (blend->normal && !dg_vertex_blend_float3(blend->normal->format)))
+     {
+         if (!warned++)
+             FIXME("Vertex blending of position %s, normal %s is not supported.\n",
+@@ -274,6 +367,45 @@
+     }
+ }
+ 
++/* DreamGPU 0053: one vertex tweened in object space, POSITION1 * (1 - t) +
++ * POSITION2 * t for all four components (a missing w is 1), normals
++ * likewise; without a second position or normal the first is copied.
++ * position2 and normal2 are NULL without them. */
++static void dg_vertex_tween_vertex(const struct dg_vertex_blend *blend, const BYTE *position,
++        const BYTE *position2, const BYTE *normal, const BYTE *normal2, float *out_position, float *out_normal)
++{
++    float v[4] = {0.0f, 0.0f, 0.0f, 1.0f}, v2[4] = {0.0f, 0.0f, 0.0f, 1.0f}, n[3], n2[3];
++    float t = blend->tween, s = 1.0f - t;
++    unsigned int j;
++
++    memcpy(v, position, (blend->position->format->id == WINED3DFMT_R32G32B32A32_FLOAT ? 4 : 3) * sizeof(*v));
++    if (position2)
++    {
++        memcpy(v2, position2,
++                (blend->position2->format->id == WINED3DFMT_R32G32B32A32_FLOAT ? 4 : 3) * sizeof(*v2));
++        for (j = 0; j < 4; ++j)
++            out_position[j] = v[j] * s + v2[j] * t;
++    }
++    else
++    {
++        memcpy(out_position, v, sizeof(v));
++    }
++
++    if (!normal)
++        return;
++    memcpy(n, normal, sizeof(n));
++    if (normal2)
++    {
++        memcpy(n2, normal2, sizeof(n2));
++        for (j = 0; j < 3; ++j)
++            out_normal[j] = n[j] * s + n2[j] * t;
++    }
++    else
++    {
++        memcpy(out_normal, n, sizeof(n));
++    }
++}
++
+ /* Context activation is done by the caller. GL's modelview becomes the view
+  * matrix until dg_vertex_blend_end. */
+ static void dg_vertex_blend_begin(const struct wined3d_gl_info *gl_info, const struct wined3d_state *state)
+@@ -292,17 +424,23 @@
+ }
+ 
+ /* Context activation is done by the caller. drawStridedSlow's normal and
+- * position of a vertex, blended: the streams are in system memory there. */
++ * position of a vertex, blended or tweened: the streams are in system memory
++ * there, and dg_vertex_tween_immediate found the second ones. */
+ static void dg_vertex_blend_send(const struct wined3d_gl_info *gl_info, const struct dg_vertex_blend *blend,
+         LONG vertex)
+ {
+-    float position[4], normal[3];
++    const BYTE *normal = blend->normal ? blend->normal->data.addr + vertex * blend->normal->stride : NULL;
++    float position[4], normal_out[3];
+ 
+-    dg_vertex_blend_vertex(blend, blend->weights->data.addr + vertex * blend->weights->stride,
+-            blend->position->data.addr + vertex * blend->position->stride,
+-            blend->normal ? blend->normal->data.addr + vertex * blend->normal->stride : NULL, position, normal);
++    if (blend->matrices)
++        dg_vertex_blend_vertex(blend, blend->weights->data.addr + vertex * blend->weights->stride,
++                blend->position->data.addr + vertex * blend->position->stride, normal, position, normal_out);
++    else
++        dg_vertex_tween_vertex(blend, blend->position->data.addr + vertex * blend->position->stride,
++                blend->position2 ? blend->position2_data + vertex * blend->position2_stride : NULL, normal,
++                blend->normal2 ? blend->normal2_data + vertex * blend->normal2_stride : NULL, position, normal_out);
+     if (blend->normal)
+-        gl_info->gl_ops.gl.p_glNormal3fv(normal);
++        gl_info->gl_ops.gl.p_glNormal3fv(normal_out);
+     gl_info->gl_ops.gl.p_glVertex4fv(position);
+ }
+ 
+@@ -356,8 +494,17 @@
+     }
+ 
+     /* DreamGPU: each vertex blended into world space, drawn under the view
+-     * matrix (see dg_vertex_blend). */
+-    if ((blended = dg_vertex_blend_init(&blend, context, state, si)))
++     * matrix (see dg_vertex_blend), or tweened (0053) under Wine's own. */
++    if ((blended = dg_vertex_blend_init(&blend, context, state, si)) && !blend.matrices
++            && !dg_vertex_tween_immediate(&blend, context, state, idxData, idxSize, startIdx, NumVertexes))
++    {
++        static BOOL warned;
++
++        if (!warned++)
++            FIXME("Drawing a tweened draw untweened: its vertices are not all readable.\n");
++        blended = FALSE;
++    }
++    if (blended && blend.matrices)
+         dg_vertex_blend_begin(gl_info, state);
+ 
+     /* Start drawing in GL */
+@@ -567,7 +714,7 @@
+ 
+     gl_info->gl_ops.gl.p_glEnd();
+     checkGLcall("glEnd and previous calls");
+-    if (blended)
++    if (blended && blend.matrices)
+         dg_vertex_blend_end(gl_info);
+ }
+ 
+@@ -1502,14 +1649,66 @@
+     return memory + offset;
+ }
+ 
+-/* The blended arrays of an array draw. FALSE, before any GL call, draws the
+- * streams unblended. */
+-static BOOL dg_vertex_blend_prepare(struct dg_vertex_blend_arrays *arrays, const struct dg_vertex_blend *blend,
++/* DreamGPU 0053: a declaration element's vertex 0 in its stream's system
++ * memory, when vertices first..last lie within the stream: stream offset
++ * plus element offset, then the stream's stride per vertex, as
++ * context_stream_info_from_declaration lays out the first position and
++ * normal. NULL otherwise, including stride zero. */
++static const BYTE *dg_vertex_tween_source(struct wined3d_context *context, const struct wined3d_state *state,
++        const struct wined3d_vertex_declaration_element *e, int64_t first, int64_t last)
++{
++    const struct wined3d_stream_state *stream = &state->streams[e->input_slot];
++    const BYTE *memory;
++    ULONG_PTR offset;
++
++    if (!stream->buffer)
++        return NULL;
++    offset = (ULONG_PTR)stream->offset + e->offset;
++    if (!dg_xyzrhw_span(stream->buffer->resource.size, offset, stream->stride, e->format->byte_count, first, last)
++            || !(memory = buffer_get_sysmem(stream->buffer, context)))
++        return NULL;
++    return memory + offset;
++}
++
++/* The second position and normal of a tweened draw for vertices
++ * first..last. FALSE draws it untweened. */
++static BOOL dg_vertex_tween_sources(struct dg_vertex_blend *blend, struct wined3d_context *context,
++        const struct wined3d_state *state, int64_t first, int64_t last)
++{
++    if (blend->position2)
++    {
++        if (!(blend->position2_data = dg_vertex_tween_source(context, state, blend->position2, first, last)))
++            return FALSE;
++        blend->position2_stride = state->streams[blend->position2->input_slot].stride;
++    }
++    if (blend->normal2)
++    {
++        if (!(blend->normal2_data = dg_vertex_tween_source(context, state, blend->normal2, first, last)))
++            return FALSE;
++        blend->normal2_stride = state->streams[blend->normal2->input_slot].stride;
++    }
++    return TRUE;
++}
++
++/* drawStridedSlow's vertices: start..start + count - 1, or each index plus
++ * the base vertex. Before any GL call. */
++static BOOL dg_vertex_tween_immediate(struct dg_vertex_blend *blend, struct wined3d_context *context,
++        const struct wined3d_state *state, const void *indices, UINT index_size, UINT start, UINT count)
++{
++    int64_t first, last, final;
++
++    return dg_fog_coord_range(indices, index_size, start, count, state->base_vertex_index, &first, &last, &final)
++            && dg_vertex_tween_sources(blend, context, state, first, last);
++}
++
++/* The blended or tweened arrays of an array draw. FALSE, before any GL
++ * call, draws the streams unblended. */
++static BOOL dg_vertex_blend_prepare(struct dg_vertex_blend_arrays *arrays, struct dg_vertex_blend *blend,
+         struct wined3d_context *context, const struct wined3d_state *state, const void *idx_data,
+         UINT idx_size, UINT start_idx, UINT index_count, BOOL indexed)
+ {
+     const struct wined3d_gl_info *gl_info = context->gl_info;
+-    const BYTE *weights, *position, *normal = NULL;
++    const BYTE *weights = NULL, *position, *normal = NULL;
+     int64_t first, last, final, range, base, j;
+     const void *indices = NULL;
+     float *values, *normals;
+@@ -1533,10 +1732,12 @@
+     if (!dg_fog_coord_range(indices, idx_size, start_idx, index_count, index_base, &first, &last, &final))
+         return FALSE;
+     base = state->load_base_vertex_index;
+-    if (!(weights = dg_vertex_blend_source(context, state, blend->weights, base + first, base + last))
++    if ((blend->matrices
++            && !(weights = dg_vertex_blend_source(context, state, blend->weights, base + first, base + last)))
+             || !(position = dg_vertex_blend_source(context, state, blend->position, base + first, base + last))
+             || (blend->normal && !(normal = dg_vertex_blend_source(context, state, blend->normal,
+-                    base + first, base + last))))
++                    base + first, base + last)))
++            || (!blend->matrices && !dg_vertex_tween_sources(blend, context, state, base + first, base + last)))
+         return FALSE;
+ 
+     range = last - first + 1;
+@@ -1558,9 +1759,16 @@
+     {
+         ULONG_PTR vertex = (ULONG_PTR)(base + first + j);
+ 
+-        dg_vertex_blend_vertex(blend, weights + vertex * blend->weights->stride,
+-                position + vertex * blend->position->stride,
+-                normal ? normal + vertex * blend->normal->stride : NULL, values + 4 * j, normals + 3 * j);
++        if (blend->matrices)
++            dg_vertex_blend_vertex(blend, weights + vertex * blend->weights->stride,
++                    position + vertex * blend->position->stride,
++                    normal ? normal + vertex * blend->normal->stride : NULL, values + 4 * j, normals + 3 * j);
++        else
++            dg_vertex_tween_vertex(blend, position + vertex * blend->position->stride,
++                    blend->position2 ? blend->position2_data + vertex * blend->position2_stride : NULL,
++                    normal ? normal + vertex * blend->normal->stride : NULL,
++                    blend->normal2 ? blend->normal2_data + vertex * blend->normal2_stride : NULL,
++                    values + 4 * j, normals + 3 * j);
+     }
+     arrays->values = values;
+     arrays->positions = (ULONG_PTR)values - (ULONG_PTR)first * 4 * sizeof(float);
+@@ -1579,7 +1787,9 @@
+     if (blend->normal)
+         gl_info->gl_ops.gl.p_glNormalPointer(GL_FLOAT, 0, (const void *)arrays->normals);
+     checkGLcall("vertex blend arrays");
+-    dg_vertex_blend_begin(gl_info, state);
++    /* A tweened draw keeps Wine's modelview. */
++    if (blend->matrices)
++        dg_vertex_blend_begin(gl_info, state);
+ }
+ 
+ /* Context activation is done by the caller. The modelview, and the position
+@@ -1590,7 +1800,8 @@
+ {
+     const struct wined3d_stream_info_element *e = blend->position;
+ 
+-    dg_vertex_blend_end(gl_info);
++    if (blend->matrices)
++        dg_vertex_blend_end(gl_info);
+     if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
+         GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, e->data.buffer_object));
+     gl_info->gl_ops.gl.p_glVertexPointer(e->format->gl_vtx_format, e->format->gl_vtx_type, e->stride,
+@@ -1858,7 +2069,7 @@
+     }
+     else
+     {
+-        /* DreamGPU: blended positions and normals (see dg_vertex_blend). */
++        /* DreamGPU: blended or tweened positions and normals (see dg_vertex_blend). */
+         if (!instance_count && dg_vertex_blend_init(&blend, context, state, stream_info)
+                 && !dg_vertex_blend_prepare(&blend_arrays, &blend, context, state, idx_data, idx_size,
+                         start_idx, index_count, indexed))
+@@ -1866,7 +2077,7 @@
+             static BOOL warned;
+ 
+             if (!warned++)
+-                FIXME("Drawing a blended draw unblended: its vertices are not all readable.\n");
++                FIXME("Drawing a blended or tweened draw unblended: its vertices are not all readable.\n");
+         }
+         if (fog.values)
+             dg_fog_coords_bind(gl_info, &fog);
+--- a/wined3d/state.c
++++ b/wined3d/state.c
+@@ -3798,8 +3798,10 @@
+     enum wined3d_vertex_blend_flags f = state->render_states[WINED3D_RS_VERTEXBLEND];
+     static unsigned int once;
+ 
+-    /* DreamGPU: drawprim.c blends 1 to 3 weights itself (dg_vertex_blend). */
+-    if (f == WINED3D_VBF_DISABLE || (f >= WINED3D_VBF_1WEIGHTS && f <= WINED3D_VBF_3WEIGHTS))
++    /* DreamGPU: drawprim.c blends 1 to 3 weights itself (dg_vertex_blend),
++     * and tweens (0053). */
++    if (f == WINED3D_VBF_DISABLE || (f >= WINED3D_VBF_1WEIGHTS && f <= WINED3D_VBF_3WEIGHTS)
++            || f == WINED3D_VBF_TWEENING)
+         return;
+ 
+     if (!once++) FIXME("Vertex blend flags %#x not supported.\n", f);
+@@ -3838,11 +3840,12 @@
+             }
+             break;
+ 
+-        case WINED3D_VBF_TWEENING:
+         case WINED3D_VBF_0WEIGHTS: /* Indexed vertex blending, not supported. */
+             if (!once++) FIXME("Vertex blend flags %#x not supported.\n", val);
+             else WARN("Vertex blend flags %#x not supported.\n", val);
+             /* Fall through. */
++        /* DreamGPU: drawprim.c tweens without GL vertex blending (0053). */
++        case WINED3D_VBF_TWEENING:
+         case WINED3D_VBF_DISABLE:
+             gl_info->gl_ops.gl.p_glDisable(GL_VERTEX_BLEND_ARB);
+             checkGLcall("glDisable(GL_VERTEX_BLEND_ARB)");
+@@ -5666,13 +5669,16 @@
+     caps->max_vertex_blend_matrices = gl_info->supported[ARB_VERTEX_BLEND]
+             ? gl_info->limits.blends : MAX_VERTEX_BLENDS;
+     caps->max_vertex_blend_matrix_index = 0;
++    /* DreamGPU: drawprim.c tweens on the CPU (0053); the GeForce FX claims
++     * tweening too (D3D9 VertexProcessingCaps 0x17b). */
+     caps->vertex_processing_caps = WINED3DVTXPCAPS_DIRECTIONALLIGHTS
+             | WINED3DVTXPCAPS_MATERIALSOURCE7
+             | WINED3DVTXPCAPS_POSITIONALLIGHTS
+             | WINED3DVTXPCAPS_LOCALVIEWER
+             | WINED3DVTXPCAPS_VERTEXFOG
+             | WINED3DVTXPCAPS_TEXGEN
+-            | WINED3DVTXPCAPS_TEXGEN_SPHEREMAP;
++            | WINED3DVTXPCAPS_TEXGEN_SPHEREMAP
++            | WINED3DVTXPCAPS_TWEENING;
+     caps->fvf_caps = WINED3DFVFCAPS_PSIZE | 0x0008; /* 8 texture coords */
+     caps->max_user_clip_planes = gl_info->limits.clipplanes;
+     caps->raster_caps = 0;

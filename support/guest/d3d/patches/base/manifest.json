@@ -211,6 +211,10 @@
     {
       "file": "0052-ffp-vertex-blend.patch",
       "sha256": "a60d17c2acfa698be753c65ad0653c5b9058d3b9831217c5b8fedfdc728842e1"
+    },
+    {
+      "file": "0053-ffp-vertex-tween.patch",
+      "sha256": "44e782b2e1dd9b498172f5730b1a831353059a2c3ca29c796dcf1103b85d00cf"
     }
   ],
   "files": {
@@ -288,7 +292,7 @@
     },
     "wined3d/drawprim.c": {
       "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
-      "after_sha256": "0eccfd481ee087236cdbf7fc1085996282db40ab447654ce8ccc2b778254fe9e"
+      "after_sha256": "9e4f46ff6a0c468b1d0cfebd5c02754bda17f5bcb69d5b0011d37000d23e760b"
     },
     "ddraw/ddraw.c": {
       "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",
@@ -304,7 +308,7 @@
     },
     "wined3d/context.c": {
       "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
-      "after_sha256": "6e97889d99080fe2c06dedcd906e710218c2cc4a2947b852c7853a611af81c93"
+      "after_sha256": "f237237fac289bc9a4511417b0ecfed4ddef9b0dfa8ee9f1075b89c19ec2258b"
     },
     "wined3d/swapchain.c": {
       "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
@@ -348,7 +352,7 @@
     },
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",
-      "after_sha256": "97c25065743eeed163d0a6b6775d3b81ee12da725c35acf362e030823880e6f4"
+      "after_sha256": "62ee1081505f55e3db371ab77633afde33a91330730370d894521754b89ad0ba"
     },
     "wined3d/volume.c": {
       "before_sha256": "1c0abf7585df1f8282b26226553aa3943ff13266ee4f34c535655e8095061c7e",

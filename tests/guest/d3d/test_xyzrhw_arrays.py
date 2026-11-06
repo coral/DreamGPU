@@ -1406,16 +1406,23 @@ int main(void)
 '''
 
 
-# 0052's vertex blending in drawStridedSlow: no draw here sets
-# D3DRS_VERTEXBLEND (an XYZRHW draw never blends), so its helpers are stubs
-# that decline; test_vertex_blend.py runs the real ones.
+# 0052's vertex blending and 0053's tweening in drawStridedSlow: no draw here
+# sets D3DRS_VERTEXBLEND (an XYZRHW draw never blends or tweens), so their
+# helpers are stubs that decline; test_vertex_blend.py and
+# test_vertex_tween.py run the real ones.
 BLEND_STUBS = r'''
-struct dg_vertex_blend { int unused; };
+struct dg_vertex_blend { unsigned int matrices; };
 static BOOL dg_vertex_blend_init(struct dg_vertex_blend *blend, const struct wined3d_context *context,
         const struct wined3d_state *state, const struct wined3d_stream_info *si)
 {
     (void)blend; (void)context; (void)state; (void)si;
     return FALSE;
+}
+static BOOL dg_vertex_tween_immediate(struct dg_vertex_blend *blend, struct wined3d_context *context,
+        const struct wined3d_state *state, const void *indices, UINT index_size, UINT start, UINT count)
+{
+    (void)blend; (void)context; (void)state; (void)indices; (void)index_size; (void)start; (void)count;
+    abort();
 }
 static void dg_vertex_blend_begin(const struct wined3d_gl_info *gl_info, const struct wined3d_state *state)
 {

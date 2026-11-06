@@ -543,7 +543,9 @@ they execute, included), generating object-linear texture coordinates and
 blending raster positions on the CPU, and binding `vertex.weight` and
 `state.matrix.modelview[n]` in host vertex programs; and applications would
 see an extension the FX never had. `tests/native_qemu/vertex_blend.rs` draws
-such records.
+such records. Patch 0053's vertex tweening (`D3DVBF_TWEENING`) sends the same
+client arrays, or the same immediate-mode `Normal3fv`/`Vertex4fv`, in object
+space under Wine's own modelview, without the matrix records.
 
 ## System OpenGL provider
 

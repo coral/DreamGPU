@@ -899,3 +899,51 @@ the resulting records with lighting, fog and a clip plane under the view; the
 installed D3D8/9 probe (`vertex-blend-probe.inc`) checks the caps and exact
 two-, three- and four-matrix and lit pixels. The diagnostic stack is rebased
 onto 0052 with its `drawprim.c` call-site line renumbered.
+
+`0053-ffp-vertex-tween.patch` gives the fixed-function pipeline vertex
+tweening (`D3DRS_VERTEXBLEND` `D3DVBF_TWEENING`, `D3DRS_TWEENFACTOR`), which
+WineD3D never implemented: `state_vertexblend_w` and `state_vertexblend`
+printed a FIXME, the declaration's second position and normal (usage index 1:
+D3D9 `POSITION1`/`NORMAL1`, D3D8 `D3DVSDE_POSITION2`/`NORMAL2`, which d3d8
+already converts to index 1) had no fixed-function stream slot
+(`fixed_get_input` printed a FIXME for each whenever the stream info was
+rebuilt), and the first
+position was drawn. Direct3D documents `POSITION = POSITION1 * (1 -
+TWEENFACTOR) + POSITION2 * TWEENFACTOR`, the same for normals, before lighting
+and clipping, mutually exclusive with weighted blending; a GeForce FX claimed
+`D3DVTXPCAPS_TWEENING` (D3D9 VertexProcessingCaps 0x17b). Tweening takes
+0052's path with `matrices` 0: `dg_vertex_tween_init` finds the first
+position and normal in Wine's stream info and the second ones in the vertex
+declaration (the first of each usage index 1 element, not the tessellation
+pseudo-stream), and `dg_vertex_tween_sources` reads them from their streams'
+system memory copies (0037) at stream offset plus element offset, every
+vertex the draw reads checked against the stream (0048's span check). Each
+vertex is tweened in object space in that formula's order (all four position
+components, a missing w being 1; without a second position or normal the
+first is copied, and a second normal without a first is ignored), so factor
+0 draws exactly the first values and 1 the second, and replaces Wine's
+position and normal as 0052's client arrays (array draws) or
+`glNormal3fv`/`glVertex4fv` (`drawStridedSlow`, whose vertices
+`dg_vertex_tween_immediate` checks before `glBegin`). The modelview stays
+Wine's WORLD and VIEW: no matrix call is made, and Wine's array pointers are
+restored as 0052 restores them. Vertex shaders, pretransformed positions, a
+generic-attribute pipeline, positions or normals other than FLOAT3/FLOAT4,
+per-instance data, second streams missing, too short or of stride zero, and
+indices beyond them keep the untweened draw (FIXME once); draws without
+tweening, blended draws among them, are unchanged, as tweening and blending
+are selected by the same render state. Tweening does not depend on
+`ARB_vertex_blend`, whose handler now disables GL blending for it without the
+FIXME. `vp_ffp_get_caps` claims `WINED3DVTXPCAPS_TWEENING`, so D3D9 reports
+the FX's 0x17b (before 0x13b) and D3D8 0x17f (before 0x13f; D3D8 copies
+Wine's bits unmasked, including D3D7's VERTEXFOG and D3D9's TEXGEN_SPHEREMAP),
+while D3D7's mask drops it. `fixed_get_input` declines usage index 1
+positions and normals without the FIXME. `test_vertex_tween.py` runs the
+prepared caps, state handler, `fixed_get_input` and helpers under ASan/UBSan
+against a double-precision reference of the documented formula (one and two
+streams, stream offsets, FLOAT3/FLOAT4, position-only and normal-only, factors
+0, 1/2, 1, fractions and extrapolation, factors 0 and 1 and integer midpoints
+bit for bit, array and immediate-mode draws, every fallback before any GL
+call); `test_vertex_blend.py` and `test_xyzrhw_arrays.py` follow the shared
+helpers; the installed D3D8/9 probe (`tween-probe.inc`) checks the cap and
+exact tweened pixels. The diagnostic stack is rebased onto 0053 with its
+`drawprim.c` call-site line renumbered.

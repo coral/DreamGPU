@@ -193,6 +193,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "npot-probe.inc"
 #include "depth-texture-probe.inc"
 #include "vertex-blend-probe.inc"
+#include "tween-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -372,6 +373,9 @@ static void Run(void) {
     if (failed)
         return;
     vertex_blend_probe::Run(device, surface);
+    if (failed)
+        return;
+    tween_probe::Run(device, surface);
     if (failed)
         return;
     Log("STAGE present");

@@ -471,13 +471,13 @@ and disposable-VM acceptance cycle:
   the view matrix alone. Wine specifies lights, clip planes and texture
   generation planes under the view matrix and lighting, NORMALIZE, texture
   generation and fog read eye space, which view * sum(w_i WORLDi v) is
-  unchanged. Draws without blending are byte-identical; tweening, 0 weights
-  (indexed blending), unsupported weight formats and unreadable streams keep
-  today's unblended draw. D3D8 and D3D9 then report the GeForce FX 5800's
+  unchanged. Draws without blending are byte-identical; 0 weights (indexed
+  blending), unsupported weight formats and unreadable streams keep today's
+  unblended draw (tweening is 0053, below). D3D8 and D3D9 then report the GeForce FX 5800's
   MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0 (before 1 and 0;
-  D3D7 wMaxVertexBlendMatrices likewise); VertexProcessingCaps stay D3D9 0x13b
-  and D3D8 0x13f (the FX's D3D9 0x17b adds TWEENING, which Wine's fixed
-  function does not implement). Source tests run the prepared helpers against
+  D3D7 wMaxVertexBlendMatrices likewise); 0052 left VertexProcessingCaps at
+  D3D9 0x13b and D3D8 0x13f (the FX's D3D9 0x17b adds TWEENING, which 0053
+  claims). Source tests run the prepared helpers against
   an eye-space ARB_vertex_blend reference; the native pixel test draws the
   frontend's records of such draws with lighting, fog and a clip plane under
   the view. The installed D3D8/9 probe (`tools/d3d/vertex-blend-probe.inc`:
@@ -485,6 +485,31 @@ and disposable-VM acceptance cycle:
   normals with and without NORMALIZENORMALS; it skips below two matrices) has
   not yet run on a guest; D3D7, macOS CGL, Win98/XP guests and games remain
   unverified.
+- Direct3D fixed-function vertex tweening (`D3DRS_VERTEXBLEND`
+  `D3DVBF_TWEENING`, `D3DRS_TWEENFACTOR`; D3D8 and D3D9 only) likewise needs
+  no capability bit and no frontend or host change. WineD3D never tweened: it
+  printed a FIXME, gave the declaration's second position and normal (D3D9
+  usage index 1, D3D8 `D3DVSDE_POSITION2`/`NORMAL2`) no fixed-function slot
+  and drew the first position. Wine patch 0053 tweens on the CPU through 0052's
+  helpers, in Direct3D's documented order `POSITION1 * (1 - TWEENFACTOR) +
+  POSITION2 * TWEENFACTOR` (normals likewise) and in object space: the second
+  elements are read from their streams' system memory copies (one stream or a
+  second key-frame stream), the results replace Wine's position and normal as
+  client arrays or immediate-mode `Normal3fv`/`Vertex4fv`, and the modelview
+  stays Wine's, so the GL records are 0052's without its matrix calls (the
+  native vertex blend test draws that shape; no new native test). Factor 0
+  draws exactly the first key frame and 1 the second. Vertex shaders,
+  pretransformed positions, formats other than FLOAT3/FLOAT4, per-instance
+  data and unreadable second streams keep the untweened draw; draws without
+  tweening are byte-identical. D3D9 VertexProcessingCaps become the GeForce FX
+  5800's 0x17b (before 0x13b) and D3D8 0x17f (before 0x13f; D3D8 copies Wine's
+  bits unmasked); D3D7, which has no tweening, masks it out. Source tests run
+  the prepared helpers against a double-precision reference of the formula.
+  The installed D3D8/9 probe (`tools/d3d/tween-probe.inc`: positions from user
+  memory, a vertex buffer and two indexed streams at factors 0, 1/2 and 1, a
+  stretched quad, tweening disabled, lit normals with and without
+  NORMALIZENORMALS; it skips without the cap) has not yet run on a guest;
+  macOS CGL, Win98/XP guests and games remain unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

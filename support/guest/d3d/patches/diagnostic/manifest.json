@@ -6,21 +6,21 @@
   "patches": [
     {
       "file": "0001-bounded-copy-diagnostics.patch",
-      "sha256": "50e22da5234d4c60dd985b82869e991ba216271e646ddf10d9ee29bf675e5f7a"
+      "sha256": "d10e1525bd5b202096bc087029a008f62dcc40f76c33927144b087ffe06570fb"
     }
   ],
   "files": {
     "wined3d/context.c": {
-      "before_sha256": "6e97889d99080fe2c06dedcd906e710218c2cc4a2947b852c7853a611af81c93",
-      "after_sha256": "beb7e35352691b7500e8e0d68af40124b9636cf9c098522247a3ecd9d139f682"
+      "before_sha256": "f237237fac289bc9a4511417b0ecfed4ddef9b0dfa8ee9f1075b89c19ec2258b",
+      "after_sha256": "90b72e57e63143327a9b9ad0572b6bf661e155e25d810bbda151c016476adb91"
     },
     "wined3d/device.c": {
       "before_sha256": "4fc7519b11118ddf540988af2d8d5c3af3e8ac405ce769f611f206f427df3f85",
       "after_sha256": "5e3498aa60ece6f96d9d98ea3b340c375379849f518906976e0e9288d3021895"
     },
     "wined3d/drawprim.c": {
-      "before_sha256": "0eccfd481ee087236cdbf7fc1085996282db40ab447654ce8ccc2b778254fe9e",
-      "after_sha256": "a391db4912e2bd153082d1bc86b7c90804bb6e5e13cd1d94edc3f06e127403e7"
+      "before_sha256": "9e4f46ff6a0c468b1d0cfebd5c02754bda17f5bcb69d5b0011d37000d23e760b",
+      "after_sha256": "a7904a677ada46e65eb4a336172aaa499c4e9c8d92beaff4987ccf6b1425eed0"
     },
     "wined3d/surface.c": {
       "before_sha256": "d71c0ab0d0368c6d52b3c13df55c3aa42543e9d35528c8f6643a531707727947",

@@ -12,9 +12,11 @@ view matrix alone.
 
 The prepared caps function runs with and without ARB_vertex_blend (4 and 0
 without it; GL's MAX_VERTEX_UNITS with it), and the D3D9 mask and the D3D8
-copy give the FX's MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0
-with VertexProcessingCaps unchanged. The prepared state handler stays quiet
-for 1-3 weights and keeps its FIXME for tweening and 0 weights.
+copy give the FX's MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0;
+VertexProcessingCaps gain only 0053's TWEENING. The prepared state handler
+stays quiet for 1-3 weights (and 0053's tweening) and keeps its FIXME for 0
+weights. 0053's tweening shares these helpers (test_vertex_tween.py); here no
+declaration is bound, so a tweening draw declines.
 
 The prepared blending helpers (dg_vertex_blend_*), 0041's index scan and
 0048's span check are compiled unchanged under ASan/UBSan against a
@@ -114,9 +116,11 @@ struct wined3d_stream_info
 };
 struct wined3d_resource { UINT size; void *heap_memory; };
 struct wined3d_buffer { struct wined3d_resource resource; GLuint buffer_object; };
-struct wined3d_stream_state { struct wined3d_buffer *buffer; UINT offset, stride; };
+struct wined3d_stream_state { struct wined3d_buffer *buffer; UINT offset, stride, frequency, flags; };
+@DECLARATION@
 struct wined3d_state
 {
+    const struct wined3d_vertex_declaration *vertex_declaration; /* 0053's tweening; NULL here */
     DWORD render_states[WINEHIGHEST_RENDER_STATE + 1];
     struct wined3d_matrix transforms[WINED3D_TS_WORLD_LAST + 1];
     struct wined3d_stream_state streams[16];
@@ -685,12 +689,12 @@ int main(void)
     gl.supported[ARB_VERTEX_BLEND] = FALSE;
     gl.limits.blends = 1;
 
-    /* The state handler without ARB_vertex_blend: quiet for 1-3 weights. */
+    /* The state handler without ARB_vertex_blend: quiet for 1-3 weights and
+     * (0053) tweening; 0 weights FIXMEs once. */
     {
         static const DWORD quiet[] = {WINED3D_VBF_DISABLE, WINED3D_VBF_1WEIGHTS, WINED3D_VBF_2WEIGHTS,
-                WINED3D_VBF_3WEIGHTS};
-        static const DWORD loud[] = {WINED3D_VBF_TWEENING, WINED3D_VBF_0WEIGHTS};
-        for (i = 0; i < 4; ++i)
+                WINED3D_VBF_3WEIGHTS, WINED3D_VBF_TWEENING};
+        for (i = 0; i < 5; ++i)
         {
             reset();
             state.render_states[WINED3D_RS_VERTEXBLEND] = quiet[i];
@@ -700,7 +704,7 @@ int main(void)
         for (i = 0; i < 2; ++i)
         {
             reset();
-            state.render_states[WINED3D_RS_VERTEXBLEND] = loud[i];
+            state.render_states[WINED3D_RS_VERTEXBLEND] = WINED3D_VBF_0WEIGHTS;
             state_vertexblend_w(NULL, &state, 0);
             assert(fixmes == !i);
         }
@@ -916,8 +920,9 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-vertex-blend-') as temporary:
     wined3d_vtxp = caps_bits(re.findall(r'WINED3D(VTXPCAPS_\w+)', vtxp), public)
     mask = re.search(r'pCaps->VertexProcessingCaps &=\s*([^;]+);', d3d9)[1]
     d3d9_vtxp = wined3d_vtxp & caps_bits(re.findall(r'D3D(VTXPCAPS_\w+)', mask), public)
-    print('D3D9 VertexProcessingCaps %#x, D3D8 %#x (unchanged by 0052)' % (d3d9_vtxp, wined3d_vtxp))
-    assert d3d9_vtxp == 0x13b and wined3d_vtxp == 0x13f
+    # 0052 left them unchanged (D3D9 0x13b, D3D8 0x13f); 0053 adds TWEENING.
+    print('D3D9 VertexProcessingCaps %#x, D3D8 %#x (0053: TWEENING)' % (d3d9_vtxp, wined3d_vtxp))
+    assert d3d9_vtxp == 0x17b and wined3d_vtxp == 0x17f
 
     blend = drawprim[drawprim.index('/* DreamGPU: fixed-function vertex blending without GL_ARB_vertex_blend,'):
                      drawprim.index('/* Context activation is done by the caller. */\nstatic void drawStridedSlow(')]
@@ -932,8 +937,15 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-vertex-blend-') as temporary:
         enums += re.search(r'#define ' + re.escape(name) + r'\b.*\n', public)[0]
     enums += ''.join(re.findall(r'#define WINED3DVTXPCAPS_\w+\s+\w+\n', public))
     enums += re.search(r'#define MAX_VERTEX_BLENDS\s+\d+\n', private)[0]
+    # 0053's tweening reads declaration elements (test_vertex_tween.py).
+    enums += ''.join(block(public, opening) for opening in (
+        'enum wined3d_decl_usage\n', 'enum wined3d_input_classification\n'))
+    enums += re.search(r'#define MAX_STREAMS\s+\d+\n', private)[0]
+    enums += re.search(r'#define WINED3DSTREAMSOURCE_INSTANCEDATA\s+.*\n', public)[0]
+    declaration = ''.join(block(private, opening) for opening in (
+        'struct wined3d_vertex_declaration_element\n', 'struct wined3d_vertex_declaration\n'))
 
-    body = (PREAMBLE.replace('@ENUMS@', enums)
+    body = (PREAMBLE.replace('@ENUMS@', enums).replace('@DECLARATION@', declaration)
             + function(state, 'static void vp_ffp_get_caps(')
             + function(state, 'static void state_vertexblend_w(')
             + function(drawprim, 'static BOOL dg_fog_coord_range(')

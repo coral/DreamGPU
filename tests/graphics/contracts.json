@@ -464,6 +464,14 @@
       "scope": "installed-api",
       "path": "tools/d3d/vertex-blend-probe.inc"
     },
+    "d3d-vertex-tween": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_vertex_tween.py"
+    },
+    "guest-vertex-tween": {
+      "scope": "installed-api",
+      "path": "tools/d3d/tween-probe.inc"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1620,9 +1628,31 @@
         "native-vertex-blend",
         "native",
         "d3d-xyzrhw-arrays",
-        "guest-vertex-blend"
+        "guest-vertex-blend",
+        "d3d-vertex-tween"
       ],
-      "remaining": "No capability bit and no frontend or host change: GL_ARB_vertex_blend stays unadvertised (Mesa lacks it and a GeForce FX never listed it), and Wine patch 0052 blends on the CPU instead. WineD3D now reports the GeForce FX's MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0 (D3D8 and D3D9; before 1 and 0) and draws D3DRS_VERTEXBLEND 1-3 weights: each vertex's position and normal blended into world space (sum of w_i v WORLDi, normals through each WORLDi inverse transpose, the last weight 1 minus the others) as client arrays of an array draw, or per vertex in immediate mode, under the view matrix alone, so lights, clip planes, texture generation and fog keep eye space. Other draws, including tweening, 0 weights (indexed blending, not claimed), weights without blending and unreadable streams, are unchanged. VertexProcessingCaps stay D3D9 0x13b and D3D8 0x13f; the FX also claimed D3DVTXPCAPS_TWEENING, which Wine's fixed function does not implement. Source tests run the prepared helpers against an eye-space ARB_vertex_blend reference; native pixel tests (Linux) draw the frontend's records of such draws with lighting, fog and a clip plane under the view. The installed D3D8/9 probe (two-, three- and four-matrix quads from user memory and indexed buffers, lit normals with and without NORMALIZENORMALS), D3D7, macOS CGL, Win98/XP guests and games remain to be run."
+      "remaining": "No capability bit and no frontend or host change: GL_ARB_vertex_blend stays unadvertised (Mesa lacks it and a GeForce FX never listed it), and Wine patch 0052 blends on the CPU instead. WineD3D now reports the GeForce FX's MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0 (D3D8 and D3D9; before 1 and 0) and draws D3DRS_VERTEXBLEND 1-3 weights: each vertex's position and normal blended into world space (sum of w_i v WORLDi, normals through each WORLDi inverse transpose, the last weight 1 minus the others) as client arrays of an array draw, or per vertex in immediate mode, under the view matrix alone, so lights, clip planes, texture generation and fog keep eye space. Other draws, including 0 weights (indexed blending, not claimed), weights without blending and unreadable streams, are unchanged; tweening is d3d.vertex-tween (Wine 0053, same helpers). VertexProcessingCaps stay D3D9 0x13b and D3D8 0x13f under 0052; 0053 adds the FX's D3DVTXPCAPS_TWEENING. Source tests run the prepared helpers against an eye-space ARB_vertex_blend reference; native pixel tests (Linux) draw the frontend's records of such draws with lighting, fog and a clip plane under the view. The installed D3D8/9 probe (two-, three- and four-matrix quads from user memory and indexed buffers, lit normals with and without NORMALIZENORMALS), D3D7, macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "d3d.vertex-tween",
+      "area": 11,
+      "api": "D3D8/D3D9 (Wine fixed-function pipeline)",
+      "operation": "vertex tweening (D3DRS_VERTEXBLEND D3DVBF_TWEENING, D3DRS_TWEENFACTOR) of positions and normals from D3D9 POSITION1/NORMAL1 or D3D8 D3DVSDE_POSITION2/NORMAL2; D3DVTXPCAPS_TWEENING",
+      "format": "FLOAT3/4 positions and normals, second elements in any stream",
+      "resource": "draw",
+      "usage": "key-frame animation (morphing)",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "emulated",
+      "tests": [
+        "d3d-vertex-tween",
+        "d3d-vertex-blend",
+        "native-vertex-blend",
+        "d3d-xyzrhw-arrays",
+        "guest-vertex-tween"
+      ],
+      "remaining": "No capability bit and no frontend or host change. WineD3D never tweened: it printed a FIXME, had no fixed-function slot for the second position and normal and drew the first. Wine patch 0053 tweens on the CPU with 0052's helpers: POSITION1 * (1 - TWEENFACTOR) + POSITION2 * TWEENFACTOR (as Direct3D documents it; normals likewise) in object space, each second element read from its stream's system memory copy, drawn as 0052's client arrays or immediate-mode Normal3fv/Vertex4fv under Wine's own modelview, so the GL records are 0052's without its matrix calls (native-vertex-blend draws that shape). D3D9 VertexProcessingCaps become the GeForce FX's 0x17b (before 0x13b), D3D8 0x17f (before 0x13f); D3D7 has no tweening. Vertex shaders, pretransformed positions, other formats, per-instance data and unreadable second streams keep the untweened draw; draws without tweening are unchanged. Source tests run the prepared helpers against a double-precision reference of the documented formula. The installed D3D8/9 probe (positions from user memory, a vertex buffer and two indexed streams at factors 0, 1/2 and 1, a stretched quad, lit normals with and without NORMALIZENORMALS), macOS CGL, Win98/XP guests and games remain to be run."
     },
     {
       "id": "gl.cube-map",
