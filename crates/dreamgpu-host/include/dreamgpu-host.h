@@ -114,10 +114,16 @@ typedef struct DreamGpuContextState {
     uint32_t attrib_framebuffers[16][2];
     /* Rust-owned query and fence state (ARB_occlusion_query, NV_fence). */
     void *queries;
+    /* Rust-owned rectangle texture state, with the cube map state's ownership. */
+    DreamGpuTexture *default_texture_rect, *bound_texture_rect;
+    DreamGpuTexture *units_rect[8];
+    DreamGpuTexture *attrib_rect[16][8];
+    uint32_t proxy_rejected_rect;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the
- * cube map; anything else but TEXTURE_1D and TEXTURE_3D selects the 2D binding). */
+ * cube map; anything else but TEXTURE_1D, TEXTURE_3D and TEXTURE_RECTANGLE
+ * selects the 2D binding). */
 DreamGpuTexture *dreamgpu_context_texture(const DreamGpuContextState *state, uint32_t target);
 uint32_t dreamgpu_context_state_init(const DreamGpuTextureMemory *memory,
                                      DreamGpuContextState *state, DreamGpuTextureNamespace *shared);
@@ -139,8 +145,8 @@ uint32_t dreamgpu_texture_bind(const DreamGpuTextureMemory *memory, DreamGpuText
 void dreamgpu_texture_delete(const DreamGpuTextureMemory *memory, DreamGpuTextureNamespace *ns,
                              const uint8_t *data, uint32_t count, DreamGpuTexture *default_2d,
                              DreamGpuTexture *default_1d, DreamGpuTexture *default_cube,
-                             DreamGpuTexture *default_3d, DreamGpuTexture *const *const *bindings,
-                             uint32_t binding_count);
+                             DreamGpuTexture *default_3d, DreamGpuTexture *default_rect,
+                             DreamGpuTexture *const *const *bindings, uint32_t binding_count);
 DreamGpuTexture *dreamgpu_texture_lookup(DreamGpuTextureNamespace *ns, uint32_t name);
 void dreamgpu_texture_wait(const struct DreamGpuGlApi *api, DreamGpuTexture *texture,
                            uint64_t serial);
@@ -355,7 +361,12 @@ typedef struct DreamGpuDeviceGlRequest {
     uint64_t address, result_address;
     uint32_t bytes, generation, current_generation, bpp;
     uint32_t busy_2d, result_capacity;
+    /* Handed to enqueue with the snapshot; client/stream are a fault domain. */
+    uint32_t sequence, client, stream;
 } DreamGpuDeviceGlRequest;
+typedef struct DreamGpuEnqueue {
+    uint32_t sequence, client, stream, error;
+} DreamGpuEnqueue;
 typedef struct DreamGpuDeviceGlResult {
     uint32_t sensitive, records, result_capacity;
 } DreamGpuDeviceGlResult;
@@ -364,7 +375,7 @@ typedef struct DreamGpuDeviceGlCallbacks {
     uint32_t (*validate)(void *, const uint8_t *, uint32_t, uint32_t *);
     void (*diagnostics_begin)(void *, uint32_t);
     void (*diagnostic_record)(void *, const uint8_t *);
-    uint32_t (*enqueue)(void *, uint8_t *, uint32_t, uint32_t);
+    uint32_t (*enqueue)(void *, uint8_t *, uint32_t, uint32_t, const DreamGpuEnqueue *);
 } DreamGpuDeviceGlCallbacks;
 uint32_t dreamgpu_device_2d_capture(const DreamGpuDeviceMemory *, uint64_t, uint32_t, uint8_t *,
                                     uint64_t, uint64_t *);
@@ -445,16 +456,25 @@ typedef struct DreamGpuBatch {
     uint32_t sequence, generation, records;
     uint64_t trace_queued_us;
     uint32_t primary_width, primary_height;
+    uint32_t client, stream, error;
     uint32_t result_bytes, result_type;
     uint8_t result[512];
     uint8_t *bulk_result;
 } DreamGpuBatch;
+typedef struct DreamGpuDomain {
+    uint32_t client, stream;
+} DreamGpuDomain;
+/* Batches run in order: one legacy SUBMIT or up to DG_GL_QUEUE_DEPTH queued.
+ * A failed domain's later batches complete DG_GL_ERROR_SKIPPED unexecuted. */
 typedef struct DreamGpuSubmission {
-    DreamGpuBatch *pending;
+    DreamGpuBatch *pending[16];
+    uint32_t pending_head, pending_len;
     uint32_t reset, reset_generation;
     uint64_t reset_cpu_epoch, reset_cpu_generation;
     uint32_t head, len;
-    DreamGpuCompletion done[16];
+    DreamGpuCompletion done[64];
+    DreamGpuDomain faulted[16];
+    uint32_t faulted_next;
 } DreamGpuSubmission;
 typedef struct DreamGpuSubmissionRequest {
     uint8_t *data;
@@ -462,6 +482,8 @@ typedef struct DreamGpuSubmissionRequest {
     uint32_t sequence, generation, records;
     uint64_t trace_queued_us;
     uint32_t primary_width, primary_height;
+    /* Null data with nonzero error: an in-order completion that never runs. */
+    uint32_t client, stream, error;
 } DreamGpuSubmissionRequest;
 typedef struct DreamGpuSubmissionRun {
     void *opaque;
@@ -489,4 +511,39 @@ void dreamgpu_submission_complete(DreamGpuSubmission *, const DreamGpuSubmission
                                   const DreamGpuDesktopState *, const DreamGpuFrame *);
 uint32_t dreamgpu_submission_poll(DreamGpuSubmission *, DreamGpuCompletion *);
 void dreamgpu_submission_free(DreamGpuSubmission *, const DreamGpuSubmissionMemory *);
+/* Device side of the queued transport; every call holds the device lock. */
+typedef struct DreamGpuQueueCallbacks {
+    DreamGpuDeviceGlCallbacks gl;
+    uint32_t (*write)(void *, uint64_t, const uint8_t *, uint32_t);
+    void (*barrier)(void *);
+    uint32_t (*marker)(void *, const DreamGpuEnqueue *);
+    void (*fault)(void *, uint32_t);
+} DreamGpuQueueCallbacks;
+typedef struct DreamGpuQueueEntry {
+    uint64_t result_address;
+    uint32_t sequence, slot, client, stream, bytes, sensitive, result_capacity, error, engine;
+    uint32_t reserved;
+} DreamGpuQueueEntry;
+typedef struct DreamGpuQueue {
+    uint64_t address;
+    uint32_t active, generation, consumed, completed, head, len;
+    uint64_t pending_bytes;
+    DreamGpuQueueEntry entries[16];
+    DreamGpuDomain faulted[16];
+    uint32_t faulted_next, reserved;
+    uint64_t kicks, taken, finished, interrupts;
+} DreamGpuQueue;
+typedef struct DreamGpuQueueOutcome {
+    uint32_t flags, fault_sequence;
+} DreamGpuQueueOutcome;
+#define DREAMGPU_QUEUE_IRQ 1
+#define DREAMGPU_QUEUE_FAULT 2
+uint32_t dreamgpu_queue_enable(DreamGpuQueue *, const DreamGpuQueueCallbacks *, uint64_t, uint32_t,
+                               uint32_t, uint32_t);
+uint32_t dreamgpu_queue_disable(DreamGpuQueue *, const DreamGpuQueueCallbacks *);
+void dreamgpu_queue_reset(DreamGpuQueue *, const DreamGpuQueueCallbacks *);
+uint32_t dreamgpu_queue_consume(DreamGpuQueue *, const DreamGpuQueueCallbacks *, uint32_t, uint32_t,
+                                uint32_t);
+DreamGpuQueueOutcome dreamgpu_queue_complete(DreamGpuQueue *, const DreamGpuQueueCallbacks *,
+                                             const DreamGpuCompletion *);
 #endif

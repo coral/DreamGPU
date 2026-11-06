@@ -17,6 +17,7 @@ extern "C" {
 #include "transport.h"
 #include "dg-gl-limits.h"
 #include "dg-gl-registers.h"
+#include "dg-gl-queue.h"
 #include "dg-gl-validate.h"
 #include "dg-gl-result.h"
 #include "dg-gl-signature.h"
@@ -145,6 +146,12 @@ typedef struct {
     volatile ULONG DesktopActive;
     ULONG DesktopWidth, DesktopHeight, DesktopStride, DesktopBpp;
     BOOLEAN GlFaulted, GlNotifyRegistered;
+    /* Queued transport: Build is the buffer the next submission is written
+     * in (a free queue buffer or GlCommands), acquired on first use. */
+    DG_GL_QUEUE Queue;
+    BOOLEAN QueueSupported, BuildQueued;
+    ULONG *Build;
+    ULONG BuildStatus, ResultBytes, ResultType;
     volatile LONG DpcReferences;
     KEVENT DpcsIdle;
     DG_CLIENT Clients[DG_ESCAPE_MAX_CLIENTS];
@@ -329,7 +336,8 @@ PVOID DgTransportCreate(PVOID registers) {
      * submit sequence, timeout count, wait status, device status, assigned
      * level, assigned vector. Words 13-16 identify ISR entry/callback context
      * for a kernel debugger; these are guest kernel addresses, never host
-     * pointers or application data. */
+     * pointers or application data. Words 45-48: queued-transport doorbells,
+     * sleeping waits, engine resets that discarded entries, queue active. */
     t->Diagnostics = (volatile ULONG *)((PUCHAR)t->Commands + 0xc00);
     RtlZeroMemory(t->Commands, PAGE_SIZE);
     DebugPage = t->Diagnostics;
@@ -608,18 +616,160 @@ static VOID WriteGlRegister(void *context, ULONG reg, ULONG value) {
     WriteReg((DG_TRANSPORT *)context, reg, value);
 }
 
-static ULONG SubmitGl(DG_TRANSPORT *t, ULONG bytes, DG_ESCAPE_REPLY *reply) {
+static int QueuePrepare(void *context) {
+    KeResetEvent(&((DG_TRANSPORT *)context)->GlCompletion);
+    return 1;
+}
+
+static int QueueWait(void *context) {
+    LARGE_INTEGER timeout;
+    timeout.QuadPart = -20000000LL; /* two seconds, never a polling interval */
+    return KeWaitForSingleObject(&((DG_TRANSPORT *)context)->GlCompletion, Executive, KernelMode,
+                                 FALSE, &timeout) == STATUS_SUCCESS;
+}
+
+static void QueueFinish(void *context) {
+    (void)context;
+}
+
+static void QueueBarrier(void *context) {
+    (void)context;
+    KeMemoryBarrier();
+}
+
+static DG_GL_QUEUE_OPS QueueOps(DG_TRANSPORT *t) {
+    DG_GL_QUEUE_OPS ops = {t,         ReadGlRegister, WriteGlRegister, QueueBarrier, QueuePrepare,
+                           QueueWait, QueueFinish};
+    return ops;
+}
+
+/* While the queue page is current it names the engine generation, so the
+ * per-request generation needs no MMIO read; engine reset clears it first. */
+static ULONG CurrentGeneration(DG_TRANSPORT *t) {
+    return DgGlQueueCurrent(&t->Queue) ? t->Queue.Generation : ReadReg(t, DG_REG_GENERATION);
+}
+
+/* (Re)enable the queue after OPEN or an engine reset. Failure keeps the
+ * register transport, which every host supports. */
+static VOID QueueEnsure(DG_TRANSPORT *t) {
+    DG_GL_QUEUE_OPS ops;
+    if (!t->QueueSupported || DgGlQueueCurrent(&t->Queue) || t->Build)
+        return;
+    ops = QueueOps(t);
+    DgGlQueueReap(&t->Queue);
+    if (!(ReadReg(t, DG_GL_REG_STATUS) & DG_STATUS_BUSY))
+        DgGlQueueEnable(&t->Queue, &ops, ReadReg(t, DG_REG_GENERATION));
+    t->Diagnostics[48] = t->Queue.Active;
+}
+
+static ULONG LocalBytes(DG_TRANSPORT *t) {
+    return DgGlQueueCurrent(&t->Queue) ? DG_ESCAPE_QUEUE_MAX_BYTES : DG_ESCAPE_MAX_BYTES;
+}
+
+/* The buffer the next submission is built in. A queue buffer is reused only
+ * after the host copied what it held; waiting for one can fail (BuildStatus),
+ * in which case GlCommands receives the records and nothing is submitted. */
+static ULONG *GlBuild(DG_TRANSPORT *t) {
+    if (t->Build)
+        return t->Build;
+    QueueEnsure(t);
+    t->Build = (ULONG *)t->GlCommands;
+    t->BuildQueued = FALSE;
+    t->BuildStatus = DG_ESCAPE_OK;
+    if (DgGlQueueCurrent(&t->Queue)) {
+        DG_GL_QUEUE_OPS ops = QueueOps(t);
+        int result;
+        void *buffer = DgGlQueueBuffer(&t->Queue, &ops, &result);
+        if (buffer) {
+            t->Build = (ULONG *)buffer;
+            t->BuildQueued = TRUE;
+        } else if (!result) {
+            t->GlFaulted = TRUE;
+            IncrementDiagnostic(&t->Diagnostics[24]);
+            t->BuildStatus = DG_ESCAPE_TIMEOUT;
+        } else {
+            /* Engine reset discarded queued work: this operation's outcome is
+             * unknown to its caller, never silently replayed. */
+            t->BuildStatus = DG_ESCAPE_HOST;
+        }
+    }
+    return t->Build;
+}
+
+typedef struct {
+    ULONG Token, Stream, Async, ResultCapacity;
+} DG_SUBMIT;
+
+static ULONG SubmitQueued(DG_TRANSPORT *t, ULONG *commands, ULONG bytes, DG_ESCAPE_REPLY *reply,
+                          const DG_SUBMIT *submit) {
+    DG_GL_QUEUE_OPS ops = QueueOps(t);
+    DG_GL_QUEUE_RESULT outcome = {};
+    ULONG sequence, index, generation = commands[7];
+    int waited;
+    if (!DgGlRegistersRefresh(&t->GlRegisters, generation, 0, ReadGlRegister, t) ||
+        !DgGlLimitsRefreshLocal(&t->GlLimits, generation, 0, LocalBytes(t), ReadGlRegister, t) ||
+        bytes > t->GlLimits.MaxBytes)
+        return DG_ESCAPE_UNSUPPORTED;
+    sequence = ++t->GlSequence;
+    if (!sequence)
+        sequence = ++t->GlSequence;
+    t->Diagnostics[23] = sequence;
+    index = DgGlQueuePublish(&t->Queue, &ops, bytes, sequence, generation,
+                             submit ? submit->Token : 0, submit ? submit->Stream : 0,
+                             submit && submit->ResultCapacity ? t->GlResultAddress.LowPart : 0,
+                             submit ? submit->ResultCapacity : 0, submit && submit->Async);
+    t->Diagnostics[45] = t->Queue.Doorbells;
+    if (submit && submit->Async)
+        return DG_ESCAPE_OK;
+    waited = DgGlQueueWaitEntry(&t->Queue, &ops, index, &outcome);
+    t->Diagnostics[46] = t->Queue.Sleeps;
+    t->Diagnostics[47] = t->Queue.Lost;
+    if (!waited) {
+        t->GlFaulted = TRUE;
+        IncrementDiagnostic(&t->Diagnostics[24]);
+        return DG_ESCAPE_TIMEOUT;
+    }
+    if (waited < 0) {
+        /* Reset before completion: whether a prefix ran is unknown. */
+        if (reply)
+            reply->DeviceError = DG_GL_ERROR_GENERATION;
+        return DG_ESCAPE_HOST;
+    }
+    if (reply) {
+        reply->DeviceError = outcome.Error;
+        reply->CompletedSequence = sequence;
+    }
+    t->ResultBytes = outcome.ResultBytes;
+    t->ResultType = outcome.ResultType;
+    t->Diagnostics[25] = outcome.Error;
+    return outcome.Status & DG_STATUS_ERROR ? DG_ESCAPE_HOST : DG_ESCAPE_OK;
+}
+
+/* Submit what GlBuild() holds: queued when its buffer came from the queue,
+ * else through the synchronous register protocol. */
+static ULONG SubmitGl(DG_TRANSPORT *t, ULONG bytes, DG_ESCAPE_REPLY *reply,
+                      const DG_SUBMIT *submit = NULL) {
+    ULONG *commands = GlBuild(t);
     ULONG sequence, device_status, generation, error;
     LARGE_INTEGER timeout;
     NTSTATUS status;
+    t->Build = NULL;
+    t->ResultBytes = t->ResultType = 0;
     if (t->GlFaulted)
         return DG_ESCAPE_STOPPED;
+    if (t->BuildStatus != DG_ESCAPE_OK) {
+        if (reply)
+            reply->DeviceError = DG_GL_ERROR_GENERATION;
+        return t->BuildStatus;
+    }
+    if (t->BuildQueued)
+        return SubmitQueued(t, commands, bytes, reply, submit);
     if (ReadReg(t, DG_GL_REG_STATUS) & DG_STATUS_BUSY)
         return DG_ESCAPE_STOPPED;
     /* User validation or the kernel record builder already captured/stamped
      * this generation under GlMutex. Re-reading it could mismatch the packet
      * after an external reset; the native generation gate remains final. */
-    generation = ((ULONG *)t->GlCommands)[7];
+    generation = commands[7];
     if (!DgGlRegistersRefresh(&t->GlRegisters, generation, 0, ReadGlRegister, t) ||
         !DgGlLimitsRefresh(&t->GlLimits, generation, 0, ReadGlRegister, t) ||
         bytes > t->GlLimits.MaxBytes)
@@ -658,6 +808,11 @@ static ULONG SubmitGl(DG_TRANSPORT *t, ULONG bytes, DG_ESCAPE_REPLY *reply) {
         reply->CompletedSequence = sequence;
     }
     t->Diagnostics[25] = error;
+    if (!(device_status & DG_STATUS_ERROR) && submit && submit->ResultCapacity) {
+        KeMemoryBarrier();
+        t->ResultBytes = ReadReg(t, DG_GL_REG_RESULT_BYTES);
+        t->ResultType = ReadReg(t, DG_GL_REG_RESULT_TYPE);
+    }
     return device_status & DG_STATUS_ERROR ? DG_ESCAPE_HOST : DG_ESCAPE_OK;
 }
 
@@ -682,13 +837,13 @@ static ULONG NTAPI KernelOwner(PVOID context, ULONG token) {
 }
 
 static ULONG *DesktopRecord(DG_TRANSPORT *t, ULONG index, ULONG op, ULONG client, ULONG drawable) {
-    ULONG *words = (ULONG *)t->GlCommands + index * 24;
+    ULONG *words = GlBuild(t) + index * 24;
     RtlZeroMemory(words, 96);
     words[0] = DG_GL_DESKTOP;
     words[1] = 96;
     words[2] = client ? client : 0xffffffffUL;
     words[4] = drawable;
-    words[7] = ReadReg(t, DG_REG_GENERATION);
+    words[7] = CurrentGeneration(t);
     words[8] = op;
     words[16] = t->DesktopBpp == 16 ? 16 : 0;
     return words + 8;
@@ -853,7 +1008,7 @@ static ULONG DesktopSubmit(DG_TRANSPORT *t, const DG_COMMAND *commands, ULONG co
 
 static ULONG SubmitWindowPresent(DG_TRANSPORT *t, const DG_KERNEL_PRESENT_REQUEST *request,
                                  ULONG flags) {
-    ULONG *r = (ULONG *)t->GlCommands;
+    ULONG *r = GlBuild(t);
     RtlZeroMemory(r, 40);
     r[0] = DG_GL_PRESENT;
     r[1] = 40;
@@ -861,7 +1016,7 @@ static ULONG SubmitWindowPresent(DG_TRANSPORT *t, const DG_KERNEL_PRESENT_REQUES
     r[3] = request->Context;
     r[4] = request->Drawable;
     r[5] = flags | DG_GL_PRESENT_BOUNDED;
-    r[7] = ReadReg(t, DG_REG_GENERATION);
+    r[7] = CurrentGeneration(t);
     /* This immutable WNDOBJ snapshot is rechecked against the actual native
      * drawable before exchange/export, closing the user resize/DDI gap. */
     r[8] = request->WindowWidth;
@@ -938,11 +1093,20 @@ static ULONG NTAPI KernelPresent(PVOID context, const DG_KERNEL_PRESENT_REQUEST 
             ((request->Flags & DG_WINDOW_PRESENT_FRONT_ONLY) ? DG_GL_PRESENT_FRONT_ONLY : 0));
     if (status != DG_ESCAPE_OK)
         goto done;
-    slot = ReadReg(t, DG_GL_REG_PRESENT_SLOT);
-    epoch_lo = ReadReg(t, DG_GL_REG_PRESENT_EPOCH_LO);
-    epoch_hi = ReadReg(t, DG_GL_REG_PRESENT_EPOCH_HI);
-    frame_lo = ReadReg(t, DG_GL_REG_PRESENT_FRAME_LO);
-    frame_hi = ReadReg(t, DG_GL_REG_PRESENT_FRAME_HI);
+    if (DgGlQueueCurrent(&t->Queue)) {
+        /* Written with the PRESENT entry's completion, before COMPLETED. */
+        slot = DgGlQueueLoad(&t->Queue, DG_GL_QUEUE_PRESENT_SLOT);
+        epoch_lo = DgGlQueueLoad(&t->Queue, DG_GL_QUEUE_PRESENT_EPOCH_LO);
+        epoch_hi = DgGlQueueLoad(&t->Queue, DG_GL_QUEUE_PRESENT_EPOCH_HI);
+        frame_lo = DgGlQueueLoad(&t->Queue, DG_GL_QUEUE_PRESENT_FRAME_LO);
+        frame_hi = DgGlQueueLoad(&t->Queue, DG_GL_QUEUE_PRESENT_FRAME_HI);
+    } else {
+        slot = ReadReg(t, DG_GL_REG_PRESENT_SLOT);
+        epoch_lo = ReadReg(t, DG_GL_REG_PRESENT_EPOCH_LO);
+        epoch_hi = ReadReg(t, DG_GL_REG_PRESENT_EPOCH_HI);
+        frame_lo = ReadReg(t, DG_GL_REG_PRESENT_FRAME_LO);
+        frame_hi = ReadReg(t, DG_GL_REG_PRESENT_FRAME_HI);
+    }
     if (!t->DesktopActive) {
         t->DesktopBpp = request->Bpp;
         r = DesktopRecord(t, 0, DG_DESKTOP_SEED, 0, 0);
@@ -991,15 +1155,19 @@ done:
 }
 
 static VOID CloseClient(DG_TRANSPORT *t, DG_CLIENT *client) {
-    ULONG *words = (ULONG *)t->GlCommands;
+    ULONG *words;
     if (!client->Process)
         return;
+    words = GlBuild(t);
     RtlZeroMemory(words, DG_GL_HEADER_BYTES);
     words[0] = DG_GL_CLOSE_CLIENT;
     words[1] = DG_GL_HEADER_BYTES;
     words[2] = client->Token;
-    words[7] = ReadReg(t, DG_REG_GENERATION);
+    words[7] = CurrentGeneration(t);
+    /* Synchronous: every earlier entry of this client is reaped before its
+     * unreported failures are dropped with the token. */
     SubmitGl(t, DG_GL_HEADER_BYTES, NULL);
+    DgGlQueueDropClient(&t->Queue, client->Token);
     /* Tokens are never reused, even if a fault prevented host retirement.
      * The host resource cap bounds any retained objects until device reset. */
     ObDereferenceObject(client->Process);
@@ -1106,6 +1274,11 @@ static VOID NTAPI DriverUnload(PDRIVER_OBJECT driver) {
         }
         if (t->GlCommands)
             MmFreeContiguousMemory(t->GlCommands);
+        /* Engine reset above disabled the queue page before these go. */
+        for (i = 0; i < t->Queue.BufferCount; ++i)
+            MmFreeContiguousMemory(t->Queue.Buffers[i].Memory);
+        if (t->Queue.Page)
+            MmFreeContiguousMemory((PVOID)t->Queue.Page);
         if (t->GlResult)
             MmFreeContiguousMemory(t->GlResult);
         if (t->GlSignatures)
@@ -1140,18 +1313,22 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
     reply.Version = DG_ESCAPE_VERSION;
     reply.MaxResultBytes = DG_ESCAPE_LEGACY_RESULT_BYTES;
     reply.FunctionWords = (ULONG)-1;
-    if (request.Version != DG_ESCAPE_VERSION || request.Reserved || request.Reserved2 ||
-        request.Bytes > DG_ESCAPE_MAX_BYTES || request.Bytes != input_bytes - sizeof(request) ||
+    if (request.Version != DG_ESCAPE_VERSION || (request.Flags & ~DG_ESCAPE_SUBMIT_ASYNC) ||
+        request.Bytes > DG_ESCAPE_QUEUE_MAX_BYTES ||
+        request.Bytes != input_bytes - sizeof(request) ||
         request.ResultCapacity > DG_ESCAPE_MAX_RESULT_BYTES ||
         request.ResultCapacity > output_bytes - sizeof(reply) ||
-        (request.Operation != DG_ESCAPE_SUBMIT && (request.Bytes || request.ResultCapacity)))
+        ((request.Flags & DG_ESCAPE_SUBMIT_ASYNC) && request.ResultCapacity) ||
+        (request.Operation != DG_ESCAPE_SUBMIT &&
+         (request.Bytes || request.ResultCapacity || request.Flags || request.Stream)))
         goto done;
     if (!DriverReady) {
         result = DG_ESCAPE_UNSUPPORTED;
         goto done;
     }
     KeWaitForSingleObject(&t->GlMutex, Executive, KernelMode, FALSE, NULL);
-    reply.Generation = ReadReg(t, DG_REG_GENERATION);
+    QueueEnsure(t);
+    reply.Generation = CurrentGeneration(t);
     t->GlSignatureGeneration = reply.Generation;
     if (t->GlFaulted) {
         result = DG_ESCAPE_STOPPED;
@@ -1159,8 +1336,8 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
     }
     if (!DgGlRegistersRefresh(&t->GlRegisters, reply.Generation,
                               request.Operation == DG_ESCAPE_OPEN, ReadGlRegister, t) ||
-        !DgGlLimitsRefresh(&t->GlLimits, reply.Generation, request.Operation == DG_ESCAPE_OPEN,
-                           ReadGlRegister, t)) {
+        !DgGlLimitsRefreshLocal(&t->GlLimits, reply.Generation, request.Operation == DG_ESCAPE_OPEN,
+                                LocalBytes(t), ReadGlRegister, t)) {
         result = DG_ESCAPE_UNSUPPORTED;
         goto unlock;
     }
@@ -1204,6 +1381,45 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
             }
             t->GlNotifyRegistered = TRUE;
             WriteReg(t, DG_REG_IRQ_ENABLE, InterruptMask(t));
+        }
+        {
+            /* Queued transport: one RAM page and up to eight kernel packet
+             * buffers, kept for the adapter's life once the host offers it.
+             * Fewer than two buffers keeps the register transport. */
+            DG_GL_QUEUE_OPS ops = QueueOps(t);
+            highest.QuadPart = 0xffffffffULL;
+            t->QueueSupported = FALSE;
+            if (DgGlQueueSupported(&ops)) {
+                if (!t->Queue.Page) {
+                    PVOID page = MmAllocateContiguousMemory(PAGE_SIZE, highest);
+                    if (page) {
+                        RtlZeroMemory(page, PAGE_SIZE);
+                        t->Queue.Page = (volatile ULONG *)page;
+                        t->Queue.PagePhysical = MmGetPhysicalAddress(page).LowPart;
+                    }
+                }
+                while (t->Queue.Page && t->Queue.BufferCount < DG_GL_QUEUE_MAX_BUFFERS) {
+                    PVOID buffer = MmAllocateContiguousMemory(DG_ESCAPE_QUEUE_MAX_BYTES, highest);
+                    if (!buffer)
+                        break;
+                    t->Queue.Buffers[t->Queue.BufferCount].Memory = buffer;
+                    t->Queue.Buffers[t->Queue.BufferCount].Physical =
+                        MmGetPhysicalAddress(buffer).LowPart;
+                    ++t->Queue.BufferCount;
+                }
+                t->Queue.BufferBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+                t->QueueSupported = t->Queue.Page && t->Queue.BufferCount >= 2;
+            }
+            QueueEnsure(t);
+            reply.Generation = CurrentGeneration(t);
+            if (!DgGlLimitsRefreshLocal(&t->GlLimits, reply.Generation, 1, LocalBytes(t),
+                                        ReadGlRegister, t)) {
+                result = DG_ESCAPE_UNSUPPORTED;
+                goto unlock;
+            }
+            reply.MaxBytes = t->GlLimits.MaxBytes;
+            reply.MaxRecords = t->GlLimits.MaxRecords;
+            reply.DeviceError = DgGlQueueCurrent(&t->Queue) ? DG_ESCAPE_FEATURE_QUEUE : 0;
         }
         for (i = 0; i < DG_ESCAPE_MAX_CLIENTS; ++i)
             if (!t->Clients[i].Process) {
@@ -1256,37 +1472,84 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
             break;
         case DG_ESCAPE_SUBMIT: {
             BOOLEAN query;
-            ULONG bytes, type;
+            ULONG bytes, type, *commands;
+            DG_SUBMIT submit = {};
+            DG_GL_QUEUE_FAULT fault;
             if (request.Function)
                 break;
-            RtlCopyMemory(t->GlCommands, (PUCHAR)input + sizeof(request), request.Bytes);
-            if (!DgValidateUserGl((ULONG *)t->GlCommands, request.Bytes, client->Token,
-                                  reply.Generation, &t->GlLimits, FunctionWords, t))
+            /* Streams opt into deferred failure reports. Report one before
+             * anything else of this client runs; the request is not executed. */
+            DgGlQueueReap(&t->Queue);
+            if (request.Stream && DgGlQueueTakeFault(&t->Queue, client->Token, 0, &fault)) {
+                reply.FunctionWords = fault.Stream;
+                reply.DeviceError = fault.Error;
+                reply.CompletedSequence = fault.Sequence;
+                result = DG_ESCAPE_DEFERRED;
                 break;
-            query = *(ULONG *)t->GlCommands == DG_GL_QUERY;
-            if (query != (request.ResultCapacity != 0))
+            }
+            commands = GlBuild(t);
+            if (t->BuildStatus != DG_ESCAPE_OK) {
+                result = t->BuildStatus;
+                t->Build = NULL;
                 break;
+            }
+            if (!t->BuildQueued && request.Bytes > DG_ESCAPE_MAX_BYTES) {
+                t->Build = NULL;
+                break;
+            }
+            RtlCopyMemory(commands, (PUCHAR)input + sizeof(request), request.Bytes);
+            if (!DgValidateUserGl(commands, request.Bytes, client->Token, reply.Generation,
+                                  &t->GlLimits, FunctionWords, t)) {
+                t->Build = NULL;
+                break;
+            }
+            query = commands[0] == DG_GL_QUERY;
+            if (query != (request.ResultCapacity != 0)) {
+                t->Build = NULL;
+                break;
+            }
             if (query) {
                 if (!t->GlResult) {
                     highest.QuadPart = 0xffffffffULL;
                     t->GlResult = MmAllocateContiguousMemory(DG_ESCAPE_MAX_RESULT_BYTES, highest);
                     if (!t->GlResult) {
                         result = DG_ESCAPE_RESOURCES;
+                        t->Build = NULL;
                         break;
                     }
                     t->GlResultAddress = MmGetPhysicalAddress(t->GlResult);
                 }
                 RtlZeroMemory(t->GlResult, request.ResultCapacity);
-                DgGlProgramResult(&t->GlRegisters, t->GlResultAddress.LowPart,
-                                  t->GlResultAddress.HighPart, request.ResultCapacity,
-                                  WriteGlRegister, t);
+                if (!t->BuildQueued)
+                    DgGlProgramResult(&t->GlRegisters, t->GlResultAddress.LowPart,
+                                      t->GlResultAddress.HighPart, request.ResultCapacity,
+                                      WriteGlRegister, t);
             }
-            result = SubmitGl(t, request.Bytes, &reply);
+            submit.Token = request.Stream ? client->Token : 0;
+            submit.Stream = request.Stream;
+            submit.Async = (request.Flags & DG_ESCAPE_SUBMIT_ASYNC) != 0;
+            submit.ResultCapacity = request.ResultCapacity;
+            result = SubmitGl(t, request.Bytes, &reply, &submit);
+            if (result == DG_ESCAPE_HOST && request.Stream &&
+                reply.DeviceError == DG_GL_ERROR_SKIPPED) {
+                /* Skipped behind an earlier failure of its stream: report that
+                 * failure (or this skip) instead; nothing of it executed. */
+                if (!DgGlQueueTakeFault(&t->Queue, client->Token, request.Stream, &fault)) {
+                    fault.Stream = request.Stream;
+                    fault.Error = DG_GL_ERROR_SKIPPED;
+                    fault.Sequence = reply.CompletedSequence;
+                }
+                reply.FunctionWords = fault.Stream;
+                reply.DeviceError = fault.Error;
+                reply.CompletedSequence = fault.Sequence;
+                result = DG_ESCAPE_DEFERRED;
+                break;
+            }
             if (!query || result != DG_ESCAPE_OK)
                 break;
             KeMemoryBarrier();
-            bytes = ReadReg(t, DG_GL_REG_RESULT_BYTES);
-            type = ReadReg(t, DG_GL_REG_RESULT_TYPE);
+            bytes = t->ResultBytes;
+            type = t->ResultType;
             if (!DgValidateGlResult(type, bytes, request.ResultCapacity,
                                     (const unsigned char *)t->GlResult)) {
                 result = DG_ESCAPE_HOST;

@@ -67,11 +67,17 @@ pub(crate) fn texgen_params(coord: u32, pname: u32) -> u32 {
 pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
     if !matches!(
         target,
-        GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_3D
+        GL_TEXTURE_1D
+            | GL_TEXTURE_2D
+            | GL_TEXTURE_CUBE_MAP
+            | GL_TEXTURE_3D
+            | GL_TEXTURE_RECTANGLE_ARB
     ) {
         return 0;
     }
     match pname {
+        // A rectangle has one level and generates none (ARB_texture_rectangle).
+        GL_GENERATE_MIPMAP if target == GL_TEXTURE_RECTANGLE_ARB => 0,
         // The GL 1.2 third coordinate, a parameter of every target. Frontends
         // without negotiated 3D textures send it only for cube maps.
         GL_TEXTURE_WRAP_R => 1,
@@ -250,6 +256,8 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_MAX_CUBE_MAP_TEXTURE_SIZE
         | GL_TEXTURE_BINDING_3D
         | GL_MAX_3D_TEXTURE_SIZE
+        | GL_TEXTURE_BINDING_RECTANGLE_ARB
+        | GL_MAX_RECTANGLE_TEXTURE_SIZE_ARB
         | GL_FRAMEBUFFER_BINDING
         | GL_READ_FRAMEBUFFER_BINDING
         | GL_RENDERBUFFER_BINDING
@@ -548,9 +556,25 @@ fn depth_image(target: u32, format: u32, border: u32) -> bool {
         && border == 0
         && crate::framebuffer::depth_texture_format(format)
 }
-/// Image targets of 2D-shaped records: TEXTURE_2D or one cube map face.
+/// Image targets of 2D-shaped records: TEXTURE_2D, one cube map face or
+/// TEXTURE_RECTANGLE (ARB_texture_rectangle).
 fn image_2d_target(target: u32) -> bool {
-    target == GL_TEXTURE_2D || crate::texture::cube_face(target).is_some()
+    target == GL_TEXTURE_2D
+        || target == GL_TEXTURE_RECTANGLE_ARB
+        || crate::texture::cube_face(target).is_some()
+}
+/// TEXTURE_RECTANGLE or its proxy.
+fn rectangle(target: u32) -> bool {
+    matches!(
+        target,
+        GL_TEXTURE_RECTANGLE_ARB | GL_PROXY_TEXTURE_RECTANGLE_ARB
+    )
+}
+/// A rectangle image has level zero only and no border; the record carries
+/// both, so the frontend reports violations as GL_INVALID_VALUE and the host
+/// refuses them as malformed. Other targets pass.
+fn rectangle_image_shape(target: u32, level: u32, border: u32) -> bool {
+    !rectangle(target) || (level == 0 && border == 0)
 }
 /// Cube faces (and the cube proxy) are square images without borders. The
 /// record carries the whole shape, so the frontend reports violations as
@@ -591,6 +615,7 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_TEXTURE_2D
             | GL_TEXTURE_CUBE_MAP
             | GL_TEXTURE_3D
+            | GL_TEXTURE_RECTANGLE_ARB
             | GL_CULL_FACE
             | GL_LIGHTING
             | GL_FOG
@@ -759,6 +784,7 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
     let (wi, hi) = if image { (5, 6) } else { (6, 7) };
     if !image_2d_target(a[0])
         || (image && !cube_image_shape(a[0], a[wi], a[hi], a[7]))
+        || !rectangle_image_shape(a[0], a[1], if image { a[7] } else { 0 })
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
         || a[wi] > DG_GL_MAX_TEXTURE_DIMENSION + 2
         || a[hi] > DG_GL_MAX_TEXTURE_DIMENSION + 2
@@ -1004,10 +1030,16 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
             } else {
                 GL_PROXY_TEXTURE_2D
             }
-            || (!one && a[0] == GL_PROXY_TEXTURE_CUBE_MAP))
+            || (!one
+                && matches!(
+                    a[0],
+                    GL_PROXY_TEXTURE_CUBE_MAP | GL_PROXY_TEXTURE_RECTANGLE_ARB
+                )))
     {
         return if a[1] <= DG_GL_MAX_TEXTURE_LEVEL
             && cube_image_shape(a[0], w, h, a[5])
+            && rectangle_image_shape(a[0], a[1], a[5])
+            && (!rectangle(a[0]) || texture_internal_format(a[2]))
             && a[5] <= 1
             && w <= i32::MAX as u32
             && h <= i32::MAX as u32
@@ -1031,6 +1063,8 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     } else {
         image_2d_target(a[0])
     }) || (image && !cube_image_shape(a[0], w, h, a[5]))
+        || !rectangle_image_shape(a[0], a[1], if image { a[5] } else { 0 })
+        || (image && rectangle(a[0]) && !texture_internal_format(a[2]))
         || (one && (h != 1 || (!image && a[3] != 0)))
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
         || (!image && (w == 0 || h == 0))
@@ -1065,7 +1099,8 @@ fn compressed_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
         // target, level, internalformat, width, height, border, imageSize
         let block = crate::texture::s3tc_block_bytes(a[2]);
         let proxy = matches!(a[0], GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP);
-        (image_2d_target(a[0]) || proxy)
+        // Rectangles are never compressed (ARB_texture_rectangle).
+        ((image_2d_target(a[0]) && !rectangle(a[0])) || proxy)
             && cube_image_shape(a[0], a[3], a[4], a[5])
             && block != 0
             && a[1] <= DG_GL_MAX_TEXTURE_LEVEL
@@ -1078,6 +1113,7 @@ fn compressed_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
         // target, level, xoffset, yoffset, width, height, format, imageSize
         let block = crate::texture::s3tc_block_bytes(a[6]);
         image_2d_target(a[0])
+            && !rectangle(a[0])
             && block != 0
             && a[1] <= DG_GL_MAX_TEXTURE_LEVEL
             && a[2].is_multiple_of(4)
@@ -1175,6 +1211,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             };
             if (matches!(a, GL_TEXTURE_1D | GL_TEXTURE_3D) || image_2d_target(a))
                 && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
+                && (!rectangle(a) || b & DG_GL_TEXTURE_READ_LEVEL_MASK == 0)
                 && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
                 && d < pixels
             {
@@ -1190,6 +1227,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 n => n,
             };
             if image_2d_target(a)
+                && !rectangle(a)
                 && b & 0xffff <= DG_GL_MAX_TEXTURE_LEVEL
                 && n <= DG_GL_MAX_READBACK_BYTES / 4
                 && d < DG_GL_MAX_TEXTURE_DIMENSION * DG_GL_MAX_TEXTURE_DIMENSION
@@ -1319,7 +1357,11 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             if d == 0 {
                 if matches!(
                     a,
-                    GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_3D
+                    GL_TEXTURE_1D
+                        | GL_TEXTURE_2D
+                        | GL_TEXTURE_CUBE_MAP
+                        | GL_TEXTURE_3D
+                        | GL_TEXTURE_RECTANGLE_ARB
                 ) && b == GL_TEXTURE_RESIDENT
                 {
                     1
@@ -1346,8 +1388,10 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                             | GL_PROXY_TEXTURE_CUBE_MAP
                             | GL_TEXTURE_3D
                             | GL_PROXY_TEXTURE_3D
+                            | GL_PROXY_TEXTURE_RECTANGLE_ARB
                     ))
                     && b <= DG_GL_MAX_TEXTURE_LEVEL
+                    && (!rectangle(a) || b == 0)
                     && matches!(
                         d,
                         GL_TEXTURE_WIDTH

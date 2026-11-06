@@ -769,3 +769,46 @@ rhw grows from 1 to 3, so the perspective-correct texel boundary shows a wrong
 1/rhw, with exact pixels. Immediate mode gives the same pixels, so they check
 results, not the path. The diagnostic stack is rebased onto 0048 with its
 `drawprim.c` call-site line renumbered.
+
+`0049-rectangle-texture-types.patch` puts NPOT resources into rectangle
+textures exactly where a rectangle can hold them. With DreamGPU's rectangle
+textures (`DG_CAP_GL_TEXTURE_RECTANGLE`: `GL_ARB_texture_rectangle` and
+`GL_NV_texture_rectangle`, no `ARB_texture_non_power_of_two`, GL 1.1) WineD3D
+reports what a GeForce FX reaches through the "Geforce 5 NP2 disable" quirk:
+the FX driver's GL 2.0 NPOT is removed and its rectangles restored, while here
+the quirk has nothing to remove (0034) and the rectangles stay. TextureCaps
+gain `NONPOW2CONDITIONAL` beside `POW2`, `CUBEMAP_POW2` and `VOLUMEMAP_POW2`:
+0x7ec9f becomes 0x7ed9f (D3D9, after its mask: 0x7ec87 becomes 0x7ed87). Three
+places then disagreed with the rectangle rules.
+`init_format_texture_info` gave compressed formats rectangle flags, although
+`ARB_texture_rectangle` has no compressed internal formats (`INVALID_ENUM`).
+`resource_init` (after 0042) skipped the 2D type of every NPOT resource to try
+a rectangle, and since this tree disables the texture usage check, a DXT
+texture took the rectangle anyway and a depth buffer, which a rectangle cannot
+hold without `ARB_depth_texture`, fell through to the renderbuffer 0042 had
+removed. The 2D type is now skipped only when the rectangle type passes the
+texture, render-target, depth-stencil and FBO-attachability checks for the
+format and usage; otherwise the padded 2D texture stays. And
+`surface_private_setup` and `wined3d_surface_update_desc` unpadded every
+surface whenever rectangles existed, including those of a padded 2D texture,
+whose `pow2_matrix` `texture_init` computes for the padded size; a surface is
+now unpadded only in a rectangle texture (or with full NPOT support). NPOT
+colour textures, render targets, offscreen plain surfaces and backbuffers
+become exact-size rectangles (800x600 stays 800x600, no 1024x1024 texture);
+blits, presents (`glBlitFramebuffer`), readback (`GetTexImage`,
+`CopyTexSubImage2D` into the rectangle), the fixed-function enable and the
+arbfp blitter and replacement shaders already handle `GL_TEXTURE_RECTANGLE_ARB`
+with unnormalized coordinates, and D3D9 pixel shaders sample them as `RECT`
+through the np2 fixup constants. Depth-stencil surfaces stay padded 2D textures
+and attach beside an exact-size colour rectangle through 0044's mixed sizes.
+NPOT DXT textures keep their padded 2D type and therefore today's answer
+(`D3DERR_NOTAVAILABLE`, compressed padded surfaces are unsupported), P8 keeps
+its CPU-expanded 2D texture (it has no rectangle flags), and a mipmapped NPOT
+texture remains `D3DERR_INVALIDCALL` (`texture_init`), as for conditional NPOT
+hardware. `CheckDeviceFormat` has no dimensions and is unchanged.
+`test_rectangle_texture_types.py` runs the prepared caps computation (DreamGPU,
+and a real FX driver through 0034's bookkeeping and the quirk, give the same
+TextureCaps), the format flag assignment, `resource_init` and
+`surface_private_setup` under ASan/UBSan; `test_fbo_padded_targets.py` covers
+the unchanged rectangle-free selection. The diagnostic stack is rebased onto
+0049 with its `surface.c` call-site line numbers renumbered.

@@ -22,6 +22,9 @@ static ULONG HostMaxRecords, HostMaxBytes, LargestSubmission;
 /* Typed state queries: the last function/first argument and fixed answers. */
 static ULONG HostInteger, LastQueryFunction, LastQueryArgument;
 static GLboolean HostEnabled;
+/* Queued transport: OPEN feature bits, a stream whose deferred failure the
+ * next streamed submission reports, and what the frontend asked for. */
+static ULONG HostFeatures, DeferStream, AsyncSubmits, SyncStreamSubmits, LastStream;
 /* Optional observers for suites including this fixture: every submitted
  * record in order, and typed answers to queries modelled below only for their
  * function (TRUE when the observer filled the reply). Reset clears both. */
@@ -217,10 +220,15 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
     }
     assert(dc == (HDC)100 && escape == DG_ESCAPE);
     assert(input_bytes >= 0 && (size_t)input_bytes == sizeof(*request) + request->Bytes &&
-           request->Bytes <= DG_ESCAPE_MAX_BYTES);
+           request->Bytes <= (HostFeatures ? DG_ESCAPE_QUEUE_MAX_BYTES : DG_ESCAPE_MAX_BYTES));
     assert(output_bytes >= 0 && (size_t)output_bytes == sizeof(*reply) + request->ResultCapacity);
-    assert((request->Operation == DG_ESCAPE_QUERY || !request->Function) && !request->Reserved &&
-           !request->Reserved2);
+    assert(request->Operation == DG_ESCAPE_QUERY || !request->Function);
+    /* Flags and streams only for a driver offering the queue, only on SUBMIT;
+     * an asynchronous request never expects a result. */
+    assert(!(request->Flags & ~DG_ESCAPE_SUBMIT_ASYNC));
+    assert(HostFeatures || (!request->Flags && !request->Stream));
+    assert(request->Operation == DG_ESCAPE_SUBMIT || (!request->Flags && !request->Stream));
+    assert(!(request->Flags && request->ResultCapacity));
     ZeroMemory(output, output_bytes);
     ++Calls;
     reply->Version = DG_ESCAPE_VERSION;
@@ -231,6 +239,7 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
     reply->Client = 1;
     if (request->Operation == DG_ESCAPE_OPEN) {
         assert(!request->Client);
+        reply->DeviceError = HostFeatures;
         return 1;
     }
     assert(request->Client == 1);
@@ -267,6 +276,24 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
     }
     assert(request->Operation == DG_ESCAPE_SUBMIT);
     assert(request->Bytes <= HostMaxBytes);
+    if (request->Stream) {
+        LastStream = request->Stream;
+        if (request->Flags)
+            ++AsyncSubmits;
+        else
+            ++SyncStreamSubmits;
+        if (DeferStream) {
+            /* An earlier batch of DeferStream failed; this one never ran. */
+            reply->Status = DG_ESCAPE_DEFERRED;
+            reply->FunctionWords = DeferStream;
+            reply->DeviceError = DG_GL_ERROR_HOST;
+            reply->CompletedSequence = 77;
+            DeferStream = 0;
+            return 1;
+        }
+    }
+    if (words[0] == DG_GL_DESTROY_CONTEXT || words[0] == DG_GL_DESTROY_DRAWABLE)
+        assert(!request->Stream && !request->Flags); /* cleanup is never skipped */
     reply->CompletedSequence = ++Sequence;
     while (at * 4 < request->Bytes) {
         const ULONG *r = words + at;
@@ -368,6 +395,7 @@ static void Reset(void) {
     HostCaps = CapabilityQueries = CapabilityFailure = 0;
     HostInteger = LastQueryFunction = LastQueryArgument = 0;
     HostEnabled = 0;
+    HostFeatures = DeferStream = AsyncSubmits = SyncStreamSubmits = LastStream = 0;
     SubmittedRecord = NULL;
     AnswerQuery = NULL;
     assert(DllMain(NULL, DLL_PROCESS_ATTACH, NULL));
@@ -1072,10 +1100,59 @@ int main(void) {
     assert(wglMakeCurrent((HDC)1, context));
     assert(DllMain(NULL, DLL_PROCESS_DETACH, (void *)1) && Allocations == 1 && !Closes);
     Thread = 0;
+
+    /* Queued transport: full packets and glFlush return once captured; every
+     * flush whose outcome an API reports stays synchronous. Each submission
+     * names its context; cleanup names none, so a failed context still goes. */
+    Reset();
+    HostFeatures = DG_ESCAPE_FEATURE_QUEUE;
+    HostMaxBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+    context = Create();
+    c = Lookup(context);
+    assert(MaxWords == DG_ESCAPE_QUEUE_MAX_BYTES / 4 && MaxRecords == DG_GL_MAX_RECORDS);
+    calls = AsyncSubmits;
+    glBegin(GL_POINTS);
+    for (i = 0; i < 3 * DG_GL_MAX_RECORDS; ++i)
+        glVertex3f((float)i, 0, 0);
+    glEnd();
+    /* 48-byte Vertex3f records: 128 KiB packets carry 2730, not 1024. */
+    assert(AsyncSubmits >= calls + 4 && LastStream == c->Id && !c->Failed);
+    assert(LargestSubmission == DG_ESCAPE_QUEUE_MAX_BYTES / 48);
+    calls = AsyncSubmits;
+    glFlush();
+    assert(AsyncSubmits == calls + 1);
+    flushes = SyncStreamSubmits;
+    glFinish();
+    assert(SyncStreamSubmits == flushes + 1 && AsyncSubmits == calls + 1);
+    /* Another context's deferred failure: this request is repeated, the other
+     * context fails at its own next flush exactly as a failed flush would. */
+    other = wglCreateContext((HDC)2);
+    assert(other);
+    DeferStream = Lookup(other)->Id;
+    glColor4f(0.25f, 0, 0, 1);
+    glFlush();
+    assert(!DeferStream && !c->Failed && !c->Error && AsyncSubmits == calls + 3);
+    assert(Lookup(other)->DeferredFault && !Lookup(other)->Failed);
+    assert(!Flush(Lookup(other)) && Lookup(other)->Failed);
+    assert(Lookup(other)->Error == GL_INVALID_OPERATION && !Lookup(other)->Uncertain);
+    /* This context's deferred failure fails the synchronous request. */
+    DeferStream = c->Id;
+    glColor4f(0.5f, 0, 0, 1);
+    glFinish();
+    assert(c->Failed && !c->Uncertain && !DeferStream);
+    ErrorDrains();
+    calls = AsyncSubmits + SyncStreamSubmits;
+    glColor4f(0.75f, 0, 0, 1);
+    glFlush();
+    assert(AsyncSubmits + SyncStreamSubmits == calls); /* failed: nothing more is sent */
+    assert(wglDeleteContext(other));
+    assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+
     Reset();
     assert(DllMain(NULL, DLL_PROCESS_DETACH, NULL));
     puts("PASS actual frontend: error drain, native flush, ownership, rejected allocation, "
-         "independent teardown, uncertain completion, Begin batches, loader cleanup");
+         "independent teardown, uncertain completion, Begin batches, loader cleanup, queued "
+         "transport streams, asynchronous flushes and deferred failures");
     return 0;
 }
 

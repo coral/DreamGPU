@@ -74,6 +74,18 @@ static ULONG FunctionWords(void *context, ULONG function) {
             return DG_GL_FUNCTION_QUERY | 2;
         case 0x3f1: /* GetQueryObjectuiv */
             return DG_GL_FUNCTION_QUERY | 3;
+        /* Rectangle textures (DG_CAP_GL_TEXTURE_RECTANGLE) add no function:
+         * the existing image, copy, binding and readback records name the
+         * TEXTURE_RECTANGLE target. */
+        case 0x8d4: /* TexImage2D */
+        case 0x8f5: /* TexSubImage2D */
+            return DG_GL_FUNCTION_INLINE_DATA | 8;
+        case 0x156: /* CopyTexImage2D */
+            return 8;
+        case 0x4e: /* BindTexture */
+            return 2;
+        case 0x414: /* GetTexImage */
+            return DG_GL_FUNCTION_QUERY | 3;
         default:
             return (ULONG)-1;
     }
@@ -417,6 +429,42 @@ int main(void) {
         assert(!DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
         batch[5] = 0;
         assert(DgValidateUserGl(batch, sizeof(batch), 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* A rectangle (TEXTURE_RECTANGLE, 0x84f5) travels in the existing
+         * records: BindTexture, a 3x5 TexImage2D with its sixty bytes, an
+         * allocation-only 640x480 TexImage2D and a CopyTexImage2D. The kernel
+         * admits them by shape; the host owns the rectangle rules. */
+        ULONG batch[80] = {DG_GL_CALL, 44, 0, 1, 1, 0, 0, 0, 0x4e, 0x84f5, 5};
+        ULONG *image = batch + 11, *allocation = image + 33, *copy = allocation + 18;
+        const ULONG image_words[10] = {0x8d4, 60, 0x84f5, 0, 0x8058, 3, 5, 0, 0x1908, 0x1401};
+        const ULONG allocation_words[10] = {0x8d4, 0,   0x84f5, 0,      0x8058,
+                                            640,   480, 0,      0x1908, 0x1401};
+        const ULONG copy_words[9] = {0x156, 0x84f5, 0, 0x8058, 0, 0, 640, 480, 0};
+        image[0] = allocation[0] = DG_GL_DATA_CALL;
+        copy[0] = DG_GL_CALL;
+        image[1] = 40 + 32 + 60;
+        allocation[1] = 40 + 32;
+        copy[1] = 68;
+        image[3] = image[4] = allocation[3] = allocation[4] = copy[3] = copy[4] = 1;
+        memcpy(image + 8, image_words, sizeof(image_words));
+        memcpy(allocation + 8, allocation_words, sizeof(allocation_words));
+        memcpy(copy + 8, copy_words, sizeof(copy_words));
+        for (ULONG i = 0; i < 15; ++i)
+            image[18 + i] = 0x01020304U * (i + 1);
+        const ULONG bytes = (ULONG)((copy + 17 - batch) * 4);
+        assert(DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        assert(image[2] == 42 && allocation[7] == 7 && copy[2] == 42);
+        image[9] = 56; /* the payload is the record's remaining bytes */
+        assert(!DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        image[9] = 60;
+        copy[1] = 72; /* CopyTexImage2D has eight words */
+        assert(!DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        copy[1] = 68;
+        assert(DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        /* Level-zero readback of the rectangle: target, level, first pixel. */
+        ULONG query[12] = {DG_GL_QUERY, 48, 0, 1, 1, 0, 0, 0, 0x414, 0x84f5, 0, 0};
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
     }
     {
         /* DeleteFramebuffers and DeleteRenderbuffers: a count, then names. */

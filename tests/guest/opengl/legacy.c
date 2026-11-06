@@ -82,6 +82,9 @@ BOOL JglFramebufferObjectAvailable(void) {
 BOOL JglOcclusionQueryAvailable(void) {
     return FALSE;
 }
+BOOL JglTextureRectangleAvailable(void) {
+    return FALSE;
+}
 BOOL JglReadFramebufferBound(void) {
     return FALSE;
 }

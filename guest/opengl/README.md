@@ -437,6 +437,26 @@ fence makes `TestFenceNV` answer TRUE. Without the capability the exports fail
 locally with `GL_INVALID_OPERATION` and `wglGetProcAddress` hides them.
 `tests/guest/opengl/test_occlusion_query.py` covers the contract.
 
+### ARB_texture_rectangle and NV_texture_rectangle
+
+`DG_CAP_GL_TEXTURE_RECTANGLE` adds `GL_ARB_texture_rectangle
+GL_NV_texture_rectangle`, last in the extension string, and no entry points:
+`TEXTURE_RECTANGLE` becomes a target of `BindTexture`, `TexParameter`,
+`TexImage2D`/`TexSubImage2D`, `CopyTexImage2D`/`CopyTexSubImage2D`,
+`GetTexImage`, `GetTexLevelParameter` and `FramebufferTexture2DEXT`, and
+`PROXY_TEXTURE_RECTANGLE` of `TexImage2D` and `GetTexLevelParameter`, all in the
+existing records. Everything the host would reject as malformed is a local GL
+error: a nonzero level or a border (`GL_INVALID_VALUE`, also for readback and
+level queries), a size beyond 2048, a depth internal format (`GL_INVALID_VALUE`),
+a compressed internal format, the compressed records and `GetCompressedTexImage`
+(`GL_INVALID_ENUM`), `GENERATE_MIPMAP` (no rectangle parameter) and
+`GenerateMipmapEXT` (`GL_INVALID_ENUM`). Parameter values (wraps, filters,
+`BASE_LEVEL`) and a nonzero attachment level are native GL's errors.
+`TEXTURE_BINDING_RECTANGLE` and `MAX_RECTANGLE_TEXTURE_SIZE` are host answers.
+Without the capability every rectangle enum keeps its `GL_INVALID_ENUM`, now
+raised locally, and `Enable(TEXTURE_RECTANGLE)` still passes through.
+`tests/guest/opengl/test_texture_rectangle.py` covers the contract.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

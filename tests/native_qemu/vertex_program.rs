@@ -8,7 +8,7 @@
 //! programs, a program exactly as WineD3D generates it for a vs_1_1 shader,
 //! and sharing/isolation between contexts. Every GL error stays a GL error:
 //! no batch in this file may fail.
-use super::fragment_program::{start, Device};
+use super::fragment_program::{Device, start};
 use super::textures::{call, data_call, words};
 
 const VP: u32 = 0x8620;
@@ -142,7 +142,11 @@ fn f(v: f32) -> u32 {
     v.to_bits()
 }
 fn string(target: u32, source: &[u8]) -> (u32, Vec<u32>) {
-    data_call(PROGRAM_STRING, &[target, ASCII, source.len() as u32], source)
+    data_call(
+        PROGRAM_STRING,
+        &[target, ASCII, source.len() as u32],
+        source,
+    )
 }
 fn env(index: u32, v: [f32; 4]) -> (u32, Vec<u32>) {
     call(ENV, &[VP, index, f(v[0]), f(v[1]), f(v[2]), f(v[3])])
@@ -191,7 +195,14 @@ fn full(slot: usize) -> Array {
     corners(slot, -1., -1., 1., 1.)
 }
 /// One generic attribute repeated for each of `count` vertices.
-fn repeated(slot: usize, kind: u32, size: u32, normalized: bool, vertex: &[u8], count: usize) -> Array {
+fn repeated(
+    slot: usize,
+    kind: u32,
+    size: u32,
+    normalized: bool,
+    vertex: &[u8],
+    count: usize,
+) -> Array {
     Array {
         slot,
         kind,
@@ -207,7 +218,10 @@ fn draw(mode: u32, count: u32, arrays: &[Array]) -> (u32, Vec<u32>) {
     let mut sorted: Vec<&Array> = arrays.iter().collect();
     sorted.sort_by_key(|a| a.slot);
     for a in &sorted {
-        assert_eq!(a.data.len(), count as usize * a.size as usize * component_bytes(a.kind));
+        assert_eq!(
+            a.data.len(),
+            count as usize * a.size as usize * component_bytes(a.kind)
+        );
         descriptors[a.slot] = a.kind | a.size << 16 | if a.normalized { 1 << 24 } else { 0 };
         if a.slot < 16 {
             mask |= 1 << a.slot;
@@ -256,7 +270,10 @@ impl VertexDevice for Device {
         let length = self.vertex_program(PROGRAM_LENGTH) as usize;
         let mut out = Vec::new();
         while out.len() < length {
-            out.extend(self.query(GET_PROGRAM_STRING, &[VP, 4, out.len() as u32 / 4]).1);
+            out.extend(
+                self.query(GET_PROGRAM_STRING, &[VP, 4, out.len() as u32 / 4])
+                    .1,
+            );
         }
         out.truncate(length);
         out
@@ -298,7 +315,11 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
         env(1, [0., 2., 0., -1.]),
         env(2, [0., 0., 1., 0.]),
         env(3, [0., 0., 0., 1.]),
-        draw(QUADS, 4, &[square(), repeated(19, 0x1401, 4, true, &color, 4)]),
+        draw(
+            QUADS,
+            4,
+            &[square(), repeated(19, 0x1401, 4, true, &color, 4)],
+        ),
     ]);
     d.submit(&records);
     assert_eq!(d.error(), 0);
@@ -310,7 +331,11 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
     let mut records = clear();
     records.extend([
         env(0, [1., 0., 0., -1.]),
-        draw(QUADS, 4, &[square(), repeated(19, 0x1401, 4, true, &color, 4)]),
+        draw(
+            QUADS,
+            4,
+            &[square(), repeated(19, 0x1401, 4, true, &color, 4)],
+        ),
     ]);
     d.submit(&records);
     assert_eq!(d.pixel_for(1, 1, 4), SLATE);
@@ -327,21 +352,67 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
     // Label, type, size, normalized, one vertex's bytes, expected pixel.
     type Case = (&'static str, u32, u32, bool, Vec<u8>, [u8; 4]);
     let cases: [Case; 10] = [
-        ("FLOAT 3", FLOAT, 3, false, f32s(&[1., 0., 1.]), [255, 0, 255, 255]),
+        (
+            "FLOAT 3",
+            FLOAT,
+            3,
+            false,
+            f32s(&[1., 0., 1.]),
+            [255, 0, 255, 255],
+        ),
         ("DOUBLE 2", 0x140a, 2, false, f64s(&[0., 1.]), GREEN),
-        ("SHORT 4", 0x1402, 4, false, i16s(&[1, 1, 0, 1]), [255, 255, 0, 255]),
-        ("UNSIGNED_SHORT 4 normalized", 0x1403, 4, true, u16s(&[0, 65535, 65535, 65535]), [0, 255, 255, 255]),
-        ("BYTE 3 normalized", 0x1400, 3, true, vec![0x80, 0x7f, 0x80], GREEN),
+        (
+            "SHORT 4",
+            0x1402,
+            4,
+            false,
+            i16s(&[1, 1, 0, 1]),
+            [255, 255, 0, 255],
+        ),
+        (
+            "UNSIGNED_SHORT 4 normalized",
+            0x1403,
+            4,
+            true,
+            u16s(&[0, 65535, 65535, 65535]),
+            [0, 255, 255, 255],
+        ),
+        (
+            "BYTE 3 normalized",
+            0x1400,
+            3,
+            true,
+            vec![0x80, 0x7f, 0x80],
+            GREEN,
+        ),
         ("INT 1", 0x1404, 1, false, i32s(&[1]), RED),
         ("UNSIGNED_INT 3", 0x1405, 3, false, u32s(&[0, 0, 1]), BLUE),
-        ("UNSIGNED_BYTE 4 normalized", 0x1401, 4, true, vec![51, 102, 153, 204], [51, 102, 153, 204]),
+        (
+            "UNSIGNED_BYTE 4 normalized",
+            0x1401,
+            4,
+            true,
+            vec![51, 102, 153, 204],
+            [51, 102, 153, 204],
+        ),
         ("UNSIGNED_BYTE 2", 0x1401, 2, false, vec![1, 0], RED),
-        ("SHORT 1 normalized", 0x1402, 1, true, i16s(&[i16::MIN]), BLACK),
+        (
+            "SHORT 1 normalized",
+            0x1402,
+            1,
+            true,
+            i16s(&[i16::MIN]),
+            BLACK,
+        ),
     ];
     d.submit(&[call(BIND_PROGRAM, &[VP, 2]), string(VP, PASS)]);
     for (label, kind, size, normalized, vertex, expected) in cases {
         let mut records = vec![call(CLEAR_COLOR, &[f(0.5); 4]), call(CLEAR, &[0x4000])];
-        records.push(draw(QUADS, 4, &[full(16), repeated(17, kind, size, normalized, &vertex, 4)]));
+        records.push(draw(
+            QUADS,
+            4,
+            &[full(16), repeated(17, kind, size, normalized, &vertex, 4)],
+        ));
         d.submit(&records);
         d.expect(expected, label);
     }
@@ -355,9 +426,17 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
     d.submit(&records);
     d.expect([51, 102, 153, 204], "current attribute 1");
     assert_eq!(d.current(1), current.map(f));
-    d.submit(&[draw(QUADS, 4, &[full(16), repeated(17, 0x1401, 4, true, &[255; 4], 4)])]);
+    d.submit(&[draw(
+        QUADS,
+        4,
+        &[full(16), repeated(17, 0x1401, 4, true, &[255; 4], 4)],
+    )]);
     d.expect([255; 4], "attribute 1 array");
-    assert_eq!(d.current(1), current.map(f), "restored after the array draw");
+    assert_eq!(
+        d.current(1),
+        current.map(f),
+        "restored after the array draw"
+    );
     // Inside Begin/End attribute 0 provokes each vertex after attribute 1.
     let mut records = clear();
     records.extend(quad_attribute(1, [0., 1., 0., 1.]));
@@ -383,7 +462,11 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
         draw_positions(-1., -1., 0., 1.),
     ]);
     d.submit(&records);
-    assert_eq!(d.pixel_for(1, 1, 4), BLUE, "vertex.attrib[0] is the vertex array");
+    assert_eq!(
+        d.pixel_for(1, 1, 4),
+        BLUE,
+        "vertex.attrib[0] is the vertex array"
+    );
     assert_eq!(d.pixel_for(1, 6, 4), BLACK);
 
     // state.matrix.mvp follows the modelview; program matrices are matrix modes.
@@ -469,7 +552,11 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
         call(DISABLE, &[POINT_SIZE]),
         call(DISABLE, &[TWO_SIDE]),
     ]);
-    assert_eq!(d.vertex_program(PROGRAM_BINDING), 2, "bindings are not attribute state");
+    assert_eq!(
+        d.vertex_program(PROGRAM_BINDING),
+        2,
+        "bindings are not attribute state"
+    );
 
     // Relative addressing with an ADDRESS register.
     let mut records = clear();
@@ -477,7 +564,14 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
         call(BIND_PROGRAM, &[VP, 8]),
         string(VP, RELATIVE),
         env(3, [0., 1., 0., 1.]),
-        draw(QUADS, 4, &[full(16), repeated(17, FLOAT, 1, false, &2f32.to_le_bytes(), 4)]),
+        draw(
+            QUADS,
+            4,
+            &[
+                full(16),
+                repeated(17, FLOAT, 1, false, &2f32.to_le_bytes(), 4),
+            ],
+        ),
     ]);
     d.submit(&records);
     d.expect(GREEN, "C[A0.x + 1]");
@@ -490,7 +584,11 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
         call(BIND_PROGRAM, &[FP, 10]),
         string(FP, FRAGMENT_VARYING),
         call(ENABLE, &[FP]),
-        draw(QUADS, 4, &[full(16), repeated(17, 0x1401, 4, true, &color, 4)]),
+        draw(
+            QUADS,
+            4,
+            &[full(16), repeated(17, 0x1401, 4, true, &color, 4)],
+        ),
         call(DISABLE, &[FP]),
     ]);
     d.submit(&records);
@@ -530,7 +628,14 @@ fn qemu_vertex_programs_transform_generic_attributes_and_alias_the_position() {
         string(VP, WINE_VS20),
         env(4, [2., 0.5, 2., 1.]),
         call(LOCAL, &[VP, 0, f(1.), f(1.), f(0.), f(0.)]),
-        draw(QUADS, 4, &[square(), repeated(17, 0x1401, 4, true, &[0x20, 0x80, 0x40, 255], 4)]),
+        draw(
+            QUADS,
+            4,
+            &[
+                square(),
+                repeated(17, 0x1401, 4, true, &[0x20, 0x80, 0x40, 255], 4),
+            ],
+        ),
     ]);
     d.submit(&records);
     assert_eq!(d.error(), 0);
@@ -560,7 +665,11 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
     let broken = b"!!ARBvp1.0\nMOV result.position, vertex.attrib[0];\nBOGUS;\nEND";
     d.submit(&[
         string(VP, broken),
-        draw(QUADS, 4, &[full(16), repeated(17, 0x1401, 4, true, &color, 4)]),
+        draw(
+            QUADS,
+            4,
+            &[full(16), repeated(17, 0x1401, 4, true, &color, 4)],
+        ),
     ]);
     assert_eq!(d.error(), INVALID_OPERATION);
     let position = d.word(GET_INTEGER, &[ERROR_POSITION]) as i32;
@@ -575,7 +684,10 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
     assert_eq!(d.error(), INVALID_OPERATION);
     let at = beyond.windows(2).position(|w| w == b"16").unwrap() as u32;
     assert_eq!(d.word(GET_INTEGER, &[ERROR_POSITION]), at);
-    assert!(d.error_string().starts_with("DreamGPU: generic vertex attribute"));
+    assert!(
+        d.error_string()
+            .starts_with("DreamGPU: generic vertex attribute")
+    );
     assert_eq!(d.vertex_source(), PASS);
     // An enabled program without a valid string fails array and immediate
     // draws as GL errors; the batch and the context survive.
@@ -612,10 +724,21 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
         env(1, [0., 2., 0., -1.]),
         env(2, [0., 0., 1., 0.]),
         env(3, [0., 0., 0., 1.]),
-        draw(QUADS, 4, &[corners(16, 0., 0., 1., 1.), repeated(19, 0x1401, 4, true, &color, 4)]),
+        draw(
+            QUADS,
+            4,
+            &[
+                corners(16, 0., 0., 1., 1.),
+                repeated(19, 0x1401, 4, true, &color, 4),
+            ],
+        ),
     ]);
     assert_eq!(d.word(END_LIST, &[]), 0);
-    assert_eq!(d.vertex_program(PROGRAM_LENGTH), 0, "compiled, not executed");
+    assert_eq!(
+        d.vertex_program(PROGRAM_LENGTH),
+        0,
+        "compiled, not executed"
+    );
     assert!(!d.mode_enabled(VP));
     let mut records = clear();
     records.push(call(CALL_LIST, &[list]));
@@ -629,7 +752,11 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
     records.push(data_call(DELETE_PROGRAMS, &[1], &3u32.to_le_bytes()));
     d.submit(&records);
     assert_eq!(d.word(END_LIST, &[]), 0);
-    assert_eq!(d.vertex_program(PROGRAM_BINDING), 0, "deleted while compiling");
+    assert_eq!(
+        d.vertex_program(PROGRAM_BINDING),
+        0,
+        "deleted while compiling"
+    );
     let mut records = clear();
     records.push(call(CALL_LIST, &[list + 1]));
     d.submit(&records);
@@ -643,7 +770,11 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
     records.extend([
         call(BIND_PROGRAM, &[VP, 4]),
         call(ENABLE, &[VP]),
-        draw(QUADS, 4, &[full(16), repeated(17, 0x1401, 4, true, &color, 4)]),
+        draw(
+            QUADS,
+            4,
+            &[full(16), repeated(17, 0x1401, 4, true, &color, 4)],
+        ),
     ]);
     d.submit_for(2, &records);
     d.expect_for(2, SLATE, "a shared vertex program");
@@ -652,13 +783,23 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
     assert_eq!(d.word_for(3, GET_PROGRAM, &[VP, PROGRAM_LENGTH]), 0);
     // Default vertex objects are private to each share group.
     d.submit_for(3, &[call(BIND_PROGRAM, &[VP, 0]), string(VP, PASS)]);
-    assert_eq!(d.word_for(1, GET_PROGRAM, &[VP, PROGRAM_LENGTH]), PASS.len() as u32);
+    assert_eq!(
+        d.word_for(1, GET_PROGRAM, &[VP, PROGRAM_LENGTH]),
+        PASS.len() as u32
+    );
     d.submit(&[call(BIND_PROGRAM, &[VP, 0])]);
     assert_eq!(d.word_for(1, GET_PROGRAM, &[VP, PROGRAM_LENGTH]), 0);
     let mut records = clear();
     records.extend([
         call(ENABLE, &[VP]),
-        draw(QUADS, 4, &[full(16), repeated(17, 0x1401, 4, true, &[0, 0, 255, 255], 4)]),
+        draw(
+            QUADS,
+            4,
+            &[
+                full(16),
+                repeated(17, 0x1401, 4, true, &[0, 0, 255, 255], 4),
+            ],
+        ),
     ]);
     d.submit_for(3, &records);
     d.expect_for(3, BLUE, "the private default vertex object");
@@ -666,7 +807,11 @@ fn qemu_vertex_program_failures_lists_and_sharing_stay_gl_errors() {
     d.submit(&[data_call(DELETE_PROGRAMS, &[1], &4u32.to_le_bytes())]);
     assert!(!d.is_program_for(2, 4));
     let mut records = clear();
-    records.push(draw(QUADS, 4, &[full(16), repeated(17, 0x1401, 4, true, &color, 4)]));
+    records.push(draw(
+        QUADS,
+        4,
+        &[full(16), repeated(17, 0x1401, 4, true, &color, 4)],
+    ));
     d.submit_for(2, &records);
     d.expect_for(2, SLATE, "a deleted but bound vertex program");
     assert_eq!(d.word_for(2, GET_PROGRAM, &[VP, PROGRAM_BINDING]), 4);

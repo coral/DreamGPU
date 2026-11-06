@@ -23,6 +23,11 @@ The main ownership rules are:
   immutable host copies. It never creates a reference to guest-mapped VRAM;
   guest CPUs can access that RAM outside QEMU's global lock. Bounded integer
   transfer descriptors call QEMU's existing RAM/dirty-tracking primitive.
+- The queued transport (`queue.rs`) copies each guest ring entry once under
+  QEMU's global lock, then snapshots its command bytes through the same
+  transaction as a register SUBMIT. Up to sixteen batches wait in submission
+  order; completions are written back in that order, and a failed fault
+  domain's later batches complete skipped without executing.
 - The render worker owns registry mutation. Resource destruction drains pending
   publication before reuse. Rust does not retain registry references across C
   callbacks, and does not copy fields written by the completion worker.

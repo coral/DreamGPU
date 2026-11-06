@@ -182,7 +182,8 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-fbo-types-') as temporary:
     patches.apply(work, MANIFEST)
     resource = (work / 'wined3d/resource.c').read_text()
     code = ''.join(function(resource, prefix) for prefix in (
-        'static DWORD resource_access_from_pool(', 'static void resource_check_usage(', 'HRESULT resource_init('))
+        'static DWORD resource_access_from_pool(', 'static void resource_check_usage(',
+        'static BOOL resource_rect_usable(', 'HRESULT resource_init('))
     # Real flag values from the pinned headers.
     headers = (work / 'wined3d/wined3d_private.h').read_text() + (ROOT / 'vendor/wine9x/include/wine/wined3d.h').read_text()
     names = set(re.findall(r'\b(WINED3D(?:USAGE|FMT_FLAG)_\w+|WINED3D_RESOURCE_ACCESS_\w+|WINED3D_VIDMEM_ACCOUNTING)\b', code + TEST))

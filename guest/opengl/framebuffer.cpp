@@ -374,7 +374,10 @@ void APIENTRY glFramebufferTexture1DEXT(GLenum target, GLenum attachment, GLenum
 }
 void APIENTRY glFramebufferTexture2DEXT(GLenum target, GLenum attachment, GLenum textarget,
                                         GLuint texture, GLint level) {
-    if (!TextureAttachment(target, attachment, JglImage2DTarget(textarget), level))
+    /* A rectangle's nonzero level is the host's INVALID_VALUE: it depends on
+     * the texture, not on the record. */
+    if (!TextureAttachment(target, attachment,
+                           JglImage2DTarget(textarget) || JglRectangleTarget(textarget), level))
         return;
     const ULONG args[5] = {target, attachment, textarget, texture, (ULONG)level};
     JglScalarVector(FEnum_glFramebufferTexture2D, 5, args);

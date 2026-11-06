@@ -420,6 +420,22 @@
       "scope": "installed-api",
       "path": "tools/d3d/xyzrhw-probe.inc"
     },
+    "gl-texture-rectangle": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_texture_rectangle.py"
+    },
+    "native-texture-npot": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/texture_npot.rs"
+    },
+    "d3d-rectangle-texture-types": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_rectangle_texture_types.py"
+    },
+    "guest-npot": {
+      "scope": "installed-api",
+      "path": "tools/d3d/npot-probe.inc"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1726,6 +1742,29 @@
         "guest-query"
       ],
       "remaining": "Negotiated by DG_CAP_GL_OCCLUSION_QUERY; without it the extensions and entry points stay hidden and every entry point fails locally. Query and fence objects belong to one context and the host owns names, objects and the active query; BeginQuery, EndQuery and SetFenceNV compile into display lists, deletion executes immediately, and every state-dependent failure (nesting, Gen/Delete while active, results of non-objects or the active query) is a GL error. Results stay asynchronous on the host: a pending availability or fence status flushes native GL, QUERY_RESULT and FinishFenceNV wait, and one GetQueryObject round trip carries the result and the results of earlier ended queries, which the frontend keeps with signalled fences until the name is begun, set or deleted or a list executes. Objects are charged against the resource budget, at most 4096 names per kind and context. Wine then creates D3DQUERYTYPE_OCCLUSION queries (D3DERR_NOTAVAILABLE before) and backs D3DQUERYTYPE_EVENT with NV fences (an issued event's GetData failed with D3DERR_INVALIDCALL before); this Wine still answers a pending event S_OK with FALSE. Native pixel tests pass on Linux; the installed D3D9 query probe, macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.texture-rectangle",
+      "area": 8,
+      "api": "OpenGL 1.1 + ARB_texture_rectangle and NV_texture_rectangle (D3D8/D3D9 conditional non-power-of-two textures through Wine)",
+      "operation": "TEXTURE_RECTANGLE definition/subimage/copy/readback, zero-defined storage, proxies, per-unit binding and enable with TEXTURE_BIT, parameters and their errors, framebuffer attachment, ARB_fragment_program RECT sampling, display lists",
+      "format": "uncompressed colour internal formats of any size up to 2048, level zero, no border; every 2D wire format and GL 1.2 packed type",
+      "resource": "rectangle texture",
+      "usage": "sampling and rendering with unnormalized coordinates",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-texture-rectangle",
+        "native-texture-npot",
+        "native",
+        "d3d-rectangle-texture-types",
+        "d3d-fbo-padded-targets",
+        "d3d-geforce-fx-quirk",
+        "guest-npot"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_TEXTURE_RECTANGLE; without it the extension names stay hidden and every rectangle enum keeps its GL_INVALID_ENUM. No new records: the 2D image, copy, readback, level query and FramebufferTexture2D records name TEXTURE_RECTANGLE (and its proxy), with level zero, no border, no compressed or depth format and at most 2048 per side as record rules the frontend checks locally; parameter values (REPEAT, MIRRORED_REPEAT and mirror-once wraps, mipmap filters, a nonzero BASE_LEVEL) are native GL errors and GENERATE_MIPMAP is no rectangle parameter. ARB_texture_non_power_of_two is not claimed (GL_VERSION stays 1.1), so 2D textures stay power-of-two for WineD3D. Native pixel tests (Linux, private Mesa) sample a 37x23 rectangle exactly with NEAREST and LINEAR including its last row and column and CLAMP_TO_EDGE beyond them, and cover subimages, CopyTexImage2D/CopyTexSubImage2D, readback, proxies, the spec's errors, rendering into a rectangle through a framebuffer object, ARB fragment program TEX/TXP with RECT, enable precedence, per-unit bindings with TEXTURE_BIT, display lists and deletion. WineD3D then reports the GeForce FX 5800's TextureCaps, POW2|NONPOW2CONDITIONAL (D3D9 0x7ed87, D3D8 0x7ed9f from 0x7ec87/0x7ec9f); Wine 0049 keeps formats a rectangle cannot hold (DXTn, depth) in padded 2D textures and unpads only rectangles, so NPOT render targets, backbuffers, offscreen surfaces and textures are exact-size rectangles while NPOT DXT textures still fail (D3DERR_NOTAVAILABLE) and mipmapped NPOT textures D3DERR_INVALIDCALL. The installed D3D8/9 NPOT probe, macOS CGL (its IOSurface export binds a native rectangle texture), Win98/XP guests and games remain to be run."
     },
     {
       "id": "glide3.vertex",

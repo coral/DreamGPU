@@ -48,6 +48,9 @@ unsafe fn request(m: &Memory, seq: u32) -> Request {
         trace_queued_us: 0,
         primary_width: 640,
         primary_height: 480,
+        client: 0,
+        stream: 0,
+        error: 0,
     }
 }
 #[test]
@@ -63,16 +66,30 @@ fn submission_failure_reset_and_executing_snapshot_ownership() {
         h.fail = false;
         assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r, 1), 0);
         assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r, 0), 1);
-        let r2 = request(&m, 2);
+        // Queued transport depth: later batches wait in order behind it.
+        for seq in 2..=PENDING as u32 {
+            let next = request(&m, seq);
+            assert_eq!(dreamgpu_submission_submit(&mut s, &m, &next, 0), 1);
+        }
+        let r2 = request(&m, 99);
         assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r2, 0), 0);
         free(m, r2.data.cast());
+        // A preset error needs null data and vice versa.
+        let mut marker = request(&m, 100);
+        free(m, marker.data.cast());
+        marker.data = ptr::null_mut();
+        assert_eq!(dreamgpu_submission_submit(&mut s, &m, &marker, 0), 0);
         let running = dreamgpu_submission_take(&mut s);
         assert_eq!((*running).data, r.data);
-        assert!(s.pending.is_null());
+        assert_eq!(s.pending_len, PENDING as u32 - 1);
+        let next = dreamgpu_submission_take(&mut s);
+        assert_eq!((*next).sequence, 2);
+        drop_batch(m, next);
         let r3 = request(&m, 3);
         assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r3, 0), 1);
         dreamgpu_submission_reset(&mut s, &m, 10, 88, 99);
-        assert!(s.pending.is_null());
+        assert_eq!(s.pending_len, 0);
+        assert!(s.pending.iter().all(|b| b.is_null()));
         assert_eq!(h.live.len(), 2);
         assert_eq!(
             (
@@ -142,9 +159,9 @@ fn bulk_results_move_on_success_free_on_error_and_bound_ring() {
             (*b).result_type = 2;
             dreamgpu_submission_complete(&mut s, &m, b, 0, &resources, &d, &f);
         }
-        assert_eq!((s.len, h.live.len()), (16, 16));
+        assert_eq!((s.len, h.live.len()), (25, 25));
         let mut c: Completion = core::mem::zeroed();
-        for seq in 9..25 {
+        for seq in 0..25 {
             assert_eq!(dreamgpu_submission_poll(&mut s, &mut c), 1);
             assert_eq!(c.sequence, seq);
             assert!(c.resources_live);
@@ -316,7 +333,148 @@ fn native_completion_layout_matches_shared_header() {
         assert_eq!(core::mem::size_of::<Frame>(), 32);
         assert_eq!(core::mem::size_of::<Completion>(), 576);
         assert_eq!(core::mem::offset_of!(Completion, bulk_result), 568);
-        assert_eq!(core::mem::size_of::<Batch>(), 576);
+        assert_eq!(core::mem::size_of::<Batch>(), 592);
+        assert_eq!(core::mem::size_of::<Submission>(), 168 + 576 * DONE + 136);
+    }
+}
+
+#[test]
+fn completion_ring_drops_only_beyond_its_bound() {
+    unsafe {
+        let mut h = Heap::default();
+        let m = memory(&mut h);
+        let mut s: Submission = core::mem::zeroed();
+        let (resources, d, f) = (
+            Resources::default(),
+            core::mem::zeroed(),
+            core::mem::zeroed(),
+        );
+        for seq in 0..DONE as u32 + 3 {
+            let r = request(&m, seq);
+            assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r, 0), 1);
+            let b = dreamgpu_submission_take(&mut s);
+            dreamgpu_submission_complete(&mut s, &m, b, 0, &resources, &d, &f);
+        }
+        let mut c: Completion = core::mem::zeroed();
+        assert_eq!(dreamgpu_submission_poll(&mut s, &mut c), 1);
+        assert_eq!(c.sequence, 3);
+        dreamgpu_submission_free(&mut s, &m);
+        assert!(h.live.is_empty());
+    }
+}
+
+unsafe fn domain_request(m: &Memory, seq: u32, client: u32, stream: u32) -> Request {
+    let mut r = unsafe { request(m, seq) };
+    r.client = client;
+    r.stream = stream;
+    r
+}
+
+#[test]
+fn failed_domains_skip_later_batches_until_reset() {
+    unsafe {
+        let mut h = Heap::default();
+        let m = memory(&mut h);
+        let mut s: Submission = core::mem::zeroed();
+        let (resources, d, f) = (
+            Resources::default(),
+            core::mem::zeroed(),
+            core::mem::zeroed(),
+        );
+        for (seq, client, stream) in [(1, 4, 1), (2, 4, 1), (3, 4, 2), (4, 0, 1), (5, 4, 0)] {
+            let r = domain_request(&m, seq, client, stream);
+            assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r, 0), 1);
+        }
+        let b = dreamgpu_submission_take(&mut s);
+        assert_eq!((*b).error, 0);
+        dreamgpu_submission_complete(&mut s, &m, b, DG_GL_ERROR_HOST, &resources, &d, &f);
+        // Same domain: skipped. Another stream and domain-less batches execute.
+        let b = dreamgpu_submission_take(&mut s);
+        assert_eq!(((*b).sequence, (*b).error), (2, DG_GL_ERROR_SKIPPED));
+        let run = Run {
+            opaque: ptr::null_mut(),
+            cancelled,
+            report,
+        };
+        // A preset error returns before touching the platform or records.
+        let platform: *const Platform = ptr::null();
+        assert_eq!(
+            dreamgpu_submission_run(b, ptr::null_mut(), platform, &run, 0),
+            DG_GL_ERROR_SKIPPED
+        );
+        dreamgpu_submission_complete(&mut s, &m, b, DG_GL_ERROR_SKIPPED, &resources, &d, &f);
+        for seq in 3..=5 {
+            let b = dreamgpu_submission_take(&mut s);
+            assert_eq!(((*b).sequence, (*b).error), (seq, 0));
+            dreamgpu_submission_complete(&mut s, &m, b, 0, &resources, &d, &f);
+        }
+        // An in-order marker poisons its domain exactly like an execution failure.
+        let mut marker = domain_request(&m, 6, 9, 9);
+        free(m, marker.data.cast());
+        marker.data = ptr::null_mut();
+        marker.error = DG_GL_ERROR_UNSUPPORTED;
+        assert_eq!(dreamgpu_submission_submit(&mut s, &m, &marker, 0), 1);
+        let r = domain_request(&m, 7, 9, 9);
+        assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r, 0), 1);
+        let b = dreamgpu_submission_take(&mut s);
+        assert_eq!((*b).error, DG_GL_ERROR_UNSUPPORTED);
+        dreamgpu_submission_complete(&mut s, &m, b, (*b).error, &resources, &d, &f);
+        let b = dreamgpu_submission_take(&mut s);
+        assert_eq!((*b).error, DG_GL_ERROR_SKIPPED);
+        dreamgpu_submission_complete(&mut s, &m, b, (*b).error, &resources, &d, &f);
+        // A batch cancelled by a pending reset cannot fault the next generation.
+        let r = domain_request(&m, 70, 30, 1);
+        dreamgpu_submission_submit(&mut s, &m, &r, 0);
+        let running = dreamgpu_submission_take(&mut s);
+        dreamgpu_submission_reset(&mut s, &m, 11, 0, 0);
+        dreamgpu_submission_complete(
+            &mut s,
+            &m,
+            running,
+            DG_GL_ERROR_GENERATION,
+            &resources,
+            &d,
+            &f,
+        );
+        assert!(!faulted(
+            &s.faulted,
+            Domain {
+                client: 30,
+                stream: 1
+            }
+        ));
+        // Engine reset forgets every failed domain.
+        dreamgpu_submission_reset(&mut s, &m, 11, 0, 0);
+        for seq in [8, 9] {
+            let r = domain_request(&m, seq, 4, 1);
+            dreamgpu_submission_submit(&mut s, &m, &r, 0);
+        }
+        dreamgpu_submission_reset(&mut s, &m, 12, 0, 0);
+        let r = domain_request(&m, 10, 4, 1);
+        dreamgpu_submission_submit(&mut s, &m, &r, 0);
+        let b = dreamgpu_submission_take(&mut s);
+        assert_eq!((*b).error, 0);
+        drop_batch(m, b);
+        let mut c: Completion = core::mem::zeroed();
+        let mut errors = std::vec::Vec::new();
+        while dreamgpu_submission_poll(&mut s, &mut c) == 1 {
+            errors.push((c.sequence, c.error));
+        }
+        assert_eq!(
+            errors,
+            [
+                (1, DG_GL_ERROR_HOST),
+                (2, DG_GL_ERROR_SKIPPED),
+                (3, 0),
+                (4, 0),
+                (5, 0),
+                (6, DG_GL_ERROR_UNSUPPORTED),
+                (7, DG_GL_ERROR_SKIPPED),
+                (70, DG_GL_ERROR_GENERATION),
+            ]
+        );
+        dreamgpu_submission_free(&mut s, &m);
+        assert!(h.live.is_empty());
     }
 }
 

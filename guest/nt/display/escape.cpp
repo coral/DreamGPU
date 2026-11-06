@@ -37,7 +37,7 @@ ULONG APIENTRY DrvEscape(SURFOBJ *surface, ULONG escape, ULONG input_bytes, PVOI
         return DgBindWindow(surface, input_bytes, input, output_bytes, output);
     if (escape != DG_ESCAPE || !surface || !surface->dhpdev || !input || !output ||
         input_bytes < sizeof(DG_ESCAPE_REQUEST) ||
-        input_bytes > sizeof(DG_ESCAPE_REQUEST) + DG_ESCAPE_MAX_BYTES ||
+        input_bytes > sizeof(DG_ESCAPE_REQUEST) + DG_ESCAPE_QUEUE_MAX_BYTES ||
         output_bytes < sizeof(DG_ESCAPE_REPLY) ||
         output_bytes > sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_MAX_RESULT_BYTES)
         return 0;

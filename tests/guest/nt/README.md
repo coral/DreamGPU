@@ -9,11 +9,22 @@ python3 tests/guest/nt/test_gl.py
 The driver itself is built with `DREAMGPU_BUILD=guest cargo build --release` on the
 pinned MinGW host (or through `DREAMGPU_GUEST_HOST`).
 
-`gl-limits.c` exercises an older 256-record host, the 1024/1025 boundary,
-independent byte bounds, hostile capability values, generation wrap and a
-new OPEN against a changed host with the same saved generation. Ten thousand
-ordinary cache checks cause no additional limit-register reads. The immutable
-packet allocation stays 64 KiB. QUERY remains a sole-record operation.
+`gl-limits.c` exercises an older 256-record host, the 1024/1025 boundary of
+the previous host, independent byte bounds, hostile capability values,
+generation wrap and a new OPEN against a changed host with the same saved
+generation. Ten thousand ordinary cache checks cause no additional
+limit-register reads. Register-transport packets stay 64 KiB; queued-transport
+packets are 128 KiB, and losing the queue clamps a cached limit at once.
+QUERY remains a sole-record operation.
+
+`gl-queue.c` runs the shared queued-transport driver code (`dg-gl-queue.h`)
+against a modelled device: an older host never sees a queue register, 100
+pipelined batches cost one doorbell write and no register read each, buffers
+and ring entries are reused only after the device released them, counters
+wrap at 2^32, a device that keeps up never makes the driver sleep or take an
+interrupt, asynchronous failures are reported once per stream (synchronous
+ones only to their caller), the watchdog returns, and an engine reset with
+entries in flight reports them and requires the new generation.
 
 `gl-registers.c` exercises the production MMIO cache used by the miniport.
 Ten thousand ordinary submissions reuse capability, command-DMA/generation

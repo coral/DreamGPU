@@ -36,6 +36,9 @@ BOOL JglTextureCubeMapAvailable(void) {
 BOOL JglTexture3DAvailable(void) {
     return FALSE; /* 3D images: tests/guest/opengl/texture-3d.cpp. */
 }
+BOOL JglTextureRectangleAvailable(void) {
+    return FALSE; /* Rectangles: tests/guest/opengl/texture-rectangle.cpp. */
+}
 BOOL JglFramebufferObjectAvailable(void) {
     return FALSE; /* Depth textures: tests/guest/opengl/framebuffer-object.cpp. */
 }

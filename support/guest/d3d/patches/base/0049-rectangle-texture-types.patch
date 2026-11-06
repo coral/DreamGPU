@@ -1,0 +1,86 @@
+--- a/wined3d/resource.c
++++ b/wined3d/resource.c
+@@ -71,6 +71,26 @@
+         WARN_(d3d_perf)("WINED3DUSAGE_DYNAMIC used without WINED3DUSAGE_WRITEONLY.\n");
+ }
+ 
++/* DreamGPU: whether a rectangle texture can hold a resource of this format and
++ * usage, by the checks resource_init() applies to every type and the texture
++ * check this tree disables there. */
++static BOOL resource_rect_usable(const struct wined3d_format *format, DWORD usage)
++{
++    DWORD flags = format->flags[WINED3D_GL_RES_TYPE_TEX_RECT];
++
++    if (!(flags & WINED3DFMT_FLAG_TEXTURE))
++        return FALSE;
++    if ((usage & WINED3DUSAGE_RENDERTARGET) && !(flags & WINED3DFMT_FLAG_RENDERTARGET))
++        return FALSE;
++    if ((usage & WINED3DUSAGE_DEPTHSTENCIL) && !(flags & (WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL)))
++        return FALSE;
++    if (wined3d_settings.offscreen_rendering_mode == ORM_FBO
++            && usage & (WINED3DUSAGE_RENDERTARGET | WINED3DUSAGE_DEPTHSTENCIL)
++            && !(flags & WINED3DFMT_FLAG_FBO_ATTACHABLE))
++        return FALSE;
++    return TRUE;
++}
++
+ HRESULT resource_init(struct wined3d_resource *resource, struct wined3d_device *device,
+         enum wined3d_resource_type type, const struct wined3d_format *format,
+         enum wined3d_multisample_type multisample_type, UINT multisample_quality,
+@@ -135,11 +155,15 @@
+              * next candidate is a renderbuffer, which this tree takes for every
+              * NPOT resource (the texture usage check is disabled above) and can
+              * only load by resolving a multisampled one, and swapchain_blit()
+-             * presents from the texture. Keep the padded 2D texture instead. */
++             * presents from the texture. Keep the padded 2D texture instead.
++             * Likewise for a format a rectangle cannot hold (compressed, depth
++             * without ARB_depth_texture), which would take the rectangle anyway
++             * or fall through to the renderbuffer. */
+             if (((width & (width - 1)) || (height & (height - 1)))
+                     && !gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO]
+                     && !gl_info->supported[WINED3D_GL_NORMALIZED_TEXRECT]
+                     && gl_info->supported[ARB_TEXTURE_RECTANGLE]
++                    && resource_rect_usable(format, usage)
+                     && gl_type == WINED3D_GL_RES_TYPE_TEX_2D)
+             {
+                 TRACE("Skipping 2D texture type to try texture rectangle.\n");
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -651,8 +651,11 @@
+     TRACE("surface %p.\n", surface);
+ 
+     /* Non-power2 support */
++    /* DreamGPU: a rectangle extension unpads only rectangle textures. A 2D
++     * texture of an NPOT resource that a rectangle cannot hold (resource_init)
++     * stays padded, as texture_init()'s pow2_matrix expects. */
+     if (gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO] || gl_info->supported[WINED3D_GL_NORMALIZED_TEXRECT]
+-            || gl_info->supported[ARB_TEXTURE_RECTANGLE])
++            || surface->texture_target == GL_TEXTURE_RECTANGLE_ARB)
+     {
+         pow2Width = surface->resource.width;
+         pow2Height = surface->resource.height;
+@@ -2127,7 +2130,8 @@
+     height = texture_resource->height;
+     surface->resource.width = width;
+     surface->resource.height = height;
+-    if (gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO] || gl_info->supported[ARB_TEXTURE_RECTANGLE]
++    /* DreamGPU: as in surface_private_setup(), only rectangles are unpadded. */
++    if (gl_info->supported[ARB_TEXTURE_NON_POWER_OF_TWO] || surface->texture_target == GL_TEXTURE_RECTANGLE_ARB
+             || gl_info->supported[WINED3D_GL_NORMALIZED_TEXRECT])
+     {
+         surface->pow2Width = width;
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -2188,7 +2188,11 @@
+         if (gl_info->supported[ARB_TEXTURE_CUBE_MAP])
+             format->flags[WINED3D_GL_RES_TYPE_TEX_CUBE] |= format_texture_info[i].flags;
+ 
+-        if (gl_info->supported[ARB_TEXTURE_RECTANGLE])
++        /* DreamGPU: ARB_texture_rectangle has no compressed internal formats
++         * (INVALID_ENUM). Without rectangle flags an NPOT compressed texture
++         * keeps the 2D type (resource_init). */
++        if (gl_info->supported[ARB_TEXTURE_RECTANGLE]
++                && !(format_texture_info[i].flags & WINED3DFMT_FLAG_COMPRESSED))
+             format->flags[WINED3D_GL_RES_TYPE_TEX_RECT] |= format_texture_info[i].flags;
+ 
+         format->flags[WINED3D_GL_RES_TYPE_RB] |= format_texture_info[i].flags;

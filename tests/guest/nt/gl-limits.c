@@ -41,7 +41,8 @@ int main(void) {
     assert(limits.MaxRecords == 256 && limits.MaxBytes == 65536 && host.Reads == 2);
     assert(DgValidateUserGl(batch, 256 * 52, 9, 1, &limits, Signature, NULL));
     assert(!DgValidateUserGl(batch, 257 * 52, 9, 1, &limits, Signature, NULL));
-    host.Records = DG_GL_MAX_RECORDS;
+    /* The previous host generation advertised 1024 records. */
+    host.Records = 1024;
     for (i = 0; i < 10000; ++i)
         assert(DgGlLimitsRefresh(&limits, 1, 0, Read, &host));
     assert(host.Reads == 2 && limits.MaxRecords == 256);
@@ -64,7 +65,24 @@ int main(void) {
     assert(!DgValidateUserGl(batch, 79 * 52, 9, UINT32_MAX, &limits, Signature, NULL));
     host.Bytes = host.Records = UINT32_MAX;
     assert(DgGlLimitsRefresh(&limits, 1, 0, Read, &host));
-    assert(limits.MaxBytes == 65536 && limits.MaxRecords == 1024);
+    assert(limits.MaxBytes == 65536 && limits.MaxRecords == 65536 / DG_GL_HEADER_BYTES);
+    /* The current host with the queued transport: larger kernel packets. */
+    host.Bytes = DG_GL_MAX_BYTES;
+    host.Records = DG_GL_MAX_RECORDS;
+    assert(DgGlLimitsRefreshLocal(&limits, 5, 0, DG_ESCAPE_QUEUE_MAX_BYTES, Read, &host));
+    assert(limits.MaxBytes == DG_ESCAPE_QUEUE_MAX_BYTES && limits.MaxRecords == DG_GL_MAX_RECORDS);
+    assert(DgValidateUserGl(batch, DG_ESCAPE_QUEUE_MAX_BYTES / 52 * 52, 9, 5, &limits, Signature,
+                            NULL));
+    assert(!DgValidateUserGl(batch, (DG_ESCAPE_QUEUE_MAX_BYTES / 52 + 1) * 52, 9, 5, &limits,
+                             Signature, NULL));
+    /* A lost queue falls back to 64 KiB packets in the same generation: the
+     * cached limit is clamped at once, never left above the fallback buffer. */
+    i = host.Reads;
+    assert(DgGlLimitsRefreshLocal(&limits, 5, 0, DG_ESCAPE_MAX_BYTES, Read, &host));
+    assert(host.Reads == i + 2 && limits.MaxBytes == 65536);
+    assert(DgGlLimitsRefreshLocal(&limits, 5, 0, DG_ESCAPE_MAX_BYTES, Read, &host));
+    assert(host.Reads == i + 2);
+    assert(!DgValidateUserGl(batch, 65540, 9, 5, &limits, Signature, NULL));
     host.Records = 0;
     assert(!DgGlLimitsRefresh(&limits, 1, 1, Read, &host));
     assert(!DgValidateUserGl(batch, 52, 9, 1, &limits, Signature, NULL));
@@ -73,7 +91,7 @@ int main(void) {
     assert(!DgGlLimitsRefresh(&limits, 2, 0, Read, &host));
     host.Bytes = 0;
     assert(!DgGlLimitsRefresh(&limits, 3, 0, Read, &host));
-    puts("GL limits: old/new hosts, 1024/1025 boundary, 64 KiB bound, cached MMIO, OPEN and "
-         "generation refresh passed");
+    puts("GL limits: old/new hosts, 1024/1025 boundary, 64 KiB and queued 128 KiB bounds, cached "
+         "MMIO, OPEN and generation refresh passed");
     return 0;
 }

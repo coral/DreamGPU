@@ -36,6 +36,14 @@ pub struct Completion {
     pub result: [u8; DG_GL_MAX_RESULT_BYTES as usize],
     pub bulk_result: *mut u8,
 }
+/// Pending batches: one legacy SUBMIT, or up to the queued transport depth.
+pub const PENDING: usize = DG_GL_QUEUE_DEPTH as usize;
+/// Completions outlive their batches until the device's main loop polls them.
+/// Each pending batch and reset contributes one; the queue bounds both.
+pub const DONE: usize = 64;
+/// Fault domains remembered between engine resets. Eviction only stops
+/// skipping for an old domain whose frontend no longer submits.
+pub const FAULTED: usize = 16;
 #[repr(C)]
 pub struct Batch {
     pub data: *mut u8,
@@ -46,21 +54,52 @@ pub struct Batch {
     pub trace_queued_us: u64,
     pub primary_width: u32,
     pub primary_height: u32,
+    /// Optional fault domain; zero client or stream is none.
+    pub client: u32,
+    pub stream: u32,
+    /// Nonzero: complete with this error without executing (no snapshot).
+    pub error: u32,
     pub result_bytes: u32,
     pub result_type: u32,
     pub result: [u8; DG_GL_MAX_RESULT_BYTES as usize],
     pub bulk_result: *mut u8,
 }
 #[repr(C)]
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Domain {
+    pub client: u32,
+    pub stream: u32,
+}
+impl Domain {
+    fn some(self) -> bool {
+        self.client != 0 && self.stream != 0
+    }
+}
+#[repr(C)]
 pub struct Submission {
-    pub pending: *mut Batch,
+    pub pending: [*mut Batch; PENDING],
+    pub pending_head: u32,
+    pub pending_len: u32,
     pub reset: u32,
     pub reset_generation: u32,
     pub reset_cpu_epoch: u64,
     pub reset_cpu_generation: u64,
     pub head: u32,
     pub len: u32,
-    pub done: [Completion; 16],
+    pub done: [Completion; DONE],
+    pub faulted: [Domain; FAULTED],
+    pub faulted_next: u32,
+}
+/// True when `domain` already failed in this engine generation.
+pub fn faulted(list: &[Domain; FAULTED], domain: Domain) -> bool {
+    domain.some() && list.contains(&domain)
+}
+/// Remember a failed domain once, replacing the oldest entry when full.
+pub fn fault(list: &mut [Domain; FAULTED], next: &mut u32, domain: Domain) {
+    if domain.some() && !list.contains(&domain) {
+        list[*next as usize % FAULTED] = domain;
+        *next = (*next + 1) % FAULTED as u32;
+    }
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -73,6 +112,10 @@ pub struct Request {
     pub trace_queued_us: u64,
     pub primary_width: u32,
     pub primary_height: u32,
+    pub client: u32,
+    pub stream: u32,
+    /// Nonzero with null data: an in-order completion that never executes.
+    pub error: u32,
 }
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -99,8 +142,9 @@ unsafe fn drop_batch(memory: Memory, b: *mut Batch) {
     }
 }
 /// # Safety
-/// Engine mutex held. Request contains an exclusively owned immutable DMA snapshot;
-/// success transfers it, failure leaves it with the caller. Allocator has C lifetime.
+/// Engine mutex held. Request contains an exclusively owned immutable DMA snapshot,
+/// or null data with a preset error; success transfers it, failure leaves it with
+/// the caller. Batches execute in submission order. Allocator has C lifetime.
 #[no_mangle]
 pub unsafe extern "C" fn dreamgpu_submission_submit(
     s: *mut Submission,
@@ -109,11 +153,14 @@ pub unsafe extern "C" fn dreamgpu_submission_submit(
     stopping: u32,
 ) -> u32 {
     unsafe {
-        if !(*s).pending.is_null() || stopping != 0 {
+        let r = *r;
+        if (*s).pending_len as usize == PENDING
+            || stopping != 0
+            || (r.data.is_null() != (r.error != 0))
+        {
             return 0;
         }
         let m = *m;
-        let r = *r;
         let b = (m.allocate)(m.opaque, core::mem::size_of::<Batch>()).cast::<Batch>();
         if b.is_null() {
             return 0;
@@ -127,22 +174,42 @@ pub unsafe extern "C" fn dreamgpu_submission_submit(
             trace_queued_us: r.trace_queued_us,
             primary_width: r.primary_width,
             primary_height: r.primary_height,
+            client: r.client,
+            stream: r.stream,
+            error: r.error,
             result_bytes: 0,
             result_type: 0,
             result: [0; DG_GL_MAX_RESULT_BYTES as usize],
             bulk_result: ptr::null_mut(),
         });
-        (*s).pending = b;
+        let i = ((*s).pending_head + (*s).pending_len) as usize % PENDING;
+        (*s).pending[i] = b;
+        (*s).pending_len += 1;
         1
     }
 }
 /// # Safety
 /// Engine mutex held. Returned batch becomes exclusively render-worker owned.
+/// Every earlier batch has completed, so the fault list is current: a batch of
+/// a failed domain is marked skipped here and never executes.
 #[no_mangle]
 pub unsafe extern "C" fn dreamgpu_submission_take(s: *mut Submission) -> *mut Batch {
     unsafe {
-        let b = (*s).pending;
-        (*s).pending = ptr::null_mut();
+        if (*s).pending_len == 0 {
+            return ptr::null_mut();
+        }
+        let i = (*s).pending_head as usize;
+        let b = (*s).pending[i];
+        (*s).pending[i] = ptr::null_mut();
+        (*s).pending_head = ((*s).pending_head + 1) % PENDING as u32;
+        (*s).pending_len -= 1;
+        let domain = Domain {
+            client: (*b).client,
+            stream: (*b).stream,
+        };
+        if (*b).error == 0 && faulted(&(*s).faulted, domain) {
+            (*b).error = DG_GL_ERROR_SKIPPED;
+        }
         b
     }
 }
@@ -162,21 +229,34 @@ pub unsafe extern "C" fn dreamgpu_submission_reset(
         (*s).reset_generation = generation;
         (*s).reset_cpu_epoch = epoch;
         (*s).reset_cpu_generation = frame;
-        let b = dreamgpu_submission_take(s);
-        drop_batch(*m, b);
+        drop_pending(s, *m);
+        (*s).faulted = [Domain::default(); FAULTED];
+        (*s).faulted_next = 0;
+    }
+}
+unsafe fn drop_pending(s: *mut Submission, m: Memory) {
+    unsafe {
+        while (*s).pending_len != 0 {
+            let i = (*s).pending_head as usize;
+            let b = (*s).pending[i];
+            (*s).pending[i] = ptr::null_mut();
+            (*s).pending_head = ((*s).pending_head + 1) % PENDING as u32;
+            (*s).pending_len -= 1;
+            drop_batch(m, b);
+        }
     }
 }
 unsafe fn push(s: *mut Submission, m: Memory, c: Completion) {
     unsafe {
-        if (*s).len == 16 {
+        if (*s).len as usize == DONE {
             let i = (*s).head as usize;
             let old = (*s).done[i].bulk_result;
             (*s).done[i] = core::mem::zeroed();
-            (*s).head = ((*s).head + 1) % 16;
+            (*s).head = ((*s).head + 1) % DONE as u32;
             (*s).len -= 1;
             free(m, old.cast());
         }
-        let i = ((*s).head + (*s).len) as usize % 16;
+        let i = ((*s).head + (*s).len) as usize % DONE;
         (*s).done[i] = c;
         (*s).len += 1;
     }
@@ -288,6 +368,9 @@ pub unsafe extern "C" fn dreamgpu_submission_run(
             (*b).primary_height,
         );
         let run = *run;
+        if (*b).error != 0 {
+            return (*b).error;
+        }
         let mut result = initial;
         let mut offset = 0;
         let mut lookup = Lookup::default();
@@ -338,6 +421,15 @@ pub unsafe extern "C" fn dreamgpu_submission_complete(
 ) {
     unsafe {
         let m = *m;
+        // A batch finishing while a reset is pending belongs to the discarded
+        // generation (usually cancelled by it); the reset clears the list.
+        if error != 0 && (*s).reset == 0 {
+            let domain = Domain {
+                client: (*b).client,
+                stream: (*b).stream,
+            };
+            fault(&mut (*s).faulted, &mut (*s).faulted_next, domain);
+        }
         let mut c: Completion = core::mem::zeroed();
         c.sequence = (*b).sequence;
         c.generation = (*b).generation;
@@ -380,7 +472,7 @@ pub unsafe extern "C" fn dreamgpu_submission_poll(s: *mut Submission, out: *mut 
         let i = (*s).head as usize;
         out.write((*s).done[i]);
         (*s).done[i] = core::mem::zeroed();
-        (*s).head = ((*s).head + 1) % 16;
+        (*s).head = ((*s).head + 1) % DONE as u32;
         (*s).len -= 1;
         1
     }
@@ -392,7 +484,7 @@ pub unsafe extern "C" fn dreamgpu_submission_poll(s: *mut Submission, out: *mut 
 pub unsafe extern "C" fn dreamgpu_submission_free(s: *mut Submission, m: *const Memory) {
     unsafe {
         let m = *m;
-        drop_batch(m, dreamgpu_submission_take(s));
+        drop_pending(s, m);
         let mut c: Completion = core::mem::zeroed();
         while dreamgpu_submission_poll(s, &mut c) != 0 {
             free(m, c.bulk_result.cast());

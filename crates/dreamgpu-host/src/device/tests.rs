@@ -55,7 +55,13 @@ unsafe extern "C" fn begin(p: *mut c_void, _: u32) {
 unsafe extern "C" fn record(p: *mut c_void, _: *const u8) {
     unsafe { &mut *p.cast::<Host>() }.records += 1;
 }
-unsafe extern "C" fn enqueue(p: *mut c_void, data: *mut u8, _: u32, _: u32) -> u32 {
+unsafe extern "C" fn enqueue(
+    p: *mut c_void,
+    data: *mut u8,
+    _: u32,
+    _: u32,
+    _: *const Enqueue,
+) -> u32 {
     let h = unsafe { &mut *p.cast::<Host>() };
     if h.enqueue_error == 0 {
         h.queued = data;

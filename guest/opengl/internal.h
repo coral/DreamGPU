@@ -151,6 +151,24 @@ static inline BOOL JglTexture3DQueryRejected(GLenum name) {
     return name - 0x806a <= 0x8073 - 0x806a && name != JGL_TEXTURE_WRAP_R &&
            !JglTexture3DAvailable();
 }
+/* ARB_texture_rectangle (NV_texture_rectangle): the TEXTURE_RECTANGLE binding
+ * target, its enable and proxy, level-zero borderless uncompressed images of
+ * any size up to DG_GL_MAX_TEXTURE_DIMENSION through the 2D image, copy,
+ * readback and framebuffer attachment records, and its state queries. */
+BOOL JglTextureRectangleAvailable(void);
+#define JGL_TEXTURE_RECTANGLE 0x84f5
+#define JGL_PROXY_TEXTURE_RECTANGLE 0x84f7
+/* TEXTURE_RECTANGLE, once negotiated. */
+static inline BOOL JglRectangleTarget(GLenum target) {
+    return target == JGL_TEXTURE_RECTANGLE && JglTextureRectangleAvailable();
+}
+/* Rectangle enums (TEXTURE_RECTANGLE, TEXTURE_BINDING_RECTANGLE, its proxy and
+ * MAX_RECTANGLE_TEXTURE_SIZE) as query names: without negotiation they stay
+ * the local GL_INVALID_ENUM they were. */
+static inline BOOL JglRectangleQueryRejected(GLenum name) {
+    return name - JGL_TEXTURE_RECTANGLE <= 0x84f8 - JGL_TEXTURE_RECTANGLE &&
+           !JglTextureRectangleAvailable();
+}
 /* ARB_fragment_program: program objects, ProgramString, env/local parameters,
  * the FRAGMENT_PROGRAM_ARB enable and its state queries. */
 BOOL JglFragmentProgramAvailable(void);
@@ -301,7 +319,9 @@ GLubyte *JglProgramErrorBuffer(void);
 static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
     const BOOL cube = target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable();
     const BOOL volume = target == JGL_TEXTURE_3D && JglTexture3DAvailable();
-    if (target != 0x0de0 && target != 0x0de1 && !cube && !volume) /* TEXTURE_1D, TEXTURE_2D */
+    const BOOL rectangle = JglRectangleTarget(target);
+    if (target != 0x0de0 && target != 0x0de1 && !cube && !volume &&
+        !rectangle) /* TEXTURE_1D, TEXTURE_2D */
         return 0;
     switch (pname) {
         case JGL_TEXTURE_WRAP_R: /* the cube map's, and every target's with 3D textures */
@@ -318,8 +338,8 @@ static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
             return 1;
         case 0x84fe: /* TEXTURE_MAX_ANISOTROPY_EXT */
             return JglFixedStateAvailable() ? 1 : 0;
-        case 0x8191: /* GENERATE_MIPMAP_SGIS */
-            return JglTextureControlAvailable() ? 1 : 0;
+        case 0x8191: /* GENERATE_MIPMAP_SGIS: a rectangle has one level */
+            return JglTextureControlAvailable() && !rectangle ? 1 : 0;
         default:
             return 0;
     }

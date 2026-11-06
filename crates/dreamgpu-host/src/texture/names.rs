@@ -206,7 +206,11 @@ unsafe fn bind(
 ) -> Result<(), u32> {
     if !matches!(
         target,
-        GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_CUBE_MAP | GL_TEXTURE_3D
+        GL_TEXTURE_1D
+            | GL_TEXTURE_2D
+            | GL_TEXTURE_CUBE_MAP
+            | GL_TEXTURE_3D
+            | GL_TEXTURE_RECTANGLE_ARB
     ) {
         return Err(11);
     }
@@ -316,6 +320,7 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
     default_1d: *mut Texture,
     default_cube: *mut Texture,
     default_3d: *mut Texture,
+    default_rect: *mut Texture,
     bindings: *const *mut *mut Texture,
     binding_count: u32,
 ) {
@@ -337,6 +342,7 @@ pub unsafe extern "C" fn dreamgpu_texture_delete(
                 GL_TEXTURE_1D => default_1d,
                 GL_TEXTURE_CUBE_MAP => default_cube,
                 GL_TEXTURE_3D => default_3d,
+                GL_TEXTURE_RECTANGLE_ARB => default_rect,
                 _ => default_2d,
             };
             for &binding in bindings {

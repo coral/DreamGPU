@@ -33,7 +33,8 @@
 extern "C" {
 
 #define MAX_JGL_CONTEXTS 32
-#define PACKET_WORDS (DG_ESCAPE_MAX_BYTES / 4)
+/* Large enough for the queued transport; OPEN negotiates the actual size. */
+#define PACKET_WORDS (DG_ESCAPE_QUEUE_MAX_BYTES / 4)
 typedef struct {
     DG_ESCAPE_REQUEST Request;
     ULONG Words[PACKET_WORDS];
@@ -47,6 +48,10 @@ typedef struct {
     HWND Window;
     BOOL Created, Drawable, Failed, InBegin, Deleting, Uncertain, FrontDirty, EverCurrent,
         ShareEstablished;
+    /* Set by any thread whose request reported this context's failed
+     * asynchronous batch; the owning thread fails the context at its next
+     * flush, as if that flush had failed. */
+    volatile LONG DeferredFault;
     /* The window's draw buffer (~0u: unknown), whichever framebuffer is bound. */
     GLenum DrawBuffer;
     GLenum Error;
@@ -67,6 +72,8 @@ static JGL_CONTEXT *Contexts[MAX_JGL_CONTEXTS];
 static ULONG Client, NextId;
 static ULONG MaxWords = PACKET_WORDS, MaxRecords = DG_GL_MAX_RECORDS;
 static ULONG MaxResultBytes = DG_ESCAPE_LEGACY_RESULT_BYTES;
+/* DG_ESCAPE_FEATURE_* reported by the driver at OPEN. */
+static ULONG TransportFeatures;
 static BOOL SecondarySupported;
 static ULONG HostCapabilities;
 static HDC Display;
@@ -127,6 +134,9 @@ BOOL JglVertexArrayBgraAvailable(void) {
 BOOL JglOcclusionQueryAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_OCCLUSION_QUERY);
 }
+BOOL JglTextureRectangleAvailable(void) {
+    return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_RECTANGLE);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Groups keep their established order. */
@@ -155,6 +165,7 @@ BOOL JglOcclusionQueryAvailable(void) {
     "GL_EXT_framebuffer_object GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil"
 #define JGL_VERTEX_ARRAY_BGRA_EXTENSIONS "GL_ARB_vertex_array_bgra"
 #define JGL_OCCLUSION_QUERY_EXTENSIONS "GL_ARB_occlusion_query GL_NV_fence"
+#define JGL_TEXTURE_RECTANGLE_EXTENSIONS "GL_ARB_texture_rectangle GL_NV_texture_rectangle"
 /* Each group's terminator byte pays for one separator or the final NUL. */
 static char
     Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
@@ -164,7 +175,8 @@ static char
                sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
                sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) +
                sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
-               sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS) + sizeof(JGL_OCCLUSION_QUERY_EXTENSIONS)];
+               sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS) + sizeof(JGL_OCCLUSION_QUERY_EXTENSIONS) +
+               sizeof(JGL_TEXTURE_RECTANGLE_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -201,8 +213,11 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_VERTEX_ARRAY_BGRA_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_OCCLUSION_QUERY)
         AppendExtensions(&at, JGL_OCCLUSION_QUERY_EXTENSIONS);
+    if (HostCapabilities & DG_CAP_GL_TEXTURE_RECTANGLE)
+        AppendExtensions(&at, JGL_TEXTURE_RECTANGLE_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_TEXTURE_RECTANGLE_EXTENSIONS
 #undef JGL_OCCLUSION_QUERY_EXTENSIONS
 #undef JGL_VERTEX_ARRAY_BGRA_EXTENSIONS
 #undef JGL_FRAMEBUFFER_OBJECT_EXTENSIONS
@@ -284,22 +299,45 @@ static void Error(JGL_CONTEXT *c, GLenum error) {
     if (c && !c->Error)
         c->Error = error;
 }
-static BOOL Request(PACKET *packet, ULONG operation, ULONG words, DG_ESCAPE_REPLY *reply) {
-    int result;
-    ZeroMemory(&packet->Request, sizeof(packet->Request));
-    packet->Request.Version = DG_ESCAPE_VERSION;
-    packet->Request.Operation = operation;
-    packet->Request.Client = operation == DG_ESCAPE_OPEN ? 0 : Client;
-    packet->Request.Bytes = words * 4;
-    ZeroMemory(reply, sizeof(*reply));
-    result = JglTransportRequest(Display, sizeof(packet->Request) + words * 4, (LPCSTR)packet,
-                                 sizeof(*reply), (LPSTR)reply);
-    if (result != 1 || reply->Version != DG_ESCAPE_VERSION) {
-        /* A missing reply cannot prove that the submitted operation failed
-         * before execution. Keep its resource ownership until process exit. */
-        reply->Version = 0;
+/* Another context's asynchronous batch failed: fail it at its next flush. */
+static void DeferredFailure(ULONG stream) {
+    ULONG i;
+    EnterCriticalSection(&Lock);
+    for (i = 0; i < MAX_JGL_CONTEXTS; ++i)
+        if (Contexts[i] && Contexts[i]->Id == stream)
+            Contexts[i]->DeferredFault = 1; /* aligned 32-bit store */
+    LeaveCriticalSection(&Lock);
+}
+/* A DEFERRED reply names an earlier failure and guarantees this request did
+ * not run: report another context's failure and repeat the request; the
+ * driver reports each failure once, so this ends. */
+static BOOL DeferredRetry(const DG_ESCAPE_REPLY *reply, ULONG stream) {
+    if (reply->Status != DG_ESCAPE_DEFERRED || !stream || reply->FunctionWords == stream)
         return FALSE;
-    }
+    DeferredFailure(reply->FunctionWords);
+    return TRUE;
+}
+static BOOL Request(PACKET *packet, ULONG operation, ULONG words, DG_ESCAPE_REPLY *reply,
+                    ULONG stream = 0, ULONG flags = 0) {
+    int result;
+    do {
+        ZeroMemory(&packet->Request, sizeof(packet->Request));
+        packet->Request.Version = DG_ESCAPE_VERSION;
+        packet->Request.Operation = operation;
+        packet->Request.Client = operation == DG_ESCAPE_OPEN ? 0 : Client;
+        packet->Request.Bytes = words * 4;
+        packet->Request.Flags = flags;
+        packet->Request.Stream = stream;
+        ZeroMemory(reply, sizeof(*reply));
+        result = JglTransportRequest(Display, sizeof(packet->Request) + words * 4, (LPCSTR)packet,
+                                     sizeof(*reply), (LPSTR)reply);
+        if (result != 1 || reply->Version != DG_ESCAPE_VERSION) {
+            /* A missing reply cannot prove that the submitted operation failed
+             * before execution. Keep its resource ownership until process exit. */
+            reply->Version = 0;
+            return FALSE;
+        }
+    } while (DeferredRetry(reply, stream));
     return reply->Status == DG_ESCAPE_OK;
 }
 static BOOL CompletionKnown(const DG_ESCAPE_REPLY *reply) {
@@ -314,18 +352,39 @@ static BOOL CompletionKnown(const DG_ESCAPE_REPLY *reply) {
             return TRUE;
         case DG_ESCAPE_HOST:
             return reply->CompletedSequence != 0;
+        case DG_ESCAPE_DEFERRED:
+            return TRUE; /* not executed; an earlier batch's failure */
         default:
             return FALSE;
     }
 }
-static BOOL Flush(JGL_CONTEXT *c) {
+/* With the queued transport every submission names its context as a stream.
+ * ASYNC returns once the driver captured the batch: used only where no API
+ * result depends on the batch (a full packet, glFlush). CONTROL submits
+ * outside any stream, so cleanup of a failed context still executes. */
+#define FLUSH_SYNC 0
+#define FLUSH_ASYNC 1
+#define FLUSH_CONTROL 2
+JGL_INLINE ULONG Stream(const JGL_CONTEXT *c) {
+    return (TransportFeatures & DG_ESCAPE_FEATURE_QUEUE) ? c->Id : 0;
+}
+static BOOL Flush(JGL_CONTEXT *c, ULONG mode = FLUSH_SYNC) {
     DG_ESCAPE_REPLY reply;
     BOOL result;
+    if (c->DeferredFault && mode != FLUSH_CONTROL) {
+        c->DeferredFault = 0;
+        if (!c->Failed) {
+            c->Failed = TRUE;
+            Error(c, GL_INVALID_OPERATION);
+        }
+    }
     if (c->Failed)
         return FALSE;
     if (!c->Used)
         return TRUE;
-    result = Request(&c->Packet, DG_ESCAPE_SUBMIT, c->Used, &reply);
+    result = Request(&c->Packet, DG_ESCAPE_SUBMIT, c->Used, &reply,
+                     mode == FLUSH_CONTROL ? 0 : Stream(c),
+                     mode == FLUSH_ASYNC && Stream(c) ? DG_ESCAPE_SUBMIT_ASYNC : 0);
     c->Used = c->Records = 0;
     if (!result) {
         c->Failed = TRUE;
@@ -341,7 +400,7 @@ JGL_INLINE ULONG *Record(JGL_CONTEXT *c, ULONG operation, ULONG context, ULONG d
     if (c->Failed || words > MaxWords - 8)
         return NULL;
     if (c->Used + 8 + words > MaxWords || c->Records == MaxRecords)
-        if (!Flush(c))
+        if (!Flush(c, FLUSH_ASYNC))
             return NULL;
     record = c->Packet.Words + c->Used;
     record[0] = operation;
@@ -364,12 +423,30 @@ JGL_INLINE BOOL DrawsWindowFront(const JGL_CONTEXT *c) {
            (c->DrawBuffer == ~0u || c->DrawBuffer == GL_FRONT || c->DrawBuffer == GL_FRONT_LEFT ||
             c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK);
 }
+/* A base or sized internal format of a copied face or rectangle (the component
+ * counts 1-4 are not copy formats). */
+static BOOL CopyInternalFormat(ULONG format) {
+    return (format >= 0x1906 && format <= 0x190a) /* ALPHA, RGB, RGBA, LUMINANCE(_ALPHA) */ ||
+           format == 0x8049 /* INTENSITY */ || format == 0x2a10 /* R3_G3_B2 */ ||
+           (format >= 0x803b && format <= 0x8048) || (format >= 0x804a && format <= 0x804d) ||
+           (format >= 0x804f && format <= 0x805b);
+}
 /* CopyTexImage2D/CopyTexSubImage2D target the 2D image or, once negotiated, a
- * cube map face. A face record is checked here exactly as the host checks it:
- * an invalid one is a local GL error, never a record that fails the batch. */
+ * cube map face or a rectangle. A face or rectangle record is checked here
+ * exactly as the host checks it: an invalid one is a local GL error, never a
+ * record that fails the batch. */
 static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
     const BOOL image = function == FEnum_glCopyTexImage2D;
     const ULONG width = a[image ? 5 : 6], height = a[image ? 6 : 7];
+    if (JglRectangleTarget(a[0])) {
+        /* Level zero only, no border, any size up to the 2D level-zero limit,
+         * a colour internal format (ARB_texture_rectangle). */
+        if (a[1] || width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION ||
+            height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION ||
+            (image && (a[7] || !CopyInternalFormat(a[2]))))
+            return GL_INVALID_VALUE;
+        return 0;
+    }
     if (!JglImage2DTarget(a[0]))
         return GL_INVALID_ENUM;
     /* TEXTURE_2D: native GL judges the copy, but depth textures
@@ -381,13 +458,8 @@ static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
     if (a[1] > DG_GL_MAX_TEXTURE_LEVEL || width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1] ||
         height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
         return GL_INVALID_VALUE;
-    /* Square, borderless faces with a base or sized internal format (the
-     * component counts 1-4 are not copy formats). */
-    if (image && (width != height || a[7] ||
-                  !((a[2] >= 0x1906 && a[2] <= 0x190a) /* ALPHA, RGB, RGBA, LUMINANCE(_ALPHA) */ ||
-                    a[2] == 0x8049 /* INTENSITY */ || a[2] == 0x2a10 /* R3_G3_B2 */ ||
-                    (a[2] >= 0x803b && a[2] <= 0x8048) || (a[2] >= 0x804a && a[2] <= 0x804d) ||
-                    (a[2] >= 0x804f && a[2] <= 0x805b))))
+    /* Square, borderless faces with a base or sized internal format. */
+    if (image && (width != height || a[7] || !CopyInternalFormat(a[2])))
         return GL_INVALID_VALUE;
     return 0;
 }
@@ -566,9 +638,9 @@ static BOOL Control(JGL_CONTEXT *c, ULONG operation, ULONG context, ULONG drawab
         return FALSE;
     if (words)
         CopyMemory(record, arguments, words * 4);
-    return Flush(c);
+    return Flush(c, FLUSH_CONTROL);
 }
-static BOOL FlushCurrent(JGL_CONTEXT *c) {
+static BOOL FlushCurrent(JGL_CONTEXT *c, ULONG mode = FLUSH_SYNC) {
     ULONG *record;
     if (c->InBegin || c->Failed)
         return FALSE;
@@ -576,7 +648,7 @@ static BOOL FlushCurrent(JGL_CONTEXT *c) {
     if (!record)
         return FALSE;
     record[0] = FEnum_glFlush;
-    return Flush(c) && (!c->FrontDirty || !MatchingGeometry(c) || PublishFront(c));
+    return Flush(c, mode) && (!c->FrontDirty || !MatchingGeometry(c) || PublishFront(c));
 }
 static void Unbind(JGL_CONTEXT *c) {
     TlsSetValue(Current, NULL);
@@ -852,17 +924,29 @@ BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output
         return FALSE;
     record[0] = function;
     CopyMemory(record + 1, arguments, 12);
-    ZeroMemory(result, sizeof(result->Reply) + capacity);
-    ZeroMemory(&c->Packet.Request, sizeof(c->Packet.Request));
-    c->Packet.Request.Version = DG_ESCAPE_VERSION;
-    c->Packet.Request.Operation = DG_ESCAPE_SUBMIT;
-    c->Packet.Request.Client = Client;
-    c->Packet.Request.Bytes = c->Used * 4;
-    c->Packet.Request.ResultCapacity = capacity;
-    status =
-        JglTransportRequest(Display, sizeof(c->Packet.Request) + c->Used * 4, (LPCSTR)&c->Packet,
-                            sizeof(result->Reply) + capacity, (LPSTR)result);
+    do {
+        ZeroMemory(result, sizeof(result->Reply) + capacity);
+        ZeroMemory(&c->Packet.Request, sizeof(c->Packet.Request));
+        c->Packet.Request.Version = DG_ESCAPE_VERSION;
+        c->Packet.Request.Operation = DG_ESCAPE_SUBMIT;
+        c->Packet.Request.Client = Client;
+        c->Packet.Request.Bytes = c->Used * 4;
+        c->Packet.Request.ResultCapacity = capacity;
+        c->Packet.Request.Stream = Stream(c);
+        status = JglTransportRequest(Display, sizeof(c->Packet.Request) + c->Used * 4,
+                                     (LPCSTR)&c->Packet, sizeof(result->Reply) + capacity,
+                                     (LPSTR)result);
+    } while (status == 1 && result->Reply.Version == DG_ESCAPE_VERSION &&
+             DeferredRetry(&result->Reply, Stream(c)));
     c->Used = c->Records = 0;
+    if (status == 1 && result->Reply.Version == DG_ESCAPE_VERSION &&
+        result->Reply.Status == DG_ESCAPE_DEFERRED) {
+        /* This context's earlier asynchronous batch failed: exactly what a
+         * failed synchronous flush before this query would have reported. */
+        c->Failed = TRUE;
+        Error(c, GL_INVALID_OPERATION);
+        return FALSE;
+    }
     unit = type == DG_GL_RESULT_DOUBLE                                ? 8
            : (type == DG_GL_RESULT_INT || type == DG_GL_RESULT_FLOAT) ? 4
                                                                       : 1;
@@ -973,6 +1057,7 @@ static void CloseIdleClient(PACKET *packet) {
     if (Client && Request(packet, DG_ESCAPE_CLOSE, 0, &reply)) {
         Client = 0;
         HostCapabilities = 0;
+        TransportFeatures = 0;
         ReleaseDC(NULL, Display);
         Display = NULL;
     }
@@ -1008,6 +1093,8 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
             goto done;
         }
         Client = reply.Client;
+        /* Older drivers leave DeviceError zero in an OPEN reply. */
+        TransportFeatures = reply.DeviceError & DG_ESCAPE_FEATURE_QUEUE;
         MaxWords = reply.MaxBytes / 4 < PACKET_WORDS ? reply.MaxBytes / 4 : PACKET_WORDS;
         MaxRecords = reply.MaxRecords < DG_GL_MAX_RECORDS ? reply.MaxRecords : DG_GL_MAX_RECORDS;
         MaxResultBytes = reply.MaxResultBytes < DG_ESCAPE_MAX_RESULT_BYTES
@@ -1126,7 +1213,7 @@ void APIENTRY glBindTexture(GLenum target, GLuint texture) {
     c = CurrentContext();
     if (target != GL_TEXTURE_1D && target != GL_TEXTURE_2D &&
         !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable()) &&
-        !(target == JGL_TEXTURE_3D && JglTexture3DAvailable())) {
+        !(target == JGL_TEXTURE_3D && JglTexture3DAvailable()) && !JglRectangleTarget(target)) {
         CommandError(c, GL_INVALID_ENUM);
         return;
     }
@@ -1699,7 +1786,7 @@ void APIENTRY glFlush(void) {
         if (c->InBegin)
             Error(c, GL_INVALID_OPERATION);
         else
-            FlushCurrent(c);
+            FlushCurrent(c, FLUSH_ASYNC);
     }
 }
 void APIENTRY glFinish(void) {

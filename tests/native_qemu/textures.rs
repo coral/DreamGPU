@@ -560,6 +560,8 @@ fn qemu_reset_fences_queued_query_dma_before_guest_result_page_reuse() {
 #[test]
 #[ignore = "requires native GPU; exact large-batch ordering and overflow pixels"]
 fn qemu_large_scalar_batches_preserve_order_and_reject_overflow() {
+    /// gl.h DG_GL_MAX_RECORDS, advertised by REG_MAX_RECORDS.
+    const DG_GL_MAX_RECORDS: u32 = 4096;
     fn persistent_batch(
         qemu: &mut Qemu,
         sequence: u32,
@@ -599,7 +601,7 @@ fn qemu_large_scalar_batches_preserve_order_and_reject_overflow() {
         let _ = wake.try_send(());
     }));
     let mut qemu = Qemu::start(&directory, &socket);
-    assert_eq!(qemu.read(0x112c), 1024);
+    assert_eq!(qemu.read(0x112c), DG_GL_MAX_RECORDS);
     qemu.batch(1, &[(1, vec![0]), (3, vec![32, 32]), (5, vec![])]);
     qemu.await_completion(1);
     let generation = qemu.read(0x103c);
@@ -612,10 +614,13 @@ fn qemu_large_scalar_batches_preserve_order_and_reject_overflow() {
         call(0x9dc, &[(-1f32).to_bits(), (-1f32).to_bits()]),
         call(0x9dc, &[1f32.to_bits(), (-1f32).to_bits()]),
     ];
-    records.resize(1024, call(0x0db, &[0, 0, 1f32.to_bits(), 1f32.to_bits()]));
+    records.resize(
+        DG_GL_MAX_RECORDS as usize,
+        call(0x0db, &[0, 0, 1f32.to_bits(), 1f32.to_bits()]),
+    );
     // The final allowed record must execute: dropping the tail leaves blue
     // current color and changes the last two vertices after the boundary.
-    records[1023] = red.clone();
+    records[DG_GL_MAX_RECORDS as usize - 1] = red.clone();
     persistent_batch(&mut qemu, 2, generation, &records);
     qemu.await_completion(2);
     // An unfinished Begin survives the submission boundary. Completing its
@@ -647,10 +652,10 @@ fn qemu_large_scalar_batches_preserve_order_and_reject_overflow() {
     );
     qemu.await_completion(4);
     // If validation executes a prefix, this clear turns FRONT blue. The
-    // rejected 1025th record must prevent the entire batch from executing.
+    // rejected record past the limit must prevent the entire batch from executing.
     records.clear();
     records.push(call(0x09a, &[0x4000]));
-    records.resize(1025, red);
+    records.resize(DG_GL_MAX_RECORDS as usize + 1, red);
     persistent_batch(&mut qemu, 5, generation, &records);
     assert_eq!(qemu.read(0x1120), 5);
     assert_eq!(qemu.read(0x1124), 1); // DG_GL_ERROR_BATCH

@@ -41,6 +41,12 @@ typedef struct {
     void(DREAMGPU_CDECL *TraceField)(const char *, DWORD);
     void(DREAMGPU_CDECL *TraceChar)(char);
     const DG9_MEMORY_SERVICES *Memory;
+    /* Queued-transport sleep: Prepare (nonzero on success) before arming the
+     * device wait, Wait until the GL completion IRQ (nonzero) or the two
+     * second watchdog (zero), Finish after either. */
+    int(DREAMGPU_CDECL *QueuePrepare)(void);
+    int(DREAMGPU_CDECL *QueueWait)(void);
+    void(DREAMGPU_CDECL *QueueFinish)(void);
 } DG9_CHANNEL_SERVICES;
 #ifdef __cplusplus
 extern "C" {

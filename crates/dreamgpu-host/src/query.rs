@@ -127,12 +127,17 @@ unsafe fn execute(
         FEnum_glGetTexLevelParameteriv | FEnum_glGetTexLevelParameterfv
     ) && matches!(
         a,
-        GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP | GL_PROXY_TEXTURE_3D
+        GL_PROXY_TEXTURE_1D
+            | GL_PROXY_TEXTURE_2D
+            | GL_PROXY_TEXTURE_CUBE_MAP
+            | GL_PROXY_TEXTURE_3D
+            | GL_PROXY_TEXTURE_RECTANGLE_ARB
     ) && !state.context.is_null()
         && unsafe {
             match a {
                 GL_PROXY_TEXTURE_CUBE_MAP => (*state.context).proxy_rejected_cube,
                 GL_PROXY_TEXTURE_3D => (*state.context).proxy_rejected_3d,
+                GL_PROXY_TEXTURE_RECTANGLE_ARB => (*state.context).proxy_rejected_rect,
                 _ => (*state.context).proxy_rejected[usize::from(a == GL_PROXY_TEXTURE_2D)],
             }
         } & (1 << b)
@@ -502,6 +507,20 @@ unsafe fn execute(
                     call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
                     integers[0] = integers[0].clamp(0, DG_GL_MAX_3D_TEXTURE_SIZE as i32);
                 }
+                // The active unit's rectangle binding (ARB_texture_rectangle).
+                GL_TEXTURE_BINDING_RECTANGLE_ARB => {
+                    if state.context.is_null() {
+                        return Err(DG_GL_ERROR_CONTEXT);
+                    }
+                    let rect = unsafe { (*state.context).bound_texture_rect };
+                    if !rect.is_null() {
+                        integers[0] = unsafe { (*rect).guest_name } as i32;
+                    }
+                }
+                GL_MAX_RECTANGLE_TEXTURE_SIZE_ARB => {
+                    call!(dg_glGetIntegerv(a, integers.as_mut_ptr()));
+                    integers[0] = integers[0].clamp(0, DG_GL_MAX_TEXTURE_DIMENSION as i32);
+                }
                 GL_ATTRIB_STACK_DEPTH => integers[0] = state.attrib_depth as i32,
                 GL_MAX_ATTRIB_STACK_DEPTH => integers[0] = 16,
                 GL_MAX_EVAL_ORDER => {
@@ -583,6 +602,7 @@ unsafe fn execute(
                 GL_TEXTURE_BINDING_2D
                     | GL_TEXTURE_BINDING_CUBE_MAP
                     | GL_TEXTURE_BINDING_3D
+                    | GL_TEXTURE_BINDING_RECTANGLE_ARB
                     | GL_FRAMEBUFFER_BINDING
                     | GL_READ_FRAMEBUFFER_BINDING
                     | GL_RENDERBUFFER_BINDING

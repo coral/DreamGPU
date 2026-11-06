@@ -320,6 +320,30 @@
 #define DG_GL_QUERY_REPORTS 63
 #define DG_GL_QUERY_PENDING 1
 #define DG_GL_QUERY_AVAILABLE 2
+/* Rectangle textures: ARB_texture_rectangle (NV_texture_rectangle), the
+ * GeForce FX's conditional non-power-of-two textures. TEXTURE_RECTANGLE is a
+ * BindTexture/Enable/TexParameter target with its own binding per texture unit,
+ * covered by TEXTURE_BIT; a name keeps the target of its first bind. Enable
+ * precedence is cube map > 3D > rectangle > 2D > 1D. TexImage2D/TexSubImage2D,
+ * CopyTexImage2D/CopyTexSubImage2D, GetTexImage and GetTexLevelParameter take
+ * TEXTURE_RECTANGLE in their existing records, TexImage2D and
+ * GetTexLevelParameter also PROXY_TEXTURE_RECTANGLE. A rectangle image has
+ * level zero only, no border, an uncompressed colour internal format (no S3TC,
+ * generic compressed or depth format) and dimensions of any size up to
+ * DG_GL_MAX_TEXTURE_DIMENSION; any other record is a fault, so the frontend
+ * reports INVALID_VALUE (level, border, size, depth format) or INVALID_ENUM
+ * (compressed format, compressed records, GetCompressedTexImage, GenerateMipmap)
+ * locally. GENERATE_MIPMAP is no rectangle parameter. FramebufferTexture2D takes
+ * textarget TEXTURE_RECTANGLE; a level other than zero is INVALID_VALUE.
+ * Texture coordinates are unnormalized (0..width, 0..height), also through
+ * ARB_fragment_program's RECT texture target. Native GL judges parameter
+ * values: REPEAT, MIRRORED_REPEAT and the mirror-once wraps and mipmap
+ * minification filters are INVALID_ENUM, a nonzero BASE_LEVEL is
+ * INVALID_OPERATION; a new object starts with CLAMP_TO_EDGE wraps and a LINEAR
+ * minification filter. The host answers TEXTURE_BINDING_RECTANGLE and
+ * MAX_RECTANGLE_TEXTURE_SIZE (DG_GL_MAX_TEXTURE_DIMENSION or a smaller native
+ * limit). Residency charges the image like a 2D level. */
+#define DG_CAP_GL_TEXTURE_RECTANGLE 0x10000000
 #define DG_IRQ_GL_COMPLETION 0x02
 #define DG_GL_REG_VERSION 0x1100
 #define DG_GL_REG_ADDR_LO 0x1104
@@ -352,12 +376,84 @@
 #define DG_GL_REG_FAULT_SEQUENCE 0x1178
 #define DG_GL_VERSION 0x00010000
 #define DG_GL_MAX_BYTES 0x01010000
-#define DG_GL_MAX_RECORDS 1024
+#define DG_GL_MAX_RECORDS 4096
 #define DG_GL_MAX_CONTEXTS 32
 #define DG_GL_MAX_DRAWABLES 32
 #define DG_GL_MAX_DIMENSION 4096
 #define DG_GL_MAX_IMAGE_BYTES 0x20000000
 #define DG_GL_EXPORT_SLOTS 3
+/* Queued submission. QUEUE_VERSION reads zero on older hosts, which have only
+ * the single-batch registers above; this host keeps them unchanged for older
+ * drivers. A driver writes a 4 KiB-aligned guest RAM page to QUEUE_ADDR_LO/HI,
+ * zeroes its guest words, then writes the current engine GENERATION to
+ * QUEUE_CONTROL (zero disables an idle queue). The device clears the page's
+ * device words, writes GENERATION then STATE ACTIVE, and QUEUE_CONTROL reads
+ * one. Engine reset disables the queue: unfinished batches are discarded
+ * without completion and STATE becomes zero. While enabled, legacy SUBMIT
+ * completes with DG_GL_ERROR_BATCH and never executes.
+ * All counters are free-running 32-bit values compared as signed differences.
+ * The driver fills entry PRODUCED % DEPTH, then increments PRODUCED, then
+ * writes any value to QUEUE_DOORBELL (an ioeventfd where available, so it need
+ * not stop in the device model). The device copies each published entry and
+ * its complete command bytes into host memory, validates them exactly as
+ * SUBMIT does, and advances CONSUMED: consumed command RAM may be reused
+ * immediately, while the entry stays device-owned until it completes. Batches
+ * execute and complete in entry order, at most DG_GL_QUEUE_DEPTH unfinished.
+ * Completion writes the entry's STATUS (DONE, ERROR) and ERROR, RESULT_BYTES/
+ * TYPE after DMA of a QUERY result to the entry's RESULT address (capacity
+ * zero for every other batch), the latest PRESENT identity (the PRESENT_*
+ * registers), then COMPLETED. DG_IRQ_GL_COMPLETION is raised only while WAIT
+ * arms a condition that holds: COMPLETED - WAIT_COMPLETED >= 0 or CONSUMED -
+ * WAIT_CONSUMED >= 0. A waiter arms, fences, then rechecks before sleeping.
+ * CLIENT/STREAM name an optional fault domain (zero: none). Once a batch of a
+ * domain fails, its later batches complete with DG_GL_ERROR_SKIPPED without
+ * executing, until engine reset. Records, admission and ordering are those of
+ * SUBMIT; only the transport differs. */
+#define DG_GL_REG_QUEUE_VERSION 0x1180
+#define DG_GL_REG_QUEUE_ADDR_LO 0x1184
+#define DG_GL_REG_QUEUE_ADDR_HI 0x1188
+#define DG_GL_REG_QUEUE_CONTROL 0x118c
+#define DG_GL_REG_QUEUE_DOORBELL 0x1190
+#define DG_GL_QUEUE_VERSION 1
+#define DG_GL_QUEUE_DEPTH 16
+#define DG_GL_QUEUE_PAGE_BYTES 4096
+#define DG_GL_QUEUE_ACTIVE 1
+/* Device-written page words. Bytes 36-63 are zero. */
+#define DG_GL_QUEUE_STATE 0
+#define DG_GL_QUEUE_GENERATION 4
+#define DG_GL_QUEUE_CONSUMED 8
+#define DG_GL_QUEUE_COMPLETED 12
+#define DG_GL_QUEUE_PRESENT_SLOT 16
+#define DG_GL_QUEUE_PRESENT_EPOCH_LO 20
+#define DG_GL_QUEUE_PRESENT_EPOCH_HI 24
+#define DG_GL_QUEUE_PRESENT_FRAME_LO 28
+#define DG_GL_QUEUE_PRESENT_FRAME_HI 32
+/* Guest-written page words. */
+#define DG_GL_QUEUE_PRODUCED 64
+#define DG_GL_QUEUE_WAIT 68
+#define DG_GL_QUEUE_WAIT_COMPLETED 72
+#define DG_GL_QUEUE_WAIT_CONSUMED 76
+#define DG_GL_QUEUE_WAIT_FOR_COMPLETED 1
+#define DG_GL_QUEUE_WAIT_FOR_CONSUMED 2
+/* DEPTH entries of ENTRY_BYTES from RING: guest words, then device words. */
+#define DG_GL_QUEUE_RING 256
+#define DG_GL_QUEUE_ENTRY_BYTES 64
+#define DG_GL_ENTRY_ADDR_LO 0
+#define DG_GL_ENTRY_ADDR_HI 4
+#define DG_GL_ENTRY_BYTES 8
+#define DG_GL_ENTRY_SEQUENCE 12
+#define DG_GL_ENTRY_GENERATION 16
+#define DG_GL_ENTRY_CLIENT 20
+#define DG_GL_ENTRY_STREAM 24
+#define DG_GL_ENTRY_RESULT_ADDR_LO 28
+#define DG_GL_ENTRY_RESULT_ADDR_HI 32
+#define DG_GL_ENTRY_RESULT_CAPACITY 36
+#define DG_GL_ENTRY_RESERVED0 40
+#define DG_GL_ENTRY_RESERVED1 44
+#define DG_GL_ENTRY_STATUS 48
+#define DG_GL_ENTRY_ERROR 52
+#define DG_GL_ENTRY_RESULT_BYTES 56
+#define DG_GL_ENTRY_RESULT_TYPE 60
 
 /* ADDR_LO/HI, BYTES, RESULT_ADDR_LO/HI, RESULT_CAPACITY and the programmed
  * GENERATION persist across submit and
@@ -377,7 +473,8 @@
  * GENERATION must match the engine generation read before submission.
  * Drivers negotiate min(local limit, REG_MAX_BYTES/REG_MAX_RECORDS) when
  * opening a channel and after a generation change. Older hosts advertise
- * 256 records; record layout and ordering are unchanged by a larger limit.
+ * 256 or 1024 records; record layout and ordering are unchanged by a larger
+ * limit.
  */
 #define DG_GL_OFF_OP 0
 #define DG_GL_OFF_SIZE 4
@@ -449,6 +546,8 @@
 #define DG_GL_ERROR_LIMIT 9
 #define DG_GL_ERROR_DESKTOP 10
 #define DG_GL_ERROR_TEXTURE 11
+/* A queued batch of a failed fault domain, not executed. */
+#define DG_GL_ERROR_SKIPPED 12
 /* DESKTOP descriptors follow the usual 32-byte GL record header. The kernel
  * display driver serializes all GDI primary accesses until batch completion.
  * CPU captures/readbacks are serviced in bounded main-loop quanta; no guest

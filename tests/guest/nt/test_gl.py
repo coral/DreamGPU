@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[3]
 SOURCE = Path(__file__).resolve().parent
 
 with tempfile.TemporaryDirectory(prefix="dreamgpu-nt-gl-") as directory:
-    for name in ("gl-validate", "gl-signature", "gl-limits", "gl-registers", "window"):
+    for name in ("gl-validate", "gl-signature", "gl-limits", "gl-registers", "gl-queue", "window"):
         binary = Path(directory) / name
         cpp = name == "window"
         source = SOURCE / (name + (".cpp" if cpp else ".c"))

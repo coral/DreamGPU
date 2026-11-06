@@ -202,6 +202,18 @@ pub struct GlRequest {
     pub bpp: u32,
     pub busy_2d: u32,
     pub result_capacity: u32,
+    pub sequence: u32,
+    pub client: u32,
+    pub stream: u32,
+}
+/// Identity handed to the engine with a snapshot, or alone with a preset error.
+#[repr(C)]
+#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
+pub struct Enqueue {
+    pub sequence: u32,
+    pub client: u32,
+    pub stream: u32,
+    pub error: u32,
 }
 #[repr(C)]
 #[derive(Default)]
@@ -218,7 +230,7 @@ pub struct GlCallbacks {
     pub diagnostics_begin: unsafe extern "C" fn(*mut c_void, u32),
     pub diagnostic_record: unsafe extern "C" fn(*mut c_void, *const u8),
     // Success transfers snapshot ownership. Failure retains it in this transaction.
-    pub enqueue: unsafe extern "C" fn(*mut c_void, *mut u8, u32, u32) -> u32,
+    pub enqueue: unsafe extern "C" fn(*mut c_void, *mut u8, u32, u32, *const Enqueue) -> u32,
 }
 /// Callback table and request are copied before callbacks. The read callback cannot
 /// retain the allocated buffer; validator/diagnostics may only read their snapshot.
@@ -237,7 +249,7 @@ pub unsafe extern "C" fn dreamgpu_device_gl_submit(
     unsafe { output.write(out) };
     error
 }
-unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult) -> u32 {
+pub(crate) unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult) -> u32 {
     if r.bytes == 0 || r.bytes > DG_GL_MAX_BYTES || r.bytes & 3 != 0 {
         return DG_GL_ERROR_BATCH;
     }
@@ -319,7 +331,13 @@ unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult) -> u32 {
         }
         offset += size as usize;
     }
-    let error = unsafe { (c.enqueue)(opaque, snapshot.data, r.bytes, out.records) };
+    let info = Enqueue {
+        sequence: r.sequence,
+        client: r.client,
+        stream: r.stream,
+        error: 0,
+    };
+    let error = unsafe { (c.enqueue)(opaque, snapshot.data, r.bytes, out.records, &info) };
     if error == 0 {
         snapshot.release();
     }

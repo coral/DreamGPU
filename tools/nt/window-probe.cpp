@@ -53,7 +53,7 @@ static BOOL Request(ULONG operation, ULONG expected) {
     Packet.Request.Client = Client;
     Packet.Request.Bytes = operation == DG_ESCAPE_SUBMIT ? Used * 4 : 0;
     Packet.Request.Function = 0;
-    Packet.Request.Reserved = 0;
+    Packet.Request.Flags = Packet.Request.Stream = 0;
     ZeroMemory(&Reply, sizeof(Reply));
     result = ExtEscape(Display, DG_ESCAPE, sizeof(Packet.Request) + Packet.Request.Bytes,
                        (LPCSTR)&Packet, sizeof(Reply), (LPSTR)&Reply);

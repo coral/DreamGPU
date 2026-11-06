@@ -60,6 +60,7 @@ mod primary;
 mod program;
 mod publication;
 mod query;
+mod queue;
 mod resource;
 mod scalar;
 mod selection;

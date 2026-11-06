@@ -128,7 +128,12 @@ impl Device {
         self.submit_for(1, records);
     }
     /// One QUERY record of `context`, through a fresh guarded result page.
-    pub(super) fn query_for(&mut self, context: u32, function: u32, args: &[u32]) -> (u32, Vec<u8>) {
+    pub(super) fn query_for(
+        &mut self,
+        context: u32,
+        function: u32,
+        args: &[u32],
+    ) -> (u32, Vec<u8>) {
         self.sequence += 1;
         let mut payload = vec![function];
         payload.extend_from_slice(args);

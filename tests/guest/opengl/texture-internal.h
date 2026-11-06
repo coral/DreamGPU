@@ -72,6 +72,13 @@ BOOL JglTexture3DAvailable(void);
 #define JGL_TEXTURE_3D 0x806f
 #define JGL_PROXY_TEXTURE_3D 0x8070
 #define JGL_TEXTURE_WRAP_R 0x8072
+/* Rectangle textures, as in guest/opengl/internal.h. */
+BOOL JglTextureRectangleAvailable(void);
+#define JGL_TEXTURE_RECTANGLE 0x84f5
+#define JGL_PROXY_TEXTURE_RECTANGLE 0x84f7
+static inline BOOL JglRectangleTarget(GLenum target) {
+    return target == JGL_TEXTURE_RECTANGLE && JglTextureRectangleAvailable();
+}
 /* Depth textures and DEPTH_STENCIL pixels, as in guest/opengl/internal.h. */
 BOOL JglFramebufferObjectAvailable(void);
 #define JGL_DEPTH_STENCIL 0x84f9

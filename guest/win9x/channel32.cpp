@@ -20,6 +20,7 @@ typedef int BOOL;
 #include "dg-owner.h"
 #include "dg-function-cache.h"
 #include "packet32.h"
+#include "dg-gl-queue.h"
 #include "../include/ownership.hpp"
 static const DG9_CHANNEL_SERVICES *api;
 extern "C" void DREAMGPU_CDECL DreamGpuChannelBind(const DG9_CHANNEL_SERVICES *services) {
@@ -126,13 +127,139 @@ static ULONG Dg9GlWordsNative(void *, ULONG function) {
 static ULONG __cdecl Dg9GlWords(void *, ULONG function) {
     return Dg9FunctionCacheWords(&dg_gl_function_cache, function, Dg9GlWordsNative, NULL);
 }
-static ULONG Dg9GlSubmit(ULONG bytes, DG_ESCAPE_REPLY *reply) {
+/* Queued transport (gl.h): one RAM page and up to eight 128 KiB packet
+ * buffers. dg_gl_build is the buffer the next submission is written in: a
+ * free queue buffer, or dg_gl_commands for the register transport. */
+static DG_GL_QUEUE dg_gl_queue;
+static BOOL dg_gl_queue_supported, dg_gl_build_queued;
+static ULONG *dg_gl_build;
+static ULONG dg_gl_build_status, dg_gl_result_bytes, dg_gl_result_type, dg_gl_queue_sequence;
+static ULONG dg_gl_caps, dg_gl_caps_version, dg_gl_caps_generation;
+static BOOL dg_gl_caps_valid;
+struct DG9_SUBMIT {
+    ULONG Token, Stream, Async, ResultCapacity;
+};
+static ULONG Dg9QueueRead(void *, ULONG reg) {
+    return api->Read(reg);
+}
+static void Dg9QueueWrite(void *, ULONG reg, ULONG value) {
+    api->Write(reg, value);
+}
+static void Dg9QueueBarrier(void *) {
+    __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
+static int Dg9QueuePrepare(void *) {
+    return api->QueuePrepare();
+}
+static int Dg9QueueWait(void *) {
+    return api->QueueWait();
+}
+static void Dg9QueueFinish(void *) {
+    api->QueueFinish();
+}
+static DG_GL_QUEUE_OPS Dg9QueueOps(void) {
+    return DG_GL_QUEUE_OPS{nullptr,         Dg9QueueRead, Dg9QueueWrite, Dg9QueueBarrier,
+                           Dg9QueuePrepare, Dg9QueueWait, Dg9QueueFinish};
+}
+/* A current queue page names the engine generation without an MMIO read;
+ * engine reset clears it before any other register changes. */
+static ULONG Dg9Generation(void) {
+    return DgGlQueueCurrent(&dg_gl_queue) ? dg_gl_queue.Generation
+                                          : Dg9GlRead(NULL, DG_REG_GENERATION);
+}
+/* CAPS and GL VERSION are invariant for a realized device; reread them after
+ * every OPEN (a restored desktop may run on another host) or reset. */
+static ULONG Dg9Caps(ULONG generation, BOOL force) {
+    if (force || !dg_gl_caps_valid || dg_gl_caps_generation != generation) {
+        dg_gl_caps = Dg9GlRead(NULL, DG_REG_CAPS);
+        dg_gl_caps_version = Dg9GlRead(NULL, DG_GL_REG_VERSION);
+        dg_gl_caps_generation = generation;
+        dg_gl_caps_valid = TRUE;
+    }
+    return dg_gl_caps;
+}
+static void Dg9QueueEnsure(void) {
+    if (!dg_gl_queue_supported || dg_gl_build || DgGlQueueCurrent(&dg_gl_queue))
+        return;
+    const auto ops = Dg9QueueOps();
+    DgGlQueueReap(&dg_gl_queue);
+    if (!(Dg9GlRead(NULL, DG_GL_REG_STATUS) & DG_STATUS_BUSY))
+        DgGlQueueEnable(&dg_gl_queue, &ops, Dg9GlRead(NULL, DG_REG_GENERATION));
+}
+static ULONG Dg9LocalBytes(void) {
+    return DgGlQueueCurrent(&dg_gl_queue) ? DG_ESCAPE_QUEUE_MAX_BYTES : DG_ESCAPE_MAX_BYTES;
+}
+static ULONG *Dg9Build(void) {
+    if (dg_gl_build)
+        return dg_gl_build;
+    Dg9QueueEnsure();
+    dg_gl_build = dg_gl_commands;
+    dg_gl_build_queued = FALSE;
+    dg_gl_build_status = DG_ESCAPE_OK;
+    if (DgGlQueueCurrent(&dg_gl_queue)) {
+        const auto ops = Dg9QueueOps();
+        int result;
+        void *buffer = DgGlQueueBuffer(&dg_gl_queue, &ops, &result);
+        if (buffer) {
+            dg_gl_build = static_cast<ULONG *>(buffer);
+            dg_gl_build_queued = TRUE;
+        } else if (!result) {
+            dg_gl_faulted = TRUE;
+            dg_gl_build_status = DG_ESCAPE_TIMEOUT;
+        } else {
+            dg_gl_build_status = DG_ESCAPE_HOST; /* engine reset discarded work */
+        }
+    }
+    return dg_gl_build;
+}
+static ULONG Dg9GlSubmit(ULONG bytes, DG_ESCAPE_REPLY *reply, const DG9_SUBMIT *submit = nullptr) {
+    ULONG *commands = Dg9Build();
+    const BOOL queued = dg_gl_build_queued;
+    dg_gl_build = NULL;
+    dg_gl_result_bytes = dg_gl_result_type = 0;
     if (dg_gl_faulted)
         return DG_ESCAPE_STOPPED;
-    const auto status = api->Submit(dg_gl_physical, bytes, reply);
-    if (status == DG_ESCAPE_TIMEOUT)
+    if (dg_gl_build_status != DG_ESCAPE_OK) {
+        reply->DeviceError = DG_GL_ERROR_GENERATION;
+        return dg_gl_build_status;
+    }
+    if (!queued) {
+        const auto status = api->Submit(dg_gl_physical, bytes, reply);
+        if (status == DG_ESCAPE_TIMEOUT)
+            dg_gl_faulted = TRUE;
+        if (status == DG_ESCAPE_OK && submit && submit->ResultCapacity) {
+            dg_gl_result_bytes = Dg9GlRead(NULL, DG_GL_REG_RESULT_BYTES);
+            dg_gl_result_type = Dg9GlRead(NULL, DG_GL_REG_RESULT_TYPE);
+        }
+        return status;
+    }
+    if (bytes > dg_gl_limits.MaxBytes)
+        return DG_ESCAPE_UNSUPPORTED;
+    const auto ops = Dg9QueueOps();
+    ULONG sequence = ++dg_gl_queue_sequence;
+    if (!sequence)
+        sequence = ++dg_gl_queue_sequence;
+    const ULONG index = DgGlQueuePublish(
+        &dg_gl_queue, &ops, bytes, sequence, commands[7], submit ? submit->Token : 0,
+        submit ? submit->Stream : 0, submit && submit->ResultCapacity ? dg_gl_result_physical : 0,
+        submit ? submit->ResultCapacity : 0, submit && submit->Async);
+    if (submit && submit->Async)
+        return DG_ESCAPE_OK;
+    DG_GL_QUEUE_RESULT outcome = {};
+    const int waited = DgGlQueueWaitEntry(&dg_gl_queue, &ops, index, &outcome);
+    if (!waited) {
         dg_gl_faulted = TRUE;
-    return status;
+        return DG_ESCAPE_TIMEOUT;
+    }
+    if (waited < 0) {
+        reply->DeviceError = DG_GL_ERROR_GENERATION;
+        return DG_ESCAPE_HOST;
+    }
+    reply->DeviceError = outcome.Error;
+    reply->CompletedSequence = sequence;
+    dg_gl_result_bytes = outcome.ResultBytes;
+    dg_gl_result_type = outcome.ResultType;
+    return outcome.Status & DG_STATUS_ERROR ? DG_ESCAPE_HOST : DG_ESCAPE_OK;
 }
 static void Dg9GlDrain(DG_ESCAPE_REPLY *reply) {
     DWORD token, flags;
@@ -144,15 +271,19 @@ static void Dg9GlDrain(DG_ESCAPE_REPLY *reply) {
         if (!token)
             break;
         Dg9WindowRetire(token);
-        memset(dg_gl_commands, 0, DG_GL_HEADER_BYTES);
-        dg_gl_commands[0] = DG_GL_CLOSE_CLIENT;
-        dg_gl_commands[1] = DG_GL_HEADER_BYTES;
-        dg_gl_commands[2] = token;
-        dg_gl_commands[7] = reply->Generation;
+        ULONG *commands = Dg9Build();
+        memset(commands, 0, DG_GL_HEADER_BYTES);
+        commands[0] = DG_GL_CLOSE_CLIENT;
+        commands[1] = DG_GL_HEADER_BYTES;
+        commands[2] = token;
+        commands[7] = reply->Generation;
         /* A retired client's cleanup completion is not this caller's result
          * identity, including when the caller just completed a typed query. */
         if (Dg9GlSubmit(DG_GL_HEADER_BYTES, &cleanup) != DG_ESCAPE_OK)
             break;
+        /* Synchronous: the token's earlier entries are reaped; drop its
+         * unreported failures with it. */
+        DgGlQueueDropClient(&dg_gl_queue, token);
         flags = Dg9GlDisableInterrupts();
         Dg9OwnerFinishRetired(&dg_gl_owners, token);
         Dg9GlRestoreInterrupts(flags);
@@ -169,6 +300,33 @@ static BOOL Dg9GlInitialize(void) {
         return FALSE;
     dg_gl_commands = reinterpret_cast<ULONG *>(commands.release());
     dg_gl_result = results.release();
+    /* Queued transport memory, only when the host offers it. Contiguous
+     * pages may be scarce on Win9x: fewer than two buffers keeps registers. */
+    const auto ops = Dg9QueueOps();
+    if (DgGlQueueSupported(&ops)) {
+        DWORD physical = 0;
+        void *page = api->Allocate(1, &physical);
+        if (page && physical && !(physical & 4095)) {
+            dg_gl_queue.Page = static_cast<volatile ULONG *>(page);
+            dg_gl_queue.PagePhysical = physical;
+            while (dg_gl_queue.BufferCount < DG_GL_QUEUE_MAX_BUFFERS) {
+                void *buffer = api->Allocate(DG_ESCAPE_QUEUE_MAX_BYTES >> 12, &physical);
+                if (!buffer)
+                    break;
+                if (!physical || (physical & 4095)) {
+                    api->Free(buffer);
+                    break;
+                }
+                dg_gl_queue.Buffers[dg_gl_queue.BufferCount].Memory = buffer;
+                dg_gl_queue.Buffers[dg_gl_queue.BufferCount].Physical = physical;
+                ++dg_gl_queue.BufferCount;
+            }
+            dg_gl_queue.BufferBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+        } else if (page) {
+            api->Free(page);
+        }
+        dg_gl_queue_supported = dg_gl_queue.Page && dg_gl_queue.BufferCount >= 2;
+    }
     Dg9OwnerInitialize(&dg_gl_owners);
     dg_gl_initialized = TRUE;
     return TRUE;
@@ -206,7 +364,8 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
         if (!Dg9GlCritical() && dg_gl_mutex) {
             Wait_Semaphore(dg_gl_mutex, 0);
             memset(&reply, 0, sizeof(reply));
-            reply.Generation = Dg9GlRead(NULL, DG_REG_GENERATION);
+            Dg9QueueEnsure();
+            reply.Generation = Dg9Generation();
             Dg9GlDrain(&reply);
             Signal_Semaphore(dg_gl_mutex);
         }
@@ -229,12 +388,14 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
         !Dg9LockUser(params->lpcbBytesReturned, sizeof(DWORD), TRUE, &returned))
         goto done;
     memcpy(&request, input.Address, sizeof(request));
-    if (request.Version != DG_ESCAPE_VERSION || request.Reserved || request.Reserved2 ||
-        request.Bytes > DG_ESCAPE_MAX_BYTES ||
+    if (request.Version != DG_ESCAPE_VERSION || (request.Flags & ~DG_ESCAPE_SUBMIT_ASYNC) ||
+        request.Bytes > DG_ESCAPE_QUEUE_MAX_BYTES ||
         request.Bytes != params->cbInBuffer - sizeof(request) ||
         request.ResultCapacity > DG_ESCAPE_MAX_RESULT_BYTES ||
         request.ResultCapacity > params->cbOutBuffer - sizeof(reply) ||
-        (request.Operation != DG_ESCAPE_SUBMIT && (request.Bytes || request.ResultCapacity)))
+        ((request.Flags & DG_ESCAPE_SUBMIT_ASYNC) && request.ResultCapacity) ||
+        (request.Operation != DG_ESCAPE_SUBMIT &&
+         (request.Bytes || request.ResultCapacity || request.Flags || request.Stream)))
         goto done;
     if (!dg_gl_mutex) {
         DWORD candidate = Create_Semaphore(1);
@@ -253,12 +414,14 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
     held_mutex = dg_gl_mutex;
     reply.Version = DG_ESCAPE_VERSION;
     reply.FunctionWords = (ULONG)-1;
-    reply.Generation = Dg9GlRead(NULL, DG_REG_GENERATION);
-    reply.MaxResultBytes = Dg9GlResultLimit(Dg9GlRead(NULL, DG_REG_CAPS));
-    if (Dg9GlRead(NULL, DG_GL_REG_VERSION) != DG_GL_VERSION ||
-        !(Dg9GlRead(NULL, DG_REG_CAPS) & DG_CAP_GL_TRANSPORT) ||
-        !DgGlLimitsRefresh(&dg_gl_limits, reply.Generation, request.Operation == DG_ESCAPE_OPEN,
-                           Dg9GlRead, NULL)) {
+    Dg9QueueEnsure();
+    reply.Generation = Dg9Generation();
+    reply.MaxResultBytes =
+        Dg9GlResultLimit(Dg9Caps(reply.Generation, request.Operation == DG_ESCAPE_OPEN));
+    if (dg_gl_caps_version != DG_GL_VERSION || !(dg_gl_caps & DG_CAP_GL_TRANSPORT) ||
+        !DgGlLimitsRefreshLocal(&dg_gl_limits, reply.Generation,
+                                request.Operation == DG_ESCAPE_OPEN, Dg9LocalBytes(), Dg9GlRead,
+                                NULL)) {
         status = DG_ESCAPE_UNSUPPORTED;
         goto unlock;
     }
@@ -269,6 +432,18 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
     if (!Dg9GlInitialize()) {
         status = DG_ESCAPE_RESOURCES;
         goto unlock;
+    }
+    if (request.Operation == DG_ESCAPE_OPEN) {
+        /* Initialization may have just allocated the queue: enable it, then
+         * negotiate packet size against the transport actually in use. */
+        Dg9QueueEnsure();
+        reply.Generation = Dg9Generation();
+        if (!DgGlLimitsRefreshLocal(&dg_gl_limits, reply.Generation, TRUE, Dg9LocalBytes(),
+                                    Dg9GlRead, NULL)) {
+            status = DG_ESCAPE_UNSUPPORTED;
+            goto unlock;
+        }
+        reply.DeviceError = DgGlQueueCurrent(&dg_gl_queue) ? DG_ESCAPE_FEATURE_QUEUE : 0;
     }
     reply.MaxBytes = dg_gl_limits.MaxBytes;
     reply.MaxRecords = dg_gl_limits.MaxRecords;
@@ -302,29 +477,70 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
         Dg9GlRestoreInterrupts(flags);
         status = DG_ESCAPE_OK;
     } else if (request.Operation == DG_ESCAPE_CAPABILITIES && !request.Function) {
-        reply.FunctionWords = Dg9GlRead(NULL, DG_REG_CAPS);
+        reply.FunctionWords = Dg9Caps(reply.Generation, TRUE);
         status = DG_ESCAPE_OK;
     } else if (request.Operation == DG_ESCAPE_QUERY) {
         reply.FunctionWords = Dg9GlWords(NULL, request.Function);
         status = DG_ESCAPE_OK;
     } else if (request.Operation == DG_ESCAPE_SUBMIT && !request.Function) {
-        memcpy(dg_gl_commands, (BYTE *)input.Address + sizeof(request), request.Bytes);
-        if (!DreamGpuValidatePacket(dg_gl_commands, request.Bytes, token, reply.Generation,
-                                    &dg_gl_limits, Dg9GlWords, NULL))
+        DG_GL_QUEUE_FAULT fault;
+        DgGlQueueReap(&dg_gl_queue);
+        /* A stream's deferred failure is reported before anything else of
+         * its client runs; this request is not executed. */
+        if (request.Stream && DgGlQueueTakeFault(&dg_gl_queue, token, 0, &fault)) {
+            reply.FunctionWords = fault.Stream;
+            reply.DeviceError = fault.Error;
+            reply.CompletedSequence = fault.Sequence;
+            status = DG_ESCAPE_DEFERRED;
             goto unlock;
-        query = dg_gl_commands[0] == DG_GL_QUERY;
-        if (query != (request.ResultCapacity != 0))
+        }
+        ULONG *commands = Dg9Build();
+        if (dg_gl_build_status != DG_ESCAPE_OK) {
+            status = dg_gl_build_status;
+            dg_gl_build = NULL;
             goto unlock;
+        }
+        if (!dg_gl_build_queued && request.Bytes > DG_ESCAPE_MAX_BYTES) {
+            dg_gl_build = NULL;
+            goto unlock;
+        }
+        memcpy(commands, (BYTE *)input.Address + sizeof(request), request.Bytes);
+        if (!DreamGpuValidatePacket(commands, request.Bytes, token, reply.Generation, &dg_gl_limits,
+                                    Dg9GlWords, NULL)) {
+            dg_gl_build = NULL;
+            goto unlock;
+        }
+        query = commands[0] == DG_GL_QUERY;
+        if (query != (request.ResultCapacity != 0)) {
+            dg_gl_build = NULL;
+            goto unlock;
+        }
         if (query) {
             memset(dg_gl_result, 0, request.ResultCapacity);
-            Dg9GlWrite(DG_GL_REG_RESULT_ADDR_LO, dg_gl_result_physical);
-            Dg9GlWrite(DG_GL_REG_RESULT_ADDR_HI, 0);
-            Dg9GlWrite(DG_GL_REG_RESULT_CAPACITY, request.ResultCapacity);
+            if (!dg_gl_build_queued) {
+                Dg9GlWrite(DG_GL_REG_RESULT_ADDR_LO, dg_gl_result_physical);
+                Dg9GlWrite(DG_GL_REG_RESULT_ADDR_HI, 0);
+                Dg9GlWrite(DG_GL_REG_RESULT_CAPACITY, request.ResultCapacity);
+            }
         }
-        status = Dg9GlSubmit(request.Bytes, &reply);
-        if (query && status == DG_ESCAPE_OK) {
-            reply.ResultBytes = Dg9GlRead(NULL, DG_GL_REG_RESULT_BYTES);
-            reply.ResultType = Dg9GlRead(NULL, DG_GL_REG_RESULT_TYPE);
+        const DG9_SUBMIT submit = {request.Stream ? token : 0, request.Stream,
+                                   (request.Flags & DG_ESCAPE_SUBMIT_ASYNC) != 0,
+                                   request.ResultCapacity};
+        status = Dg9GlSubmit(request.Bytes, &reply, &submit);
+        if (status == DG_ESCAPE_HOST && request.Stream &&
+            reply.DeviceError == DG_GL_ERROR_SKIPPED) {
+            if (!DgGlQueueTakeFault(&dg_gl_queue, token, request.Stream, &fault)) {
+                fault.Stream = request.Stream;
+                fault.Error = DG_GL_ERROR_SKIPPED;
+                fault.Sequence = reply.CompletedSequence;
+            }
+            reply.FunctionWords = fault.Stream;
+            reply.DeviceError = fault.Error;
+            reply.CompletedSequence = fault.Sequence;
+            status = DG_ESCAPE_DEFERRED;
+        } else if (query && status == DG_ESCAPE_OK) {
+            reply.ResultBytes = dg_gl_result_bytes;
+            reply.ResultType = dg_gl_result_type;
             if (!DreamGpuValidateResult(reply.ResultType, reply.ResultBytes, request.ResultCapacity,
                                         dg_gl_result)) {
                 reply.ResultBytes = reply.ResultType = 0;
@@ -363,6 +579,14 @@ extern "C" void DREAMGPU_CDECL DreamGpuGlShutdown(void) {
         api->Free(dg_gl_commands);
     if (dg_gl_result)
         api->Free(dg_gl_result);
+    /* The device reset preceding shutdown disabled the queue page. */
+    for (ULONG i = 0; i < dg_gl_queue.BufferCount; ++i)
+        api->Free(dg_gl_queue.Buffers[i].Memory);
+    if (dg_gl_queue.Page)
+        api->Free(const_cast<ULONG *>(dg_gl_queue.Page));
+    memset(&dg_gl_queue, 0, sizeof(dg_gl_queue));
+    dg_gl_queue_supported = FALSE;
+    dg_gl_build = NULL;
     dg_gl_commands = NULL;
     dg_gl_result = NULL;
     dg_gl_initialized = FALSE;
@@ -392,27 +616,30 @@ extern "C" void DREAMGPU_CDECL DreamGpuPrimaryFault(void) {
 /* Every record names the primary format; the device checks it against the
  * active VBE mode. Zero keeps the original XRGB8888 records byte-identical. */
 static ULONG *Dg9DesktopRecord(ULONG op, ULONG client, ULONG drawable, ULONG bpp) {
-    memset(dg_gl_commands, 0, 96);
-    dg_gl_commands[0] = DG_GL_DESKTOP;
-    dg_gl_commands[1] = 96;
-    dg_gl_commands[2] = client ? client : 0xffffffffUL;
-    dg_gl_commands[4] = drawable;
-    dg_gl_commands[7] = Dg9GlRead(NULL, DG_REG_GENERATION);
-    dg_gl_commands[8] = op;
-    dg_gl_commands[8 + DG_DESKTOP_PRIMARY_BPP / 4] = bpp == 16 ? 16 : 0;
-    return dg_gl_commands + 8;
+    ULONG *commands = Dg9Build();
+    memset(commands, 0, 96);
+    commands[0] = DG_GL_DESKTOP;
+    commands[1] = 96;
+    commands[2] = client ? client : 0xffffffffUL;
+    commands[4] = drawable;
+    commands[7] = Dg9Generation();
+    commands[8] = op;
+    commands[8 + DG_DESKTOP_PRIMARY_BPP / 4] = bpp == 16 ? 16 : 0;
+    return commands + 8;
 }
 static ULONG Dg9WindowSubmit(ULONG bytes) {
     DG_ESCAPE_REPLY reply;
     ULONG status;
+    const ULONG *commands = Dg9Build();
+    const ULONG opcode = commands[0], operation = commands[8];
     memset(&reply, 0, sizeof(reply));
-    reply.Generation = Dg9GlRead(NULL, DG_REG_GENERATION);
+    reply.Generation = commands[7];
     status = Dg9GlSubmit(bytes, &reply);
     if (api->TraceText) {
         if (status != DG_ESCAPE_OK) {
             DgIdentityText("DGWINDOWERROR");
-            DgIdentityField("opcode", dg_gl_commands[0]);
-            DgIdentityField("operation", dg_gl_commands[8]);
+            DgIdentityField("opcode", opcode);
+            DgIdentityField("operation", operation);
             DgIdentityField("status", status);
             DgIdentityField("device", reply.DeviceError);
             DgIdentityField("sequence", reply.CompletedSequence);
@@ -558,7 +785,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
         goto unlock;
     }
     if (!Dg9CursorTakeoverSafe() || !Dg9Primary(&width, &height, &stride, &offset, &bpp) ||
-        offset || !(Dg9GlRead(NULL, DG_REG_CAPS) & DG_CAP_GL_PRESENT_BOUNDS)) {
+        offset || !(Dg9Caps(Dg9Generation(), FALSE) & DG_CAP_GL_PRESENT_BOUNDS)) {
         status = DG_ESCAPE_UNSUPPORTED;
         goto unlock;
     }
@@ -581,7 +808,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
         window->Drawable = request.Drawable;
         window->Width = request.Width;
         window->Height = request.Height;
-        window->Generation = Dg9GlRead(NULL, DG_REG_GENERATION);
+        window->Generation = Dg9Generation();
         reply.Binding = window->Token;
         reply.Capabilities = DG9_WINDOW_FRONT_ONLY;
         status = DG_ESCAPE_OK;
@@ -592,7 +819,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
         (request.Operation != DG9_WINDOW_PREPARE && request.Flags))
         goto unlock;
     window = Dg9WindowFind(request.Binding, request.Client);
-    if (!window || window->Generation != Dg9GlRead(NULL, DG_REG_GENERATION)) {
+    if (!window || window->Generation != Dg9Generation()) {
         status = DG_ESCAPE_OWNER;
         goto unlock;
     }
@@ -604,19 +831,28 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
     } else if (request.Operation == DG9_WINDOW_PREPARE) {
         if (window->Retained)
             goto unlock;
-        memset(dg_gl_commands, 0, 40);
-        dg_gl_commands[0] = DG_GL_PRESENT;
-        dg_gl_commands[1] = 40;
-        dg_gl_commands[2] = window->Client;
-        dg_gl_commands[3] = window->Context;
-        dg_gl_commands[4] = window->Drawable;
-        dg_gl_commands[5] = DG_GL_PRESENT_RETAIN | DG_GL_PRESENT_BOUNDED |
-                            (request.Flags ? DG_GL_PRESENT_FRONT_ONLY : 0);
-        dg_gl_commands[7] = window->Generation;
-        dg_gl_commands[8] = window->Width;
-        dg_gl_commands[9] = window->Height;
+        ULONG *commands = Dg9Build();
+        memset(commands, 0, 40);
+        commands[0] = DG_GL_PRESENT;
+        commands[1] = 40;
+        commands[2] = window->Client;
+        commands[3] = window->Context;
+        commands[4] = window->Drawable;
+        commands[5] = DG_GL_PRESENT_RETAIN | DG_GL_PRESENT_BOUNDED |
+                      (request.Flags ? DG_GL_PRESENT_FRONT_ONLY : 0);
+        commands[7] = window->Generation;
+        commands[8] = window->Width;
+        commands[9] = window->Height;
         status = Dg9WindowSubmit(40);
-        if (status == DG_ESCAPE_OK) {
+        if (status == DG_ESCAPE_OK && DgGlQueueCurrent(&dg_gl_queue)) {
+            /* Written with the PRESENT entry's completion, before COMPLETED. */
+            window->Slot = DgGlQueueLoad(&dg_gl_queue, DG_GL_QUEUE_PRESENT_SLOT);
+            window->EpochLow = DgGlQueueLoad(&dg_gl_queue, DG_GL_QUEUE_PRESENT_EPOCH_LO);
+            window->EpochHigh = DgGlQueueLoad(&dg_gl_queue, DG_GL_QUEUE_PRESENT_EPOCH_HI);
+            window->FrameLow = DgGlQueueLoad(&dg_gl_queue, DG_GL_QUEUE_PRESENT_FRAME_LO);
+            window->FrameHigh = DgGlQueueLoad(&dg_gl_queue, DG_GL_QUEUE_PRESENT_FRAME_HI);
+            window->Retained = TRUE;
+        } else if (status == DG_ESCAPE_OK) {
             window->Slot = Dg9GlRead(NULL, DG_GL_REG_PRESENT_SLOT);
             window->EpochLow = Dg9GlRead(NULL, DG_GL_REG_PRESENT_EPOCH_LO);
             window->EpochHigh = Dg9GlRead(NULL, DG_GL_REG_PRESENT_EPOCH_HI);
@@ -683,7 +919,7 @@ extern "C" unsigned short DREAMGPU_CDECL DreamGpuWindowBlt(const DG9_CHANNEL_BLT
             break;
         }
     if (!window || !window->Token || !window->Retained || dg_gl_faulted ||
-        window->Generation != Dg9GlRead(NULL, DG_REG_GENERATION))
+        window->Generation != Dg9Generation())
         goto done;
     flags = Dg9GlDisableInterrupts();
     owner = Dg9OwnerFind(&dg_gl_owners, window->Client);

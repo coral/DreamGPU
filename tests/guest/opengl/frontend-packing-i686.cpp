@@ -23,6 +23,13 @@ void *memset(void *destination, int value, size_t bytes) {
         out[i] = (BYTE)value;
     return destination;
 }
+/* Only a DEFERRED reply (never sent here) takes the context table lock. */
+void EnterCriticalSection(CRITICAL_SECTION *) {
+    TransportError = 3;
+}
+void LeaveCriticalSection(CRITICAL_SECTION *) {
+    TransportError = 3;
+}
 void *TlsGetValue(DWORD key) {
     ++TlsCalls;
     if (key != 0)
@@ -37,7 +44,7 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
         (ULONG)input_bytes != sizeof(*request) + request->Bytes || output_bytes != sizeof(*reply) ||
         request->Version != DG_ESCAPE_VERSION || request->Operation != DG_ESCAPE_SUBMIT ||
         request->Client != 51 || request->Bytes > DG_ESCAPE_MAX_BYTES || (request->Bytes & 3) ||
-        request->Function || request->ResultCapacity || request->Reserved || request->Reserved2) {
+        request->Function || request->ResultCapacity || request->Flags || request->Stream) {
         TransportError = 2;
         return 0;
     }

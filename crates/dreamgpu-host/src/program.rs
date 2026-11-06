@@ -766,7 +766,12 @@ unsafe fn replace_vertex(
     }
     unsafe {
         native_bind_name(api, target, fresh)?;
-        load(target, GL_PROGRAM_FORMAT_ASCII_ARB, data.len() as i32, data.as_ptr().cast());
+        load(
+            target,
+            GL_PROGRAM_FORMAT_ASCII_ARB,
+            data.len() as i32,
+            data.as_ptr().cast(),
+        );
     }
     let code = unsafe { get_error() };
     if code != GL_NO_ERROR {

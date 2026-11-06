@@ -780,11 +780,27 @@ fn record_shapes_words_and_query_shapes() {
         1,
         0
     ]));
-    assert!(!t2(&[
+    // ARB_texture_rectangle: a rectangle attaches through FramebufferTexture2D
+    // (a nonzero level is an execution-time INVALID_VALUE).
+    assert!(t2(&[
         GL_FRAMEBUFFER,
         GL_COLOR_ATTACHMENT0,
         GL_TEXTURE_RECTANGLE_ARB,
-        0,
+        1,
+        0
+    ]));
+    assert!(t2(&[
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_TEXTURE_RECTANGLE_ARB,
+        1,
+        1
+    ]));
+    assert!(!t2(&[
+        GL_FRAMEBUFFER,
+        GL_COLOR_ATTACHMENT0,
+        GL_PROXY_TEXTURE_RECTANGLE_ARB,
+        1,
         0
     ]));
     assert!(!t2(&[GL_FRAMEBUFFER, 0x821a, GL_TEXTURE_2D, 1, 0])); // DEPTH_STENCIL_ATTACHMENT

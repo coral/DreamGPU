@@ -666,8 +666,9 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         return GL_INVALID_OPERATION;
     }
     let one = unsafe { (*t).target } == GL_TEXTURE_1D;
-    // A cube face is cleared and filled through its own face target.
-    let target = if cube_face(target).is_some() {
+    // A cube face is cleared and filled through its own face target, a
+    // rectangle through TEXTURE_RECTANGLE.
+    let target = if cube_face(target).is_some() || target == GL_TEXTURE_RECTANGLE_ARB {
         target
     } else {
         GL_TEXTURE_2D

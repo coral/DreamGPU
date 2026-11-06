@@ -22,13 +22,14 @@ unsafe extern "C" fn zero(
 ) -> u32 {
     unsafe { resource::dreamgpu_texture_zero(opaque.cast::<Memory>(), t, target, level, w, h) }
 }
-/// Rejected-level mask of a proxy target: 1D, 2D, cube map or 3D.
+/// Rejected-level mask of a proxy target: 1D, 2D, cube map, 3D or rectangle.
 unsafe fn proxy_mask(state: *mut ContextState, target: u32) -> *mut u32 {
     unsafe {
         match target {
             GL_PROXY_TEXTURE_1D => addr_of_mut!((*state).proxy_rejected[0]),
             GL_PROXY_TEXTURE_CUBE_MAP => addr_of_mut!((*state).proxy_rejected_cube),
             GL_PROXY_TEXTURE_3D => addr_of_mut!((*state).proxy_rejected_3d),
+            GL_PROXY_TEXTURE_RECTANGLE_ARB => addr_of_mut!((*state).proxy_rejected_rect),
             _ => addr_of_mut!((*state).proxy_rejected[1]),
         }
     }
@@ -448,6 +449,7 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
                 (*state).default_texture_1d,
                 (*state).default_texture_cube,
                 (*state).default_texture_3d,
+                (*state).default_texture_rect,
                 bindings.as_ptr(),
                 bindings.len() as u32,
             )
@@ -539,7 +541,10 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
     if matches!(function, FEnum_glTexImage1D | FEnum_glTexImage2D)
         && matches!(
             a[0],
-            GL_PROXY_TEXTURE_1D | GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP
+            GL_PROXY_TEXTURE_1D
+                | GL_PROXY_TEXTURE_2D
+                | GL_PROXY_TEXTURE_CUBE_MAP
+                | GL_PROXY_TEXTURE_RECTANGLE_ARB
         )
     {
         unsafe {

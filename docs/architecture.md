@@ -101,6 +101,43 @@ not eliminate synchronization, producer leases or all GPU copies.
 VM must still complete required guest reads and resource lifecycle operations.
 Juke retains its application-specific choice of which VM to present.
 
+## Guest command transport
+
+Guest GL work (the OpenGL frontend, and OpenGLide and WineD3D through it)
+reaches the device in batches of the records described in `gl.h`. The
+frontend fills a per-context packet and hands it to the kernel driver (NT
+miniport through `ExtEscape`, Win9x VxD through `DeviceIoControl`). The kernel
+copies the packet into driver-owned memory, validates every record there, and
+only then lets the device read it; the device copies it again into host
+memory and validates that copy before execution. No application-writable byte
+is read by the host after kernel validation.
+
+Two transports carry the same records with the same admission and ordering:
+
+- The register transport (every host): one batch at a time through the
+  `DG_GL_REG_*` registers. The driver waits for each batch to finish.
+- The queued transport (`DG_GL_REG_QUEUE_VERSION` 1): a guest RAM page holds a
+  sixteen-entry ring and the counters; the kernel owns up to eight 128 KiB
+  packet buffers. Publishing a batch is one doorbell write, which QEMU serves
+  through an ioeventfd so the vCPU does not stop in the device model. The
+  device copies and validates the entry on its main loop, the render thread
+  executes it, and completion status is written back to the page by DMA.
+  The driver sleeps only when it needs something: a free buffer or entry,
+  a query result, a synchronous submission. It arms the interrupt for that
+  one condition first; otherwise no interrupt is raised.
+
+The kernel enables the queue when the host offers it and falls back to the
+register transport otherwise; older drivers never see it. A frontend that
+sees `DG_ESCAPE_FEATURE_QUEUE` at OPEN names its context as a stream in every
+submission and submits full packets and `glFlush` asynchronously. Everything
+whose API result depends on the batch (SwapBuffers, MakeCurrent, Finish,
+queries, context cleanup) stays synchronous. A failed asynchronous batch is
+reported once, as `DG_ESCAPE_DEFERRED`, to that client's next submission; the
+frontend then fails the named context exactly as a failed synchronous flush
+would. The host skips that stream's later queued batches, so nothing after
+the failure executes. Engine reset discards unfinished entries; the kernel
+reports them as failed and re-enables the queue for the new generation.
+
 ## Input, scheduling and diagnostics
 
 DreamGPU owns fixed-wire input queues and their sleeping I/O worker. Juke decides

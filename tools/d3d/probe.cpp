@@ -190,6 +190,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "xyzrhw-probe.inc"
 #include "rtt-probe.inc"
 #include "query-probe.inc"
+#include "npot-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -362,6 +363,9 @@ static void Run(void) {
     if (failed)
         return;
 #endif
+    npot_probe::Run(d3d, device, surface);
+    if (failed)
+        return;
     Log("STAGE present");
     HR(DEVICE(Present, device, NULL, NULL, NULL, NULL), "FAIL present");
 }

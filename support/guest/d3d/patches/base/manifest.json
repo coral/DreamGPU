@@ -195,6 +195,10 @@
     {
       "file": "0048-xyzrhw-arrays.patch",
       "sha256": "365e9f1c3c805998ffaf2ad001bd22cc3abd57edc0a24a0d97c73479742a35d0"
+    },
+    {
+      "file": "0049-rectangle-texture-types.patch",
+      "sha256": "6843e0ac8579593e39b97bd82199b9ff94fd7c93b794eabf31b730fd5ec0845c"
     }
   ],
   "files": {
@@ -212,15 +216,15 @@
     },
     "wined3d/resource.c": {
       "before_sha256": "bb5d96bd0ba31be8b24eaf172b5a927c6760b9e094b9ebb132d118f1447039d7",
-      "after_sha256": "820692b2c208e7549653c9d4d2fc313e52a9751626d4b6d2cdd1b36929dd878a"
+      "after_sha256": "2ab072eb0616c4aedefc76cdf0c1b8389196996cf8611f0226137f8437b06da1"
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "a963a229e8fe2c3ced846a9dab485612c4c3ebd9a35ed59f1b2c35c358a58b11"
+      "after_sha256": "d71c0ab0d0368c6d52b3c13df55c3aa42543e9d35528c8f6643a531707727947"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
-      "after_sha256": "991051f9483aeb4fa56f7b1cf00389066be9db8a0ef6fdeb788b8a923057ebc1"
+      "after_sha256": "21d6453b5034df1e37fbc27f487cf7a14f1bac54a4827d95bb69548fa30ba4b7"
     },
     "switcher/switcher.c": {
       "before_sha256": "a820f660bdc88a06aa27b8c31b2b2871fbb84baa5ad93a5b6c4bcc767be0e123",

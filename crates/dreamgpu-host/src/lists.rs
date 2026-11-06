@@ -436,6 +436,7 @@ unsafe fn capture(
                 | GL_PROXY_TEXTURE_2D
                 | GL_PROXY_TEXTURE_CUBE_MAP
                 | GL_PROXY_TEXTURE_3D
+                | GL_PROXY_TEXTURE_RECTANGLE_ARB
         );
     if s.is_null() || unsafe { (*s).mode } == 0 || immediate(f) || proxy {
         return true;

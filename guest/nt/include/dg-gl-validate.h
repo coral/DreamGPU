@@ -12,7 +12,7 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
     ULONG offset = 0, records = 0;
     if (!limits->Initialized || limits->Generation != generation || !limits->MaxRecords ||
         limits->MaxRecords > DG_GL_MAX_RECORDS || !bytes || bytes > limits->MaxBytes ||
-        bytes > DG_ESCAPE_MAX_BYTES || (bytes & 3))
+        bytes > DG_ESCAPE_QUEUE_MAX_BYTES || (bytes & 3))
         return 0;
     while (offset < bytes) {
         ULONG *record = words + offset / 4, op, size, expected = 0;
@@ -41,7 +41,7 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
                     return 0;
                 expected = function_words(context, record[8]);
                 if (expected == (ULONG)-1 || (expected & DG_GL_FUNCTION_KIND_MASK) ||
-                    expected > (DG_ESCAPE_MAX_BYTES - 36) / 4)
+                    expected > (DG_ESCAPE_QUEUE_MAX_BYTES - 36) / 4)
                     return 0;
                 expected = 36 + expected * 4;
                 break;

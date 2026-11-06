@@ -34,6 +34,8 @@ mod pixel_image;
 mod pixels;
 #[path = "native_qemu/primary16.rs"]
 mod primary16;
+#[path = "native_qemu/queue.rs"]
+mod queue;
 #[path = "native_qemu/raster.rs"]
 mod raster;
 #[path = "native_qemu/secondary.rs"]
@@ -42,6 +44,8 @@ mod secondary;
 mod texture_3d;
 #[path = "native_qemu/texture_control.rs"]
 mod texture_control;
+#[path = "native_qemu/texture_npot.rs"]
+mod texture_npot;
 #[path = "native_qemu/textures.rs"]
 mod textures;
 #[path = "native_qemu/vertex_array_bgra.rs"]

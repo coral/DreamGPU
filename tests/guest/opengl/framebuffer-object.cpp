@@ -121,7 +121,8 @@ static void HostShape(const std::vector<ULONG> &r) {
             if (r[8] == FEnum_glFramebufferTexture1D)
                 assert(a[2] == GL_TEXTURE_1D);
             else if (!volume)
-                assert(a[2] == GL_TEXTURE_2D || a[2] - CUBE_X < 6);
+                assert(a[2] == GL_TEXTURE_2D || a[2] == 0x84f5 /* RECTANGLE */ ||
+                       a[2] - CUBE_X < 6);
             else
                 assert(a[2] == TEX3D && a[5] < DG_GL_MAX_3D_TEXTURE_SIZE);
             break;

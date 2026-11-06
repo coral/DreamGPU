@@ -10,8 +10,8 @@ extern BOOL Dg9CursorTakeoverSafe(void);
 extern BOOL Dg9Primary(DWORD *, DWORD *, DWORD *, DWORD *);
 extern void Dg9PrimaryGpuOwned(BOOL);
 extern FBHDA_t *hda;
-static DWORD dg_gl_sequence;
-static volatile DWORD dg_gl_wait, dg_gl_pending;
+static DWORD dg_gl_sequence, dg_gl_queue_timer;
+static volatile DWORD dg_gl_wait, dg_gl_pending, dg_gl_timed_out;
 /* One bounded boot event permits state-driven fixture logon with the normal
  * driver. No addresses or per-frame diagnostic I/O enter this path. */
 static BOOL dg_boot_process_seen;
@@ -99,6 +99,7 @@ static void __declspec(naked) Dg9GlTimeout(void) {
     // clang-format off: Watcom assembly uses newline instruction boundaries.
     _asm {
         pushad
+        mov dword ptr [dg_gl_timed_out], 1
         call Dg9GlSignal
         popad
         ret
@@ -145,6 +146,35 @@ static ULONG __cdecl Dg9Submit(ULONG physical, ULONG bytes, DG_ESCAPE_REPLY *rep
     reply->CompletedSequence = sequence;
     reply->DeviceError = status & DG_STATUS_ERROR ? Dg9GlRead(NULL, DG_GL_REG_ERROR) : 0;
     return status & DG_STATUS_ERROR ? DG_ESCAPE_HOST : DG_ESCAPE_OK;
+}
+
+/* Queued transport: the semaphore and watchdog exist before the device wait
+ * is armed, so an IRQ arriving in between still wakes Wait immediately. */
+static int __cdecl Dg9ApiQueuePrepare(void) {
+    dg_gl_wait = Create_Semaphore(0);
+    if (!dg_gl_wait)
+        return 0;
+    dg_gl_timed_out = 0;
+    dg_gl_pending = 1;
+    dg_gl_queue_timer = Set_Async_Time_Out(2000, 0, Dg9GlTimeout);
+    if (!dg_gl_queue_timer) {
+        dg_gl_pending = 0;
+        Destroy_Semaphore(dg_gl_wait);
+        dg_gl_wait = 0;
+        return 0;
+    }
+    return 1;
+}
+static int __cdecl Dg9ApiQueueWait(void) {
+    Wait_Semaphore(dg_gl_wait, 0);
+    return !dg_gl_timed_out;
+}
+static void __cdecl Dg9ApiQueueFinish(void) {
+    Cancel_Time_Out(dg_gl_queue_timer);
+    dg_gl_queue_timer = 0;
+    dg_gl_pending = 0;
+    Destroy_Semaphore(dg_gl_wait);
+    dg_gl_wait = 0;
 }
 
 static volatile DWORD *__cdecl Dg9ApiRegisters(void) {
@@ -230,16 +260,16 @@ static void __cdecl Dg9ApiTraceChar(char c) {
 }
 #endif
 static const DG9_CHANNEL_SERVICES dg_channel_services = {
-    Dg9ApiRegisters,       Dg9ApiRead,       Dg9ApiWrite,     Dg9ApiCritical,     Dg9ApiDisable,
-    Dg9ApiRestore,         Dg9ApiContext,    Dg9ApiSemaphore, Dg9ApiDestroy,      Dg9ApiWait,
-    Dg9ApiSignalSemaphore, Dg9ApiAllocate,   Dg9ApiFree,      Dg9Submit,          Dg9ApiPending,
-    Dg9ApiSignal,          Dg9ApiCursor,     Dg9ApiPrimary,   Dg9ApiPrimaryOwned, Dg9ApiFatal,
+    Dg9ApiRegisters,       Dg9ApiRead,         Dg9ApiWrite,     Dg9ApiCritical,     Dg9ApiDisable,
+    Dg9ApiRestore,         Dg9ApiContext,      Dg9ApiSemaphore, Dg9ApiDestroy,      Dg9ApiWait,
+    Dg9ApiSignalSemaphore, Dg9ApiAllocate,     Dg9ApiFree,      Dg9Submit,          Dg9ApiPending,
+    Dg9ApiSignal,          Dg9ApiCursor,       Dg9ApiPrimary,   Dg9ApiPrimaryOwned, Dg9ApiFatal,
 #ifdef DG_IDENTITY_H
-    Dg9ApiTraceText,       Dg9ApiTraceField, Dg9ApiTraceChar,
+    Dg9ApiTraceText,       Dg9ApiTraceField,   Dg9ApiTraceChar,
 #else
     NULL,NULL,NULL,
 #endif
-    &dg_memory_services};
+    &dg_memory_services,   Dg9ApiQueuePrepare, Dg9ApiQueueWait, Dg9ApiQueueFinish};
 void Dg9ChannelInitializeCallbacks(void) {
     DreamGpuChannelBind(&dg_channel_services);
 }

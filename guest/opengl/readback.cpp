@@ -535,8 +535,10 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     ULONG wire_bytes = wide ? 16 : 4, kind = wide ? DG_GL_RESULT_FLOAT : DG_GL_RESULT_INT;
     if (!JglReady())
         return;
-    /* TEXTURE_2D or, once negotiated, one cube map face or TEXTURE_3D. */
-    if (target != GL_TEXTURE_1D && !JglImage2DTarget(target) && !volume) {
+    /* TEXTURE_2D or, once negotiated, one cube map face, TEXTURE_3D or
+     * TEXTURE_RECTANGLE (level zero only). */
+    if (target != GL_TEXTURE_1D && !JglImage2DTarget(target) && !volume &&
+        !JglRectangleTarget(target)) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }
@@ -547,7 +549,8 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         JglSetError(GL_INVALID_OPERATION);
         return;
     }
-    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || !pixels)
+    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || !pixels ||
+        (level && JglRectangleTarget(target)))
         goto invalid;
     args[0] = target;
     args[1] = level;

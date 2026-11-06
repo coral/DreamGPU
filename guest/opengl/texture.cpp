@@ -323,17 +323,19 @@ static BOOL DepthPixels(GLenum format) {
     return format == 0x1902 /* DEPTH_COMPONENT */ || format == JGL_DEPTH_STENCIL;
 }
 
-/* 2D records target TEXTURE_2D or, once negotiated, one cube map face. */
+/* 2D records target TEXTURE_2D or, once negotiated, one cube map face or
+ * TEXTURE_RECTANGLE, whose only level is zero (ARB_texture_rectangle). */
 static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, GLenum format,
                      GLenum type, ULONG *components, GLint border = 0) {
-    if (!JglImage2DTarget(target)) {
+    if (!JglImage2DTarget(target) && !JglRectangleTarget(target)) {
         JglCommandError(GL_INVALID_ENUM);
         return FALSE;
     }
     if (!(*components = PixelBytes(format, type, FALSE, DepthTarget(target))))
         return FALSE;
-    if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
-        border > 1 || (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * border ||
+    if ((level && JglRectangleTarget(target)) || level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL ||
+        width < 0 || height < 0 || border < 0 || border > 1 ||
+        (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * border ||
         (ULONG)height > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * border) {
         JglCommandError(GL_INVALID_VALUE);
         return FALSE;
@@ -617,10 +619,20 @@ invalid:
 static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsizei width,
                        GLsizei height, GLint border, GLenum format, GLenum type) {
     const BOOL cube = target == JGL_PROXY_TEXTURE_CUBE_MAP;
+    const BOOL rectangle = target == JGL_PROXY_TEXTURE_RECTANGLE;
     if (!JglReady() || !PixelBytes(format, type, TRUE))
         return;
     if (!JglTextureImagesAvailable()) {
         JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
+    /* A rectangle is never compressed; it has level zero and no border. */
+    if (rectangle && CompressedInternalFormat2D(internal_format)) {
+        JglSetError(GL_INVALID_ENUM);
+        return;
+    }
+    if (rectangle && (level || border)) {
+        JglSetError(GL_INVALID_VALUE);
         return;
     }
     /* Cube map faces are square and borderless. */
@@ -644,7 +656,8 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
                            GLsizei height, GLint border, GLenum format, GLenum type,
                            const void *pixels) {
     if (target == 0x8064 /* PROXY_TEXTURE_2D */ ||
-        (target == JGL_PROXY_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable())) {
+        (target == JGL_PROXY_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable()) ||
+        (target == JGL_PROXY_TEXTURE_RECTANGLE && JglTextureRectangleAvailable())) {
         ProxyImage(target, level, internal_format, width, height, border, format, type);
         return;
     }
@@ -656,10 +669,17 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
         return;
     const BOOL compressed = CompressedInternalFormat2D(internal_format);
     const BOOL depth = DepthTarget(target) && JglDepthInternalFormat(internal_format);
-    /* Cube map faces are square and borderless, as are depth textures. */
+    const BOOL rectangle = JglRectangleTarget(target);
+    /* Rectangles are never compressed (ARB_texture_rectangle). */
+    if (rectangle && compressed) {
+        JglCommandError(GL_INVALID_ENUM);
+        return;
+    }
+    /* Cube map faces are square and borderless, as are depth textures and
+     * rectangles. */
     if (width < 2 * border || height < 2 * border ||
         (JglCubeFace(target) && (width != height || border)) || (depth && border) ||
-        (!InternalFormat(internal_format) && !compressed && !depth)) {
+        (rectangle && border) || (!InternalFormat(internal_format) && !compressed && !depth)) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }

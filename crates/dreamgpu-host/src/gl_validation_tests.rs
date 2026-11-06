@@ -1124,3 +1124,214 @@ fn bgra_buffer_draw_is_the_buffer_draw_with_bgra_buffer_slots() {
     assert_eq!(validate(ext, &bad, &data), DG_GL_ERROR_BATCH);
     assert_eq!(validate(ext, &a, &data[..184]), DG_GL_ERROR_BATCH);
 }
+
+#[test]
+fn rectangle_records_have_one_borderless_uncompressed_level() {
+    // ARB_texture_rectangle: TEXTURE_RECTANGLE is a binding, enable and
+    // parameter target; GENERATE_MIPMAP is no rectangle parameter.
+    for pname in [
+        GL_TEXTURE_MIN_FILTER,
+        GL_TEXTURE_MAG_FILTER,
+        GL_TEXTURE_WRAP_S,
+        GL_TEXTURE_WRAP_T,
+        GL_TEXTURE_WRAP_R,
+        GL_TEXTURE_BASE_LEVEL,
+        GL_TEXTURE_MAX_LEVEL,
+        GL_TEXTURE_PRIORITY,
+        GL_TEXTURE_MAX_ANISOTROPY_EXT,
+    ] {
+        assert_eq!(
+            texture_params(GL_TEXTURE_RECTANGLE_ARB, pname),
+            1,
+            "{pname:#x}"
+        );
+    }
+    assert_eq!(
+        texture_params(GL_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_BORDER_COLOR),
+        4
+    );
+    assert_eq!(
+        texture_params(GL_TEXTURE_RECTANGLE_ARB, GL_GENERATE_MIPMAP),
+        0
+    );
+    assert_eq!(texture_params(GL_TEXTURE_2D, GL_GENERATE_MIPMAP), 1);
+    assert_eq!(
+        texture_params(GL_PROXY_TEXTURE_RECTANGLE_ARB, GL_TEXTURE_MIN_FILTER),
+        0
+    );
+    assert!(query_cap(GL_TEXTURE_RECTANGLE_ARB));
+    assert!(!query_cap(GL_PROXY_TEXTURE_RECTANGLE_ARB));
+    for name in [
+        GL_TEXTURE_BINDING_RECTANGLE_ARB,
+        GL_MAX_RECTANGLE_TEXTURE_SIZE_ARB,
+    ] {
+        assert_eq!(query_state_count(name), 1, "{name:#x}");
+    }
+
+    // Images of any size up to the 2D level-zero limit, level zero only, no
+    // border, no compressed or depth internal format.
+    let image = |a: [u32; 8], n: usize| data_validate(FEnum_glTexImage2D, &a, &vec![0; n]);
+    let rect = GL_TEXTURE_RECTANGLE_ARB;
+    let (rgba, ubyte) = (GL_RGBA, GL_UNSIGNED_BYTE);
+    assert_eq!(image([rect, 0, GL_RGBA8, 3, 5, 0, rgba, ubyte], 60), 0);
+    assert_eq!(image([rect, 0, GL_RGBA8, 640, 480, 0, rgba, ubyte], 0), 0);
+    assert_eq!(image([rect, 0, GL_RGB5, 2048, 1, 0, rgba, ubyte], 0), 0);
+    assert_eq!(image([rect, 0, GL_RGBA8, 0, 0, 0, rgba, ubyte], 0), 0);
+    for (a, n) in [
+        ([rect, 1, GL_RGBA8, 3, 5, 0, rgba, ubyte], 60), // level one
+        ([rect, 0, GL_RGBA8, 5, 7, 1, rgba, ubyte], 140), // bordered
+        ([rect, 0, GL_RGBA8, 2049, 1, 0, rgba, ubyte], 0), // beyond the limit
+        (
+            [
+                rect,
+                0,
+                GL_COMPRESSED_RGB_S3TC_DXT1_EXT,
+                8,
+                8,
+                0,
+                rgba,
+                ubyte,
+            ],
+            0,
+        ),
+        ([rect, 0, GL_COMPRESSED_RGBA, 8, 8, 0, rgba, ubyte], 0),
+        (
+            [
+                rect,
+                0,
+                GL_DEPTH_COMPONENT24,
+                8,
+                8,
+                0,
+                GL_DEPTH_COMPONENT,
+                GL_UNSIGNED_INT,
+            ],
+            0,
+        ),
+    ] {
+        assert_eq!(image(a, n), DG_GL_ERROR_TEXTURE, "{a:?}");
+    }
+    let sub = |a: [u32; 8], n: usize| data_validate(FEnum_glTexSubImage2D, &a, &vec![0; n]);
+    assert_eq!(sub([rect, 0, 637, 1, 3, 2, rgba, ubyte], 24), 0);
+    assert_eq!(
+        sub([rect, 1, 0, 0, 1, 1, rgba, ubyte], 4),
+        DG_GL_ERROR_TEXTURE
+    );
+    // The proxy: level zero, borderless, uncompressed, never data.
+    let proxy = GL_PROXY_TEXTURE_RECTANGLE_ARB;
+    assert_eq!(
+        image([proxy, 0, GL_RGBA8, 2048, 2048, 0, rgba, ubyte], 0),
+        0
+    );
+    for (a, n) in [
+        ([proxy, 0, GL_RGBA8, 4, 4, 0, rgba, ubyte], 64),
+        ([proxy, 1, GL_RGBA8, 4, 4, 0, rgba, ubyte], 0),
+        ([proxy, 0, GL_RGBA8, 6, 6, 1, rgba, ubyte], 0),
+        (
+            [
+                proxy,
+                0,
+                GL_COMPRESSED_RGBA_S3TC_DXT5_EXT,
+                4,
+                4,
+                0,
+                rgba,
+                ubyte,
+            ],
+            0,
+        ),
+    ] {
+        assert_eq!(image(a, n), DG_GL_ERROR_TEXTURE, "{a:?}");
+    }
+    // Rectangles are no 1D target.
+    assert_eq!(
+        data_validate(
+            FEnum_glTexImage1D,
+            &[rect, 0, GL_RGBA8, 4, 1, 0, rgba, ubyte],
+            &[0; 16]
+        ),
+        DG_GL_ERROR_TEXTURE
+    );
+    // Compressed records never name a rectangle or its proxy.
+    let dxt1 = GL_COMPRESSED_RGB_S3TC_DXT1_EXT;
+    for target in [rect, proxy] {
+        assert_eq!(
+            data_validate(
+                FEnum_glCompressedTexImage2D,
+                &[target, 0, dxt1, 8, 8, 0, 32, 0],
+                &[]
+            ),
+            DG_GL_ERROR_TEXTURE
+        );
+    }
+    assert_eq!(
+        data_validate(
+            FEnum_glCompressedTexSubImage2D,
+            &[rect, 0, 0, 0, 4, 4, dxt1, 8],
+            &[0; 8]
+        ),
+        DG_GL_ERROR_TEXTURE
+    );
+
+    // Copies: any size, level zero, no border.
+    let copy = |a: [u32; 8]| call_validate(FEnum_glCopyTexImage2D, &a);
+    assert_eq!(copy([rect, 0, GL_RGBA8, 0, 0, 640, 480, 0]), 0);
+    assert_eq!(
+        copy([rect, 1, GL_RGBA8, 0, 0, 4, 4, 0]),
+        DG_GL_ERROR_TEXTURE
+    );
+    assert_eq!(
+        copy([rect, 0, GL_RGBA8, 0, 0, 6, 6, 1]),
+        DG_GL_ERROR_TEXTURE
+    );
+    assert_eq!(
+        copy([rect, 0, GL_DEPTH_COMPONENT24, 0, 0, 4, 4, 0]),
+        DG_GL_ERROR_TEXTURE
+    );
+    assert_eq!(
+        copy([proxy, 0, GL_RGBA8, 0, 0, 4, 4, 0]),
+        DG_GL_ERROR_TEXTURE
+    );
+    let sub_copy =
+        |level: u32| call_validate(FEnum_glCopyTexSubImage2D, &[rect, level, 1, 2, 0, 0, 3, 5]);
+    assert_eq!(sub_copy(0), 0);
+    assert_eq!(sub_copy(1), DG_GL_ERROR_TEXTURE);
+
+    // Queries: level-zero readback and level parameters (also of the proxy);
+    // no compressed readback.
+    assert_eq!(query_result_bytes(FEnum_glGetTexImage, [rect, 0, 0]), 512);
+    assert_eq!(query_result_bytes(FEnum_glGetTexImage, [rect, 1, 0]), 0);
+    assert_eq!(
+        query_result_bytes(FEnum_glGetCompressedTexImage, [rect, 0, 0]),
+        0
+    );
+    for target in [rect, proxy] {
+        assert_eq!(
+            query_result_bytes(
+                FEnum_glGetTexLevelParameteriv,
+                [target, 0, GL_TEXTURE_WIDTH]
+            ),
+            4
+        );
+        assert_eq!(
+            query_result_bytes(
+                FEnum_glGetTexLevelParameteriv,
+                [target, 1, GL_TEXTURE_WIDTH]
+            ),
+            0
+        );
+    }
+    assert_eq!(
+        query_result_bytes(FEnum_glGetTexParameteriv, [rect, GL_TEXTURE_RESIDENT, 0]),
+        4
+    );
+    assert_eq!(
+        query_result_bytes(FEnum_glGetTexParameteriv, [rect, GL_TEXTURE_WRAP_S, 0]),
+        4
+    );
+    assert_eq!(
+        query_result_bytes(FEnum_glGetTexParameteriv, [rect, GL_GENERATE_MIPMAP, 0]),
+        0
+    );
+    assert_eq!(query_result_bytes(FEnum_glIsEnabled, [rect, 0, 0]), 1);
+}

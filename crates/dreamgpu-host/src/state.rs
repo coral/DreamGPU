@@ -125,17 +125,30 @@ pub struct ContextState {
     /// Rust-only query and fence state (ARB_occlusion_query, NV_fence), owned
     /// by this context and created on first use.
     pub queries: *mut crate::occlusion::Queries,
+    /// Rust-only rectangle texture state (ARB_texture_rectangle), with the cube
+    /// map state's ownership: `bound_texture_rect` is the active unit's binding,
+    /// `units_rect` every other unit's (null for the active unit), and
+    /// `attrib_rect` saves every unit's binding, in unit order, with each
+    /// TEXTURE_BIT entry.
+    pub default_texture_rect: *mut Texture,
+    pub bound_texture_rect: *mut Texture,
+    pub units_rect: [*mut Texture; UNITS],
+    pub attrib_rect: [[*mut Texture; UNITS]; STACK],
+    /// PROXY_TEXTURE_RECTANGLE (level zero) rejected by the virtual limits.
+    pub proxy_rejected_rect: u32,
 }
 impl ContextState {
-    /// Every unit's (2D, 1D, cube map, 3D) binding, including the active unit's.
-    pub(crate) fn unit_bindings(&self) -> [[*mut Texture; 4]; UNITS] {
-        let mut all = [[null_mut(); 4]; UNITS];
+    /// Every unit's (2D, 1D, cube map, 3D, rectangle) binding, including the
+    /// active unit's.
+    pub(crate) fn unit_bindings(&self) -> [[*mut Texture; 5]; UNITS] {
+        let mut all = [[null_mut(); 5]; UNITS];
         for (unit, out) in all.iter_mut().enumerate() {
             *out = [
                 self.units[unit][0],
                 self.units[unit][1],
                 self.units_cube[unit],
                 self.units_3d[unit],
+                self.units_rect[unit],
             ];
         }
         all[self.active_unit as usize] = [
@@ -143,6 +156,7 @@ impl ContextState {
             self.bound_texture_1d,
             self.bound_texture_cube,
             self.bound_texture_3d,
+            self.bound_texture_rect,
         ];
         all
     }
@@ -156,6 +170,12 @@ impl ContextState {
     fn bindings_3d(&self) -> [*mut Texture; UNITS] {
         let mut all = self.units_3d;
         all[self.active_unit as usize] = self.bound_texture_3d;
+        all
+    }
+    /// Every unit's rectangle texture binding, in unit order.
+    fn bindings_rect(&self) -> [*mut Texture; UNITS] {
+        let mut all = self.units_rect;
+        all[self.active_unit as usize] = self.bound_texture_rect;
         all
     }
     const EMPTY: Self = Self {
@@ -200,11 +220,16 @@ impl ContextState {
         window_framebuffer: 0,
         attrib_framebuffers: [[0; 2]; STACK],
         queries: null_mut(),
+        default_texture_rect: null_mut(),
+        bound_texture_rect: null_mut(),
+        units_rect: [null_mut(); UNITS],
+        attrib_rect: [[null_mut(); UNITS]; STACK],
+        proxy_rejected_rect: 0,
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
-/// face belongs to the cube map; anything else but 1D and 3D selects the 2D
-/// binding.
+/// face belongs to the cube map; anything else but 1D, 3D and rectangle
+/// selects the 2D binding.
 ///
 /// # Safety
 /// Read-only render-owned state.
@@ -214,6 +239,7 @@ pub(crate) unsafe fn bound(state: *const ContextState, target: u32) -> *mut Text
             GL_TEXTURE_1D => (*state).bound_texture_1d,
             GL_TEXTURE_CUBE_MAP => (*state).bound_texture_cube,
             GL_TEXTURE_3D => (*state).bound_texture_3d,
+            GL_TEXTURE_RECTANGLE_ARB => (*state).bound_texture_rect,
             _ => (*state).bound_texture,
         }
     }
@@ -256,7 +282,7 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
     unsafe {
         state.write(ContextState::EMPTY);
     }
-    if unsafe { *m.count } > DG_GL_MAX_TEXTURES - 4 {
+    if unsafe { *m.count } > DG_GL_MAX_TEXTURES - 5 {
         return DG_GL_ERROR_LIMIT;
     }
     let namespace = if shared.is_null() {
@@ -288,8 +314,13 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
     } else {
         unsafe { crate::texture::allocate(m, GL_TEXTURE_3D, initial()) }
     };
-    if volume.is_null() {
-        for texture in [two, one, cube] {
+    let rect = if volume.is_null() {
+        null_mut()
+    } else {
+        unsafe { crate::texture::allocate(m, GL_TEXTURE_RECTANGLE_ARB, initial()) }
+    };
+    if rect.is_null() {
+        for texture in [two, one, cube, volume] {
             if !texture.is_null() {
                 unsafe {
                     (m.free)(m.opaque, texture.cast());
@@ -311,13 +342,15 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
             .refs
             .checked_add(1)
             .expect("namespace reference overflow");
-        *m.count += 4;
+        *m.count += 5;
         let mut units = [[two, one]; UNITS];
         units[0] = [null_mut(); 2];
         let mut units_cube = [cube; UNITS];
         units_cube[0] = null_mut();
         let mut units_3d = [volume; UNITS];
         units_3d[0] = null_mut();
+        let mut units_rect = [rect; UNITS];
+        units_rect[0] = null_mut();
         state.write(ContextState {
             textures: namespace,
             default_texture: two,
@@ -331,6 +364,9 @@ pub unsafe extern "C" fn dreamgpu_context_state_init(
             default_texture_3d: volume,
             bound_texture_3d: volume,
             units_3d,
+            default_texture_rect: rect,
+            bound_texture_rect: rect,
+            units_rect,
             ..ContextState::EMPTY
         });
     }
@@ -362,16 +398,24 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
     // Native queries and sync objects belong to this context's native context.
     unsafe { crate::occlusion::release(&*memory, old.queries) };
     assert!(old.attrib_depth as usize <= STACK);
-    for (((saved, units), cube), volume) in old.attrib[..old.attrib_depth as usize]
+    for ((((saved, units), cube), volume), rect) in old.attrib[..old.attrib_depth as usize]
         .iter()
         .zip(&old.unit_attrib)
         .zip(&old.cube_attrib)
         .zip(&old.attrib_3d)
+        .zip(&old.attrib_rect)
     {
         unsafe {
             dreamgpu_texture_unref(memory, saved.texture);
             dreamgpu_texture_unref(memory, saved.texture_1d);
-            for texture in units.units.iter().flatten().chain(cube).chain(volume) {
+            for texture in units
+                .units
+                .iter()
+                .flatten()
+                .chain(cube)
+                .chain(volume)
+                .chain(rect)
+            {
                 dreamgpu_texture_unref(memory, *texture);
             }
         }
@@ -382,6 +426,7 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
         .flatten()
         .chain(&old.units_cube)
         .chain(&old.units_3d)
+        .chain(&old.units_rect)
     {
         unsafe { dreamgpu_texture_unref(memory, *texture) };
     }
@@ -399,6 +444,8 @@ pub unsafe extern "C" fn dreamgpu_context_state_release(
         dreamgpu_texture_unref(memory, old.default_texture_cube);
         dreamgpu_texture_unref(memory, old.bound_texture_3d);
         dreamgpu_texture_unref(memory, old.default_texture_3d);
+        dreamgpu_texture_unref(memory, old.bound_texture_rect);
+        dreamgpu_texture_unref(memory, old.default_texture_rect);
         dreamgpu_texture_namespace_unref(memory, old.textures);
     }
 }
@@ -521,6 +568,7 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
     let mut units = UnitAttrib::EMPTY;
     let mut cube = [null_mut(); UNITS];
     let mut volume = [null_mut(); UNITS];
+    let mut rect = [null_mut(); UNITS];
     if mask & GL_TEXTURE_BIT != 0 {
         unsafe {
             saved.texture = (*state).bound_texture;
@@ -532,11 +580,13 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
             };
             cube = (*state).cube_bindings();
             volume = (*state).bindings_3d();
+            rect = (*state).bindings_rect();
             for texture in [saved.texture, saved.texture_1d]
                 .iter()
                 .chain(units.units.iter().flatten())
                 .chain(&cube)
                 .chain(&volume)
+                .chain(&rect)
             {
                 if !texture.is_null() {
                     (**texture).refs = (**texture)
@@ -552,6 +602,7 @@ unsafe fn push(api: &DreamGpuGlApi, state: *mut ContextState, mask: u32) -> Resu
         (*state).unit_attrib[depth] = units;
         (*state).cube_attrib[depth] = cube;
         (*state).attrib_3d[depth] = volume;
+        (*state).attrib_rect[depth] = rect;
         (*state).attrib_framebuffers[depth] = crate::framebuffer::binding_names(state);
         (*state).attrib_depth += 1;
     }
@@ -583,7 +634,9 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
     let saved_units = unsafe { (*state).unit_attrib[depth - 1] };
     let saved_cube = unsafe { (*state).cube_attrib[depth - 1] };
     let saved_3d = unsafe { (*state).attrib_3d[depth - 1] };
-    let (restored, restored_count) = distinct(&saved, &saved_units, &saved_cube, &saved_3d);
+    let saved_rect = unsafe { (*state).attrib_rect[depth - 1] };
+    let (restored, restored_count) =
+        distinct(&saved, &saved_units, &[&saved_cube, &saved_3d, &saved_rect]);
     if !saved.texture.is_null() {
         for texture in &restored[..restored_count] {
             unsafe { dreamgpu_texture_wait(api, *texture, serial) };
@@ -621,6 +674,7 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
             let old_units = (*state).units;
             let old_cube = (*state).cube_bindings();
             let old_3d = (*state).bindings_3d();
+            let old_rect = (*state).bindings_rect();
             (*state).bound_texture = saved.texture;
             (*state).bound_texture_1d = saved.texture_1d;
             (*state).units = saved_units.units;
@@ -632,9 +686,18 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
             (*state).bound_texture_3d = saved_3d[active];
             (*state).units_3d = saved_3d;
             (*state).units_3d[active] = null_mut();
+            (*state).bound_texture_rect = saved_rect[active];
+            (*state).units_rect = saved_rect;
+            (*state).units_rect[active] = null_mut();
             dreamgpu_texture_unref(memory, old_two);
             dreamgpu_texture_unref(memory, old_one);
-            for texture in old_units.iter().flatten().chain(&old_cube).chain(&old_3d) {
+            for texture in old_units
+                .iter()
+                .flatten()
+                .chain(&old_cube)
+                .chain(&old_3d)
+                .chain(&old_rect)
+            {
                 dreamgpu_texture_unref(memory, *texture);
             }
             // Native PopAttrib restored parameters of every unit's binding.
@@ -646,6 +709,7 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
         (*state).unit_attrib[depth - 1] = UnitAttrib::EMPTY;
         (*state).cube_attrib[depth - 1] = [null_mut(); UNITS];
         (*state).attrib_3d[depth - 1] = [null_mut(); UNITS];
+        (*state).attrib_rect[depth - 1] = [null_mut(); UNITS];
         (*state).attrib_framebuffers[depth - 1] = [0; 2];
         (*state).attrib_depth -= 1;
         select(api, state)?;
@@ -654,19 +718,18 @@ unsafe fn pop(memory: *const Memory, state: *mut ContextState, serial: u64) -> R
 }
 /// Distinct non-null textures of a saved TEXTURE_BIT entry, so each storage
 /// object is fenced once even when one default is bound on many units.
+/// `targets` holds the cube map, 3D and rectangle bindings, in unit order.
 fn distinct(
     saved: &Attrib,
     units: &UnitAttrib,
-    cube: &[*mut Texture; UNITS],
-    volume: &[*mut Texture; UNITS],
-) -> ([*mut Texture; 2 + 4 * UNITS], usize) {
-    let mut out = [null_mut(); 2 + 4 * UNITS];
+    targets: &[&[*mut Texture; UNITS]; 3],
+) -> ([*mut Texture; 2 + 5 * UNITS], usize) {
+    let mut out = [null_mut(); 2 + 5 * UNITS];
     let mut n = 0;
     for &texture in [saved.texture, saved.texture_1d]
         .iter()
         .chain(units.units.iter().flatten())
-        .chain(cube)
-        .chain(volume)
+        .chain(targets.iter().copied().flatten())
     {
         if !texture.is_null() && !out[..n].contains(&texture) {
             out[n] = texture;
@@ -675,22 +738,25 @@ fn distinct(
     }
     (out, n)
 }
-/// Every unit's live (2D, 1D, cube map, 3D) binding slot, for texture deletion.
-pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Texture; 4 * UNITS] {
-    let mut slots = [null_mut(); 4 * UNITS];
+/// Every unit's live (2D, 1D, cube map, 3D, rectangle) binding slot, for
+/// texture deletion.
+pub(crate) unsafe fn binding_slots(state: *mut ContextState) -> [*mut *mut Texture; 5 * UNITS] {
+    let mut slots = [null_mut(); 5 * UNITS];
     unsafe {
         let active = (*state).active_unit as usize;
-        for (unit, quad) in slots.as_chunks_mut::<4>().0.iter_mut().enumerate() {
+        for (unit, five) in slots.as_chunks_mut::<5>().0.iter_mut().enumerate() {
             if unit == active {
-                quad[0] = addr_of_mut!((*state).bound_texture);
-                quad[1] = addr_of_mut!((*state).bound_texture_1d);
-                quad[2] = addr_of_mut!((*state).bound_texture_cube);
-                quad[3] = addr_of_mut!((*state).bound_texture_3d);
+                five[0] = addr_of_mut!((*state).bound_texture);
+                five[1] = addr_of_mut!((*state).bound_texture_1d);
+                five[2] = addr_of_mut!((*state).bound_texture_cube);
+                five[3] = addr_of_mut!((*state).bound_texture_3d);
+                five[4] = addr_of_mut!((*state).bound_texture_rect);
             } else {
-                quad[0] = addr_of_mut!((*state).units[unit][0]);
-                quad[1] = addr_of_mut!((*state).units[unit][1]);
-                quad[2] = addr_of_mut!((*state).units_cube[unit]);
-                quad[3] = addr_of_mut!((*state).units_3d[unit]);
+                five[0] = addr_of_mut!((*state).units[unit][0]);
+                five[1] = addr_of_mut!((*state).units[unit][1]);
+                five[2] = addr_of_mut!((*state).units_cube[unit]);
+                five[3] = addr_of_mut!((*state).units_3d[unit]);
+                five[4] = addr_of_mut!((*state).units_rect[unit]);
             }
         }
     }
@@ -720,6 +786,8 @@ unsafe fn switch_unit(state: *mut ContextState, unit: u32) {
     s.bound_texture_cube = core::mem::replace(&mut s.units_cube[unit as usize], null_mut());
     s.units_3d[s.active_unit as usize] = s.bound_texture_3d;
     s.bound_texture_3d = core::mem::replace(&mut s.units_3d[unit as usize], null_mut());
+    s.units_rect[s.active_unit as usize] = s.bound_texture_rect;
+    s.bound_texture_rect = core::mem::replace(&mut s.units_rect[unit as usize], null_mut());
     s.active_unit = unit;
 }
 /// Draw admission for every texture unit: an enabled target must not sample
@@ -744,6 +812,7 @@ pub(crate) unsafe fn prepare_textures(
             (triple[1], GL_TEXTURE_1D),
             (triple[2], GL_TEXTURE_CUBE_MAP),
             (triple[3], GL_TEXTURE_3D),
+            (triple[4], GL_TEXTURE_RECTANGLE_ARB),
         ] {
             if texture.is_null() || unsafe { (*texture).undefined_levels } == 0 {
                 continue;
@@ -834,6 +903,10 @@ unsafe fn scalar(
                     GL_TEXTURE_3D => (
                         (*state).default_texture_3d,
                         addr_of_mut!((*state).bound_texture_3d),
+                    ),
+                    GL_TEXTURE_RECTANGLE_ARB => (
+                        (*state).default_texture_rect,
+                        addr_of_mut!((*state).bound_texture_rect),
                     ),
                     _ => (
                         (*state).default_texture,

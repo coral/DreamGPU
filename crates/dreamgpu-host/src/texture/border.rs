@@ -522,10 +522,11 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
         return Ok(());
     }
     let texture = unsafe {
-        // An enabled cube map or 3D texture takes precedence over 2D and 1D;
-        // neither carries borders and native sampling is exact.
+        // An enabled cube map, 3D or rectangle texture takes precedence over
+        // 2D and 1D; none carries borders and native sampling is exact.
         if a.dg_glIsEnabled.unwrap()(GL_TEXTURE_CUBE_MAP) != 0
             || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_3D) != 0
+            || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_RECTANGLE_ARB) != 0
         {
             return Ok(());
         }
@@ -544,7 +545,8 @@ pub(crate) unsafe fn prepare(m: &Memory, c: *mut ContextState) -> Result<(), u32
             let on = a.dg_glIsEnabled.unwrap()(GL_TEXTURE_2D) != 0
                 || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_1D) != 0
                 || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_CUBE_MAP) != 0
-                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_3D) != 0;
+                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_3D) != 0
+                || a.dg_glIsEnabled.unwrap()(GL_TEXTURE_RECTANGLE_ARB) != 0;
             a.dg_glActiveTexture.unwrap()(GL_TEXTURE0);
             on
         };

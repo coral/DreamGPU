@@ -55,7 +55,8 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
             return;                                                                                \
         }                                                                                          \
         if (JglCubeMapQueryRejected(pname) || JglProgramQueryRejected(pname) ||                    \
-            JglTexture3DQueryRejected(pname) || JglFramebufferQueryRejected(pname)) {              \
+            JglTexture3DQueryRejected(pname) || JglFramebufferQueryRejected(pname) ||              \
+            JglRectangleQueryRejected(pname)) {                                                    \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -73,9 +74,10 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
         if (output && JglReady() &&                                                                \
             (JglCubeMapQueryRejected(target) || JglTexture3DQueryRejected(target) ||               \
+             JglRectangleQueryRejected(target) ||                                                  \
              ((FEnum_##name == FEnum_glGetTexParameterfv ||                                        \
                FEnum_##name == FEnum_glGetTexParameteriv) &&                                       \
-              WrapRRejected(target, pname)))) {                                                    \
+              (WrapRRejected(target, pname) || RectangleMipmapRejected(target, pname))))) {        \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -87,6 +89,10 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
 static BOOL WrapRRejected(GLenum target, GLenum pname) {
     return pname == JGL_TEXTURE_WRAP_R && !JglTexture3DAvailable() &&
            !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable());
+}
+/* GENERATE_MIPMAP is no rectangle parameter: a rectangle has one level. */
+static BOOL RectangleMipmapRejected(GLenum target, GLenum pname) {
+    return pname == 0x8191 && JglRectangleTarget(target);
 }
 PAIR_QUERY(glGetTexParameterfv, GLfloat, DG_GL_RESULT_FLOAT)
 PAIR_QUERY(glGetTexParameteriv, GLint, DG_GL_RESULT_INT)
@@ -113,8 +119,14 @@ void APIENTRY glGetClipPlane(GLenum plane, GLdouble *equation) {
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
         if (output && JglReady() &&                                                                \
             (JglCubeMapQueryRejected(target) || JglTexture3DQueryRejected(target) ||               \
-             JglTexture3DQueryRejected(pname))) {                                                  \
+             JglTexture3DQueryRejected(pname) || JglRectangleQueryRejected(target))) {             \
             JglSetError(GL_INVALID_ENUM);                                                          \
+            return;                                                                                \
+        }                                                                                          \
+        /* A rectangle (and its proxy) has level zero only. */                                     \
+        if (output && JglReady() && level &&                                                       \
+            (JglRectangleTarget(target) || target == JGL_PROXY_TEXTURE_RECTANGLE)) {               \
+            JglSetError(GL_INVALID_VALUE);                                                         \
             return;                                                                                \
         }                                                                                          \
         if (output && JglQuery(FEnum_##name, args, kind, result, sizeof(result), &bytes))          \
@@ -134,7 +146,7 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
         JglArrayQuery(cap, &local))
         return local != 0;
     if (JglCubeMapQueryRejected(cap) || JglProgramQueryRejected(cap) ||
-        JglTexture3DQueryRejected(cap)) {
+        JglTexture3DQueryRejected(cap) || JglRectangleQueryRejected(cap)) {
         JglSetError(GL_INVALID_ENUM);
         return GL_FALSE;
     }

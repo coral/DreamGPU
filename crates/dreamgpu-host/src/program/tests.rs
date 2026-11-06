@@ -606,7 +606,16 @@ fn texture_limits_are_clamped_to_the_logical_units() {
 
 const VP: u32 = GL_VERTEX_PROGRAM_ARB;
 fn load_vertex(m: &Memory, c: *mut ContextState, s: &[u8]) {
-    let a = [VP, GL_PROGRAM_FORMAT_ASCII_ARB, s.len() as u32, 0, 0, 0, 0, 0];
+    let a = [
+        VP,
+        GL_PROGRAM_FORMAT_ASCII_ARB,
+        s.len() as u32,
+        0,
+        0,
+        0,
+        0,
+        0,
+    ];
     unsafe { string(m, c, &a, s) }.unwrap();
 }
 
@@ -638,7 +647,10 @@ fn vertex_programs_share_names_but_keep_their_own_bindings_and_defaults() {
     assert_eq!(unsafe { (*ns).scratch }, 0, "no fragment validation object");
     let first = native(|n| n.vertex);
     assert!(first != three && native(|n| n.deleted.contains(&three)));
-    assert_eq!(native(|n| n.loads.iter().map(|(name, _)| *name).collect::<Vec<_>>()), [first]);
+    assert_eq!(
+        native(|n| n.loads.iter().map(|(name, _)| *name).collect::<Vec<_>>()),
+        [first]
+    );
     assert_eq!(unsafe { (*(*c).vertex_program).name }, first);
     assert_eq!(native(|n| n.locals[&(first, 1)]), [1., 2., 3., 4.]);
     assert_eq!(take_errors(c), 0);
@@ -682,13 +694,21 @@ fn vertex_programs_share_names_but_keep_their_own_bindings_and_defaults() {
     native(|n| n.attribs = 32);
     assert_eq!(unsafe { attrib_limit(&*m.api) }, Ok(16));
     // Coordinate sets are checked; image units do not exist in ARBvp1.0.
-    load_vertex(m, c, b"!!ARBvp1.0 MOV result.texcoord[8], vertex.texcoord[0]; END");
+    load_vertex(
+        m,
+        c,
+        b"!!ARBvp1.0 MOV result.texcoord[8], vertex.texcoord[0]; END",
+    );
     assert_eq!(
         (take_errors(c), unsafe { (*c).program_error_kind }),
         (INVALID_OPERATION, ERROR_UNITS)
     );
     native(|n| n.loads.clear());
-    load_vertex(m, c, b"!!ARBvp1.0 PARAM texture[9] = { program.env[0..8] }; END");
+    load_vertex(
+        m,
+        c,
+        b"!!ARBvp1.0 PARAM texture[9] = { program.env[0..8] }; END",
+    );
     assert_eq!((take_errors(c), native(|n| n.loads.len())), (0, 1));
     // Fragment loads never accept generic attributes beyond the limit either
     // way: the fragment scan leaves .attrib unchecked (natively invalid).
@@ -702,10 +722,7 @@ fn vertex_programs_share_names_but_keep_their_own_bindings_and_defaults() {
     let vertex_default = native(|n| n.vertex);
     let fragment_default = native(|n| n.bound);
     assert!(vertex_default != 0 && fragment_default != 0 && vertex_default != fragment_default);
-    assert_eq!(
-        native(|n| n.locals[&(vertex_default, 1)]),
-        [1., 2., 3., 4.]
-    );
+    assert_eq!(native(|n| n.locals[&(vertex_default, 1)]), [1., 2., 3., 4.]);
     assert_eq!(unsafe { binding(c, VP) }, 0);
     // Deleting the bound vertex program reverts only the vertex binding.
     unsafe { bind(m, c, VP, 3) }.unwrap();
@@ -727,8 +744,14 @@ fn vertex_programs_share_names_but_keep_their_own_bindings_and_defaults() {
 fn attribute_scanning_checks_member_attrib_indices_only() {
     let scan = |s: &[u8]| beyond(s, 8, u32::MAX, 16);
     assert_eq!(scan(b"ATTRIB a = vertex.attrib[15];"), None);
-    assert_eq!(scan(b"ATTRIB a = vertex.attrib[16];"), Some((25, ERROR_ATTRIBS)));
-    assert_eq!(scan(b"ATTRIB a = vertex . attrib [ 99 ];"), Some((29, ERROR_ATTRIBS)));
+    assert_eq!(
+        scan(b"ATTRIB a = vertex.attrib[16];"),
+        Some((25, ERROR_ATTRIBS))
+    );
+    assert_eq!(
+        scan(b"ATTRIB a = vertex . attrib [ 99 ];"),
+        Some((29, ERROR_ATTRIBS))
+    );
     assert_eq!(scan(b"# vertex.attrib[16]\nMOV r, vertex.attrib[1];"), None);
     assert_eq!(scan(b"PARAM attrib[20] = { program.env[0..19] };"), None);
     assert_eq!(scan(b"MOV r, vertex.attribs[20];"), None);
@@ -979,10 +1002,7 @@ fn record_shapes_follow_the_protocol() {
         (0, 4, DG_GL_RESULT_FLOAT)
     );
     assert_eq!(
-        query(
-            FEnum_glGetProgramStringARB,
-            [GL_VERTEX_PROGRAM_ARB, 4, 0]
-        ),
+        query(FEnum_glGetProgramStringARB, [GL_VERTEX_PROGRAM_ARB, 4, 0]),
         (0, 4, DG_GL_RESULT_INT)
     );
     assert_eq!(

@@ -341,7 +341,10 @@ pub(crate) fn call_shape(function: u32, a: &[u32; 10]) -> bool {
         | FEnum_glFramebufferTexture3D => {
             let textarget = match function {
                 FEnum_glFramebufferTexture1D => a[2] == GL_TEXTURE_1D,
-                FEnum_glFramebufferTexture2D => a[2] == GL_TEXTURE_2D || cube_face(a[2]).is_some(),
+                FEnum_glFramebufferTexture2D => {
+                    matches!(a[2], GL_TEXTURE_2D | GL_TEXTURE_RECTANGLE_ARB)
+                        || cube_face(a[2]).is_some()
+                }
                 _ => a[2] == GL_TEXTURE_3D && a[5] < DG_GL_MAX_3D_TEXTURE_SIZE,
             };
             framebuffer_target(a[0])
@@ -1227,16 +1230,17 @@ unsafe fn attach_texture(
             FEnum_glFramebufferTexture1D => GL_TEXTURE_1D,
             FEnum_glFramebufferTexture3D => GL_TEXTURE_3D,
             _ if cube_face(textarget).is_some() => GL_TEXTURE_CUBE_MAP,
-            _ => GL_TEXTURE_2D,
+            _ => textarget,
         };
         if t.is_null() || unsafe { (*t).target } != expected {
             unsafe { error(c, GL_INVALID_OPERATION) };
             return Ok(());
         }
-        let limit = if expected == GL_TEXTURE_3D {
-            DG_GL_MAX_3D_TEXTURE_SIZE.trailing_zeros()
-        } else {
-            DG_GL_MAX_TEXTURE_LEVEL
+        // A rectangle has level zero only (ARB_texture_rectangle).
+        let limit = match expected {
+            GL_TEXTURE_3D => DG_GL_MAX_3D_TEXTURE_SIZE.trailing_zeros(),
+            GL_TEXTURE_RECTANGLE_ARB => 0,
+            _ => DG_GL_MAX_TEXTURE_LEVEL,
         };
         if level > limit {
             unsafe { error(c, GL_INVALID_VALUE) };

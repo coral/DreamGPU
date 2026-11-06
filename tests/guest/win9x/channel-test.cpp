@@ -25,7 +25,64 @@ struct Model {
     bool primary_ok{true}, expect_fatal{};
     unsigned fatal_submits{}, record_count{};
     DWORD records[64][24]{};
+    /* Queued transport model: DMA allocations by physical address, the
+     * device's counters, and failure/observation hooks. */
+    bool queue{};
+    struct {
+        DWORD physical;
+        BYTE *memory;
+        DWORD pages;
+    } dma[16]{};
+    unsigned dma_count{}, reads{}, writes{}, doorbells{}, queue_fail_function{};
+    DWORD consumed{}, last_stream{}, last_client{};
 } m;
+static BYTE *dma_memory(DWORD physical) {
+    for (unsigned i = 0; i < m.dma_count; ++i)
+        if (physical >= m.dma[i].physical && physical < m.dma[i].physical + m.dma[i].pages * 4096)
+            return m.dma[i].memory + (physical - m.dma[i].physical);
+    std::abort();
+}
+static DWORD *page_word(DWORD offset) {
+    return reinterpret_cast<DWORD *>(dma_memory(m.registers[DG_GL_REG_QUEUE_ADDR_LO / 4]) + offset);
+}
+/* The modelled device consumes and completes at the doorbell, as a host that
+ * keeps up does: no wait in the driver ever sleeps. */
+static void doorbell() {
+    const DWORD produced = *page_word(DG_GL_QUEUE_PRODUCED);
+    ++m.doorbells;
+    while (m.consumed != produced) {
+        const DWORD entry = DG_GL_QUEUE_RING + (m.consumed % DG_GL_QUEUE_DEPTH) * 64;
+        const auto *batch =
+            reinterpret_cast<const DWORD *>(dma_memory(*page_word(entry + DG_GL_ENTRY_ADDR_LO)));
+        const DWORD bytes = *page_word(entry + DG_GL_ENTRY_BYTES);
+        assert(bytes && bytes <= DG_ESCAPE_QUEUE_MAX_BYTES &&
+               *page_word(entry + DG_GL_ENTRY_GENERATION) == m.registers[DG_REG_GENERATION / 4]);
+        m.last_opcode = batch[0];
+        m.last_operation = batch[8];
+        m.last_client = *page_word(entry + DG_GL_ENTRY_CLIENT);
+        m.last_stream = *page_word(entry + DG_GL_ENTRY_STREAM);
+        ++m.submits;
+        const bool failed =
+            m.queue_fail_function && batch[0] == DG_GL_CALL && batch[8] == m.queue_fail_function;
+        *page_word(entry + DG_GL_ENTRY_STATUS) = DG_STATUS_DONE | (failed ? DG_STATUS_ERROR : 0);
+        *page_word(entry + DG_GL_ENTRY_ERROR) = failed ? DG_GL_ERROR_HOST : 0;
+        *page_word(entry + DG_GL_ENTRY_RESULT_BYTES) = 0;
+        if (batch[0] == DG_GL_QUERY) {
+            assert(*page_word(entry + DG_GL_ENTRY_RESULT_CAPACITY));
+            *dma_memory(*page_word(entry + DG_GL_ENTRY_RESULT_ADDR_LO)) = 1;
+            *page_word(entry + DG_GL_ENTRY_RESULT_BYTES) = 1;
+            *page_word(entry + DG_GL_ENTRY_RESULT_TYPE) = DG_GL_RESULT_BOOL;
+        }
+        if (batch[0] == DG_GL_PRESENT) {
+            *page_word(DG_GL_QUEUE_PRESENT_SLOT) = 2;
+            *page_word(DG_GL_QUEUE_PRESENT_EPOCH_LO) = 3;
+            *page_word(DG_GL_QUEUE_PRESENT_FRAME_LO) = 4;
+        }
+        ++m.consumed;
+        *page_word(DG_GL_QUEUE_CONSUMED) = m.consumed;
+        *page_word(DG_GL_QUEUE_COMPLETED) = m.consumed;
+    }
+}
 static DWORD DREAMGPU_CDECL check_pages(void *, DWORD, DWORD count) {
     return count;
 }
@@ -58,9 +115,26 @@ static volatile DWORD *DREAMGPU_CDECL registers() {
     return m.registers;
 }
 static DWORD DREAMGPU_CDECL read_reg(DWORD reg) {
+    ++m.reads;
     return m.registers[reg / 4];
 }
 static void DREAMGPU_CDECL write_reg(DWORD reg, DWORD value) {
+    ++m.writes;
+    if (m.queue && reg == DG_GL_REG_QUEUE_DOORBELL) {
+        doorbell();
+        return;
+    }
+    if (m.queue && reg == DG_GL_REG_QUEUE_CONTROL) {
+        const bool enable = value && value == m.registers[DG_REG_GENERATION / 4];
+        m.registers[reg / 4] = enable;
+        if (enable) {
+            std::memset(page_word(0), 0, 64);
+            *page_word(DG_GL_QUEUE_GENERATION) = value;
+            *page_word(DG_GL_QUEUE_STATE) = DG_GL_QUEUE_ACTIVE;
+            m.consumed = 0;
+        }
+        return;
+    }
     m.registers[reg / 4] = value;
 }
 static int DREAMGPU_CDECL critical() {
@@ -94,10 +168,19 @@ static void DREAMGPU_CDECL signal_semaphore(DWORD value) {
     ++m.signals;
 }
 static void *DREAMGPU_CDECL allocate_dma(DWORD pages, DWORD *physical) {
-    assert(pages == 16);
+    /* Commands, results, then (queued transport) the page and 128 KiB buffers. */
+    assert(pages == 16 || (m.queue && (pages == 1 || pages == DG_ESCAPE_QUEUE_MAX_BYTES / 4096)));
     ++m.allocations;
-    *physical = 0x40000 + m.allocations * 65536 + (m.allocations == m.bad_alignment ? 1 : 0);
-    return m.allocations == m.alloc_fail ? nullptr : std::calloc(pages, 4096);
+    *physical = 0x40000 + m.allocations * 0x100000 + (m.allocations == m.bad_alignment ? 1 : 0);
+    BYTE *memory = m.allocations == m.alloc_fail
+                       ? nullptr
+                       : static_cast<BYTE *>(std::aligned_alloc(4096, pages * 4096));
+    if (memory) {
+        std::memset(memory, 0, pages * 4096);
+        assert(m.dma_count < 16);
+        m.dma[m.dma_count++] = {*physical, memory, pages};
+    }
+    return memory;
 }
 static void DREAMGPU_CDECL free_dma(void *address) {
     assert(address);
@@ -105,7 +188,7 @@ static void DREAMGPU_CDECL free_dma(void *address) {
     std::free(address);
 }
 static DWORD DREAMGPU_CDECL submit(DWORD physical, DWORD bytes, DG_ESCAPE_REPLY *reply) {
-    assert(physical == dg_gl_physical && bytes && bytes <= 65536 && m.held);
+    assert(physical == dg_gl_physical && bytes && bytes <= 65536 && m.held && !m.queue);
     ++m.submits;
     m.last_opcode = dg_gl_commands[0];
     m.last_operation = dg_gl_commands[8];
@@ -153,6 +236,15 @@ static int DREAMGPU_CDECL primary(DWORD *w, DWORD *h, DWORD *s, DWORD *o, DWORD 
 static void DREAMGPU_CDECL primary_owned(int owned) {
     m.primary_owned = owned;
 }
+static int DREAMGPU_CDECL queue_prepare() {
+    std::abort(); /* the modelled device never leaves the driver waiting */
+}
+static int DREAMGPU_CDECL queue_wait() {
+    std::abort();
+}
+static void DREAMGPU_CDECL queue_finish() {
+    std::abort();
+}
 static void DREAMGPU_CDECL fatal(DWORD status) {
     /* A forked child proves the fault happened before any further record. */
     if (m.expect_fatal)
@@ -166,7 +258,8 @@ static const DG9_CHANNEL_SERVICES services{
     destroy_semaphore, wait_semaphore, signal_semaphore, allocate_dma,
     free_dma,          submit,         pending,          signal_wait,
     cursor_safe,       primary,        primary_owned,    fatal,
-    nullptr,           nullptr,        nullptr,          &memory_services};
+    nullptr,           nullptr,        nullptr,          &memory_services,
+    queue_prepare,     queue_wait,     queue_finish};
 static DG9_CHANNEL_CONTROL control(DWORD code, DWORD input, DWORD output) {
     return {code, 0, input, output, 0x10000, 0x20000, 0x30001, 11, 33, 0};
 }
@@ -174,8 +267,10 @@ static void cleaned() {
     assert(m.pins == m.unpins && m.waits == m.signals && !m.held);
 }
 static DG_ESCAPE_REPLY request(DWORD operation, DWORD client = 0, DWORD bytes = 0,
-                               DWORD capacity = 0, DWORD function = 0) {
-    DG_ESCAPE_REQUEST input{DG_ESCAPE_VERSION, operation, client, bytes, function, 0, capacity, 0};
+                               DWORD capacity = 0, DWORD function = 0, DWORD flags = 0,
+                               DWORD stream = 0) {
+    DG_ESCAPE_REQUEST input{DG_ESCAPE_VERSION, operation, client,   bytes,
+                            function,          flags,     capacity, stream};
     std::memcpy(m.input, &input, sizeof(input));
     auto io = control(DG_ESCAPE, sizeof(input) + bytes, sizeof(DG_ESCAPE_REPLY) + capacity);
     DWORD result = 999;
@@ -205,6 +300,10 @@ static DG9_WINDOW_REPLY window(DWORD op, DWORD client, DWORD binding = 0, DWORD 
 }
 static void initialize() {
     m = Model{};
+    dg_gl_queue = {};
+    dg_gl_queue_supported = dg_gl_build_queued = FALSE;
+    dg_gl_build = nullptr;
+    dg_gl_caps_valid = FALSE;
     dg_gl_initialized = dg_gl_faulted = 0;
     dg_gl_mutex = 0;
     dg_gl_commands = nullptr;
@@ -357,6 +456,83 @@ static void format_fault(DWORD from, DWORD from_stride, DWORD to, DWORD to_strid
     assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 42);
     DreamGpuGlShutdown();
 }
+/* Queued transport: OPEN negotiates it, an asynchronous submission costs one
+ * doorbell write and no register read, a later failure is reported once to
+ * the client as DEFERRED (the reporting request does not run), queries and
+ * presents read their outcome from the page, and cleanup frees everything. */
+static void queued() {
+    initialize();
+    m.queue = true;
+    m.registers[DG_GL_REG_QUEUE_VERSION / 4] = DG_GL_QUEUE_VERSION;
+    m.registers[DG_GL_REG_MAX_BYTES / 4] = DG_GL_MAX_BYTES;
+    m.registers[DG_GL_REG_MAX_RECORDS / 4] = DG_GL_MAX_RECORDS;
+    m.registers[DG_GL_REG_FUNCTION_WORDS / 4] = 2;
+    const auto opened = request(DG_ESCAPE_OPEN);
+    assert(opened.Status == 0 && opened.DeviceError == DG_ESCAPE_FEATURE_QUEUE);
+    assert(opened.MaxBytes == DG_ESCAPE_QUEUE_MAX_BYTES && opened.MaxRecords == DG_GL_MAX_RECORDS);
+    assert(dg_gl_queue_supported && dg_gl_queue.BufferCount == DG_GL_QUEUE_MAX_BUFFERS);
+    const DWORD client = opened.Client;
+    DWORD command[12] = {DG_GL_CALL, 44, 0, 0, 0, 0, 0, 1, 0x77, 0, 0, 0};
+    std::memcpy(m.input + 32, command, 44);
+    assert(request(DG_ESCAPE_SUBMIT, client, 44, 0, 0, DG_ESCAPE_SUBMIT_ASYNC, 4).Status == 0);
+    for (unsigned i = 0; i < 40; ++i) {
+        const unsigned reads = m.reads, writes = m.writes, doorbells = m.doorbells;
+        const auto reply = request(DG_ESCAPE_SUBMIT, client, 44, 0, 0, DG_ESCAPE_SUBMIT_ASYNC, 4);
+        assert(reply.Status == 0 && !reply.CompletedSequence);
+        assert(m.reads == reads && m.writes == writes + 1 && m.doorbells == doorbells + 1);
+        assert(m.last_client == client && m.last_stream == 4);
+    }
+    /* Stream 4 fails after its request returned. Stream 5's next request is
+     * not executed; it reports the failure instead, once. */
+    command[8] = 0x55;
+    std::memcpy(m.input + 32, command, 44);
+    m.queue_fail_function = 0x55;
+    assert(request(DG_ESCAPE_SUBMIT, client, 44, 0, 0, DG_ESCAPE_SUBMIT_ASYNC, 4).Status == 0);
+    command[8] = 0x77;
+    std::memcpy(m.input + 32, command, 44);
+    unsigned submits = m.submits;
+    auto deferred = request(DG_ESCAPE_SUBMIT, client, 44, 0, 0, DG_ESCAPE_SUBMIT_ASYNC, 5);
+    assert(deferred.Status == DG_ESCAPE_DEFERRED && deferred.FunctionWords == 4 &&
+           deferred.DeviceError == DG_GL_ERROR_HOST && deferred.CompletedSequence &&
+           m.submits == submits);
+    assert(request(DG_ESCAPE_SUBMIT, client, 44, 0, 0, DG_ESCAPE_SUBMIT_ASYNC, 5).Status == 0 &&
+           m.submits == submits + 1);
+    /* A synchronous stream request reports its own failure as before. */
+    command[8] = 0x55;
+    std::memcpy(m.input + 32, command, 44);
+    const auto failed = request(DG_ESCAPE_SUBMIT, client, 44, 0, 0, 0, 6);
+    assert(failed.Status == DG_ESCAPE_HOST && failed.DeviceError == DG_GL_ERROR_HOST &&
+           failed.CompletedSequence);
+    m.queue_fail_function = 0;
+    /* Query result through the entry and the driver's result page. */
+    m.registers[DG_GL_REG_FUNCTION_WORDS / 4] = DG_GL_FUNCTION_QUERY;
+    Dg9FunctionCacheRefresh(&dg_gl_function_cache, 1, 1);
+    DWORD query[12] = {DG_GL_QUERY, 48, 0, 0, 0, 0, 0, 1, 0x88, 0, 0, 0};
+    std::memcpy(m.input + 32, query, 48);
+    const auto result = request(DG_ESCAPE_SUBMIT, client, 48, 1, 0, 0, 5);
+    assert(result.Status == 0 && result.ResultBytes == 1 &&
+           result.ResultType == DG_GL_RESULT_BOOL && m.output[sizeof(result)] == 1);
+    /* An asynchronous query is a malformed envelope, rejected before any work. */
+    {
+        DG_ESCAPE_REQUEST input{
+            DG_ESCAPE_VERSION, DG_ESCAPE_SUBMIT, client, 48, 0, DG_ESCAPE_SUBMIT_ASYNC, 1, 5};
+        std::memcpy(m.input, &input, sizeof(input));
+        auto io = control(DG_ESCAPE, sizeof(input) + 48, sizeof(DG_ESCAPE_REPLY) + 1);
+        DWORD status = 0;
+        submits = m.submits;
+        assert(DreamGpuGlControl(&io, &status) && status == 87 && m.submits == submits);
+        cleaned();
+    }
+    /* PRESENT identity comes from the page, not the registers. */
+    const auto bound = window(DG9_WINDOW_BIND, client);
+    assert(window(DG9_WINDOW_PREPARE, client, bound.Binding).Status == 0);
+    assert(dg_windows[0].Slot == 2 && dg_windows[0].EpochLow == 3 && dg_windows[0].FrameLow == 4);
+    m.record_count = 0;
+    assert(request(DG_ESCAPE_CLOSE, client).Status == 0 && m.last_opcode == DG_GL_CLOSE_CLIENT);
+    DreamGpuGlShutdown();
+    assert(m.allocations == m.frees && m.sem_created == m.sem_destroyed);
+    m.queue = false;
+}
 int main() {
     assert(Dg9GlResultLimit(0) == 512 && Dg9GlResultLimit(DG_CAP_GL_TRANSPORT) == 512 &&
            Dg9GlResultLimit(DG_CAP_GL_BULK_READBACK) == 65536);
@@ -476,9 +652,10 @@ int main() {
     format_fault(32, 3200, 16, 3200);
     format_fault(16, 3200, 32, 3200);
     format_fault(16, 1600, 32, 3200);
+    queued();
     std::puts("PASS actual C++ Win98 channel/window: pin/allocation failure ownership, OS "
               "identity, privileged packet rejection, typed result identity across cleanup, "
               "retained-frame lifecycle, GDI clips/coherence, timeout and waiter-safe teardown, "
-              "XRGB8888/RGB565 format word on SEED/BLIT/READBACK/RETURN/DISCARD and "
-              "format-change fault");
+              "XRGB8888/RGB565 format word on SEED/BLIT/READBACK/RETURN/DISCARD, "
+              "format-change fault, queued transport doorbells and deferred failures");
 }

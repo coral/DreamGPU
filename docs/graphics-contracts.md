@@ -358,6 +358,41 @@ and disposable-VM acceptance cycle:
   changes and no Wine patch. The installed D3D9 query probe (2000 visible,
   3200 partially occluded, 0 hidden and 65200 reused samples exactly, and an
   event polled to signalled) has not yet run on a guest.
+- Rectangle textures (`DG_CAP_GL_TEXTURE_RECTANGLE`) add ARB_texture_rectangle
+  and NV_texture_rectangle, the GeForce FX's non-power-of-two textures, and no
+  entry points: `TEXTURE_RECTANGLE` is a binding, enable and parameter target
+  with its own binding per unit (TEXTURE_BIT, precedence cube > 3D > rectangle
+  > 2D > 1D), and the existing 2D image, subimage, copy, readback, level query
+  and `FramebufferTexture2D` records name it (`TexImage2D` and level queries also
+  its proxy). A rectangle has level zero only, no border, an uncompressed
+  colour internal format and at most 2048 texels per side; these are record
+  rules the frontend reports locally (`GL_INVALID_VALUE`, `GL_INVALID_ENUM` for
+  compressed formats and records, `GENERATE_MIPMAP` and `GenerateMipmapEXT`),
+  while parameter values (REPEAT, MIRRORED_REPEAT and mirror-once wraps, mipmap
+  filters: `GL_INVALID_ENUM`; a nonzero BASE_LEVEL: `GL_INVALID_OPERATION`) and
+  a nonzero attachment level are native or host GL errors. Coordinates are
+  unnormalized, also through ARB_fragment_program's RECT target. Storage is
+  zero-defined without a payload and charged like a 2D level.
+  ARB_texture_non_power_of_two is deliberately not claimed: a real FX driver
+  only implied it through GL 2.0 and WineD3D's FX quirk removes it, while
+  rectangles are what Wine uses on that card, so DreamGPU takes the same Wine
+  path. Native pixel tests (Linux host) sample a 37x23 rectangle exactly with
+  NEAREST and LINEAR, its last row and column and CLAMP_TO_EDGE included, and
+  cover subimages, copies, readback, proxies, the errors, rendering into a
+  rectangle through a framebuffer object and sampling it back, fragment
+  program TEX/TXP with RECT, precedence, bindings, lists and deletion. From the
+  Wine source, WineD3D then reports D3DPTEXTURECAPS_POW2 with
+  NONPOW2CONDITIONAL, as the GeForce FX 5800 it names does (TextureCaps D3D9
+  0x7ed87, D3D8 0x7ed9f; before 0x7ec87/0x7ec9f), and Wine patch 0049 keeps
+  formats a rectangle cannot hold in padded 2D textures (see the patch README):
+  NPOT render targets, backbuffers, offscreen plain surfaces, DirectDraw
+  surfaces and NPOT textures become exact-size rectangles (800x600 stays
+  800x600 instead of a 1024x1024 texture), depth/stencil surfaces and DXTn
+  textures stay padded, an NPOT DXT texture still fails to create
+  (D3DERR_NOTAVAILABLE) and a mipmapped NPOT texture with
+  D3DERR_INVALIDCALL. The installed D3D8/9 NPOT probe (the caps, a 640x480
+  texture sampled 1:1 with clamping, a 640x480 render target sampled back,
+  and the conditional restrictions) has not yet run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

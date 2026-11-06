@@ -34,13 +34,17 @@ static ULONG Lookup(void *context, ULONG function) {
 int main(void) {
     Adapter a = {.Generation = 1, .ClearWords = 1};
     Adapter b = {.Generation = 1, .ClearWords = 2};
-    ULONG batch[DG_GL_MAX_RECORDS * 10], old, i;
-    DG_GL_LIMITS limits = {1, DG_ESCAPE_MAX_BYTES, DG_GL_MAX_RECORDS, 1};
+/* The most 40-byte records the largest (queued) packet holds. */
+#define RECORDS                                                                                    \
+    (DG_ESCAPE_QUEUE_MAX_BYTES / 40 < DG_GL_MAX_RECORDS ? DG_ESCAPE_QUEUE_MAX_BYTES / 40           \
+                                                        : DG_GL_MAX_RECORDS)
+    ULONG batch[RECORDS * 10], old, i;
+    DG_GL_LIMITS limits = {1, DG_ESCAPE_QUEUE_MAX_BYTES, DG_GL_MAX_RECORDS, 1};
     assert(sizeof(a.Cache) < 16 * 1024);
-    /* A whole maximum-record scalar batch performs one host signature
-     * lookup, while the real validator still checks each immutable record. */
+    /* A whole maximum-size scalar batch performs one host signature lookup,
+     * while the real validator still checks each immutable record. */
     memset(batch, 0, sizeof(batch));
-    for (i = 0; i < DG_GL_MAX_RECORDS; ++i) {
+    for (i = 0; i < RECORDS; ++i) {
         ULONG *record = batch + i * 10;
         record[0] = DG_GL_CALL;
         record[1] = 40;
@@ -49,7 +53,7 @@ int main(void) {
         record[9] = 0x4000;
     }
     assert(DgValidateUserGl(batch, sizeof(batch), 7, a.Generation, &limits, Lookup, &a));
-    assert(a.Calls == 1 && a.Cache.Hits == DG_GL_MAX_RECORDS - 1 && a.Cache.Misses == 1);
+    assert(a.Calls == 1 && a.Cache.Hits == RECORDS - 1 && a.Cache.Misses == 1);
     assert(batch[2] == 7 && batch[7] == a.Generation);
     /* Valid zero and unsupported UINT_MAX each need their own known bit. */
     assert(Lookup(&a, FEnum_glEnd) == 0 && Lookup(&a, FEnum_glEnd) == 0);

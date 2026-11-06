@@ -172,8 +172,8 @@ fn transactional_initialization_rolls_back_each_allocation_and_shared_reference(
     let mut count = 0;
     let mut bytes = 0;
     let m = memory(&api, &mut a, &mut count, &mut bytes);
-    // Namespace, then the 2D, 1D, cube map and 3D defaults.
-    for fail in 1..=5 {
+    // Namespace, then the 2D, 1D, cube map, 3D and rectangle defaults.
+    for fail in 1..=6 {
         a.calls = 0;
         a.fail = fail;
         let mut s = ContextState::EMPTY;
@@ -193,7 +193,7 @@ fn transactional_initialization_rolls_back_each_allocation_and_shared_reference(
         unsafe { dreamgpu_context_state_init(&m, &mut first, null_mut()) },
         0
     );
-    assert_eq!(count, 4);
+    assert_eq!(count, 5);
     let shared = first.textures;
     assert_eq!(unsafe { (*shared).refs }, 1);
     a.calls = 0;
@@ -204,16 +204,16 @@ fn transactional_initialization_rolls_back_each_allocation_and_shared_reference(
         DG_GL_ERROR_HOST
     );
     assert_eq!(unsafe { (*shared).refs }, 1);
-    assert_eq!(count, 4);
+    assert_eq!(count, 5);
     a.fail = 0;
     assert_eq!(
         unsafe { dreamgpu_context_state_init(&m, &mut second, shared) },
         0
     );
     assert_eq!(unsafe { (*shared).refs }, 2);
-    assert_eq!(count, 8);
+    assert_eq!(count, 10);
     unsafe { dreamgpu_context_state_release(&m, &mut first) };
-    assert_eq!(count, 4);
+    assert_eq!(count, 5);
     assert_eq!(unsafe { (*shared).refs }, 1);
     unsafe { dreamgpu_context_state_release(&m, &mut second) };
     assert_eq!(count, 0);
@@ -260,6 +260,7 @@ fn attrib_restores_deleted_binding_and_logical_buffers_only_after_native_success
             s.default_texture_1d,
             s.default_texture_cube,
             s.default_texture_3d,
+            s.default_texture_rect,
             [
                 core::ptr::addr_of_mut!(s.bound_texture),
                 core::ptr::addr_of_mut!(s.bound_texture_1d),
@@ -275,7 +276,7 @@ fn attrib_restores_deleted_binding_and_logical_buffers_only_after_native_success
     );
     let new = s.bound_texture;
     assert_ne!(old, new);
-    assert_eq!(count, 6);
+    assert_eq!(count, 7);
     assert_eq!(
         command(&m, &mut s, FEnum_glDrawBuffer, &[GL_FRONT_AND_BACK]),
         0
@@ -304,13 +305,13 @@ fn attrib_restores_deleted_binding_and_logical_buffers_only_after_native_success
         assert_eq!(n.draw, [GL_COLOR_ATTACHMENT0]);
         assert_eq!(n.read, GL_COLOR_ATTACHMENT0);
         // The restored 2D texture, unit 0's 1D default, the 2D default bound
-        // on units 1-7, and the cube map and 3D defaults of every unit are
-        // each fenced once.
-        assert_eq!(n.fences, 5);
+        // on units 1-7, and the cube map, 3D and rectangle defaults of every
+        // unit are each fenced once.
+        assert_eq!(n.fences, 6);
     });
     unsafe { dreamgpu_context_state_release(&m, &mut s) };
     assert_eq!(count, 0);
-    assert_eq!(a.forgotten, 6);
+    assert_eq!(a.forgotten, 7);
     assert!(a.live.is_empty());
 }
 #[test]
@@ -409,6 +410,18 @@ fn context_state_c_abi_layout() {
             + 16 * 2 * 4
             + 4
             + pointer
+            + (2 + 8 + 16 * 8) * pointer
+            + 4
+            + (pointer - 4)
+    );
+    // Then the rectangle texture state, with the same shape as the cube map's.
+    assert_eq!(
+        core::mem::offset_of!(ContextState, default_texture_rect),
+        core::mem::offset_of!(ContextState, queries) + pointer
+    );
+    assert_eq!(
+        core::mem::offset_of!(ContextState, proxy_rejected_rect),
+        core::mem::offset_of!(ContextState, default_texture_rect) + (2 + 8 + 16 * 8) * pointer
     );
     // Then the query and fence state (ARB_occlusion_query, NV_fence): one
     // void * after the attribute framebuffer names.
@@ -557,6 +570,7 @@ fn texture_units_move_binding_ownership_and_texture_bit_restores_every_unit() {
             s.default_texture_1d,
             s.default_texture_cube,
             s.default_texture_3d,
+            s.default_texture_rect,
             slots.as_ptr(),
             slots.len() as u32,
         )
@@ -715,12 +729,13 @@ fn cube_map_bindings_follow_units_texture_bit_deletion_and_draw_admission() {
             s.default_texture_1d,
             s.default_texture_cube,
             s.default_texture_3d,
+            s.default_texture_rect,
             slots.as_ptr(),
             slots.len() as u32,
         )
     };
     assert_eq!((s.units_cube[0], s.bound_texture_cube), (default, default));
-    assert_eq!((bytes, count), (0, 4));
+    assert_eq!((bytes, count), (0, 5));
     assert_eq!(unsafe { (*default).refs }, 1 + UNITS as u32);
     // The freed name may now become a 2D texture.
     assert_eq!(
@@ -872,12 +887,207 @@ fn volume_bindings_follow_units_texture_bit_deletion_and_draw_admission() {
             s.default_texture_1d,
             s.default_texture_cube,
             s.default_texture_3d,
+            s.default_texture_rect,
             slots.as_ptr(),
             slots.len() as u32,
         )
     };
     assert_eq!((s.units_3d[0], s.bound_texture_3d), (default, default));
-    assert_eq!((bytes, count), (0, 4));
+    assert_eq!((bytes, count), (0, 5));
+    assert_eq!(unsafe { (*default).refs }, 1 + UNITS as u32);
+    assert_eq!(
+        command(&m, &mut s, FEnum_glBindTexture, &[GL_TEXTURE_2D, 9]),
+        0
+    );
+    assert_eq!(s.guest_errors, 0);
+    unsafe { dreamgpu_context_state_release(&m, &mut s) };
+    assert_eq!(count, 0);
+    assert!(a.live.is_empty());
+}
+
+std::thread_local! {static RECT_ENABLED: core::cell::Cell<u32> = const { core::cell::Cell::new(0) };}
+/// Enable queries of the draw admission: only TEXTURE_RECTANGLE is enabled, on
+/// the native unit recorded.
+unsafe extern "C" fn rectangle_enabled(cap: u32) -> u8 {
+    RECT_ENABLED.with(|c| {
+        u8::from(cap == GL_TEXTURE_RECTANGLE_ARB && N.with(|n| n.borrow().active) == c.get())
+    })
+}
+
+#[test]
+fn rectangle_bindings_follow_units_texture_bit_deletion_and_draw_admission() {
+    let mut api = api();
+    api.dg_glActiveTexture = Some(active_texture);
+    api.dg_glGetIntegerv = Some(native_units);
+    let mut a = Allocator::default();
+    let mut count = 0;
+    let mut bytes = 0;
+    let m = memory(&api, &mut a, &mut count, &mut bytes);
+    let mut s = ContextState::EMPTY;
+    N.with(|n| *n.borrow_mut() = Native::default());
+    assert_eq!(
+        unsafe { dreamgpu_context_state_init(&m, &mut s, null_mut()) },
+        0
+    );
+    // The default rectangle is an ordinary object bound on every unit.
+    let default = s.default_texture_rect;
+    assert_eq!(s.bound_texture_rect, default);
+    assert!(s.units_rect[1..].iter().all(|&t| t == default) && s.units_rect[0].is_null());
+    assert_eq!(
+        unsafe {
+            (
+                (*default).target,
+                (*default).refs,
+                (*default).faces.is_null(),
+            )
+        },
+        (GL_TEXTURE_RECTANGLE_ARB, 1 + UNITS as u32, true)
+    );
+    // Rectangle image, binding and proxy-free targets select this binding.
+    assert_eq!(
+        unsafe { dreamgpu_context_texture(&s, GL_TEXTURE_RECTANGLE_ARB) },
+        default
+    );
+    assert_eq!(
+        command(
+            &m,
+            &mut s,
+            FEnum_glBindTexture,
+            &[GL_TEXTURE_RECTANGLE_ARB, 9]
+        ),
+        0
+    );
+    let nine = s.bound_texture_rect;
+    assert_eq!(
+        unsafe { ((*nine).target, (*nine).guest_name) },
+        (GL_TEXTURE_RECTANGLE_ARB, 9)
+    );
+    assert_eq!(
+        unsafe { dreamgpu_context_texture(&s, GL_TEXTURE_RECTANGLE_ARB) },
+        nine
+    );
+    assert_eq!(
+        unsafe { dreamgpu_context_texture(&s, GL_TEXTURE_2D) },
+        s.default_texture
+    );
+    // The first bind fixed the target: 9 is no 2D, cube map or 3D texture,
+    // and a 2D name is no rectangle.
+    for target in [GL_TEXTURE_2D, GL_TEXTURE_CUBE_MAP, GL_TEXTURE_3D] {
+        assert_eq!(command(&m, &mut s, FEnum_glBindTexture, &[target, 9]), 0);
+        assert_eq!(
+            s.guest_errors,
+            1 << (GL_INVALID_OPERATION - GL_INVALID_ENUM)
+        );
+        s.guest_errors = 0;
+    }
+    assert_eq!(
+        command(&m, &mut s, FEnum_glBindTexture, &[GL_TEXTURE_2D, 11]),
+        0
+    );
+    assert_eq!(
+        command(
+            &m,
+            &mut s,
+            FEnum_glBindTexture,
+            &[GL_TEXTURE_RECTANGLE_ARB, 11]
+        ),
+        0
+    );
+    assert_eq!(
+        s.guest_errors,
+        1 << (GL_INVALID_OPERATION - GL_INVALID_ENUM)
+    );
+    s.guest_errors = 0;
+    assert_eq!(s.bound_texture_rect, nine);
+    // Unit 1 starts at the default; unit 0 keeps 9.
+    assert_eq!(
+        command(&m, &mut s, FEnum_glActiveTexture, &[GL_TEXTURE0 + 1]),
+        0
+    );
+    assert_eq!((s.bound_texture_rect, s.units_rect[0]), (default, nine));
+    assert!(s.units_rect[1].is_null());
+    assert_eq!(
+        command(
+            &m,
+            &mut s,
+            FEnum_glBindTexture,
+            &[GL_TEXTURE_RECTANGLE_ARB, 10]
+        ),
+        0
+    );
+    let ten = s.bound_texture_rect;
+    let all = s.unit_bindings();
+    assert_eq!((all[0][4], all[1][4], all[2][4]), (nine, ten, default));
+    // TEXTURE_BIT saves every unit's rectangle binding and the active unit.
+    assert_eq!(
+        command(&m, &mut s, FEnum_glPushAttrib, &[GL_TEXTURE_BIT]),
+        0
+    );
+    assert_eq!(unsafe { ((*nine).refs, (*ten).refs) }, (3, 3));
+    assert_eq!(
+        command(&m, &mut s, FEnum_glActiveTexture, &[GL_TEXTURE0]),
+        0
+    );
+    assert_eq!(
+        command(
+            &m,
+            &mut s,
+            FEnum_glBindTexture,
+            &[GL_TEXTURE_RECTANGLE_ARB, 0]
+        ),
+        0
+    );
+    assert_eq!((s.bound_texture_rect, s.units_rect[1]), (default, ten));
+    assert_eq!(command(&m, &mut s, FEnum_glPopAttrib, &[]), 0);
+    assert_eq!(
+        (s.active_unit, s.bound_texture_rect, s.units_rect[0]),
+        (1, ten, nine)
+    );
+    assert!(s.units_rect[1].is_null());
+    assert_eq!(unsafe { ((*nine).refs, (*ten).refs) }, (2, 2));
+    assert_eq!(unsafe { (*default).refs }, UNITS as u32 - 1);
+
+    // Draw admission: an undefined rectangle enabled on any unit refuses the
+    // draw; a disabled one is never sampled.
+    unsafe { (*nine).undefined_levels = 1 };
+    let mut admission = api;
+    admission.dg_glIsEnabled = Some(rectangle_enabled);
+    RECT_ENABLED.with(|c| c.set(GL_TEXTURE0 + 2));
+    assert_eq!(unsafe { prepare_textures(&admission, &s, 1) }, Ok(()));
+    RECT_ENABLED.with(|c| c.set(GL_TEXTURE0));
+    assert_eq!(
+        unsafe { prepare_textures(&admission, &s, 1) },
+        Err(DG_GL_ERROR_TEXTURE)
+    );
+    assert_eq!(N.with(|n| n.borrow().active), GL_TEXTURE0 + 1);
+    unsafe { (*nine).undefined_levels = 0 };
+
+    // The level charge is released with the texture; deleting reverts every
+    // unit's rectangle binding to the default.
+    unsafe {
+        (*nine).levels[0] = 640 * 480 * 4;
+        (*ten).levels[0] = 3 * 5 * 4;
+    }
+    bytes = 640 * 480 * 4 + 3 * 5 * 4;
+    let slots = unsafe { binding_slots(&mut s) };
+    let names: Vec<u8> = [9u32, 10].iter().flat_map(|v| v.to_le_bytes()).collect();
+    unsafe {
+        crate::texture::names::dreamgpu_texture_delete(
+            &m,
+            s.textures,
+            names.as_ptr(),
+            2,
+            s.default_texture,
+            s.default_texture_1d,
+            s.default_texture_cube,
+            s.default_texture_3d,
+            s.default_texture_rect,
+            slots.as_ptr(),
+            slots.len() as u32,
+        )
+    };
+    assert_eq!((s.units_rect[0], s.bound_texture_rect), (default, default));
+    assert_eq!((bytes, count), (0, 6));
     assert_eq!(unsafe { (*default).refs }, 1 + UNITS as u32);
     assert_eq!(
         command(&m, &mut s, FEnum_glBindTexture, &[GL_TEXTURE_2D, 9]),
