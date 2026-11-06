@@ -345,6 +345,8 @@ EXPORTS
     glFinishFenceNV=glFinishFenceNV@4
     glIsFenceNV=glIsFenceNV@4
     glGetFenceivNV=glGetFenceivNV@12
+    glLockArraysEXT=glLockArraysEXT@8
+    glUnlockArraysEXT=glUnlockArraysEXT@0
     glClearColor=glClearColor@16
     glClear=glClear@4
     glEnable=glEnable@4

@@ -77,7 +77,10 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glTestFence", JglOcclusionQueryAvailable},
                     {"glFinishFence", JglOcclusionQueryAvailable},
                     {"glIsFence", JglOcclusionQueryAvailable},
-                    {"glGetFence", JglOcclusionQueryAvailable}};
+                    {"glGetFence", JglOcclusionQueryAvailable},
+                    /* EXT_compiled_vertex_array comes with the buffer draw. */
+                    {"glLockArraysEXT", JglVertexBufferObjectAvailable},
+                    {"glUnlockArraysEXT", JglVertexBufferObjectAvailable}};
     if (!((ULONG_PTR)name >> 16))
         return TRUE;
     for (const auto &family : families) {

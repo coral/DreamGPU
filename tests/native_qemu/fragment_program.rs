@@ -127,6 +127,29 @@ impl Device {
     pub(super) fn submit(&mut self, records: &[(u32, Vec<u32>)]) {
         self.submit_for(1, records);
     }
+    /// A batch of `context` the device must reject whole: its error code.
+    pub(super) fn rejected_for(&mut self, context: u32, records: &[(u32, Vec<u32>)]) -> u32 {
+        self.sequence += 1;
+        self.qemu
+            .batch_for(self.sequence, 1, context, context, 0, records);
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while self.qemu.read(0x1120) != self.sequence {
+            assert!(
+                Instant::now() < deadline,
+                "batch {} did not complete",
+                self.sequence
+            );
+            // Bounded acceptance-test polling.
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert_ne!(
+            self.qemu.read(0x111c) & 4,
+            0,
+            "batch {} succeeded",
+            self.sequence
+        );
+        self.qemu.read(0x1124)
+    }
     /// One QUERY record of `context`, through a fresh guarded result page.
     pub(super) fn query_for(
         &mut self,

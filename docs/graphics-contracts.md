@@ -230,6 +230,26 @@ and disposable-VM acceptance cycle:
   reads memory instead of buffer offsets, and the zero attribute buffer covers
   every vertex and dies with its contexts. No D3D cap changes. The installed
   vertex buffer probe has not yet run on a guest.
+- Indexed client-array draws travel in bulk with
+  `DG_CAP_GL_VERTEX_BUFFER_OBJECT`: DrawElements of client arrays alone is the
+  buffer draw with a zero buffer mask (each array's vertices of the indexed
+  range once at its wire type, then the indices inline) whenever that is no
+  larger than the per-index expansion and fits one packet; sparse ranges,
+  ranges beyond DG_GL_MAX_VERTICES, more than DG_GL_MAX_INDICES indices,
+  display list compilation and every error keep the expansion's records and
+  GL errors. The host admits it as any buffer draw, bounding every inline index
+  by the client vertices, so the frontend sends only indices it scanned. The
+  frontend then offers EXT_compiled_vertex_array (LockArraysEXT,
+  UnlockArraysEXT, ARRAY_ELEMENT_LOCK_FIRST/COUNT_EXT under EXT names only,
+  saved by CLIENT_VERTEX_ARRAY_BIT, executed immediately, never recorded); a
+  locked draw submits exactly the unlocked draw's records. Quake III-engine
+  games then draw with DrawElements instead of strips of ArrayElement
+  (r_ext_compiled_vertex_array 0 keeps their old path); without the
+  capability the extension stays hidden and every record is unchanged.
+  ArrayElement keeps its records, built without per-component dispatch.
+  Native pixel tests show the buffer draw and the expansion drawing identical
+  images (a two-pass multitexture batch, mixed formats, lighting, generic
+  attributes); the Quake III timedemo has not yet been measured on a guest.
 - Framebuffer objects (`DG_CAP_GL_FRAMEBUFFER_OBJECT`) add
   EXT_framebuffer_object, EXT_framebuffer_blit and EXT_packed_depth_stencil.
   Framebuffer names are virtual and private to each context; renderbuffers

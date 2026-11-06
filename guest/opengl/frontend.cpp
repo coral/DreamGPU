@@ -166,17 +166,17 @@ BOOL JglTextureRectangleAvailable(void) {
 #define JGL_VERTEX_ARRAY_BGRA_EXTENSIONS "GL_ARB_vertex_array_bgra"
 #define JGL_OCCLUSION_QUERY_EXTENSIONS "GL_ARB_occlusion_query GL_NV_fence"
 #define JGL_TEXTURE_RECTANGLE_EXTENSIONS "GL_ARB_texture_rectangle GL_NV_texture_rectangle"
+#define JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS "GL_EXT_compiled_vertex_array"
 /* Each group's terminator byte pays for one separator or the final NUL. */
-static char
-    Extensions[sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
-               sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
-               sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) + sizeof(JGL_FOG_COORD_EXTENSIONS) +
-               sizeof(JGL_CUBE_MAP_EXTENSIONS) + sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
-               sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
-               sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) +
-               sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
-               sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS) + sizeof(JGL_OCCLUSION_QUERY_EXTENSIONS) +
-               sizeof(JGL_TEXTURE_RECTANGLE_EXTENSIONS)];
+static char Extensions
+    [sizeof(JGL_MULTITEXTURE_EXTENSIONS) + sizeof(JGL_SECONDARY_EXTENSIONS) +
+     sizeof(JGL_FIXED_STATE_EXTENSIONS) + sizeof(JGL_TEXTURE_CONTROL_EXTENSIONS) +
+     sizeof(JGL_COMPRESSED_TEXTURE_EXTENSIONS) + sizeof(JGL_FOG_COORD_EXTENSIONS) +
+     sizeof(JGL_CUBE_MAP_EXTENSIONS) + sizeof(JGL_FRAGMENT_PROGRAM_EXTENSIONS) +
+     sizeof(JGL_VERTEX_PROGRAM_EXTENSIONS) + sizeof(JGL_TEXTURE_3D_EXTENSIONS) +
+     sizeof(JGL_VERTEX_BUFFER_OBJECT_EXTENSIONS) + sizeof(JGL_FRAMEBUFFER_OBJECT_EXTENSIONS) +
+     sizeof(JGL_VERTEX_ARRAY_BGRA_EXTENSIONS) + sizeof(JGL_OCCLUSION_QUERY_EXTENSIONS) +
+     sizeof(JGL_TEXTURE_RECTANGLE_EXTENSIONS) + sizeof(JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS)];
 static void AppendExtensions(ULONG *at, const char *names) {
     if (*at)
         Extensions[(*at)++] = ' ';
@@ -215,8 +215,14 @@ static void NegotiateExtensions(void) {
         AppendExtensions(&at, JGL_OCCLUSION_QUERY_EXTENSIONS);
     if (HostCapabilities & DG_CAP_GL_TEXTURE_RECTANGLE)
         AppendExtensions(&at, JGL_TEXTURE_RECTANGLE_EXTENSIONS);
+    /* Indexed client-array draws travel in bulk as buffer draws; offered
+     * only then, so applications choosing their path by it (Quake III's
+     * DrawElements instead of strips of ArrayElement) keep older hosts' path. */
+    if (HostCapabilities & DG_CAP_GL_VERTEX_BUFFER_OBJECT)
+        AppendExtensions(&at, JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS);
     Extensions[at] = 0;
 }
+#undef JGL_COMPILED_VERTEX_ARRAY_EXTENSIONS
 #undef JGL_TEXTURE_RECTANGLE_EXTENSIONS
 #undef JGL_OCCLUSION_QUERY_EXTENSIONS
 #undef JGL_VERTEX_ARRAY_BGRA_EXTENSIONS
@@ -619,8 +625,35 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
 JGL_INLINE void Scalar(ULONG function, ULONG words, const void *arguments) {
     ScalarForContext(CurrentContext(), function, words, arguments);
 }
+/* Vectors and ArrayElement submit the per-vertex functions at a run-time
+ * function number. Dispatching each to its constant form folds the
+ * admission checks it cannot need and unrolls its copy; the records and
+ * their checks are exactly those of the generic path. */
 void JglScalarVector(ULONG function, ULONG words, const void *arguments) {
-    Scalar(function, words, arguments);
+    JGL_CONTEXT *c = CurrentContext();
+#define JGL_VERTEX_FUNCTION(name, count)                                                           \
+    case FEnum_##name:                                                                             \
+        if (words == count) {                                                                      \
+            ScalarForContext(c, FEnum_##name, count, arguments);                                   \
+            return;                                                                                \
+        }                                                                                          \
+        break
+    switch (function) {
+        JGL_VERTEX_FUNCTION(glVertex2f, 2);
+        JGL_VERTEX_FUNCTION(glVertex3f, 3);
+        JGL_VERTEX_FUNCTION(glVertex4f, 4);
+        JGL_VERTEX_FUNCTION(glColor3f, 3);
+        JGL_VERTEX_FUNCTION(glColor4f, 4);
+        JGL_VERTEX_FUNCTION(glNormal3f, 3);
+        JGL_VERTEX_FUNCTION(glTexCoord2f, 2);
+        JGL_VERTEX_FUNCTION(glTexCoord4f, 4);
+        JGL_VERTEX_FUNCTION(glMultiTexCoord4f, 5);
+        JGL_VERTEX_FUNCTION(glSecondaryColor3f, 3);
+        default:
+            break;
+    }
+#undef JGL_VERTEX_FUNCTION
+    ScalarForContext(c, function, words, arguments);
 }
 /* Resource transitions are single-command transactions. Once one succeeds,
  * publish that step before attempting another; a later failure cannot make

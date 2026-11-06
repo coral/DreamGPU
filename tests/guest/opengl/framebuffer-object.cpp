@@ -495,8 +495,10 @@ static void Negotiation(void) {
     HostSecondaryWords = 3;
     HGLRC context = Create();
     const char *all = (const char *)glGetString(GL_EXTENSIONS);
+    /* EXT_compiled_vertex_array follows every group with the buffer draw. */
     const char *tail = "GL_ARB_vertex_buffer_object GL_EXT_framebuffer_object "
-                       "GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil";
+                       "GL_EXT_framebuffer_blit GL_EXT_packed_depth_stencil "
+                       "GL_EXT_compiled_vertex_array";
     assert(strlen(all) > strlen(tail) && !strcmp(all + strlen(all) - strlen(tail), tail));
     assert(strstr(all, "GL_EXT_secondary_color"));
     for (const char *name : Entries)

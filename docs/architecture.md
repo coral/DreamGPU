@@ -140,6 +140,25 @@ would. The host skips that stream's later queued batches, so nothing after
 the failure executes. Engine reset discards unfinished entries; the kernel
 reports them as failed and re-enables the queue for the new generation.
 
+### Client-array draws
+
+Guest pointers never cross the transport, so the frontend copies client
+arrays into each draw record. DrawArrays copies the drawn range once. An
+indexed draw (DrawElements) used to expand into one packed vertex per index;
+with buffer draws negotiated (`DG_CAP_GL_VERTEX_BUFFER_OBJECT`) it is a buffer
+draw without buffer slots instead: every enabled array's vertices from the
+lowest to the highest index once, then the indices inline, whenever that is
+no larger than the expansion and fits one packet. Kernels check its layout;
+the host bounds every inline index by the client vertices before execution
+and draws natively with glDrawElements, so a draw never reads outside what the
+record carries. The frontend then also offers EXT_compiled_vertex_array: the
+lock is frontend client state only (locked contents may be cached, never must
+be), which turns Quake III-engine renderers from strips of ArrayElement, one
+small CALL record per attribute per vertex, into DrawElements. Display lists
+keep capturing the expansion, and hosts without the capability see exactly
+the records they did before. ArrayElement itself still submits its per-vertex
+attribute records, now without per-component dispatch or library copies.
+
 ## Input, scheduling and diagnostics
 
 DreamGPU owns fixed-wire input queues and their sleeping I/O worker. Juke decides

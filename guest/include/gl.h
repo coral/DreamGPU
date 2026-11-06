@@ -172,7 +172,17 @@
  * and draws nothing, as is a buffer draw received while compiling a display
  * list: the frontend dereferences buffers into client draws there, as the
  * extension requires. Native GL converts buffer attributes of every
- * descriptor type. */
+ * descriptor type.
+ * With this capability the frontend also sends indexed draws of client arrays
+ * alone as buffer draws with a zero buffer mask: client sections of the
+ * indexed range base..base+vertices-1 (each array once, at its wire type) and
+ * inline indices, instead of one expanded vertex per index, whenever that is
+ * no larger and fits one packet; the record and its admission are unchanged
+ * (every inline index within the client vertices, else the batch fails, so
+ * the frontend sends only indices it scanned). It also offers
+ * EXT_compiled_vertex_array: LockArraysEXT/UnlockArraysEXT are frontend client
+ * state only, never recorded, and a locked draw submits the records of the
+ * same draw unlocked. Display lists keep capturing the expansion. */
 #define DG_CAP_GL_VERTEX_BUFFER_OBJECT 0x1000000
 #define DG_GL_MAX_BUFFERS 16384
 #define DG_GL_MAX_BUFFER_BYTES 0x08000000

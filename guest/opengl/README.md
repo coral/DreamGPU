@@ -360,6 +360,29 @@ Without the capability the exports fail locally with `GL_INVALID_OPERATION`,
 are hidden from `wglGetProcAddress`, and the binding queries stay host queries.
 `tests/guest/opengl/test_vertex_buffer_object.py` covers the contract.
 
+### Indexed client-array draws and EXT_compiled_vertex_array
+
+With the same capability, `DrawElements` of client arrays alone (`arrays.cpp`,
+`RangedDraw`) is also a buffer draw, with no buffer slots: the indices are
+scanned for their lowest and highest values, every enabled array's vertices of
+that range travel once at their wire type (BGRA reordered, signed-normalized
+colours and normals as floats, as in the expansion), then the indices inline.
+It is chosen when it is no larger than the per-index expansion and fits one
+packet; sparse ranges, ranges beyond `DG_GL_MAX_VERTICES`, more than
+`DG_GL_MAX_INDICES` indices, display list compilation and every error keep the
+expansion. `GL_EXT_compiled_vertex_array` follows every other group in the
+extension string; `glLockArraysEXT`/`glUnlockArraysEXT` (EXT names only) and
+`ARRAY_ELEMENT_LOCK_FIRST/COUNT_EXT` are client state saved by
+`CLIENT_VERTEX_ARRAY_BIT`, never recorded or compiled, and a locked draw
+submits the unlocked draw's records. Quake III-engine renderers choose
+DrawElements over strips of ArrayElement once they see the extension.
+ArrayElement still submits one record per enabled attribute and the vertex,
+unchanged, but builds them without per-component type dispatch or library
+copies, and `JglScalarVector` dispatches the per-vertex functions to their
+constant forms. `tests/guest/opengl/test_compiled_vertex_array.py` covers the
+contract and prints the records, bytes and frontend time of a Quake III-like
+batch along each path.
+
 ### EXT_framebuffer_object
 
 `DG_CAP_GL_FRAMEBUFFER_OBJECT` adds `GL_EXT_framebuffer_object`,

@@ -459,7 +459,9 @@ static void Unnegotiated(void) {
 static void Negotiation(void) {
     JGL_CONTEXT *c = Open(VBO);
     assert(JglVertexBufferObjectAvailable() && !JglVertexProgramAvailable());
-    assert(!strcmp((const char *)glGetString(GL_EXTENSIONS), "GL_ARB_vertex_buffer_object"));
+    /* EXT_compiled_vertex_array comes with the buffer draw, as the last group. */
+    assert(!strcmp((const char *)glGetString(GL_EXTENSIONS),
+                   "GL_ARB_vertex_buffer_object GL_EXT_compiled_vertex_array"));
     for (const char *name : Entries)
         assert(wglGetProcAddress(name) == Marker);
     assert(!wglGetProcAddress("glVertexAttribPointerARB"));
@@ -473,7 +475,7 @@ static void Negotiation(void) {
     HostSecondaryWords = 3;
     HGLRC context = Create();
     const char *all = (const char *)glGetString(GL_EXTENSIONS);
-    const char *tail = "GL_EXT_texture3D GL_ARB_vertex_buffer_object";
+    const char *tail = "GL_EXT_texture3D GL_ARB_vertex_buffer_object GL_EXT_compiled_vertex_array";
     assert(strlen(all) > strlen(tail) && !strcmp(all + strlen(all) - strlen(tail), tail));
     for (const char *name : Entries)
         assert(wglGetProcAddress(name) == Marker);

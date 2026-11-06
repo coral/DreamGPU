@@ -471,6 +471,14 @@
     "glide3-win9x": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_win9x.py"
+    },
+    "gl-compiled-vertex-array": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_compiled_vertex_array.py"
+    },
+    "native-client-arrays": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/client_arrays.rs"
     }
   },
   "contracts": [
@@ -1765,6 +1773,25 @@
         "guest-npot"
       ],
       "remaining": "Negotiated by DG_CAP_GL_TEXTURE_RECTANGLE; without it the extension names stay hidden and every rectangle enum keeps its GL_INVALID_ENUM. No new records: the 2D image, copy, readback, level query and FramebufferTexture2D records name TEXTURE_RECTANGLE (and its proxy), with level zero, no border, no compressed or depth format and at most 2048 per side as record rules the frontend checks locally; parameter values (REPEAT, MIRRORED_REPEAT and mirror-once wraps, mipmap filters, a nonzero BASE_LEVEL) are native GL errors and GENERATE_MIPMAP is no rectangle parameter. ARB_texture_non_power_of_two is not claimed (GL_VERSION stays 1.1), so 2D textures stay power-of-two for WineD3D. Native pixel tests (Linux, private Mesa) sample a 37x23 rectangle exactly with NEAREST and LINEAR including its last row and column and CLAMP_TO_EDGE beyond them, and cover subimages, CopyTexImage2D/CopyTexSubImage2D, readback, proxies, the spec's errors, rendering into a rectangle through a framebuffer object, ARB fragment program TEX/TXP with RECT, enable precedence, per-unit bindings with TEXTURE_BIT, display lists and deletion. WineD3D then reports the GeForce FX 5800's TextureCaps, POW2|NONPOW2CONDITIONAL (D3D9 0x7ed87, D3D8 0x7ed9f from 0x7ec87/0x7ec9f); Wine 0049 keeps formats a rectangle cannot hold (DXTn, depth) in padded 2D textures and unpads only rectangles, so NPOT render targets, backbuffers, offscreen surfaces and textures are exact-size rectangles while NPOT DXT textures still fail (D3DERR_NOTAVAILABLE) and mipmapped NPOT textures D3DERR_INVALIDCALL. The installed D3D8/9 NPOT probe, macOS CGL (its IOSurface export binds a native rectangle texture), Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.client-array-draws",
+      "area": 21,
+      "api": "OpenGL 1.1 client arrays + EXT_compiled_vertex_array (Quake III-engine renderers, WineD3D user-memory draws)",
+      "operation": "DrawElements of client arrays as one buffer draw without buffer slots (each array's indexed range once, inline indices); LockArraysEXT/UnlockArraysEXT and the lock queries as client state; ArrayElement records",
+      "format": "every client array descriptor; UNSIGNED_BYTE/SHORT/INT indices",
+      "resource": "vertex array",
+      "usage": "per-frame geometry from client memory",
+      "pool": "client memory",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-compiled-vertex-array",
+        "native-client-arrays",
+        "native"
+      ],
+      "remaining": "Negotiated by DG_CAP_GL_VERTEX_BUFFER_OBJECT; without it EXT_compiled_vertex_array stays hidden and every indexed client draw keeps its per-index expansion. With it an indexed draw of client arrays alone is the existing buffer draw with a zero buffer mask whenever that is no larger than the expansion and fits one packet; the host bounds every inline index by the client vertices at admission. Sparse or oversized ranges, display list compilation and errors keep the expansion. The lock is client state only (saved by CLIENT_VERTEX_ARRAY_BIT, never recorded); locked draws submit the unlocked records, so the host retains nothing between draws. Native pixel tests show identical images for both records; the Quake III timedemo, guest CPU profile, Win98/XP guests and macOS CGL remain to be measured."
     },
     {
       "id": "glide3.vertex",

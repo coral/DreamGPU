@@ -5,7 +5,8 @@
  * every unit's coordinate array (GL1.3 vertex-array state), with
  * ARB_vertex_program every generic attribute array, and with
  * ARB_vertex_buffer_object the ARRAY_BUFFER and ELEMENT_ARRAY_BUFFER bindings
- * (each array keeps the buffer it latched).
+ * (each array keeps the buffer it latched), and with EXT_compiled_vertex_array
+ * the locked range.
  * No client address or client stack mutation crosses the transport.
  */
 static void APIENTRY AliasArrayElement(GLint index) {
@@ -30,6 +31,8 @@ static void APIENTRY AliasPushClientAttrib(GLbitfield mask) {
         entry.ClientTexture = state->ClientTexture;
         entry.ArrayBuffer = state->ArrayBuffer;
         entry.ElementBuffer = state->ElementBuffer;
+        entry.LockFirst = state->LockFirst;
+        entry.LockCount = state->LockCount;
     }
     if (mask & 1) { // GL_CLIENT_PIXEL_STORE_BIT
         entry.Pack = *JglPack();
@@ -52,6 +55,8 @@ static void APIENTRY AliasPopClientAttrib(void) {
         state->ClientTexture = entry.ClientTexture;
         state->ArrayBuffer = entry.ArrayBuffer;
         state->ElementBuffer = entry.ElementBuffer;
+        state->LockFirst = entry.LockFirst;
+        state->LockCount = entry.LockCount;
     }
     if (entry.Mask & 1) {
         *JglPack() = entry.Pack;

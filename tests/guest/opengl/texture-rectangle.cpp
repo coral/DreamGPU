@@ -340,7 +340,9 @@ static void Negotiation(void) {
     Close(c);
     c = Open(OTHERS | RECTANGLE);
     const char *names = (const char *)glGetString(GL_EXTENSIONS);
-    const char *tail = "GL_ARB_occlusion_query GL_NV_fence " RECTANGLE_NAMES;
+    /* EXT_compiled_vertex_array follows every group with the buffer draw. */
+    const char *tail =
+        "GL_ARB_occlusion_query GL_NV_fence " RECTANGLE_NAMES " GL_EXT_compiled_vertex_array";
     assert(strlen(names) > strlen(tail) && !strcmp(names + strlen(names) - strlen(tail), tail) &&
            !strncmp(names, "GL_ARB_multitexture ", 20));
     Close(c);

@@ -49,6 +49,7 @@ typedef struct {
     JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     ULONG ClientTexture;
     JGL_BUFFER_BINDING ArrayBuffer, ElementBuffer;
+    ULONG LockFirst, LockCount;
     JGL_UNPACK Pack, Unpack;
 } JGL_CLIENT_SNAPSHOT;
 typedef struct {
@@ -68,6 +69,8 @@ typedef struct {
     JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     ULONG ClientTexture; /* client-active unit, 0-7 */
     JGL_BUFFER_BINDING ArrayBuffer, ElementBuffer;
+    /* EXT_compiled_vertex_array: the locked range (count zero: unlocked). */
+    ULONG LockFirst, LockCount;
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
 } JGL_ARRAY_STATE;
 #ifdef __cplusplus
@@ -217,6 +220,12 @@ static inline BOOL JglProgramQueryRejected(GLenum name) {
 /* ARB_vertex_buffer_object: buffer objects in the shared namespace, their
  * bindings, data, mapping and queries (buffer.cpp), and draws reading them. */
 BOOL JglVertexBufferObjectAvailable(void);
+/* EXT_compiled_vertex_array (LockArraysEXT, UnlockArraysEXT and the lock
+ * queries) comes with the buffer draw, which carries indexed client-array
+ * draws in bulk: without it, applications keep their unlocked paths. */
+static inline BOOL JglCompiledVertexArrayAvailable(void) {
+    return JglVertexBufferObjectAvailable();
+}
 /* GLsizeiptrARB and GLintptrARB: pointer-sized signed integers. */
 typedef __PTRDIFF_TYPE__ JGL_SIZEIPTR;
 #define JGL_ARRAY_BUFFER 0x8892

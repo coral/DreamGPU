@@ -720,3 +720,122 @@ fn bgra_buffer_slots_read_their_buffers_with_size_bgra() {
     assert_eq!(binds, [70, 71, 71, 72, 0, 0, 0]);
     assert!(seen.contains(&(7, GL_TRIANGLES as usize)));
 }
+/// A Quake III-like indexed client draw as the frontend sends it with buffer
+/// draws: no buffer slots, client sections of vertices `base`..`base + 299`
+/// (FLOAT 3 positions, UNSIGNED_BYTE 4 colours, FLOAT 2 coordinates of units
+/// 0 and 1) and 1500 inline UNSIGNED_INT indices, each `base` + 0..299.
+fn ranged_packet(base: u32) -> ([u32; 10], Vec<u8>, Vec<u32>) {
+    let vertices = 300u32;
+    let indices: Vec<u32> = (0..1500u32).map(|i| base + (i * 7) % vertices).collect();
+    let mut data = vec![0u8; 128];
+    for (slot, descriptor) in [
+        (0, GL_FLOAT | (3 << 16)),
+        (1, GL_UNSIGNED_BYTE | (4 << 16)),
+        (3, GL_FLOAT | (2 << 16)),
+        (7, GL_FLOAT | (2 << 16)),
+    ] {
+        data[slot * 4..slot * 4 + 4].copy_from_slice(&u32::to_le_bytes(descriptor));
+    }
+    for (bytes, fill) in [(12, 1u8), (4, 2), (8, 3), (8, 4)] {
+        data.extend((0..vertices * bytes).map(|v| (v as u8).wrapping_mul(fill)));
+    }
+    data.extend(indices.iter().flat_map(|i| i.to_le_bytes()));
+    let a = [
+        GL_TRIANGLES,
+        base,
+        1500,
+        DG_GL_ARRAY_RAW
+            | DG_GL_ARRAY_POSITION
+            | DG_GL_ARRAY_COLOR
+            | DG_GL_ARRAY_TEXCOORD
+            | DG_GL_ARRAY_TEXCOORD1,
+        0,
+        0,
+        vertices,
+        GL_UNSIGNED_INT,
+        0,
+        0,
+    ];
+    (a, data, indices)
+}
+#[test]
+fn client_only_buffer_draws_carry_each_array_once_and_bound_every_index() {
+    let base = 100;
+    let (a, data, _) = ranged_packet(base);
+    // 300 vertices of 32 bytes and the indices, against 1500 expanded vertices
+    // of the sixteen-slot DrawArraysEXT record.
+    assert_eq!(data.len(), 128 + 300 * 32 + 1500 * 4);
+    let expanded = 64 + 1500 * 32;
+    assert!(data.len() * 3 < expanded);
+    let layout = raw::layout_buffer_draw(FEnum_glDrawRangeElements, &a, &data, true).unwrap();
+    assert_eq!(
+        (
+            layout.slots[0].offset,
+            layout.slots[1].offset,
+            layout.slots[3].offset,
+            layout.slots[7].offset,
+            layout.indices
+        ),
+        (128, 3728, 4928, 7328, 9728)
+    );
+    let word_bytes = |a: &[u32]| a.iter().flat_map(|w| w.to_le_bytes()).collect::<Vec<u8>>();
+    let validate = |a: &[u32; 10], data: &[u8]| {
+        let args = word_bytes(a);
+        unsafe {
+            crate::gl_validation::dreamgpu_gl_data_validate(
+                FEnum_glDrawRangeElements,
+                args.as_ptr(),
+                data.as_ptr(),
+                data.len() as u32,
+            )
+        }
+    };
+    assert_eq!(validate(&a, &data), 0);
+    // Every inline index lies within the client vertices: one below or past
+    // them fails the batch (the frontend sends only indices it scanned).
+    for (at, value) in [(0, base - 1), (1499, base + 300), (700, u32::MAX)] {
+        let mut bad = data.clone();
+        let offset = 9728 + at * 4;
+        bad[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+        assert_eq!(validate(&a, &bad), DG_GL_ERROR_BATCH, "{at} {value}");
+        assert!(raw::layout_buffer_draw(FEnum_glDrawRangeElements, &a, &bad, true).is_none());
+    }
+    // Without buffer slots nothing resolves against the context's buffers.
+    let resolved =
+        unsafe { crate::buffer::resolve(core::ptr::null(), &a, &layout, &data) }.unwrap();
+    assert_eq!((resolved.slots, resolved.element), ([0; 32], 0));
+    // Every slot reads its section through a pointer `base` vertices before
+    // it with tight strides, no buffer is bound, and the indices are the
+    // payload's.
+    let mut api = attrib_api();
+    api.dg_glBindBuffer = Some(bind_buffer);
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    assert_eq!(
+        unsafe { buffer_draw(&api, &a, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let p = data.as_ptr() as usize;
+    let calls = buffer_calls(&seen);
+    let pointers: Vec<_> = calls
+        .iter()
+        .filter(|c| c.0 == 5)
+        .map(|c| (c.1, c.2))
+        .collect();
+    assert_eq!(
+        pointers,
+        [
+            (0, (p + 128).wrapping_sub(100 * 12)),
+            (0, (p + 3728).wrapping_sub(100 * 4)),
+            (0, (p + 4928).wrapping_sub(100 * 8)),
+            (0, (p + 7328).wrapping_sub(100 * 8)),
+        ]
+    );
+    assert!(calls.iter().filter(|c| c.0 == 27).all(|c| c.2 == 0));
+    let at = seen
+        .iter()
+        .position(|v| *v == (7, GL_TRIANGLES as usize))
+        .unwrap();
+    assert_eq!(&seen[at + 1..at + 3], [(9, 1500), (10, p + 9728)]);
+}

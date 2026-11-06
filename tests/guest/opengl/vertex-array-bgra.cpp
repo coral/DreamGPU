@@ -237,7 +237,9 @@ static void Negotiation(void) {
     HostSecondaryWords = 3;
     HGLRC context = Create();
     const char *all = (const char *)glGetString(GL_EXTENSIONS);
-    const char *tail = "GL_EXT_packed_depth_stencil GL_ARB_vertex_array_bgra";
+    /* EXT_compiled_vertex_array follows every group with the buffer draw. */
+    const char *tail =
+        "GL_EXT_packed_depth_stencil GL_ARB_vertex_array_bgra GL_EXT_compiled_vertex_array";
     assert(strlen(all) > strlen(tail) && !strcmp(all + strlen(all) - strlen(tail), tail));
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
 }
