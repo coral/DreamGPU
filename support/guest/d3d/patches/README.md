@@ -947,3 +947,79 @@ call); `test_vertex_blend.py` and `test_xyzrhw_arrays.py` follow the shared
 helpers; the installed D3D8/9 probe (`tween-probe.inc`) checks the cap and
 exact tweened pixels. The diagnostic stack is rebased onto 0053 with its
 `drawprim.c` call-site line renumbered.
+
+`0054-d3d8-shader-validation.patch` replaces d3d8.dll's `ValidateVertexShader`
+and `ValidatePixelShader` stubs with upstream Wine's implementation and the
+runtime's signatures: `ValidatePixelShader(code, caps, return_error, errors)`
+and `ValidateVertexShader(code, declaration, caps, return_error, errors)`. The
+stubs named the declaration and caps "reserved", failed with `E_FAIL` whenever
+one was given and never wrote the error string. Now the version token is
+checked (vs.1.0-1.1, ps.1.0-1.4), and against `VertexShaderVersion` or
+`PixelShaderVersion` when caps are given; when `errors` is not NULL it receives
+a `HeapAlloc(GetProcessHeap())` string, empty unless `return_error` is set and
+the call failed, which the caller frees with `HeapFree` (a NULL pixel shader
+returns `E_FAIL` without one, as the runtime does). D3DX8's assembler, linked
+statically into Unreal Tournament 2003's `D3DDrv.dll` and 3DMark2001 SE's
+`e2_d3d8_driver_mfc.dll`, finds both in the loaded `d3d8.dll` after assembling
+each shader, passes NULL caps and declaration, `return_error` and a
+NULL-initialized string when its caller wants errors, turns a failure into
+`D3DXERR_INVALIDDATA` and frees the string with `HeapFree(GetProcessHeap(), 0,
+...)` (disassembly of both binaries); with those arguments the stubs already
+returned `S_OK` for valid versions, so the patch makes the contract exact but
+is not by itself shown to change those games. `test_shader_validation.py` runs
+the prepared functions under ASan/UBSan against the real `D3DCAPS8` layout and
+a recording process heap: upstream Wine's `test_validate_vs`/`test_validate_ps`,
+every version token against caps none, below, equal and above, declarations,
+every `return_error`/`errors` combination with each string freed once,
+allocation failure, D3DX8's exact calls, and the export signatures against
+`d3d8.spec` and the switcher's `FUNC4`/`FUNC5` entries. The installed D3D8
+probes (`shader-validation-probe.inc` in `DGD3D8` through `wined8.dll` and
+`DGSYS8` through the system `d3d8.dll` switcher) make the same calls through
+`GetProcAddress`. The diagnostic stack does not touch `d3d8_main.c`.
+
+`0055-switcher-provider-exports.patch` routes every export the Wine provider
+implements through the switcher's user list. Patch 0003 set `unkToSystemDll`,
+so `switcherLoadUserLib` fills the d3d8 and ddraw user lists only from
+`*_list_safe.h` (d3d9's from `d3d9_list_safe.h` whenever `msd3d9.dll` is
+loaded); every other export dispatches to the system list, whose slots stay
+the switcher's own stubs when no system DLL loads (`msd3d8.dll`, then
+`system32\d3d8.dll`, which is the switcher itself and which `tryLoad`
+rejects). d3d8's safe list held only `Direct3DCreate8`, so on Win2000/XP images
+without `msd3d8.dll` D3DX8's `ValidatePixelShader`/`ValidateVertexShader`
+calls reached stubs returning `E_FAIL` without a string, and every shader
+D3DX8 assembled in Unreal Tournament 2003 (DM-Antalus terrain) and 3DMark2001
+SE failed with `D3DXERR_INVALIDDATA`; with `wined8.dll` as an application-local
+`d3d8.dll` the terrain renders. Per DLL:
+- d3d8: the safe list adds `DebugSetMute`, `D3D8GetSWInfo`,
+  `ValidatePixelShader` and `ValidateVertexShader`, everything `wined8.dll`
+  exports. `CheckFullscreen`, which Wine lacks, stays on the system list.
+  `D3D8GetSWInfo` becomes `FUNC0`: Wine's is an argument-less stdcall, and the
+  `FUNC4` stub would have popped 16 bytes. The `Direct3DCreate8` stub returns
+  NULL instead of `DDERR_GENERIC` as an interface pointer.
+- d3d9: the safe list already covers `wined9.dll`'s exports except
+  `Direct3DShaderValidatorCreate9`, which stays with Microsoft's d3d9 when that
+  is loaded (Wine's returns NULL; without `msd3d9.dll` the full list reaches
+  Wine's). Stubs: `Direct3DCreate9` and `Direct3DShaderValidatorCreate9`
+  return NULL, `D3DPERF_GetStatus` and `D3DPERF_QueryRepeatFrame` 0 ("not
+  profiling"), instead of `DDERR_GENERIC`.
+- ddraw: unchanged routing. `winedd.dll` also exports `AcquireDDThreadLock`,
+  `ReleaseDDThreadLock` and, as aliases of those argument-less functions,
+  `DDInternalLock`, `DDInternalUnlock`, `InternalLock` and `InternalUnlock`;
+  native components call them on native ddraw objects (and the `FUNC2`/`FUNC1`
+  `DDInternalLock`/`DDInternalUnlock` signatures do not match the aliases), so
+  they stay on the system DLL. The `DllGetClassObject` stub returns
+  `CLASS_E_CLASSNOTAVAILABLE` instead of `S_FALSE`, which claims success
+  without an object.
+
+Every stub's argument count now equals Wine's stdcall argument count where Wine
+declares one. The `E_FAIL` `Validate*` stubs remain for a switcher that is
+not ready or a blacklisted caller without a system d3d8; D3DX8 initializes the
+string it frees, so they cannot hand it garbage. `test_switcher_dispatch.py`
+builds each switcher's prepared loaders, lists and stubs and `switcher.c`'s
+`switcher_init`/`tryLoad` natively under ASan/UBSan against a mock loader whose
+modules export what the Wine and native `.def` files list, executes
+`switcher.inc`'s trampoline (checked in the source), and requires every
+export to reach Wine, the system DLL or a stub as the policy above says, with
+and without a system DLL and for allowed and blacklisted callers; it also
+checks the stub arities and return values and reproduces the failure with
+d3d8's lists before 0055.

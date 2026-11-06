@@ -1,0 +1,167 @@
+--- a/d3d8/d3d8_main.c
++++ b/d3d8/d3d8_main.c
+@@ -66,77 +66,109 @@
+     return &object->IDirect3D8_iface;
+ }
+ 
++/* DreamGPU: ValidateVertexShader and ValidatePixelShader as upstream Wine's
++ * d3d8_main.c implements them, with the d3d8 runtime's signatures: a vertex
++ * shader's declaration and a D3DCAPS8 are parameters, not reserved pointers
++ * that must be NULL, and the last parameter receives an error string from
++ * the process heap, which callers free with HeapFree. D3DX8's assembler,
++ * statically linked into games, does so after validating each shader it
++ * assembles. The stubs failed any call with a declaration or caps and never
++ * wrote the string. Only the version token is checked, against the caps when
++ * given; the message is empty unless return_error is set. */
++static void d3d8_validation_message(BOOL return_error, const char *message, char **errors)
++{
++    SIZE_T message_size;
++
++    if (!return_error)
++        message = "";
++    message_size = strlen(message) + 1;
++    if (errors && (*errors = HeapAlloc(GetProcessHeap(), 0, message_size)))
++        memcpy(*errors, message, message_size);
++}
++
+ /***********************************************************************
+  *              ValidateVertexShader (D3D8.@)
+- *
+- * I've seen reserved1 and reserved2 always passed as 0's
+- * bool seems always passed as 0 or 1, but other values work as well...
+- * toto       result?
+  */
+-HRESULT WINAPI ValidateVertexShader(DWORD* vertexshader, DWORD* reserved1, DWORD* reserved2, BOOL bool, DWORD* toto)
++HRESULT WINAPI ValidateVertexShader(const DWORD *vs_code, const DWORD *declaration,
++        const D3DCAPS8 *caps, BOOL return_error, char **errors)
+ {
+-  HRESULT ret;
+-  static BOOL warned;
++    const char *message = "";
++    HRESULT hr = E_FAIL;
++
++    TRACE("vs_code %p, declaration %p, caps %p, return_error %#x, errors %p.\n",
++            vs_code, declaration, caps, return_error, errors);
+ 
+-  if (TRACE_ON(d3d8) || !warned) {
+-      FIXME("(%p %p %p %d %p): stub\n", vertexshader, reserved1, reserved2, bool, toto);
+-      warned = TRUE;
+-  }
+-
+-  if (!vertexshader)
+-      return E_FAIL;
+-
+-  if (reserved1 || reserved2)
+-      return E_FAIL;
+-
+-  switch(*vertexshader) {
+-        case 0xFFFE0101:
+-        case 0xFFFE0100:
+-            ret=S_OK;
++    if (!vs_code)
++    {
++        message = "Invalid code pointer.\n";
++        goto done;
++    }
++
++    switch (*vs_code)
++    {
++        case D3DVS_VERSION(1, 1):
++        case D3DVS_VERSION(1, 0):
+             break;
+-        default:
+-            WARN("Invalid shader version token %#x.\n", *vertexshader);
+-            ret=E_FAIL;
+-        }
+ 
+-  return ret;
++        default:
++            message = "Unsupported shader version.\n";
++            goto done;
++    }
++
++    if (caps && *vs_code > caps->VertexShaderVersion)
++    {
++        message = "Shader version not supported by caps.\n";
++        goto done;
++    }
++
++    hr = S_OK;
++
++done:
++    d3d8_validation_message(return_error, message, errors);
++    return hr;
+ }
+ 
+ /***********************************************************************
+  *              ValidatePixelShader (D3D8.@)
+- *
+- * PARAMS
+- * toto       result?
+  */
+-HRESULT WINAPI ValidatePixelShader(DWORD* pixelshader, DWORD* reserved1, BOOL bool, DWORD* toto)
++HRESULT WINAPI ValidatePixelShader(const DWORD *ps_code,
++        const D3DCAPS8 *caps, BOOL return_error, char **errors)
+ {
+-  HRESULT ret;
+-  static BOOL warned;
++    const char *message = "";
++    HRESULT hr = E_FAIL;
+ 
+-  if (TRACE_ON(d3d8) || !warned) {
+-      FIXME("(%p %p %d %p): stub\n", pixelshader, reserved1, bool, toto);
+-      warned = TRUE;
+-  }
+-
+-  if (!pixelshader)
+-      return E_FAIL;
+-
+-  if (reserved1)
+-      return E_FAIL;
+-
+-  switch(*pixelshader) {
+-        case 0xFFFF0100:
+-        case 0xFFFF0101:
+-        case 0xFFFF0102:
+-        case 0xFFFF0103:
+-        case 0xFFFF0104:
+-            ret=S_OK;
++    TRACE("ps_code %p, caps %p, return_error %#x, errors %p.\n",
++            ps_code, caps, return_error, errors);
++
++    /* As the d3d8 runtime: no string for a NULL code pointer. */
++    if (!ps_code)
++        return E_FAIL;
++
++    switch (*ps_code)
++    {
++        case D3DPS_VERSION(1, 4):
++        case D3DPS_VERSION(1, 3):
++        case D3DPS_VERSION(1, 2):
++        case D3DPS_VERSION(1, 1):
++        case D3DPS_VERSION(1, 0):
+             break;
++
+         default:
+-            WARN("Invalid shader version token %#x.\n", *pixelshader);
+-            ret=E_FAIL;
+-        }
+-  return ret;
++            message = "Unsupported shader version.\n";
++            goto done;
++    }
++
++    if (caps && *ps_code > caps->PixelShaderVersion)
++    {
++        message = "Shader version not supported by caps.\n";
++        goto done;
++    }
++
++    hr = S_OK;
++
++done:
++    d3d8_validation_message(return_error, message, errors);
++    return hr;
+ }
+ 
+ void d3d8_resource_cleanup(struct d3d8_resource *resource)

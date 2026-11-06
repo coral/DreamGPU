@@ -194,6 +194,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "depth-texture-probe.inc"
 #include "vertex-blend-probe.inc"
 #include "tween-probe.inc"
+#include "shader-validation-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -241,6 +242,11 @@ static void Run(void) {
         Check(FALSE, "FAIL Direct3D factory export", GetLastError());
         return;
     }
+#if DG_D3D_VERSION == 8
+    shader_validation_probe::Run(runtime);
+    if (failed)
+        return;
+#endif
     Log("STAGE create D3D object");
     d3d = create(D3D_SDK_VERSION);
     if (!Check(d3d != NULL, "FAIL create D3D object", GetLastError()))

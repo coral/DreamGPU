@@ -1,0 +1,80 @@
+--- a/switcher/d3d8_list.h
++++ b/switcher/d3d8_list.h
+@@ -1,6 +1,6 @@
+-FUNC1(Direct3DCreate8, DDERR_GENERIC)
++FUNC1(Direct3DCreate8, 0)
+ FUNC0(DebugSetMute, 0)
+-FUNC4(D3D8GetSWInfo, 0)
++FUNC0(D3D8GetSWInfo, 0)
+ FUNC4(ValidatePixelShader, E_FAIL)
+ FUNC5(ValidateVertexShader, E_FAIL)
+ FUNC0(CheckFullscreen, 0)
+--- a/switcher/d3d8_list_safe.h
++++ b/switcher/d3d8_list_safe.h
+@@ -1 +1,5 @@
+-FUNC1(Direct3DCreate8, DDERR_GENERIC)
++FUNC1(Direct3DCreate8, 0)
++FUNC0(DebugSetMute, 0)
++FUNC0(D3D8GetSWInfo, 0)
++FUNC4(ValidatePixelShader, E_FAIL)
++FUNC5(ValidateVertexShader, E_FAIL)
+--- a/switcher/d3d9_list.h
++++ b/switcher/d3d9_list.h
+@@ -1,15 +1,15 @@
+-FUNC0(Direct3DShaderValidatorCreate9, DDERR_GENERIC)
++FUNC0(Direct3DShaderValidatorCreate9, 0)
+ FUNC0(PSGPError, DDERR_GENERIC)
+ FUNC5(PSGPSampleTexture, DDERR_GENERIC)
+ FUNC2(D3DPERF_BeginEvent, DDERR_GENERIC)
+ FUNC0(D3DPERF_EndEvent, DDERR_GENERIC)
+-FUNC0(D3DPERF_GetStatus, DDERR_GENERIC)
+-FUNC0(D3DPERF_QueryRepeatFrame, DDERR_GENERIC)
++FUNC0(D3DPERF_GetStatus, 0)
++FUNC0(D3DPERF_QueryRepeatFrame, 0)
+ FUNC2(D3DPERF_SetMarker, DDERR_GENERIC)
+ FUNC1(D3DPERF_SetOptions, DDERR_GENERIC)
+ FUNC2(D3DPERF_SetRegion, DDERR_GENERIC)
+ FUNC0(DebugSetLevel, DDERR_GENERIC)
+ FUNC0(DebugSetMute, DDERR_GENERIC)
+-FUNC1(Direct3DCreate9, DDERR_GENERIC)
++FUNC1(Direct3DCreate9, 0)
+ FUNC2(Direct3DCreate9Ex, DDERR_GENERIC)
+ FUNC0(CheckFullscreen, 0)
+--- a/switcher/d3d9_list_safe.h
++++ b/switcher/d3d9_list_safe.h
+@@ -1,11 +1,11 @@
+-FUNC1(Direct3DCreate9, DDERR_GENERIC)
++FUNC1(Direct3DCreate9, 0)
+ FUNC2(Direct3DCreate9Ex, DDERR_GENERIC)
+ FUNC0(PSGPError, DDERR_GENERIC)
+ FUNC5(PSGPSampleTexture, DDERR_GENERIC)
+ FUNC2(D3DPERF_BeginEvent, DDERR_GENERIC)
+ FUNC0(D3DPERF_EndEvent, DDERR_GENERIC)
+-FUNC0(D3DPERF_GetStatus, DDERR_GENERIC)
+-FUNC0(D3DPERF_QueryRepeatFrame, DDERR_GENERIC)
++FUNC0(D3DPERF_GetStatus, 0)
++FUNC0(D3DPERF_QueryRepeatFrame, 0)
+ FUNC2(D3DPERF_SetMarker, DDERR_GENERIC)
+ FUNC1(D3DPERF_SetOptions, DDERR_GENERIC)
+ FUNC2(D3DPERF_SetRegion, DDERR_GENERIC)
+--- a/switcher/ddraw_list.h
++++ b/switcher/ddraw_list.h
+@@ -17,7 +17,7 @@
+ FUNC0(GetOLEThunkData, DDERR_GENERIC)
+ FUNC3(GetSurfaceFromDC, DDERR_GENERIC)
+ FUNC0(DllCanUnloadNow, S_FALSE)
+-FUNC3(DllGetClassObject, S_FALSE)
++FUNC3(DllGetClassObject, CLASS_E_CLASSNOTAVAILABLE)
+ FUNC0(DllRegisterServer, S_FALSE)
+ FUNC0(DllUnregisterServer, S_FALSE)
+ FUNC2(D3DParseUnknownCommand, DDERR_GENERIC)
+--- a/switcher/ddraw_list_safe.h
++++ b/switcher/ddraw_list_safe.h
+@@ -6,6 +6,6 @@
+ FUNC3(DirectDrawEnumerateExW, DDERR_INVALIDPARAMS)
+ FUNC2(DirectDrawEnumerateW, DDERR_INVALIDPARAMS)
+ FUNC0(DllCanUnloadNow, S_FALSE)
+-FUNC3(DllGetClassObject, S_FALSE)
++FUNC3(DllGetClassObject, CLASS_E_CLASSNOTAVAILABLE)
+ FUNC0(DllRegisterServer, S_FALSE)
+ FUNC0(DllUnregisterServer, S_FALSE)

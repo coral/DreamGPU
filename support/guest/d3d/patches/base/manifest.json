@@ -215,6 +215,14 @@
     {
       "file": "0053-ffp-vertex-tween.patch",
       "sha256": "44e782b2e1dd9b498172f5730b1a831353059a2c3ca29c796dcf1103b85d00cf"
+    },
+    {
+      "file": "0054-d3d8-shader-validation.patch",
+      "sha256": "ff9f54e3506002604358651d9011945c1dfd68bde78acb73e195d4d1f009b71b"
+    },
+    {
+      "file": "0055-switcher-provider-exports.patch",
+      "sha256": "25656875bec82b04980861a91f2ebf281dc4728ed683f78c3439662025a69141"
     }
   ],
   "files": {
@@ -365,6 +373,34 @@
     "wined3d/wined3d_gl.h": {
       "before_sha256": "db21884126c84683cc12b681b316db6feafc95e5edd40ec14c4dcdb4e2be3334",
       "after_sha256": "acc6f76a7b50252c4ff2075618269f8aab37ee88f175d82545be83bccb3d6fd3"
+    },
+    "d3d8/d3d8_main.c": {
+      "before_sha256": "a27bac733e85397fc9abe1fe06670c04eb0b0a493b512da0b5da8baacf441f4c",
+      "after_sha256": "9d1e0aca6d0abecd1d8fc4fa5af168c0030e89286ac402f787fbc33c6509ae5a"
+    },
+    "switcher/d3d8_list.h": {
+      "before_sha256": "4ac740f9877d454a2df228e8574c7123dead64532fb489bb725e85e2b4f5efce",
+      "after_sha256": "d0f563cc678cc7f9ccbe17353febf1789b0a007633a902bc36a42914c08d2d49"
+    },
+    "switcher/d3d8_list_safe.h": {
+      "before_sha256": "37d66c49aca0ef17355759fe78d0fb986640652272ef823ed3894467e031d57c",
+      "after_sha256": "854f640eaae341054c62ba8907ece09f05f52c8723f7f481b92d4c80bb80fd52"
+    },
+    "switcher/d3d9_list.h": {
+      "before_sha256": "eeb8c52aec6b5e23a837bf6c26e6ffb6c388924f369baf6cd4362880a9848e69",
+      "after_sha256": "7041b88a2c968dae60396cb54efe8d26166767ece3a6756af5b7860fdb4fd52a"
+    },
+    "switcher/d3d9_list_safe.h": {
+      "before_sha256": "e9ca64138c7576c49d22b20a7ced13a18b09e37c458293d1f381b64388b8caaf",
+      "after_sha256": "d3851d37763b41cbd3ef8facb9bb90150b1be115c710e4edce81eb0a8402c890"
+    },
+    "switcher/ddraw_list.h": {
+      "before_sha256": "f337e67b389b6cb1f3413f87f8186496beb7bb9d02ce5987b51f8105df918678",
+      "after_sha256": "7c6362d342c1cfc08e5775c50169b8b9f3e134f1042993b909a6dcc864c51c11"
+    },
+    "switcher/ddraw_list_safe.h": {
+      "before_sha256": "09376b50ab0fd24c6dbcb7ad58868c95acc6b9e8bd3cdaaca530a0a39c1ac283",
+      "after_sha256": "1d35da9b5c3de843715dc4b24ba9fa0b06dbe9bc28e997e0010696c330620917"
     }
   }
 }

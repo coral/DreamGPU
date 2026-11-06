@@ -510,6 +510,33 @@ and disposable-VM acceptance cycle:
   stretched quad, tweening disabled, lit normals with and without
   NORMALIZENORMALS; it skips without the cap) has not yet run on a guest;
   macOS CGL, Win98/XP guests and games remain unverified.
+- d3d8.dll's `ValidatePixelShader(code, caps, return_error, errors)` and
+  `ValidateVertexShader(code, declaration, caps, return_error, errors)` follow
+  the runtime's contract (Wine patch 0054, upstream Wine's implementation):
+  the version token is checked (vs.1.0-1.1, ps.1.0-1.4), and against the caps
+  when given, and `errors` receives a process-heap string, empty unless
+  `return_error` is set and the call failed. Wine's stubs failed with any caps
+  or declaration and never wrote the string. D3DX8, linked statically into
+  games, calls both through `GetProcAddress` on the loaded `d3d8.dll` after
+  assembling each shader and fails the assembly with `D3DXERR_INVALIDDATA`
+  when they fail. In Unreal Tournament 2003's `D3DDrv.dll` and 3DMark2001 SE's
+  `e2_d3d8_driver_mfc.dll` it passes NULL caps and declaration and a
+  NULL-initialized string, which it frees with `HeapFree(GetProcessHeap())`;
+  the Wine stubs returned `S_OK` for those calls. The failure was the d3d8
+  switcher (patch 0055): with `unkToSystemDll` (0003) its user list held only
+  `Direct3DCreate8`, so both validators dispatched to its system list, which
+  without `msd3d8.dll` (Win2000/XP images) holds stubs returning `E_FAIL`
+  without a string. UT2003's DM-Antalus terrain (Win2000) failed
+  `DXAssembleShader` with `88760B59` and rendered once `wined8.dll` was its
+  application-local `d3d8.dll`. 0055 routes every export Wine implements to
+  Wine (d3d8: `DebugSetMute`, `D3D8GetSWInfo`, both validators), fixes
+  `D3D8GetSWInfo`'s stub arity (0, not 4 arguments) and makes the pointer and
+  query stubs of d3d8, d3d9 and ddraw return safe values. The installed D3D8
+  probes (`tools/d3d/shader-validation-probe.inc`, run by `DGD3D8` on
+  `wined8.dll` and by `DGSYS8` through the system `d3d8.dll` switcher, where
+  before 0055 they fail without `msd3d8.dll`) make
+  D3DX8's calls and the runtime's other cases; they and the games have not yet
+  run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

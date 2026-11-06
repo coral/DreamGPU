@@ -472,6 +472,18 @@
       "scope": "installed-api",
       "path": "tools/d3d/tween-probe.inc"
     },
+    "d3d8-shader-validation": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_shader_validation.py"
+    },
+    "guest-shader-validation": {
+      "scope": "installed-api",
+      "path": "tools/d3d/shader-validation-probe.inc"
+    },
+    "d3d-switcher-dispatch": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_switcher_dispatch.py"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1653,6 +1665,25 @@
         "guest-vertex-tween"
       ],
       "remaining": "No capability bit and no frontend or host change. WineD3D never tweened: it printed a FIXME, had no fixed-function slot for the second position and normal and drew the first. Wine patch 0053 tweens on the CPU with 0052's helpers: POSITION1 * (1 - TWEENFACTOR) + POSITION2 * TWEENFACTOR (as Direct3D documents it; normals likewise) in object space, each second element read from its stream's system memory copy, drawn as 0052's client arrays or immediate-mode Normal3fv/Vertex4fv under Wine's own modelview, so the GL records are 0052's without its matrix calls (native-vertex-blend draws that shape). D3D9 VertexProcessingCaps become the GeForce FX's 0x17b (before 0x13b), D3D8 0x17f (before 0x13f); D3D7 has no tweening. Vertex shaders, pretransformed positions, other formats, per-instance data and unreadable second streams keep the untweened draw; draws without tweening are unchanged. Source tests run the prepared helpers against a double-precision reference of the documented formula. The installed D3D8/9 probe (positions from user memory, a vertex buffer and two indexed streams at factors 0, 1/2 and 1, a stretched quad, lit normals with and without NORMALIZENORMALS), macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "d3d8.shader-validation",
+      "area": 20,
+      "api": "D3D8 (d3d8.dll exports through the switcher to Wine)",
+      "operation": "ValidatePixelShader(code, caps, return_error, errors) and ValidateVertexShader(code, declaration, caps, return_error, errors), as D3DX8 calls them after assembling a shader",
+      "format": "vs.1.0-1.1 and ps.1.0-1.4 token streams",
+      "resource": "shader",
+      "usage": "statically linked D3DX8 (D3DXAssembleShader) in games and benchmarks",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d8-shader-validation",
+        "d3d-switcher-dispatch",
+        "guest-shader-validation"
+      ],
+      "remaining": "Wine patch 0054 is upstream Wine's implementation: version token checked, against the caps when given, a process-heap error string (empty unless return_error is set) when errors is given; the stubs failed with any caps or declaration and never wrote the string. D3DX8 as linked into UT2003's D3DDrv.dll and 3DMark2001 SE passes NULL caps and declaration and a NULL-initialized string and frees it with HeapFree(GetProcessHeap()). Its D3DXERR_INVALIDDATA came from the d3d8 switcher: with unkToSystemDll (0003) only Direct3DCreate8 reached Wine and both validators hit the system list's E_FAIL stubs on images without msd3d8.dll; patch 0055 routes every export Wine implements to Wine (d3d8, d3d9 and ddraw reviewed), fixes D3D8GetSWInfo's stub arity and makes the pointer and query stubs safe. UT2003's DM-Antalus terrain rendered on Win2000 with wined8.dll application-local; the installed D3D8 probes (DGD3D8 through wined8.dll, DGSYS8 through the switcher), UT2003 and 3DMark2001 through the switcher remain to be run."
     },
     {
       "id": "gl.cube-map",
