@@ -29,6 +29,7 @@ static ULONG error,capacity=65536,calls,queries,fail,malformed,fn,scalars[8];sta
 static std::vector<ULONG> last;static std::vector<BYTE> packed;
 static bool JglCompiling(){return false;}
 static bool JglTextureBordersAvailable(){return true;}
+static bool DepthTexture;static bool JglDepthTextureAvailable(){return DepthTexture;}
 static bool JglReady(){if(!ready)error=GL_INVALID_OPERATION;return ready;}
 static void JglSetError(ULONG e){error=e;}
 static GLboolean glIsTexture(GLuint n){return n>0&&n<100;}
@@ -53,7 +54,7 @@ static bool JglQuery(ULONG f,const ULONG*a,ULONG kind,void*out,ULONG cap,ULONG*b
  memcpy(out,result,5);*bytes=5;return true;
 }
 #include "icd-textures.inc"
-static void Reset(){error=calls=queries=fail=malformed=fn=0;capacity=65536;extent=10;border=1;ready=all=valid=true;last.clear();packed.clear();}
+static void Reset(){error=calls=queries=fail=malformed=fn=0;capacity=65536;extent=10;border=1;ready=all=valid=true;DepthTexture=false;last.clear();packed.clear();}
 int main(){
  Reset();GLuint names[]={1,2,3,4};BYTE output[]={9,9,9,9};
  assert(AliasAreTexturesResident(4,names,output)&&queries==2&&output[0]==9&&output[3]==9);
@@ -85,9 +86,16 @@ int main(){
  Reset();malformed=2;AliasCopyTexSubImage1D(GL_TEXTURE_1D,0,0,0,0,1);assert(!calls&&error==GL_INVALID_OPERATION);
  Reset();fail=1;AliasCopyTexSubImage1D(GL_TEXTURE_1D,0,0,0,0,1);assert(!calls&&queries==1);
  Reset();extent=border=0;AliasCopyTexSubImage1D(GL_TEXTURE_1D,0,0,0,0,0);assert(calls==1);
+ // ARB_depth_texture: borderless depth copies once negotiated; before, the
+ // depth formats stay the INVALID_VALUE of any unknown format.
+ for(ULONG f:{0x1902u,0x81a5u,0x81a6u,0x81a7u,0x84f9u,0x88f0u}){
+  Reset();AliasCopyTexImage1D(GL_TEXTURE_1D,0,f,0,0,4,0);assert(!calls&&error==GL_INVALID_VALUE);
+  Reset();DepthTexture=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,f,1,2,8,0);assert(calls==1&&!error&&fn==FEnum_glCopyTexImage1D&&scalars[2]==f&&scalars[5]==8&&!scalars[6]);
+  Reset();DepthTexture=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,f,0,0,10,1);assert(!calls&&error==GL_INVALID_VALUE);}
+ Reset();DepthTexture=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,0x81a8,0,0,4,0);assert(!calls&&error==GL_INVALID_VALUE);
  Reset();ready=false;AliasPrioritizeTextures(4,(GLuint*)1,(float*)1);assert(!calls&&error==GL_INVALID_OPERATION);
  assert(!AliasAreTexturesResident(4,(GLuint*)1,(BYTE*)1)&&!queries);
- puts("PASS texture aliases: real residency replies, atomic output, priority typed chunks, 1D copy bounds/arguments");
+ puts("PASS texture aliases: real residency replies, atomic output, priority typed chunks, 1D copy bounds/arguments, depth copies");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dreamgpu-icd-textures-') as temporary:

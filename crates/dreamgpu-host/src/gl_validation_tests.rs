@@ -1169,7 +1169,7 @@ fn rectangle_records_have_one_borderless_uncompressed_level() {
     }
 
     // Images of any size up to the 2D level-zero limit, level zero only, no
-    // border, no compressed or depth internal format.
+    // border, no compressed internal format (depth images: below).
     let image = |a: [u32; 8], n: usize| data_validate(FEnum_glTexImage2D, &a, &vec![0; n]);
     let rect = GL_TEXTURE_RECTANGLE_ARB;
     let (rgba, ubyte) = (GL_RGBA, GL_UNSIGNED_BYTE);
@@ -1195,19 +1195,6 @@ fn rectangle_records_have_one_borderless_uncompressed_level() {
             0,
         ),
         ([rect, 0, GL_COMPRESSED_RGBA, 8, 8, 0, rgba, ubyte], 0),
-        (
-            [
-                rect,
-                0,
-                GL_DEPTH_COMPONENT24,
-                8,
-                8,
-                0,
-                GL_DEPTH_COMPONENT,
-                GL_UNSIGNED_INT,
-            ],
-            0,
-        ),
     ] {
         assert_eq!(image(a, n), DG_GL_ERROR_TEXTURE, "{a:?}");
     }
@@ -1284,10 +1271,8 @@ fn rectangle_records_have_one_borderless_uncompressed_level() {
         copy([rect, 0, GL_RGBA8, 0, 0, 6, 6, 1]),
         DG_GL_ERROR_TEXTURE
     );
-    assert_eq!(
-        copy([rect, 0, GL_DEPTH_COMPONENT24, 0, 0, 4, 4, 0]),
-        DG_GL_ERROR_TEXTURE
-    );
+    // A depth copy defines a depth rectangle (ARB_depth_texture).
+    assert_eq!(copy([rect, 0, GL_DEPTH_COMPONENT24, 0, 0, 4, 4, 0]), 0);
     assert_eq!(
         copy([proxy, 0, GL_RGBA8, 0, 0, 4, 4, 0]),
         DG_GL_ERROR_TEXTURE
@@ -1334,4 +1319,230 @@ fn rectangle_records_have_one_borderless_uncompressed_level() {
         0
     );
     assert_eq!(query_result_bytes(FEnum_glIsEnabled, [rect, 0, 0]), 1);
+}
+
+/// ARB_depth_texture and ARB_shadow (DG_CAP2_GL_DEPTH_TEXTURE): depth images
+/// of TEXTURE_1D, TEXTURE_2D and TEXTURE_RECTANGLE (and their proxies) in the
+/// existing records, never of cube maps or 3D textures; the compare and depth
+/// texture mode parameters on every target; the level-parameter sizes; and the
+/// GetTexImage depth reads.
+#[test]
+fn depth_texture_records_take_1d_2d_and_rectangle_images_and_compare_parameters() {
+    let rect = GL_TEXTURE_RECTANGLE_ARB;
+    let (depth, uint, float) = (GL_DEPTH_COMPONENT, GL_UNSIGNED_INT, GL_FLOAT);
+    let (ds, packed) = (GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8);
+    let image1 = |a: [u32; 8], n: usize| data_validate(FEnum_glTexImage1D, &a, &vec![0; n]);
+    let image2 = |a: [u32; 8], n: usize| data_validate(FEnum_glTexImage2D, &a, &vec![0; n]);
+    let sub1 = |a: [u32; 8], n: usize| data_validate(FEnum_glTexSubImage1D, &a, &vec![0; n]);
+    let sub2 = |a: [u32; 8], n: usize| data_validate(FEnum_glTexSubImage2D, &a, &vec![0; n]);
+    for format in [
+        GL_DEPTH_COMPONENT,
+        GL_DEPTH_COMPONENT16,
+        GL_DEPTH_COMPONENT24,
+        GL_DEPTH_COMPONENT32,
+    ] {
+        assert_eq!(
+            image1([GL_TEXTURE_1D, 0, format, 8, 1, 0, depth, uint], 32),
+            0
+        );
+        assert_eq!(
+            image1([GL_TEXTURE_1D, 2, format, 2, 1, 0, depth, float], 0),
+            0
+        );
+        assert_eq!(
+            image1([GL_PROXY_TEXTURE_1D, 0, format, 8, 1, 0, depth, uint], 0),
+            0
+        );
+        assert_eq!(
+            image2([rect, 0, format, 37, 23, 0, depth, uint], 37 * 23 * 4),
+            0
+        );
+        assert_eq!(image2([rect, 0, format, 640, 480, 0, depth, uint], 0), 0);
+        let proxy = GL_PROXY_TEXTURE_RECTANGLE_ARB;
+        assert_eq!(image2([proxy, 0, format, 2048, 9, 0, depth, uint], 0), 0);
+        assert_eq!(
+            image2([GL_TEXTURE_2D, 1, format, 4, 4, 0, depth, uint], 64),
+            0
+        );
+        // A border, a cube face or a 3D texture never has a depth image.
+        assert_eq!(
+            image1([GL_TEXTURE_1D, 0, format, 10, 1, 1, depth, uint], 40),
+            DG_GL_ERROR_TEXTURE
+        );
+        assert_eq!(
+            image2([rect, 0, format, 6, 6, 1, depth, uint], 0),
+            DG_GL_ERROR_TEXTURE
+        );
+        let face = GL_TEXTURE_CUBE_MAP_POSITIVE_X;
+        assert_eq!(
+            image2([face, 0, format, 4, 4, 0, depth, uint], 64),
+            DG_GL_ERROR_TEXTURE
+        );
+        assert_eq!(
+            image2(
+                [GL_PROXY_TEXTURE_CUBE_MAP, 0, format, 4, 4, 0, depth, uint],
+                0
+            ),
+            DG_GL_ERROR_TEXTURE
+        );
+    }
+    for format in [GL_DEPTH_STENCIL, GL_DEPTH24_STENCIL8] {
+        assert_eq!(
+            image1([GL_TEXTURE_1D, 0, format, 8, 1, 0, ds, packed], 32),
+            0
+        );
+        assert_eq!(image2([rect, 0, format, 3, 5, 0, ds, packed], 60), 0);
+    }
+    // Depth pixels, every scalar type, into the targets with depth images.
+    for (kind, bytes) in [
+        (GL_UNSIGNED_BYTE, 1),
+        (GL_BYTE, 1),
+        (GL_UNSIGNED_SHORT, 2),
+        (GL_SHORT, 2),
+        (GL_UNSIGNED_INT, 4),
+        (GL_INT, 4),
+        (GL_FLOAT, 4),
+    ] {
+        assert_eq!(
+            sub1([GL_TEXTURE_1D, 0, 1, 0, 3, 1, depth, kind], 3 * bytes),
+            0
+        );
+        assert_eq!(sub2([rect, 0, 1, 2, 3, 4, depth, kind], 12 * bytes), 0);
+        assert_eq!(
+            sub2([GL_TEXTURE_2D, 0, 1, 2, 3, 4, depth, kind], 12 * bytes),
+            0
+        );
+        assert_eq!(
+            sub2(
+                [GL_TEXTURE_CUBE_MAP_NEGATIVE_Z, 0, 0, 0, 1, 1, depth, kind],
+                bytes
+            ),
+            DG_GL_ERROR_TEXTURE
+        );
+    }
+    assert_eq!(sub2([rect, 0, 0, 0, 2, 2, ds, packed], 16), 0);
+    assert_eq!(
+        sub2([rect, 0, 0, 0, 2, 2, depth, packed], 16),
+        DG_GL_ERROR_TEXTURE
+    );
+    // Copies define depth images of the same targets.
+    assert_eq!(
+        call_validate(
+            FEnum_glCopyTexImage1D,
+            &[GL_TEXTURE_1D, 0, GL_DEPTH_COMPONENT24, 0, 0, 16, 0, 0]
+        ),
+        0
+    );
+    assert_eq!(
+        call_validate(
+            FEnum_glCopyTexImage1D,
+            &[GL_TEXTURE_1D, 0, GL_DEPTH_COMPONENT24, 0, 0, 18, 1, 0]
+        ),
+        DG_GL_ERROR_TEXTURE
+    );
+    for target in [GL_TEXTURE_2D, rect] {
+        assert_eq!(
+            call_validate(
+                FEnum_glCopyTexImage2D,
+                &[target, 0, GL_DEPTH_COMPONENT16, 0, 0, 37, 23, 0]
+            ),
+            0
+        );
+        assert_eq!(
+            call_validate(
+                FEnum_glCopyTexImage2D,
+                &[target, 0, GL_DEPTH24_STENCIL8, 0, 0, 37, 23, 1]
+            ),
+            DG_GL_ERROR_TEXTURE
+        );
+    }
+    assert_eq!(
+        call_validate(
+            FEnum_glCopyTexImage2D,
+            &[
+                GL_TEXTURE_CUBE_MAP_POSITIVE_Y,
+                0,
+                GL_DEPTH_COMPONENT,
+                0,
+                0,
+                8,
+                8,
+                0
+            ]
+        ),
+        DG_GL_ERROR_TEXTURE
+    );
+
+    // The compare and depth texture mode parameters exist on every target,
+    // with one value; their GetTexParameter answers one value.
+    for target in [
+        GL_TEXTURE_1D,
+        GL_TEXTURE_2D,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_3D,
+        rect,
+    ] {
+        for pname in [
+            GL_TEXTURE_COMPARE_MODE,
+            GL_TEXTURE_COMPARE_FUNC,
+            GL_DEPTH_TEXTURE_MODE,
+        ] {
+            assert_eq!(texture_params(target, pname), 1);
+            for function in [FEnum_glGetTexParameteriv, FEnum_glGetTexParameterfv] {
+                assert_eq!(query_shape(function, [target, pname, 0]).0, 1);
+            }
+        }
+    }
+    assert_eq!(
+        texture_params(GL_TEXTURE_2D, GL_TEXTURE_COMPARE_FAIL_VALUE_ARB),
+        0
+    );
+    assert_eq!(
+        texture_params(GL_PROXY_TEXTURE_2D, GL_TEXTURE_COMPARE_MODE),
+        0
+    );
+    for pname in [GL_TEXTURE_DEPTH_SIZE, GL_TEXTURE_STENCIL_SIZE] {
+        for (target, level) in [
+            (GL_TEXTURE_1D, 3),
+            (GL_TEXTURE_2D, 0),
+            (rect, 0),
+            (GL_PROXY_TEXTURE_RECTANGLE_ARB, 0),
+        ] {
+            assert_eq!(
+                query_shape(FEnum_glGetTexLevelParameteriv, [target, level, pname]),
+                (1, DG_GL_RESULT_INT)
+            );
+        }
+    }
+
+    // GetTexImage: DEPTH reads float depth, DEPTH with FLOAT packed words, of
+    // 1D, 2D and rectangle levels only.
+    let read = |target: u32, word: u32| query_shape(FEnum_glGetTexImage, [target, word, 0]);
+    let d = DG_GL_TEXTURE_READ_DEPTH;
+    let both = d | DG_GL_TEXTURE_READ_FLOAT;
+    assert_eq!(
+        read(GL_TEXTURE_2D, d | 3 | (64 << 16)),
+        (64, DG_GL_RESULT_FLOAT)
+    );
+    assert_eq!(read(GL_TEXTURE_1D, d), (128, DG_GL_RESULT_FLOAT));
+    assert_eq!(read(rect, both | (5 << 16)), (5, DG_GL_RESULT_INT));
+    assert_eq!(
+        read(GL_TEXTURE_2D, d | (DG_GL_MAX_READBACK_BYTES / 4) << 16),
+        (DG_GL_MAX_READBACK_BYTES / 4, DG_GL_RESULT_FLOAT)
+    );
+    assert_eq!(
+        read(GL_TEXTURE_2D, d | (DG_GL_MAX_READBACK_BYTES / 4 + 1) << 16).0,
+        0
+    );
+    assert_eq!(read(rect, d | 1).0, 0);
+    assert_eq!(read(GL_TEXTURE_2D, d | (DG_GL_MAX_TEXTURE_LEVEL + 1)).0, 0);
+    assert_eq!(read(GL_TEXTURE_3D, d).0, 0);
+    assert_eq!(read(GL_TEXTURE_CUBE_MAP_POSITIVE_X, both).0, 0);
+    // Colour reads are unchanged; bit 13 is no level.
+    assert_eq!(read(GL_TEXTURE_2D, 0), (128, DG_GL_RESULT_INT));
+    assert_eq!(
+        read(GL_TEXTURE_2D, DG_GL_TEXTURE_READ_FLOAT | (4 << 16)),
+        (16, DG_GL_RESULT_FLOAT)
+    );
+    assert_eq!(read(GL_TEXTURE_2D, 0x2000).0, 0);
 }

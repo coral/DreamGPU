@@ -272,7 +272,8 @@ static inline BOOL JglColorAttachment(GLenum name) {
     return name - JGL_COLOR_ATTACHMENT0 < DG_GL_MAX_COLOR_ATTACHMENTS;
 }
 /* The depth texture internal formats: DEPTH_COMPONENT(16/24/32), DEPTH_STENCIL
- * and DEPTH24_STENCIL8 (borderless TEXTURE_2D images only). */
+ * and DEPTH24_STENCIL8 (borderless TEXTURE_2D images only; with depth textures,
+ * below, also TEXTURE_1D and TEXTURE_RECTANGLE). */
 static inline BOOL JglDepthInternalFormat(GLint format) {
     return format == 0x1902 || (format >= 0x81a5 && format <= 0x81a7) ||
            format == JGL_DEPTH_STENCIL || format == 0x88f0;
@@ -321,6 +322,56 @@ JGL_QUERY_STATE *JglQueryState(void);
 /* Per-context NUL-terminated PROGRAM_ERROR_STRING_ARB storage (DG_GL_MAX_RESULT_BYTES),
  * stable until the context is deleted; NULL without a context or memory. */
 GLubyte *JglProgramErrorBuffer(void);
+/* ARB_depth_texture, ARB_shadow and, with ARB_fragment_program,
+ * ARB_fragment_program_shadow: the first feature of the second capability
+ * word (gl.h DG_CAP2_GL_DEPTH_TEXTURE). Borderless depth images of TEXTURE_1D,
+ * TEXTURE_2D and TEXTURE_RECTANGLE and their proxies in the existing image,
+ * copy and readback records (texture.cpp, readback.cpp), the compare and depth
+ * texture mode parameters and the depth level sizes. Without it every name
+ * below stays the local GL_INVALID_ENUM it was. */
+BOOL JglDepthTextureAvailable(void);
+#define JGL_TEXTURE_DEPTH_SIZE 0x884a
+#define JGL_DEPTH_TEXTURE_MODE 0x884b
+#define JGL_TEXTURE_COMPARE_MODE 0x884c
+#define JGL_TEXTURE_COMPARE_FUNC 0x884d
+#define JGL_COMPARE_R_TO_TEXTURE 0x884e
+#define JGL_TEXTURE_STENCIL_SIZE 0x88f1
+static inline BOOL JglDepthTextureQueryRejected(GLenum name) {
+    return ((name >= JGL_TEXTURE_DEPTH_SIZE && name <= JGL_TEXTURE_COMPARE_FUNC) ||
+            name == JGL_TEXTURE_STENCIL_SIZE) &&
+           !JglDepthTextureAvailable();
+}
+/* Values of the depth texture parameters. Native GL accepts more (all eight
+ * functions, RED, COMPARE_REF_TO_TEXTURE's alias); ARB_shadow without
+ * EXT_shadow_funcs, as a GeForce FX's GL also never reported, takes exactly
+ * these, so anything else is the local GL_INVALID_ENUM. Other names' values
+ * stay native GL's to judge. */
+static inline BOOL JglTextureParameterValueValid(GLenum pname, GLint value) {
+    switch (pname) {
+        case JGL_TEXTURE_COMPARE_MODE:
+            return value == 0 /* NONE */ || value == JGL_COMPARE_R_TO_TEXTURE;
+        case JGL_TEXTURE_COMPARE_FUNC:
+            return value == 0x0203 /* LEQUAL */ || value == 0x0206 /* GEQUAL */;
+        case JGL_DEPTH_TEXTURE_MODE:
+            return value == 0x1909 /* LUMINANCE */ || value == 0x8049 /* INTENSITY */ ||
+                   value == 0x1906 /* ALPHA */;
+        default:
+            return TRUE;
+    }
+}
+/* An enum-valued parameter given as the bits of a float: GL truncates it to an
+ * integer. Integer arithmetic only, as frontend.cpp packs without the FPU;
+ * values no int32 holds (and NaN, infinities) are -1, never a valid enum. */
+static inline GLint JglFloatBitsEnum(ULONG bits) {
+    const ULONG exponent = (bits >> 23) & 0xff, mantissa = (bits & 0x7fffff) | 0x800000;
+    if (exponent < 127)
+        return 0;
+    if (exponent > 127 + 30)
+        return -1;
+    const ULONG shift = exponent - 127,
+                magnitude = shift >= 23 ? mantissa << (shift - 23) : mantissa >> (23 - shift);
+    return bits >> 31 ? -(GLint)magnitude : (GLint)magnitude;
+}
 /* Value counts of the TexParameter/TexEnv names the host accepts, and Hint
  * validity. Scalar and vector entrypoints share them: an unknown name is a local
  * GL_INVALID_ENUM, never a record the host rejects as malformed (which would
@@ -349,6 +400,10 @@ static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
             return JglFixedStateAvailable() ? 1 : 0;
         case 0x8191: /* GENERATE_MIPMAP_SGIS: a rectangle has one level */
             return JglTextureControlAvailable() && !rectangle ? 1 : 0;
+        case JGL_TEXTURE_COMPARE_MODE: /* ARB_shadow, every target */
+        case JGL_TEXTURE_COMPARE_FUNC:
+        case JGL_DEPTH_TEXTURE_MODE: /* ARB_depth_texture, every target */
+            return JglDepthTextureAvailable() ? 1 : 0;
         default:
             return 0;
     }

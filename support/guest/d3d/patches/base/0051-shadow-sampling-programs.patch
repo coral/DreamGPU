@@ -1,0 +1,132 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -1460,6 +1460,20 @@
+             tex_type = "";
+     }
+ 
++    /* DreamGPU: a shadow texture's lookups compare (ARB_shadow), so they name
++     * its SHADOW target (ARB_fragment_program_shadow): with an ordinary target
++     * the result is undefined. A GeForce FX has no cube or 3D depth textures. */
++    if (pshader && (priv->cur_ps_args->super.shadow & (1u << sampler_idx))
++            && ins->ctx->gl_info->supported[ARB_FRAGMENT_PROGRAM_SHADOW])
++    {
++        if (!strcmp(tex_type, "1D"))
++            tex_type = "SHADOW1D";
++        else if (!strcmp(tex_type, "2D"))
++            tex_type = "SHADOW2D";
++        else if (!strcmp(tex_type, "RECT"))
++            tex_type = "SHADOWRECT";
++    }
++
+     /* TEX, TXL, TXD and TXP do not support the "H" modifier,
+      * so don't use shader_arb_get_modifier
+      */
+@@ -3718,6 +3732,10 @@
+         shader_addline(buffer, "OPTION ARB_draw_buffers;\n");
+     }
+ 
++    /* DreamGPU: shadow samplers (shader_hw_sample). */
++    if (args->super.shadow && gl_info->supported[ARB_FRAGMENT_PROGRAM_SHADOW])
++        shader_addline(buffer, "OPTION ARB_fragment_program_shadow;\n");
++
+     if (reg_maps->shader_version.major < 3)
+     {
+         switch (args->super.fog)
+@@ -6317,6 +6335,16 @@
+     }
+ }
+ 
++/* DreamGPU: whether a stage's lookup names a SHADOW target: its texture
++ * compares (ARB_shadow), and ARB_fragment_program_shadow has a target of that
++ * type. With an ordinary target the result is undefined. */
++static BOOL arbfp_shadow(const struct texture_stage_op *op, const struct wined3d_gl_info *gl_info)
++{
++    return op->shadow && gl_info->supported[ARB_FRAGMENT_PROGRAM_SHADOW]
++            && (op->tex_type == WINED3D_GL_RES_TYPE_TEX_1D || op->tex_type == WINED3D_GL_RES_TYPE_TEX_2D
++            || op->tex_type == WINED3D_GL_RES_TYPE_TEX_RECT);
++}
++
+ static GLuint gen_arbfp_ffp_shader(const struct ffp_frag_settings *settings, const struct wined3d_gl_info *gl_info)
+ {
+     unsigned int stage;
+@@ -6408,6 +6436,16 @@
+     }
+     lowest_disabled_stage = stage;
+ 
++    /* DreamGPU: options precede every statement. */
++    for (stage = 0; stage < lowest_disabled_stage; ++stage)
++    {
++        if (tex_read[stage] && arbfp_shadow(&settings->op[stage], gl_info))
++        {
++            shader_addline(&buffer, "OPTION ARB_fragment_program_shadow;\n");
++            break;
++        }
++    }
++
+     switch (settings->fog)
+     {
+         case WINED3D_FFP_PS_FOG_OFF:                                                         break;
+@@ -6478,6 +6516,12 @@
+             continue;
+ 
+         textype = arbfp_texture_target(settings->op[stage].tex_type);
++        if (arbfp_shadow(&settings->op[stage], gl_info))
++        {
++            /* DreamGPU: SHADOW1D, SHADOW2D or SHADOWRECT. */
++            textype = settings->op[stage].tex_type == WINED3D_GL_RES_TYPE_TEX_1D ? "SHADOW1D"
++                    : settings->op[stage].tex_type == WINED3D_GL_RES_TYPE_TEX_2D ? "SHADOW2D" : "SHADOWRECT";
++        }
+ 
+         if(settings->op[stage].projected == proj_none) {
+             instr = "TEX";
+--- a/wined3d/directx.c
++++ b/wined3d/directx.c
+@@ -145,6 +145,7 @@
+     {"GL_ARB_ES2_compatibility",            ARB_ES2_COMPATIBILITY         },
+ #ifndef DISABLE_SOME_EXTS_HACK
+     {"GL_ARB_fragment_program",             ARB_FRAGMENT_PROGRAM          },
++    {"GL_ARB_fragment_program_shadow",      ARB_FRAGMENT_PROGRAM_SHADOW   },
+     {"GL_ARB_fragment_shader",              ARB_FRAGMENT_SHADER           },
+ #endif
+     {"GL_ARB_framebuffer_object",           ARB_FRAMEBUFFER_OBJECT        },
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -4429,10 +4429,15 @@
+             settings->op[i].dst = resultreg;
+             settings->op[i].tex_type = WINED3D_GL_RES_TYPE_TEX_1D;
+             settings->op[i].projected = proj_none;
++            settings->op[i].shadow = 0;
+             i++;
+             break;
+         }
+ 
++        /* DreamGPU: a depth texture's lookups compare (ARB_shadow): an ARB
++         * fragment program must name a SHADOW target for them. */
++        settings->op[i].shadow = (texture = state->textures[i]) && !ignore_textype
++                && (texture->resource.format_flags & WINED3DFMT_FLAG_SHADOW);
+         if ((texture = state->textures[i]))
+         {
+             settings->op[i].color_fixup = texture->resource.format->color_fixup;
+--- a/wined3d/wined3d_gl.h
++++ b/wined3d/wined3d_gl.h
+@@ -54,6 +54,7 @@
+     ARB_DRAW_INSTANCED,
+     ARB_ES2_COMPATIBILITY,
+     ARB_FRAGMENT_PROGRAM,
++    ARB_FRAGMENT_PROGRAM_SHADOW,
+     ARB_FRAGMENT_SHADER,
+     ARB_FRAMEBUFFER_OBJECT,
+     ARB_FRAMEBUFFER_SRGB,
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1899,7 +1899,9 @@
+     unsigned                tex_type : 3;
+     unsigned                dst : 1;
+     unsigned                projected : 2;
+-    unsigned                padding : 10;
++    /* DreamGPU: the stage samples a shadow texture (WINED3DFMT_FLAG_SHADOW). */
++    unsigned                shadow : 1;
++    unsigned                padding : 9;
+ };
+ 
+ struct ffp_frag_settings

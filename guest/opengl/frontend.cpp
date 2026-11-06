@@ -81,6 +81,9 @@ static ULONG MaxResultBytes = DG_ESCAPE_LEGACY_RESULT_BYTES;
 static ULONG TransportFeatures;
 static BOOL SecondarySupported;
 static ULONG HostCapabilities;
+/* The second capability word (gl.h DG_GL_REG_CAPS2), zero from older drivers
+ * and hosts; reset and negotiated with HostCapabilities. */
+static ULONG HostCapabilities2;
 static HDC Display;
 static HANDLE Heap;
 static HINSTANCE Module;
@@ -142,6 +145,9 @@ BOOL JglOcclusionQueryAvailable(void) {
 BOOL JglTextureRectangleAvailable(void) {
     return Client && (HostCapabilities & DG_CAP_GL_TEXTURE_RECTANGLE);
 }
+BOOL JglDepthTextureAvailable(void) {
+    return Client && (HostCapabilities2 & DG_CAP2_GL_DEPTH_TEXTURE);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Each name keeps its contract's gate; the
@@ -151,12 +157,15 @@ BOOL JglTextureRectangleAvailable(void) {
  * compiled vertex arrays, the texture environments, anisotropy, edge clamp,
  * point parameters, compression, secondary colour and fog coordinates. Then
  * the other fixed-function names of that era, then the program, buffer,
- * framebuffer, query and rectangle extensions later titles find anywhere.
+ * framebuffer, query and rectangle extensions later titles find anywhere, and
+ * last those of the second capability word (JGL_CAP2): depth textures and
+ * shadow comparison.
  * EXT_compiled_vertex_array comes with the buffer draw, which carries indexed
  * client-array draws in bulk: offered only then, applications choosing their
  * path by it (Quake III's DrawElements instead of strips of ArrayElement) keep
  * older hosts' path. */
 #define JGL_CAP(name) (HostCapabilities & DG_CAP_GL_##name)
+#define JGL_CAP2(name) (HostCapabilities2 & DG_CAP2_GL_##name)
 #define JGL_EXTENSION_NAMES(X)                                                                     \
     X("GL_ARB_multitexture", JGL_CAP(MULTITEXTURE))                                                \
     X("GL_EXT_compiled_vertex_array", JGL_CAP(VERTEX_BUFFER_OBJECT))                               \
@@ -202,7 +211,10 @@ BOOL JglTextureRectangleAvailable(void) {
     X("GL_ARB_occlusion_query", JGL_CAP(OCCLUSION_QUERY))                                          \
     X("GL_NV_fence", JGL_CAP(OCCLUSION_QUERY))                                                     \
     X("GL_ARB_texture_rectangle", JGL_CAP(TEXTURE_RECTANGLE))                                      \
-    X("GL_NV_texture_rectangle", JGL_CAP(TEXTURE_RECTANGLE))
+    X("GL_NV_texture_rectangle", JGL_CAP(TEXTURE_RECTANGLE))                                       \
+    X("GL_ARB_depth_texture", JGL_CAP2(DEPTH_TEXTURE))                                             \
+    X("GL_ARB_shadow", JGL_CAP2(DEPTH_TEXTURE))                                                    \
+    X("GL_ARB_fragment_program_shadow", JGL_CAP2(DEPTH_TEXTURE) && JGL_CAP(FRAGMENT_PROGRAM))
 /* Each name's terminator byte pays for one separator or the final NUL. */
 #define JGL_EXTENSION_BYTES(name, gate) +sizeof(name)
 static char Extensions[0 JGL_EXTENSION_NAMES(JGL_EXTENSION_BYTES)];
@@ -223,11 +235,14 @@ static void NegotiateExtensions(void) {
     Extensions[at] = 0;
 }
 #undef JGL_EXTENSION_NAMES
+#undef JGL_CAP2
 #undef JGL_CAP
 const GLubyte *JglExtensions(void) {
     return (const GLubyte *)Extensions;
 }
-static ULONG QueryCapabilities(void) {
+/* DG_REG_CAPS, and in *second the second word, which drivers that predate it
+ * leave zero in DeviceError (dg-escape.h). */
+static ULONG QueryCapabilities(ULONG *second) {
     DG_ESCAPE_REQUEST request;
     DG_ESCAPE_REPLY reply;
     ZeroMemory(&request, sizeof(request));
@@ -235,6 +250,7 @@ static ULONG QueryCapabilities(void) {
     request.Version = DG_ESCAPE_VERSION;
     request.Operation = DG_ESCAPE_CAPABILITIES;
     request.Client = Client;
+    *second = 0;
     int result = JglTransportRequest(Display, sizeof(request), (LPCSTR)&request, sizeof(reply),
                                      (LPSTR)&reply);
     /* Older drivers reject this operation. Missing or malformed replies must
@@ -243,6 +259,7 @@ static ULONG QueryCapabilities(void) {
         reply.Client != Client || reply.ResultType || reply.ResultBytes ||
         reply.FunctionWords == (ULONG)-1)
         return 0;
+    *second = reply.DeviceError;
     return reply.FunctionWords;
 }
 static BOOL SecondaryAvailable(void) {
@@ -460,12 +477,15 @@ static BOOL CopyInternalFormat(ULONG format) {
 static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
     const BOOL image = function == FEnum_glCopyTexImage2D;
     const ULONG width = a[image ? 5 : 6], height = a[image ? 6 : 7];
+    /* Depth textures (ARB_depth_texture) are borderless images of 1D, 2D and
+     * rectangle targets only: elsewhere a depth format is INVALID_OPERATION. */
+    const BOOL depth = image && JglDepthTextureAvailable() && JglDepthInternalFormat(a[2]);
     if (JglRectangleTarget(a[0])) {
         /* Level zero only, no border, any size up to the 2D level-zero limit,
-         * a colour internal format (ARB_texture_rectangle). */
+         * a colour (or a depth) internal format (ARB_texture_rectangle). */
         if (a[1] || width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION ||
             height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION ||
-            (image && (a[7] || !CopyInternalFormat(a[2]))))
+            (image && (a[7] || !(CopyInternalFormat(a[2]) || depth))))
             return GL_INVALID_VALUE;
         return 0;
     }
@@ -474,9 +494,12 @@ static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
     /* TEXTURE_2D: native GL judges the copy, but depth textures
      * (EXT_packed_depth_stencil) are borderless. */
     if (!JglCubeFace(a[0]))
-        return image && a[7] && JglFramebufferObjectAvailable() && JglDepthInternalFormat(a[2])
+        return image && a[7] && (JglFramebufferObjectAvailable() || JglDepthTextureAvailable()) &&
+                       JglDepthInternalFormat(a[2])
                    ? GL_INVALID_VALUE
                    : 0;
+    if (depth)
+        return GL_INVALID_OPERATION;
     if (a[1] > DG_GL_MAX_TEXTURE_LEVEL || width > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1] ||
         height > (ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
         return GL_INVALID_VALUE;
@@ -577,6 +600,15 @@ JGL_INLINE void ScalarForContext(JGL_CONTEXT *c, ULONG function, ULONG words,
             1) {
             CommandError(c, GL_INVALID_ENUM);
             return;
+        }
+        /* The depth texture parameters' values (ARB_shadow, ARB_depth_texture). */
+        if (parameter) {
+            if (!JglTextureParameterValueValid(w[1], function == FEnum_glTexParameteri
+                                                         ? (GLint)w[2]
+                                                         : JglFloatBitsEnum(w[2]))) {
+                CommandError(c, GL_INVALID_ENUM);
+                return;
+            }
         }
     }
     if (function == FEnum_glHint &&
@@ -1124,7 +1156,7 @@ static void CloseIdleClient(PACKET *packet) {
             return;
     if (Client && Request(packet, DG_ESCAPE_CLOSE, 0, &reply)) {
         Client = 0;
-        HostCapabilities = 0;
+        HostCapabilities = HostCapabilities2 = 0;
         TransportFeatures = 0;
         ReleaseDC(NULL, Display);
         Display = NULL;
@@ -1152,7 +1184,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
         goto done;
     pending.reset(c);
     if (!Client) {
-        HostCapabilities = 0;
+        HostCapabilities = HostCapabilities2 = 0;
         Display = GetDC(NULL);
         if (!Display || !Request(&c->Packet, DG_ESCAPE_OPEN, 0, &reply)) {
             if (Display)
@@ -1178,7 +1210,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
             Display = NULL;
             goto done;
         }
-        HostCapabilities = QueryCapabilities();
+        HostCapabilities = QueryCapabilities(&HostCapabilities2);
         SecondarySupported = SecondaryAvailable();
         NegotiateExtensions();
     }

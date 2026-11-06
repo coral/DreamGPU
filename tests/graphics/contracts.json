@@ -436,6 +436,22 @@
       "scope": "installed-api",
       "path": "tools/d3d/npot-probe.inc"
     },
+    "gl-depth-texture": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_depth_texture.py"
+    },
+    "native-depth-texture": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/depth_texture.rs"
+    },
+    "d3d-depth-textures": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_depth_textures.py"
+    },
+    "guest-depth-texture": {
+      "scope": "installed-api",
+      "path": "tools/d3d/depth-texture-probe.inc"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1773,6 +1789,28 @@
         "guest-npot"
       ],
       "remaining": "Negotiated by DG_CAP_GL_TEXTURE_RECTANGLE; without it the extension names stay hidden and every rectangle enum keeps its GL_INVALID_ENUM. No new records: the 2D image, copy, readback, level query and FramebufferTexture2D records name TEXTURE_RECTANGLE (and its proxy), with level zero, no border, no compressed or depth format and at most 2048 per side as record rules the frontend checks locally; parameter values (REPEAT, MIRRORED_REPEAT and mirror-once wraps, mipmap filters, a nonzero BASE_LEVEL) are native GL errors and GENERATE_MIPMAP is no rectangle parameter. ARB_texture_non_power_of_two is not claimed (GL_VERSION stays 1.1), so 2D textures stay power-of-two for WineD3D. Native pixel tests (Linux, private Mesa) sample a 37x23 rectangle exactly with NEAREST and LINEAR including its last row and column and CLAMP_TO_EDGE beyond them, and cover subimages, CopyTexImage2D/CopyTexSubImage2D, readback, proxies, the spec's errors, rendering into a rectangle through a framebuffer object, ARB fragment program TEX/TXP with RECT, enable precedence, per-unit bindings with TEXTURE_BIT, display lists and deletion. WineD3D then reports the GeForce FX 5800's TextureCaps, POW2|NONPOW2CONDITIONAL (D3D9 0x7ed87, D3D8 0x7ed9f from 0x7ec87/0x7ec9f); Wine 0049 keeps formats a rectangle cannot hold (DXTn, depth) in padded 2D textures and unpads only rectangles, so NPOT render targets, backbuffers, offscreen surfaces and textures are exact-size rectangles while NPOT DXT textures still fail (D3DERR_NOTAVAILABLE) and mipmapped NPOT textures D3DERR_INVALIDCALL. The installed D3D8/9 NPOT probe, macOS CGL (its IOSurface export binds a native rectangle texture), Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.depth-texture",
+      "area": 8,
+      "api": "OpenGL 1.1 + ARB_depth_texture, ARB_shadow and ARB_fragment_program_shadow (D3D8/D3D9 D16/D24X8/D24S8 shadow-map textures through Wine)",
+      "operation": "second capability word negotiation; depth image definition/subimage/copy from the depth buffer/readback, zero-defined storage, proxies, framebuffer attachment, compare mode/function and depth texture mode with their errors, comparison sampling (NEAREST, LINEAR, projective) in fixed function and SHADOW1D/2D/RECT programs, display lists",
+      "format": "DEPTH_COMPONENT(16/24/32), DEPTH_STENCIL and DEPTH24_STENCIL8 without a border; DEPTH_COMPONENT pixels of every scalar type, packed UNSIGNED_INT_24_8",
+      "resource": "1D, 2D and rectangle depth texture",
+      "usage": "shadow maps: render depth, sample with comparison",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-depth-texture",
+        "native-depth-texture",
+        "native",
+        "d3d-depth-textures",
+        "d3d-rectangle-texture-types",
+        "guest-depth-texture"
+      ],
+      "remaining": "Negotiated by DG_CAP2_GL_DEPTH_TEXTURE, the first bit of the second capability word DG_GL_REG_CAPS2 (0x1194), which older hosts read as zero and kernels report in the CAPABILITIES reply's DeviceError (zero from older kernels); without it every new name keeps its GL_INVALID_ENUM and depth images stay EXT_packed_depth_stencil's TEXTURE_2D ones. No new records: depth images of 1D, 2D and rectangle targets use the existing records, cube and 3D depth images are local GL_INVALID_OPERATION, compare/mode values beyond ARB_shadow and ARB_depth_texture (no EXT_shadow_funcs) local GL_INVALID_ENUM, and GetTexImage level-word bit DG_GL_TEXTURE_READ_DEPTH reads float depth or, with READ_FLOAT, packed words after the frontend checked the level's depth and stencil sizes. Native pixel tests (Linux, private Mesa on Radeon) pass; Mesa's fixed-function 1D lookups compare t instead of r. WineD3D then accepts D16, D24X8 and D24S8 as depth textures (D3DERR_NOTAVAILABLE before); Wine 0050 refuses D16_LOCKABLE, D32, INTZ and depth cube/volume textures as a GeForce FX did, and makes NPOT D16/D24X8/D24S8 depth-stencil surfaces exact-size rectangles; Wine 0051 names SHADOW targets in the arbfp fixed-function replacement and ARB pixel shaders. The installed D3D8/9 depth texture probe, macOS CGL, Win98/XP guests and games remain to be run."
     },
     {
       "id": "gl.client-array-draws",

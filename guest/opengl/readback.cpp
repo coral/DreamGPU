@@ -522,6 +522,27 @@ invalid:
     JglSetError(GL_INVALID_VALUE);
 }
 
+/* ARB_depth_texture: GetTexImage of a depth level as DEPTH_COMPONENT (any
+ * scalar type) or, of a packed level (EXT_packed_depth_stencil), as
+ * DEPTH_STENCIL/UNSIGNED_INT_24_8. Zero when the format is no depth format or
+ * depth textures are not negotiated (then ReadPixelBytes reports it). */
+static ULONG DepthTexturePixelBytes(GLenum format, GLenum type) {
+    if (!JglDepthTextureAvailable() || (format != 0x1902 && format != JGL_DEPTH_STENCIL))
+        return 0;
+    if (format == JGL_DEPTH_STENCIL || type == JGL_UNSIGNED_INT_24_8) {
+        if (format == JGL_DEPTH_STENCIL && type == JGL_UNSIGNED_INT_24_8)
+            return 4;
+        JglSetError(format == JGL_DEPTH_STENCIL ? GL_INVALID_ENUM : GL_INVALID_OPERATION);
+        return (ULONG)-1;
+    }
+    if (type >= 0x1400 && type <= 0x1406) /* BYTE..FLOAT */
+        return type <= 0x1401 ? 1 : type <= 0x1403 ? 2 : 4;
+    /* Packed colour types and BITMAP are no depth types. */
+    JglSetError((type >= 0x8032 && type <= 0x8036) || (type >= 0x8362 && type <= 0x8368)
+                    ? GL_INVALID_OPERATION
+                    : GL_INVALID_ENUM);
+    return (ULONG)-1;
+}
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void *pixels) {
     ULONG args[3], bytes, pixel_bytes, row, column, i, at = 0, total;
     ULONG *rgba, capacity;
@@ -530,9 +551,16 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     /* A 3D level is all of its images (EXT_texture3D). */
     const BOOL volume = target == JGL_TEXTURE_3D && JglTexture3DAvailable();
     JGL_UNPACK *pack;
-    BOOL wide =
-        WideReadColor(type) || (target == GL_TEXTURE_1D && JglDepthStencilReadbackAvailable());
-    ULONG wire_bytes = wide ? 16 : 4, kind = wide ? DG_GL_RESULT_FLOAT : DG_GL_RESULT_INT;
+    /* Depth reads (ARB_depth_texture): one float32 depth or packed word per
+     * pixel, of the targets that have depth images. */
+    const BOOL depth_read =
+        JglDepthTextureAvailable() && (format == 0x1902 || format == JGL_DEPTH_STENCIL);
+    const BOOL depth_target =
+        target == GL_TEXTURE_1D || target == GL_TEXTURE_2D || JglRectangleTarget(target);
+    BOOL wide = !depth_read && (WideReadColor(type) ||
+                                (target == GL_TEXTURE_1D && JglDepthStencilReadbackAvailable()));
+    ULONG wire_bytes = wide ? 16 : 4,
+          kind = wide || (depth_read && format == 0x1902) ? DG_GL_RESULT_FLOAT : DG_GL_RESULT_INT;
     if (!JglReady())
         return;
     /* TEXTURE_2D or, once negotiated, one cube map face, TEXTURE_3D or
@@ -542,9 +570,15 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         JglSetError(GL_INVALID_ENUM);
         return;
     }
-    pixel_bytes = ReadPixelBytes(format, type, TRUE);
-    if (!pixel_bytes)
+    pixel_bytes =
+        depth_read ? DepthTexturePixelBytes(format, type) : ReadPixelBytes(format, type, TRUE);
+    if (!pixel_bytes || pixel_bytes == (ULONG)-1)
         return;
+    /* Cube faces and 3D levels have no depth images. */
+    if (depth_read && !depth_target) {
+        JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
     if (wide && !JglDepthStencilReadbackAvailable()) {
         JglSetError(GL_INVALID_OPERATION);
         return;
@@ -572,6 +606,26 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
     }
     if (!width || !height || !depth)
         return;
+    /* A depth read needs a depth level (and DEPTH_STENCIL a packed one), a
+     * colour read a colour level: the host fails the batch on a mismatch,
+     * GL reports INVALID_OPERATION (ARB_depth_texture). */
+    if (JglDepthTextureAvailable() && depth_target) {
+        GLint depth_size = 0, stencil_size = 0;
+        args[2] = 0x884a; /* TEXTURE_DEPTH_SIZE */
+        if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &depth_size,
+                      sizeof(depth_size), &bytes))
+            return;
+        if (depth_size > 0 && format == JGL_DEPTH_STENCIL) {
+            args[2] = 0x88f1; /* TEXTURE_STENCIL_SIZE */
+            if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &stencil_size,
+                          sizeof(stencil_size), &bytes))
+                return;
+        }
+        if ((depth_size > 0) != depth_read || (format == JGL_DEPTH_STENCIL && stencil_size <= 0)) {
+            JglSetError(GL_INVALID_OPERATION);
+            return;
+        }
+    }
     if (width < 0 || height < 0 || depth < 0 || width > DG_GL_MAX_TEXTURE_DIMENSION + 2 ||
         height > DG_GL_MAX_TEXTURE_DIMENSION + 2 ||
         (volume && (width > DG_GL_MAX_3D_TEXTURE_SIZE || height > DG_GL_MAX_3D_TEXTURE_SIZE ||
@@ -605,7 +659,9 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         ULONG count = total - at, requested;
         if (count > capacity / wire_bytes)
             count = capacity / wire_bytes;
-        args[1] = (ULONG)level | (wide ? DG_GL_TEXTURE_READ_FLOAT : 0);
+        args[1] = (ULONG)level | (wide ? DG_GL_TEXTURE_READ_FLOAT : 0) |
+                  (depth_read ? DG_GL_TEXTURE_READ_DEPTH : 0) |
+                  (depth_read && format == JGL_DEPTH_STENCIL ? DG_GL_TEXTURE_READ_FLOAT : 0);
         requested = DG_GL_MAX_RESULT_BYTES;
         if (wide || capacity > DG_GL_MAX_RESULT_BYTES) {
             args[1] |= count << DG_GL_TEXTURE_READ_COUNT_SHIFT;
@@ -624,8 +680,11 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
             column = (at + i) % (ULONG)width;
             dest = (BYTE *)first + row / (ULONG)height * image_stride +
                    row % (ULONG)height * stride + column * pixel_bytes;
-            StoreReadPixel(dest, rgba + i * (wire_bytes / 4), format, type, pack->SwapBytes, TRUE,
-                           wide);
+            if (depth_read && format == JGL_DEPTH_STENCIL)
+                StoreReadWord(dest, rgba[i], 4, pack->SwapBytes); /* the packed word */
+            else
+                StoreReadPixel(dest, rgba + i * (wire_bytes / 4), format, type, pack->SwapBytes,
+                               TRUE, wide);
         }
         at += count;
     }

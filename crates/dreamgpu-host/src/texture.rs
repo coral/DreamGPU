@@ -274,8 +274,9 @@ unsafe fn generates_mipmaps(api: &DreamGpuGlApi, target: u32) -> bool {
 }
 
 /// Host-internal texture-read level flag: read the native compressed image in
-/// 32-bit words instead of RGBA pixels. Never part of the wire encoding.
-pub(crate) const READ_COMPRESSED: u32 = 0x4000;
+/// 32-bit words instead of RGBA pixels. Never part of the wire encoding, whose
+/// level word uses bits 14 (DG_GL_TEXTURE_READ_DEPTH) and 15 (READ_FLOAT).
+pub(crate) const READ_COMPRESSED: u32 = 0x2000;
 
 /// Bytes per 4x4 block of an S3TC internal format, zero for anything else.
 pub(crate) fn s3tc_block_bytes(format: u32) -> u32 {

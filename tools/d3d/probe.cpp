@@ -191,6 +191,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "rtt-probe.inc"
 #include "query-probe.inc"
 #include "npot-probe.inc"
+#include "depth-texture-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -364,6 +365,9 @@ static void Run(void) {
         return;
 #endif
     npot_probe::Run(d3d, device, surface);
+    if (failed)
+        return;
+    depth_texture_probe::Run(d3d, device, surface);
     if (failed)
         return;
     Log("STAGE present");

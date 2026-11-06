@@ -435,15 +435,26 @@ static void LegacyPrefix(void) {
                                          "GL_EXT_secondary_color",
                                          "GL_EXT_fog_coord",
                                          "GL_ARB_texture_cube_map"};
-    JGL_CONTEXT *c = Open(ALL);
+    /* Every contract: the second capability word's too (Open resets it). */
+    Reset();
+    HostCaps = ALL;
+    HostCaps2 = DG_CAP2_GL_DEPTH_TEXTURE;
+    HostMaxBytes = DG_ESCAPE_MAX_BYTES;
+    HostSecondaryWords = 3;
+    SubmittedRecord = Capture;
+    AnswerQuery = Answer;
+    JGL_CONTEXT *c = Lookup(Create());
+    Clear(c);
     const char *names = (const char *)glGetString(GL_EXTENSIONS);
-    assert(!strcmp(names, ExpectedExtensions(ALL, TRUE)));
-    /* Every model name exactly once, as a whole word. */
+    assert(!strcmp(names, ExpectedExtensions(ALL, TRUE, DG_CAP2_GL_DEPTH_TEXTURE)));
+    /* Every model name exactly once, as a whole word (GL_ARB_fragment_program
+     * is also the start of GL_ARB_fragment_program_shadow). */
     for (const JGL_TEST_EXTENSION &e : ExtensionNames) {
-        const char *at = strstr(names, e.Name);
         const size_t length = strlen(e.Name);
-        assert(at && (at == names || at[-1] == ' ') && (at[length] == ' ' || !at[length]));
-        assert(!strstr(at + length, e.Name));
+        ULONG words = 0;
+        for (const char *at = strstr(names, e.Name); at; at = strstr(at + 1, e.Name))
+            words += (at == names || at[-1] == ' ') && (at[length] == ' ' || !at[length]);
+        assert(words == 1);
     }
     char copy[1024];
     strncpy(copy, names, sizeof(copy) - 1);

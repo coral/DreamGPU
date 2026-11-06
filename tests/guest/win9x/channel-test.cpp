@@ -607,9 +607,25 @@ int main() {
            legacy_caps.FunctionWords == m.registers[DG_REG_CAPS / 4] &&
            !(legacy_caps.FunctionWords & DG_CAP_GL_DEPTH_STENCIL_READBACK) &&
            !legacy_caps.ResultBytes && !legacy_caps.ResultType);
+    /* A host without the second capability word reads zero there: DeviceError
+     * stays zero, as older drivers left it. */
+    assert(!legacy_caps.DeviceError);
     m.registers[DG_REG_CAPS / 4] |= DG_CAP_GL_DEPTH_STENCIL_READBACK;
     assert(request(DG_ESCAPE_CAPABILITIES, client).FunctionWords &
            DG_CAP_GL_DEPTH_STENCIL_READBACK);
+    /* CAPS2 travels unchanged in DeviceError; every request rereads it with
+     * CAPS, and a host without the GL transport reports neither. */
+    m.registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE | 0x80000000u;
+    {
+        const auto caps = request(DG_ESCAPE_CAPABILITIES, client);
+        assert(caps.Status == DG_ESCAPE_OK &&
+               caps.DeviceError == (DG_CAP2_GL_DEPTH_TEXTURE | 0x80000000u) &&
+               (caps.FunctionWords & DG_CAP_GL_DEPTH_STENCIL_READBACK) && !caps.ResultBytes);
+    }
+    m.registers[DG_GL_REG_CAPS2 / 4] = 0;
+    assert(request(DG_ESCAPE_CAPABILITIES, client).DeviceError == 0);
+    m.registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE;
+    assert(request(DG_ESCAPE_CAPABILITIES, client).DeviceError == DG_CAP2_GL_DEPTH_TEXTURE);
     assert(request(DG_ESCAPE_CAPABILITIES, client, 0, 0, 1).Status == DG_ESCAPE_INVALID);
     assert(request(DG_ESCAPE_CAPABILITIES, client + 100).Status == DG_ESCAPE_OWNER);
     m.context = 23;

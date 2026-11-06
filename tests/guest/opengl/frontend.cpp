@@ -18,6 +18,9 @@ static BOOL HostContexts[128], HostDrawables[128];
 static ULONG Width = 320, Height = 240;
 static ULONG HostSecondaryWords;
 static ULONG HostCaps, CapabilityQueries, CapabilityFailure;
+/* The second capability word a driver reports in the CAPABILITIES reply's
+ * DeviceError (dg-escape.h); zero models a driver or host without it. */
+static ULONG HostCaps2;
 static ULONG HostMaxRecords, HostMaxBytes, LargestSubmission;
 /* Typed state queries: the last function/first argument and fixed answers. */
 static ULONG HostInteger, LastQueryFunction, LastQueryArgument;
@@ -251,6 +254,7 @@ int ExtEscape(HDC dc, int escape, int input_bytes, LPCSTR input, int output_byte
         ++CapabilityQueries;
         assert(!request->Function && !request->Bytes && !request->ResultCapacity);
         reply->FunctionWords = HostCaps;
+        reply->DeviceError = HostCaps2;
         if (CapabilityFailure == 1)
             return 0;
         if (CapabilityFailure == 2)
@@ -397,7 +401,7 @@ static void Reset(void) {
     HostMaxRecords = DG_GL_MAX_RECORDS;
     HostMaxBytes = DG_ESCAPE_MAX_BYTES;
     LargestSubmission = HostSecondaryWords = 0;
-    HostCaps = CapabilityQueries = CapabilityFailure = 0;
+    HostCaps = HostCaps2 = CapabilityQueries = CapabilityFailure = 0;
     HostInteger = LastQueryFunction = LastQueryArgument = 0;
     HostEnabled = 0;
     HostFeatures = DeferStream = AsyncSubmits = SyncStreamSubmits = LastStream = 0;

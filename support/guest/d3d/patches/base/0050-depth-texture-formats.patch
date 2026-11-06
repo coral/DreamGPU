@@ -1,0 +1,32 @@
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -2249,13 +2249,25 @@
+             if ((format->flags[WINED3D_GL_RES_TYPE_TEX_2D] & WINED3DFMT_FLAG_SRGB_WRITE) && !srgb_write)
+                 format_clear_flag(format, WINED3DFMT_FLAG_SRGB_WRITE);
+ 
+-            if (!gl_info->supported[ARB_DEPTH_TEXTURE]
+-                    && format_texture_info[i].flags & (WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL))
++            /* DreamGPU: with ARB_depth_texture, a GeForce FX samples the D3D
++             * depth formats D16, D24X8 and D24S8 only, as "hardware shadow
++             * maps" (WINED3DFMT_FLAG_SHADOW: a comparison with the texture
++             * coordinate's r), and only as 2D (or rectangle) textures: no
++             * cube or volume depth textures. D16_LOCKABLE, D32, D15S1, D24X4S4
++             * and the INTZ FourCC (GeForce 8 and later) stay depth/stencil
++             * storage. */
++            if (format_texture_info[i].flags & (WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL))
+             {
+-                format->flags[WINED3D_GL_RES_TYPE_TEX_1D] &= ~WINED3DFMT_FLAG_TEXTURE;
+-                format->flags[WINED3D_GL_RES_TYPE_TEX_2D] &= ~WINED3DFMT_FLAG_TEXTURE;
+                 format->flags[WINED3D_GL_RES_TYPE_TEX_3D] &= ~WINED3DFMT_FLAG_TEXTURE;
+                 format->flags[WINED3D_GL_RES_TYPE_TEX_CUBE] &= ~WINED3DFMT_FLAG_TEXTURE;
++            }
++            if (format_texture_info[i].flags & (WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL)
++                    && (!gl_info->supported[ARB_DEPTH_TEXTURE]
++                    || (format->id != WINED3DFMT_D16_UNORM && format->id != WINED3DFMT_X8D24_UNORM
++                    && format->id != WINED3DFMT_D24_UNORM_S8_UINT)))
++            {
++                format->flags[WINED3D_GL_RES_TYPE_TEX_1D] &= ~WINED3DFMT_FLAG_TEXTURE;
++                format->flags[WINED3D_GL_RES_TYPE_TEX_2D] &= ~WINED3DFMT_FLAG_TEXTURE;
+                 format->flags[WINED3D_GL_RES_TYPE_TEX_RECT] &= ~WINED3DFMT_FLAG_TEXTURE;
+             }
+         }

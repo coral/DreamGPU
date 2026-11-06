@@ -21,6 +21,9 @@ BOOL JglTextureRectangleAvailable(void) {
 BOOL JglFramebufferObjectAvailable(void) {
     return FALSE; /* Framebuffer reads: tests/guest/opengl/framebuffer-object.cpp. */
 }
+BOOL JglDepthTextureAvailable(void) {
+    return FALSE; /* Depth texture reads: tests/guest/opengl/depth-texture.cpp. */
+}
 BOOL JglReadFramebufferBound(void) {
     return FALSE;
 }

@@ -91,6 +91,9 @@ pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
         | GL_TEXTURE_PRIORITY
         | GL_TEXTURE_MAX_ANISOTROPY_EXT
         | GL_GENERATE_MIPMAP => 1,
+        // ARB_shadow and ARB_depth_texture (DG_CAP2_GL_DEPTH_TEXTURE): every
+        // target; the frontend judges their values.
+        GL_TEXTURE_COMPARE_MODE | GL_TEXTURE_COMPARE_FUNC | GL_DEPTH_TEXTURE_MODE => 1,
         _ => 0,
     }
 }
@@ -549,12 +552,24 @@ fn texture_2d_internal_format(format: u32) -> bool {
         )
 }
 
-/// A depth internal format of a borderless TEXTURE_2D image (or its proxy),
-/// with DG_CAP_GL_FRAMEBUFFER_OBJECT.
-fn depth_image(target: u32, format: u32, border: u32) -> bool {
-    matches!(target, GL_TEXTURE_2D | GL_PROXY_TEXTURE_2D)
-        && border == 0
-        && crate::framebuffer::depth_texture_format(format)
+/// A depth internal format of a borderless image of a target that has depth
+/// images, or of its proxy: TEXTURE_2D (DG_CAP_GL_FRAMEBUFFER_OBJECT), and
+/// TEXTURE_1D and TEXTURE_RECTANGLE (DG_CAP2_GL_DEPTH_TEXTURE).
+pub(crate) fn depth_image(target: u32, format: u32, border: u32) -> bool {
+    depth_target(target) && border == 0 && crate::framebuffer::depth_texture_format(format)
+}
+/// Targets with depth images and their proxies (ARB_depth_texture: 1D, 2D and,
+/// with ARB_texture_rectangle, rectangles; never cube maps or 3D).
+pub(crate) fn depth_target(target: u32) -> bool {
+    matches!(
+        target,
+        GL_TEXTURE_1D
+            | GL_PROXY_TEXTURE_1D
+            | GL_TEXTURE_2D
+            | GL_PROXY_TEXTURE_2D
+            | GL_TEXTURE_RECTANGLE_ARB
+            | GL_PROXY_TEXTURE_RECTANGLE_ARB
+    )
 }
 /// Image targets of 2D-shaped records: TEXTURE_2D, one cube map face or
 /// TEXTURE_RECTANGLE (ARB_texture_rectangle).
@@ -771,7 +786,7 @@ fn call_validate(function: u32, a: &[u32; 8]) -> u32 {
                 || width < 2 * a[6]
                 || width - 2 * a[6] > (DG_GL_MAX_TEXTURE_DIMENSION >> a[1])
                 || a[2] <= 4
-                || !copy_1d_internal_format(a[2]))
+                || !(copy_1d_internal_format(a[2]) || depth_image(a[0], a[2], a[6])))
         {
             return DG_GL_ERROR_TEXTURE;
         }
@@ -1016,11 +1031,11 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
     let one = matches!(function, FEnum_glTexImage1D | FEnum_glTexSubImage1D);
     let w = a[if image { 3 } else { 4 }];
     let h = a[if image { 4 } else { 5 }];
-    // Depth images exist for TEXTURE_2D only (EXT_packed_depth_stencil).
+    // Depth pixels exist for the targets with depth images: TEXTURE_2D
+    // (EXT_packed_depth_stencil), TEXTURE_1D and TEXTURE_RECTANGLE
+    // (ARB_depth_texture).
     let pixel_bytes = match texture_pixel_bytes(a[6], a[7]) {
-        0 if !one && matches!(a[0], GL_TEXTURE_2D | GL_PROXY_TEXTURE_2D) => {
-            crate::framebuffer::depth_pixel_bytes(a[6], a[7])
-        }
+        0 if depth_target(a[0]) => crate::framebuffer::depth_pixel_bytes(a[6], a[7]),
         n => n,
     };
     if image
@@ -1039,14 +1054,14 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
         return if a[1] <= DG_GL_MAX_TEXTURE_LEVEL
             && cube_image_shape(a[0], w, h, a[5])
             && rectangle_image_shape(a[0], a[1], a[5])
-            && (!rectangle(a[0]) || texture_internal_format(a[2]))
+            && (!rectangle(a[0]) || texture_internal_format(a[2]) || depth_image(a[0], a[2], a[5]))
             && a[5] <= 1
             && w <= i32::MAX as u32
             && h <= i32::MAX as u32
             && (!one || h == 1)
             && pixel_bytes != 0
             && (if one {
-                texture_internal_format(a[2])
+                texture_internal_format(a[2]) || depth_image(a[0], a[2], a[5])
             } else {
                 texture_2d_internal_format(a[2]) || depth_image(a[0], a[2], a[5])
             })
@@ -1064,7 +1079,9 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
         image_2d_target(a[0])
     }) || (image && !cube_image_shape(a[0], w, h, a[5]))
         || !rectangle_image_shape(a[0], a[1], if image { a[5] } else { 0 })
-        || (image && rectangle(a[0]) && !texture_internal_format(a[2]))
+        || (image
+            && rectangle(a[0])
+            && !(texture_internal_format(a[2]) || depth_image(a[0], a[2], a[5])))
         || (one && (h != 1 || (!image && a[3] != 0)))
         || a[1] > DG_GL_MAX_TEXTURE_LEVEL
         || (!image && (w == 0 || h == 0))
@@ -1078,7 +1095,9 @@ fn data_validate(function: u32, a: &[u32; 8], data: &[u8]) -> u32 {
                 || w < 2 * a[5]
                 || (!one && h < 2 * a[5])
                 || !(if one {
-                    (1..=4).contains(&a[2]) || copy_1d_internal_format(a[2])
+                    (1..=4).contains(&a[2])
+                        || copy_1d_internal_format(a[2])
+                        || depth_image(a[0], a[2], a[5])
                 } else {
                     texture_2d_internal_format(a[2]) || depth_image(a[0], a[2], a[5])
                 })
@@ -1192,7 +1211,10 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             }
         }
         FEnum_glGetTexImage => {
-            let wide = b & DG_GL_TEXTURE_READ_FLOAT != 0;
+            // DEPTH reads one float32 depth per pixel, DEPTH with FLOAT one
+            // UNSIGNED_INT_24_8 word: both of the targets with depth images.
+            let depth = b & DG_GL_TEXTURE_READ_DEPTH != 0;
+            let wide = !depth && b & DG_GL_TEXTURE_READ_FLOAT != 0;
             let pixel_words = if wide { 4 } else { 1 };
             let n = b >> DG_GL_TEXTURE_READ_COUNT_SHIFT;
             let n = if n != 0 {
@@ -1200,7 +1222,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             } else {
                 DG_GL_MAX_RESULT_BYTES / 4
             };
-            if wide {
+            if wide || (depth && b & DG_GL_TEXTURE_READ_FLOAT == 0) {
                 kind = DG_GL_RESULT_FLOAT;
             }
             // A 3D level numbers its pixels through all of its images.
@@ -1210,6 +1232,7 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
             };
             if (matches!(a, GL_TEXTURE_1D | GL_TEXTURE_3D) || image_2d_target(a))
+                && (!depth || depth_target(a))
                 && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
                 && (!rectangle(a) || b & DG_GL_TEXTURE_READ_LEVEL_MASK == 0)
                 && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
@@ -1407,6 +1430,8 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                             | GL_TEXTURE_INTENSITY_SIZE
                             | GL_TEXTURE_COMPRESSED
                             | GL_TEXTURE_COMPRESSED_IMAGE_SIZE
+                            | GL_TEXTURE_DEPTH_SIZE
+                            | GL_TEXTURE_STENCIL_SIZE
                     ),
             )
         }

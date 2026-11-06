@@ -90,6 +90,17 @@ static void Vector(ULONG function, GLenum target, GLenum pname, const void *valu
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
+    /* The depth texture parameters' values (ARB_shadow, ARB_depth_texture). */
+    if (function == FEnum_glTexParameteriv || function == FEnum_glTexParameterfv) {
+        ULONG word;
+        CopyMemory(&word, values, sizeof(word));
+        const GLint value =
+            function == FEnum_glTexParameteriv ? (GLint)word : JglFloatBitsEnum(word);
+        if (count == 1 && !JglTextureParameterValueValid(pname, value)) {
+            JglCommandError(GL_INVALID_ENUM);
+            return;
+        }
+    }
     JglData(function, args, words, values, count * bytes);
 }
 #define PAIR(name, type)                                                                           \

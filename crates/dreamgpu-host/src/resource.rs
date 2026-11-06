@@ -701,6 +701,12 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
         let Some(zero) = (unsafe { OwnedBytes::zeroed(m, w as usize * 4) }) else {
             return GL_OUT_OF_MEMORY;
         };
+        // A depth image (ARB_depth_texture) is zeroed in its own format.
+        let (format, kind) = match unsafe { depth_image(a, GL_TEXTURE_1D, level) } {
+            Some(true) => (GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8),
+            Some(false) => (GL_DEPTH_COMPONENT, GL_UNSIGNED_INT),
+            None => (GL_RGBA, GL_UNSIGNED_BYTE),
+        };
         gl!(
             a,
             dg_glTexSubImage1D(
@@ -708,8 +714,8 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
                 level as i32,
                 -border,
                 w as i32,
-                GL_RGBA,
-                GL_UNSIGNED_BYTE,
+                format,
+                kind,
                 zero.p.cast()
             )
         );
@@ -821,9 +827,13 @@ pub unsafe extern "C" fn dreamgpu_texture_zero(
     0
 }
 /// Whether the bound image of `target` at `level` is a depth image, and if so
-/// whether it has stencil: Some(stencil). Only 2D images can be depth images.
+/// whether it has stencil: Some(stencil). Only 1D, 2D and rectangle images
+/// can be depth images.
 unsafe fn depth_image(a: &DreamGpuGlApi, target: u32, level: u32) -> Option<bool> {
-    if target != GL_TEXTURE_2D {
+    if !matches!(
+        target,
+        GL_TEXTURE_1D | GL_TEXTURE_2D | GL_TEXTURE_RECTANGLE_ARB
+    ) {
         return None;
     }
     let get = a.dg_glGetTexLevelParameteriv?;
@@ -902,13 +912,22 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
     // One cube face is a separate image: it has its own cache identity.
     let encoded_level = level | (cube_face(target).map_or(0, |f| f as u32 + 1) << 16);
     let compressed = level & crate::texture::READ_COMPRESSED != 0;
-    let pixel_bytes = if level & DG_GL_TEXTURE_READ_FLOAT != 0 {
-        16
-    } else {
-        4
+    // DEPTH (ARB_depth_texture) reads float32 depth, or with FLOAT the packed
+    // UNSIGNED_INT_24_8 words of a DEPTH_STENCIL level: four bytes either way.
+    let depth = level & DG_GL_TEXTURE_READ_DEPTH != 0;
+    let (format, kind, pixel_bytes) = match (depth, level & DG_GL_TEXTURE_READ_FLOAT != 0) {
+        (true, true) => (GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8, 4),
+        (true, false) => (GL_DEPTH_COMPONENT, GL_FLOAT, 4),
+        (false, true) => (GL_RGBA, GL_FLOAT, 16),
+        (false, false) => (GL_RGBA, GL_UNSIGNED_BYTE, 4),
     };
-    let level = level & !(DG_GL_TEXTURE_READ_FLOAT | crate::texture::READ_COMPRESSED);
-    if level > DG_GL_MAX_TEXTURE_LEVEL || result.is_null() || (compressed && pixel_bytes != 4) {
+    let level = level
+        & !(DG_GL_TEXTURE_READ_FLOAT | DG_GL_TEXTURE_READ_DEPTH | crate::texture::READ_COMPRESSED);
+    if level > DG_GL_MAX_TEXTURE_LEVEL
+        || result.is_null()
+        || (compressed && (pixel_bytes != 4 || depth))
+        || (depth && !crate::gl_validation::depth_target(target))
+    {
         return DG_GL_ERROR_TEXTURE;
     }
     let level = level as usize;
@@ -1003,17 +1022,7 @@ pub unsafe extern "C" fn dreamgpu_texture_read(
         } else {
             gl!(
                 a,
-                dg_glGetTexImage(
-                    target,
-                    level as i32,
-                    GL_RGBA,
-                    if pixel_bytes == 16 {
-                        GL_FLOAT
-                    } else {
-                        GL_UNSIGNED_BYTE
-                    },
-                    pixels.p.cast()
-                )
+                dg_glGetTexImage(target, level as i32, format, kind, pixels.p.cast())
             );
         }
         let e = gl!(a, dg_glGetError());

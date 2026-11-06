@@ -86,6 +86,19 @@ static ULONG FunctionWords(void *context, ULONG function) {
             return 2;
         case 0x414: /* GetTexImage */
             return DG_GL_FUNCTION_QUERY | 3;
+        /* Depth textures (DG_CAP2_GL_DEPTH_TEXTURE) add no function either:
+         * 1D and rectangle depth images, the compare parameters, the level
+         * sizes and the depth reads use these existing records. */
+        case 0x8d3: /* TexImage1D */
+            return DG_GL_FUNCTION_INLINE_DATA | 8;
+        case 0x154: /* CopyTexImage1D */
+            return 7;
+        case 0x8df: /* TexParameteri */
+            return 3;
+        case 0x416: /* GetTexLevelParameteriv */
+            return DG_GL_FUNCTION_QUERY | 3;
+        case 0x41d: /* GetTexParameteriv */
+            return DG_GL_FUNCTION_QUERY | 2;
         default:
             return (ULONG)-1;
     }
@@ -465,6 +478,80 @@ int main(void) {
         /* Level-zero readback of the rectangle: target, level, first pixel. */
         ULONG query[12] = {DG_GL_QUERY, 48, 0, 1, 1, 0, 0, 0, 0x414, 0x84f5, 0, 0};
         assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+    }
+    {
+        /* Depth textures (DG_CAP2_GL_DEPTH_TEXTURE) travel in the existing
+         * records: a 1D DEPTH_COMPONENT24 image with its sixteen floats, an
+         * allocation-only rectangle DEPTH24_STENCIL8 image, a 1D depth copy and
+         * the compare parameters. The kernel admits them by shape; the host
+         * owns which targets and formats have depth images. */
+        ULONG batch[112] = {DG_GL_CALL, 48, 0, 1, 1, 0, 0, 0, 0x8df, 0x0de0, 0x884c, 0x884e};
+        ULONG *image = batch + 12, *allocation = image + 34, *copy = allocation + 18;
+        ULONG *function = copy + 16, *mode = function + 12;
+        const ULONG image_words[10] = {0x8d3, 64, 0x0de0, 0, 0x81a6, 16, 1, 0, 0x1902, 0x1406};
+        const ULONG allocation_words[10] = {0x8d4, 0,   0x84f5, 0,      0x88f0,
+                                            640,   480, 0,      0x84f9, 0x84fa};
+        const ULONG copy_words[8] = {0x154, 0x0de0, 0, 0x1902, 0, 0, 16, 0};
+        image[0] = allocation[0] = DG_GL_DATA_CALL;
+        copy[0] = function[0] = mode[0] = DG_GL_CALL;
+        image[1] = 40 + 32 + 64;
+        allocation[1] = 40 + 32;
+        copy[1] = 64;
+        function[1] = mode[1] = 48;
+        image[3] = image[4] = allocation[3] = allocation[4] = copy[3] = copy[4] = 1;
+        function[3] = function[4] = mode[3] = mode[4] = 1;
+        memcpy(image + 8, image_words, sizeof(image_words));
+        memcpy(allocation + 8, allocation_words, sizeof(allocation_words));
+        memcpy(copy + 8, copy_words, sizeof(copy_words));
+        function[8] = mode[8] = 0x8df;
+        function[9] = mode[9] = 0x0de1;
+        function[10] = 0x884d; /* TEXTURE_COMPARE_FUNC GEQUAL */
+        function[11] = 0x0206;
+        mode[10] = 0x884b; /* DEPTH_TEXTURE_MODE INTENSITY */
+        mode[11] = 0x8049;
+        for (ULONG i = 0; i < 16; ++i) {
+            const float depth = (float)i / 16.0f;
+            memcpy(image + 18 + i, &depth, 4);
+        }
+        const ULONG bytes = (ULONG)((mode + 12 - batch) * 4);
+        assert(DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        assert(image[2] == 42 && allocation[7] == 7 && copy[2] == 42 && mode[7] == 7);
+        image[9] = 60; /* the payload is the record's remaining bytes */
+        assert(!DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        image[9] = 64;
+        copy[1] = 68; /* CopyTexImage1D has seven words */
+        assert(!DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        copy[1] = 64;
+        mode[1] = 52; /* TexParameteri has three */
+        assert(!DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        mode[1] = 48;
+        assert(DgValidateUserGl(batch, bytes, 42, 7, &limits, FunctionWords, NULL));
+        /* Depth readback: level word DEPTH (bit 14) alone, or with FLOAT for
+         * packed words, and a pixel count; the level sizes and parameters. */
+        ULONG query[12] = {DG_GL_QUERY,
+                           48,
+                           0,
+                           1,
+                           1,
+                           0,
+                           0,
+                           0,
+                           0x414,
+                           0x84f5,
+                           DG_GL_TEXTURE_READ_DEPTH | (128U << 16),
+                           0};
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[10] |= DG_GL_TEXTURE_READ_FLOAT;
+        query[11] = 128;
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        const ULONG level[4] = {0x416, 0x0de0, 0, 0x884a}; /* TEXTURE_DEPTH_SIZE */
+        memcpy(query + 8, level, sizeof(level));
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        const ULONG parameter[4] = {0x41d, 0x0de1, 0x884c, 0}; /* TEXTURE_COMPARE_MODE */
+        memcpy(query + 8, parameter, sizeof(parameter));
+        assert(DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
+        query[11] = 1; /* GetTexParameteriv has two arguments */
+        assert(!DgValidateUserGl(query, 48, 42, 7, &limits, FunctionWords, NULL));
     }
     {
         /* DeleteFramebuffers and DeleteRenderbuffers: a count, then names. */

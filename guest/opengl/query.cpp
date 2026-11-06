@@ -77,7 +77,8 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
              JglRectangleQueryRejected(target) ||                                                  \
              ((FEnum_##name == FEnum_glGetTexParameterfv ||                                        \
                FEnum_##name == FEnum_glGetTexParameteriv) &&                                       \
-              (WrapRRejected(target, pname) || RectangleMipmapRejected(target, pname))))) {        \
+              (WrapRRejected(target, pname) || RectangleMipmapRejected(target, pname) ||           \
+               JglDepthTextureQueryRejected(pname))))) {                                           \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -119,7 +120,8 @@ void APIENTRY glGetClipPlane(GLenum plane, GLdouble *equation) {
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
         if (output && JglReady() &&                                                                \
             (JglCubeMapQueryRejected(target) || JglTexture3DQueryRejected(target) ||               \
-             JglTexture3DQueryRejected(pname) || JglRectangleQueryRejected(target))) {             \
+             JglTexture3DQueryRejected(pname) || JglRectangleQueryRejected(target) ||              \
+             JglDepthTextureQueryRejected(pname))) {                                               \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \

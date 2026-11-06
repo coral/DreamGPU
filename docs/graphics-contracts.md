@@ -419,6 +419,42 @@ and disposable-VM acceptance cycle:
   D3DERR_INVALIDCALL. The installed D3D8/9 NPOT probe (the caps, a 640x480
   texture sampled 1:1 with clamping, a 640x480 render target sampled back,
   and the conditional restrictions) has not yet run on a guest.
+- Depth textures (`DG_CAP2_GL_DEPTH_TEXTURE`, the first bit of the second
+  capability word `DG_GL_REG_CAPS2`, which older hosts read as zero and older
+  kernels report as zero) add ARB_depth_texture, ARB_shadow and, with fragment
+  programs, ARB_fragment_program_shadow, as a GeForce FX listed them, and no
+  entry points or records: borderless depth images (`DEPTH_COMPONENT(16/24/32)`,
+  `DEPTH_STENCIL`, `DEPTH24_STENCIL8`) of 1D, 2D and rectangle textures and
+  their proxies through the existing image, subimage and copy records,
+  `TEXTURE_COMPARE_MODE`/`FUNC` and `DEPTH_TEXTURE_MODE` on every target (values
+  beyond the extensions, such as the other six functions, are local
+  `GL_INVALID_ENUM`; there is no EXT_shadow_funcs), the depth and stencil level
+  sizes, and `GetTexImage` level-word bit `DG_GL_TEXTURE_READ_DEPTH` for float
+  depth (with `READ_FLOAT`: packed `UNSIGNED_INT_24_8` words). Cube and 3D
+  depth images are `GL_INVALID_OPERATION`. Comparison, `DEPTH_TEXTURE_MODE` and
+  filtering are native; fixed-function 1D lookups on Mesa take the reference
+  from t, not r (SHADOW1D programs use r). Native pixel tests (Linux host,
+  private Mesa on Radeon) compare every function, mode and reference exactly
+  with NEAREST, average comparisons with LINEAR (a quarter texel: 64 and 191),
+  divide projective references, copy the window's depth bit-exactly into 2D, 1D
+  and rectangle textures, render into depth (and packed depth/stencil, also
+  rectangle) attachments of framebuffer objects and sample them, read depth as
+  floats and packed words, run SHADOW1D/2D/RECT programs (TEX, TXP), compile the
+  parameters into lists and keep the batch through the spec's errors; the
+  device without a GL engine reads both capability words without GL bits.
+  WineD3D's CheckDeviceFormat(D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE) then
+  accepts D16, D24X8 and D24S8 (all `D3DERR_NOTAVAILABLE` before); without Wine
+  patch 0050 it would also accept D16_LOCKABLE, D32 and INTZ and depth cube
+  textures, which a GeForce FX never had. Such textures compare (NVIDIA hardware
+  shadow maps, `DEPTH_TEXTURE_MODE` INTENSITY); Wine 0051 names SHADOW targets
+  in its fixed-function replacement and pixel shader programs, whose lookups
+  were otherwise undefined. With the depth formats rectangle-capable, NPOT
+  D16/D24X8/D24S8 depth-stencil surfaces become exact-size rectangles like
+  colour targets. The installed D3D8/9 probe (`tools/d3d/depth-texture-probe.inc`:
+  the format answers, a D24S8 texture rendered as a depth-stencil surface and
+  sampled with projected comparisons through fixed function, ps_1_1 and, on
+  D3D9, ps_2_0 `texldp`, and a LINEAR boundary) has not yet run on a guest;
+  macOS CGL, Win98/XP guests and games remain unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

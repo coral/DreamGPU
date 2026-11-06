@@ -137,7 +137,7 @@ inline DWORD SetFilePointer(HANDLE,LONG,void*,DWORD) { return 0; }
 inline BOOL WriteFile(HANDLE,const void*,DWORD,DWORD*,void*) { return FALSE; }
 inline BOOL CloseHandle(HANDLE) { return TRUE; }
 extern "C" {
-BOOL JglReady(); BOOL JglTextureBordersAvailable(); BOOL JglFramebufferObjectAvailable();
+BOOL JglReady(); BOOL JglTextureBordersAvailable(); BOOL JglFramebufferObjectAvailable(); BOOL JglDepthTextureAvailable();
 BOOL JglListMode(ULONG); BOOL JglCompiling(); void JglCallList(ULONG); BOOL JglCallLists(ULONG,const ULONG*);
 void JglScalarVector(unsigned, unsigned, const void*);
 int GetPixelFormat(HDC);
@@ -211,6 +211,7 @@ BOOL JglListMode(ULONG mode){JglArrays()->ListMode=mode;return TRUE;}
 BOOL JglCompiling(){return JglArrays()->ListMode!=0;}
 BOOL JglTextureBordersAvailable(){return TRUE;}
 BOOL JglFramebufferObjectAvailable(){return FALSE;}
+BOOL JglDepthTextureAvailable(){return FALSE;}
 void JglCallList(ULONG name){ScalarFn=FEnum_glCallList;ScalarWords=1;memcpy(ScalarArgs,&name,4);}
 BOOL JglCallLists(ULONG count,const ULONG*data){MapFunction=FEnum_glCallLists;MapBytes=count*4;assert(MapBytes<=sizeof(MapPayload));memcpy(MapPayload,data,MapBytes);return TRUE;}
 

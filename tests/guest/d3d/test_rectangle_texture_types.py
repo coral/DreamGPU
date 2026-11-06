@@ -67,6 +67,8 @@ enum wined3d_resource_type { WINED3D_RTYPE_SURFACE = 1, WINED3D_RTYPE_VOLUME, WI
         WINED3D_RTYPE_VOLUME_TEXTURE, WINED3D_RTYPE_CUBE_TEXTURE, WINED3D_RTYPE_BUFFER };
 enum wined3d_pool { WINED3D_POOL_DEFAULT, WINED3D_POOL_MANAGED, WINED3D_POOL_SYSTEM_MEM, WINED3D_POOL_SCRATCH };
 enum wined3d_multisample_type { WINED3D_MULTISAMPLE_NONE };
+/* The D3D depth formats a GeForce FX samples (0050), apart from the ids here. */
+enum { WINED3DFMT_D16_UNORM = 1001, WINED3DFMT_X8D24_UNORM, WINED3DFMT_D24_UNORM_S8_UINT };
 enum wined3d_gl_resource_type { WINED3D_GL_RES_TYPE_TEX_1D, WINED3D_GL_RES_TYPE_TEX_2D, WINED3D_GL_RES_TYPE_TEX_3D,
         WINED3D_GL_RES_TYPE_TEX_CUBE, WINED3D_GL_RES_TYPE_TEX_RECT, WINED3D_GL_RES_TYPE_BUFFER,
         WINED3D_GL_RES_TYPE_RB, WINED3D_GL_RES_TYPE_COUNT };
@@ -268,6 +270,34 @@ int main(void)
     puts("PASS resource types: NPOT colour textures, targets and plain surfaces take rectangles; DXT, depth and "
          "rectangle-unattachable targets keep padded 2D");
 
+    /* With ARB_depth_texture (0050) the GeForce FX's depth formats are
+     * textures a rectangle can hold, and check_fbo_compat attaches them as
+     * rectangles: NPOT depth-stencil surfaces become exact-size rectangles like
+     * colour targets. Other depth formats (here D32-like) keep padded 2D. */
+    {
+        struct wined3d_format fx_depth = {WINED3DFMT_D24_UNORM_S8_UINT, {0}, 1, 1}, other_depth = {5, {0}, 1, 1};
+        const struct format_texture_info fx_entry = {WINED3DFMT_D24_UNORM_S8_UINT, depth_info},
+                other_entry = {5, depth_info};
+        gl_info->supported[ARB_DEPTH_TEXTURE] = TRUE;
+        assign(&fx_depth, &fx_entry, gl_info);
+        assign(&other_depth, &other_entry, gl_info);
+        assert(fx_depth.flags[WINED3D_GL_RES_TYPE_TEX_RECT] & WINED3DFMT_FLAG_TEXTURE);
+        assert(!(other_depth.flags[WINED3D_GL_RES_TYPE_TEX_RECT] & WINED3DFMT_FLAG_TEXTURE));
+        assert(!(fx_depth.flags[WINED3D_GL_RES_TYPE_TEX_CUBE] & WINED3DFMT_FLAG_TEXTURE));
+        for (i = 0; i < WINED3D_GL_RES_TYPE_COUNT; ++i)
+            if (i == WINED3D_GL_RES_TYPE_TEX_2D || i == WINED3D_GL_RES_TYPE_TEX_RECT || i == WINED3D_GL_RES_TYPE_RB)
+            {
+                fx_depth.flags[i] |= WINED3DFMT_FLAG_FBO_ATTACHABLE;
+                other_depth.flags[i] |= WINED3DFMT_FLAG_FBO_ATTACHABLE;
+            }
+        assert(create(&fx_depth, WINED3DUSAGE_DEPTHSTENCIL, 800, 600) == WINED3D_GL_RES_TYPE_TEX_RECT);
+        assert(create(&fx_depth, WINED3DUSAGE_DEPTHSTENCIL, 1024, 1024) == WINED3D_GL_RES_TYPE_TEX_2D);
+        assert(create(&other_depth, WINED3DUSAGE_DEPTHSTENCIL, 800, 600) == WINED3D_GL_RES_TYPE_TEX_2D);
+        gl_info->supported[ARB_DEPTH_TEXTURE] = FALSE;
+        puts("PASS with ARB_depth_texture: NPOT D16/D24X8/D24S8 depth-stencil surfaces take exact-size rectangles, "
+             "other depth formats keep padded 2D");
+    }
+
     /* Surface sizes follow the container's target. */
     gl_info->limits.texture_size = 2048;
     assert(setup(&surface, 0, GL_TEXTURE_RECTANGLE_ARB, 800, 600) == WINED3D_OK);
@@ -335,7 +365,11 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-rect-types-') as temporary:
     start = utils.index('        format->flags[WINED3D_GL_RES_TYPE_TEX_1D] |= format_texture_info[i].flags;')
     end = utils.index('format->flags[WINED3D_GL_RES_TYPE_RB] &= ~WINED3DFMT_FLAG_TEXTURE;\n', start)
     assign = utils[start:end + len('format->flags[WINED3D_GL_RES_TYPE_RB] &= ~WINED3DFMT_FLAG_TEXTURE;')]
-    depth_rule = block(utils, utils.index('            if (!gl_info->supported[ARB_DEPTH_TEXTURE]', start))
+    # The depth rule (0050: no cube or volume depth textures; without
+    # ARB_depth_texture no depth textures at all) is two statements.
+    rule = utils.index('            if (format_texture_info[i].flags & (WINED3DFMT_FLAG_DEPTH', start)
+    depth_rule = block(utils, rule)
+    depth_rule += '\n' + block(utils, utils.index('            if (format_texture_info[i].flags', rule + 1))
     # wined3d_get_device_caps: the TextureCaps statements.
     caps_start = directx.index('    caps->TextureCaps   =')
     caps = directx[caps_start:directx.index('    caps->TextureFilterCaps', caps_start)]

@@ -11,6 +11,11 @@ static bool CopyFormat(GLenum format) {
            (format >= GL_INTENSITY4 && format <= GL_INTENSITY16) ||
            (format >= GL_RGB4 && format <= GL_RGBA16);
 }
+/* DEPTH_COMPONENT(16/24/32), DEPTH_STENCIL and DEPTH24_STENCIL8. */
+static bool DepthFormat(GLenum format) {
+    return format == 0x1902 || (format >= 0x81a5 && format <= 0x81a7) || format == 0x84f9 ||
+           format == 0x88f0;
+}
 static bool Span(const void *pointer, ULONG count, ULONG unit, bool command = false) {
     const ULONG_PTR max = ~(ULONG_PTR)0;
     if (!pointer || (ULONG_PTR)count > max / unit ||
@@ -138,12 +143,14 @@ static void APIENTRY AliasCopyTexImage1D(GLenum target, GLint level, GLenum inte
         JglCommandError(GL_INVALID_ENUM);
         return;
     }
-    if (!dg_icd_textures::CopyFormat(internal_format)) {
+    /* ARB_depth_texture: a borderless depth image from the depth buffer. */
+    const bool depth = JglDepthTextureAvailable() && dg_icd_textures::DepthFormat(internal_format);
+    if (!dg_icd_textures::CopyFormat(internal_format) && !depth) {
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || border < 0 || border > 1 ||
-        width < 2 * border ||
+        (depth && border) || width < 2 * border ||
         (ULONG)width > (DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2 * (ULONG)border) {
         JglCommandError(GL_INVALID_VALUE);
         return;

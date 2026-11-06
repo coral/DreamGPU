@@ -1464,6 +1464,8 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
             if (request.Function)
                 break;
             reply.FunctionWords = t->GlRegisters.Caps;
+            /* The second word, unchanged; older drivers leave DeviceError zero. */
+            reply.DeviceError = t->GlRegisters.Caps2;
             result = DG_ESCAPE_OK;
             break;
         case DG_ESCAPE_QUERY:

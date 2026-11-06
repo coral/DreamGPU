@@ -202,9 +202,10 @@ environment add/combine/dot3 names, anisotropy, edge clamp, point parameters,
 cube maps and the other fixed-function names of that era, then 3D textures,
 texture control, and last the program, buffer object, framebuffer object,
 BGRA, query and rectangle extensions that later titles find anywhere in the
-string. With every contract negotiated the string is 1108 characters and the
-legacy names end by character 461; `tests/guest/opengl/extension-names.h` is
-the suites' model and `test_compiled_vertex_array.py` checks that prefix.
+string, then the names of the second capability word (depth textures). With
+every contract negotiated the string is 1174 characters and the legacy names
+end by character 461; `tests/guest/opengl/extension-names.h` is the suites'
+model and `test_compiled_vertex_array.py` checks that prefix.
 
 ### ARB_multitexture
 
@@ -495,6 +496,35 @@ a compressed internal format, the compressed records and `GetCompressedTexImage`
 Without the capability every rectangle enum keeps its `GL_INVALID_ENUM`, now
 raised locally, and `Enable(TEXTURE_RECTANGLE)` still passes through.
 `tests/guest/opengl/test_texture_rectangle.py` covers the contract.
+
+### ARB_depth_texture, ARB_shadow and ARB_fragment_program_shadow
+
+The first feature of the second capability word: `DG_CAP2_GL_DEPTH_TEXTURE`
+arrives in the `DG_ESCAPE_CAPABILITIES` reply's `DeviceError` (older kernels
+leave it zero) and adds `GL_ARB_depth_texture GL_ARB_shadow`, and
+`GL_ARB_fragment_program_shadow` with `ARB_fragment_program`, as a GeForce FX
+listed them; no entry points. Borderless depth images (`DEPTH_COMPONENT`,
+`DEPTH_COMPONENT16/24/32`, `DEPTH_STENCIL`, `DEPTH24_STENCIL8`) of `TEXTURE_1D`,
+`TEXTURE_2D` and `TEXTURE_RECTANGLE` travel in the existing image, subimage,
+proxy and copy records, with `DEPTH_COMPONENT` pixels of every scalar type or
+packed `DEPTH_STENCIL`/`UNSIGNED_INT_24_8` words (swapped as whole units).
+A border is a local `GL_INVALID_VALUE`, depth pixels for a colour image (or
+the reverse) `GL_INVALID_OPERATION`, and a depth format or depth pixels for a
+cube map or 3D texture `GL_INVALID_OPERATION`, as the extension requires.
+`TEXTURE_COMPARE_MODE`, `TEXTURE_COMPARE_FUNC` and `DEPTH_TEXTURE_MODE` are
+parameters of every target in all four `TexParameter` forms; native GL takes
+more values than the extensions do, so the frontend reports anything but
+`NONE`/`COMPARE_R_TO_TEXTURE`, `LEQUAL`/`GEQUAL` (no `EXT_shadow_funcs`) and
+`LUMINANCE`/`INTENSITY`/`ALPHA` as `GL_INVALID_ENUM` (float values truncate,
+by integer arithmetic). `GetTexImage` reads a depth level as `DEPTH_COMPONENT`
+in any scalar type (GL's conversion of depth in [0, 1]) or a packed level as
+`DEPTH_STENCIL`: it first asks the level's `TEXTURE_DEPTH_SIZE` (and
+`TEXTURE_STENCIL_SIZE`) because a host read of the wrong kind fails the
+batch, and reports a mismatch, including a colour read of a depth level, as
+`GL_INVALID_OPERATION`. Without the capability every new name keeps its
+`GL_INVALID_ENUM`, now raised locally, and depth images stay
+`EXT_packed_depth_stencil`'s `TEXTURE_2D` ones. `tests/guest/opengl/test_depth_texture.py`
+covers the contract, `test_icd_textures.py` the ICD's 1D depth copies.
 
 ## System OpenGL provider
 

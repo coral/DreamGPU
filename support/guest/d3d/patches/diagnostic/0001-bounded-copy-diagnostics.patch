@@ -333,7 +333,7 @@
  }
 --- a/wined3d/wined3d_private.h
 +++ b/wined3d/wined3d_private.h
-@@ -3442,3 +3442,6 @@
+@@ -3444,3 +3444,6 @@
  BOOL EnumDisplaySettingsA95(LPCSTR lpszDeviceName, DWORD iModeNum, DEVMODEA *lpDevMode);
  
  #endif

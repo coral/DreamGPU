@@ -48,7 +48,7 @@ int main(void) {
     assert(DgGlRegistersRefresh(&cache, 7, 0, Read, &host));
     DgGlProgramCommands(&cache, 0x10000, 0, Write, &host);
     DgGlProgramResult(&cache, 0x20000, 0, 512, Write, &host);
-    assert(host.TotalReads == 2 && host.TotalWrites == 6);
+    assert(host.TotalReads == 3 && host.TotalWrites == 6);
     assert(host.Registers[DG_GL_REG_GENERATION / 4] == 7);
     for (i = 0; i < 10000; ++i) {
         assert(DgGlRegistersRefresh(&cache, 7, 0, Read, &host));
@@ -56,7 +56,7 @@ int main(void) {
         DgGlProgramResult(&cache, 0x20000, 0, 512, Write, &host);
         assert(!DgGlCompletionError(DG_STATUS_DONE, Read, &host));
     }
-    assert(host.TotalReads == 2 && host.TotalWrites == 6);
+    assert(host.TotalReads == 3 && host.TotalWrites == 6);
     /* Error details are read once only for ERROR; a following success must
      * not reuse a prior error in either the reply or diagnostics. */
     host.Registers[DG_GL_REG_ERROR / 4] = DG_GL_ERROR_CONTEXT;
@@ -74,7 +74,7 @@ int main(void) {
     assert(DgGlRegistersRefresh(&cache, 8, 0, Read, &host));
     DgGlProgramCommands(&cache, 0x10000, 0, Write, &host);
     DgGlProgramResult(&cache, 0x20000, 0, 512, Write, &host);
-    assert(host.TotalReads == reads + 2 && host.TotalWrites == writes + 6);
+    assert(host.TotalReads == reads + 3 && host.TotalWrites == writes + 6);
     assert(host.Registers[DG_GL_REG_ADDR_LO / 4] == 0x10000);
     assert(host.Registers[DG_GL_REG_GENERATION / 4] == 8);
     assert(host.Registers[DG_GL_REG_RESULT_CAPACITY / 4] == 512);
@@ -113,6 +113,29 @@ int main(void) {
     assert(host.Registers[DG_GL_REG_ADDR_LO / 4] == 0);
     assert(host.Registers[DG_GL_REG_ADDR_HI / 4] == 1);
     assert(host.Registers[DG_GL_REG_RESULT_ADDR_HI / 4] == 1);
+
+    /* The second capability word (gl.h DG_GL_REG_CAPS2) is read with CAPS,
+     * cached by generation like it, and zero on hosts without it (an unknown
+     * register reads zero) or without the GL transport (never read). */
+    ResetHost(&host, 9);
+    memset(host.Reads, 0, sizeof(host.Reads));
+    host.Registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE | 0x80000000u;
+    assert(DgGlRegistersRefresh(&cache, 9, 0, Read, &host));
+    assert(cache.Caps2 == (DG_CAP2_GL_DEPTH_TEXTURE | 0x80000000u));
+    assert(host.Reads[DG_GL_REG_CAPS2 / 4] == 1);
+    reads = host.TotalReads;
+    assert(DgGlRegistersRefresh(&cache, 9, 0, Read, &host));
+    assert(host.TotalReads == reads && cache.Caps2 == (DG_CAP2_GL_DEPTH_TEXTURE | 0x80000000u));
+    host.Registers[DG_GL_REG_CAPS2 / 4] = 0;
+    assert(DgGlRegistersRefresh(&cache, 9, 1, Read, &host));
+    assert(cache.Caps2 == 0 && host.Reads[DG_GL_REG_CAPS2 / 4] == 2);
+    host.Registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE;
+    host.Registers[DG_REG_CAPS / 4] = 0;
+    assert(!DgGlRegistersRefresh(&cache, 9, 1, Read, &host));
+    assert(cache.Caps2 == 0 && host.Reads[DG_GL_REG_CAPS2 / 4] == 2);
+    host.Registers[DG_REG_CAPS / 4] = DG_CAP_GL_TRANSPORT;
+    assert(DgGlRegistersRefresh(&cache, 10, 0, Read, &host));
+    assert(cache.Caps2 == DG_CAP2_GL_DEPTH_TEXTURE);
 
     assert(DgGlRegistersRefresh(&cache, UINT32_MAX, 0, Read, &host));
     DgGlProgramCommands(&cache, 0x10000, 0, Write, &host);

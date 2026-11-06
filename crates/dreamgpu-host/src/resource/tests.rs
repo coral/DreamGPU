@@ -652,6 +652,8 @@ unsafe extern "C" fn border_1d(t: u32, _: i32, p: u32, out: *mut i32) {
         out.write(match p {
             GL_TEXTURE_BORDER => 1,
             GL_TEXTURE_WIDTH => 6,
+            // A colour image: no depth (ARB_depth_texture).
+            GL_TEXTURE_DEPTH_SIZE => 0,
             _ => panic!("unexpected level query"),
         })
     };
@@ -930,6 +932,123 @@ fn float_texture_cache_keeps_precision_and_separates_representation() {
     N.with(|v| assert_eq!(v.borrow().reads, 3));
     assert!(alloc.live.is_empty());
     assert!(cache.pixels.is_null());
+    assert_eq!(errors, 0);
+}
+
+/// Native depth reads (ARB_depth_texture): float depth for DEPTH, packed
+/// UNSIGNED_INT_24_8 words for DEPTH with FLOAT; anything else is unexpected.
+unsafe extern "C" fn read_depth_image(
+    target: u32,
+    level: i32,
+    format: u32,
+    ty: u32,
+    p: *mut core::ffi::c_void,
+) {
+    assert_eq!(level, 1);
+    N.with(|v| {
+        let mut v = v.borrow_mut();
+        v.reads += 1;
+        v.targets.push(target);
+    });
+    let words: Vec<u32> = match (format, ty) {
+        (GL_DEPTH_COMPONENT, GL_FLOAT) => (0..6).map(|i| (i as f32 / 8.0).to_bits()).collect(),
+        (GL_DEPTH_STENCIL, GL_UNSIGNED_INT_24_8) => (0..6).map(|i| 0x0012_3400 | i).collect(),
+        _ => panic!("unexpected depth read {format:#x}/{ty:#x}"),
+    };
+    for (i, w) in words.iter().enumerate() {
+        unsafe {
+            core::ptr::copy_nonoverlapping(w.to_le_bytes().as_ptr(), p.cast::<u8>().add(i * 4), 4)
+        };
+    }
+}
+#[test]
+fn depth_texture_reads_use_native_depth_formats_and_their_own_cache_identity() {
+    let mut a = api();
+    a.dg_glGetTexImage = Some(read_depth_image);
+    let mut alloc = Allocator::default();
+    let m = memory(&a, &mut alloc);
+    let mut cache = ReadCache::EMPTY;
+    let mut errors = 0;
+    for target in [GL_TEXTURE_1D, GL_TEXTURE_2D, GL_TEXTURE_RECTANGLE_ARB] {
+        let mut t = Texture {
+            target,
+            ..Texture::default()
+        };
+        t.widths[1] = 3;
+        t.heights[1] = 2;
+        N.with(|v| *v.borrow_mut() = Native::default());
+        let mut out = [0xaa_u8; 26];
+        let depth = DG_GL_TEXTURE_READ_DEPTH | 1;
+        let packed = depth | DG_GL_TEXTURE_READ_FLOAT;
+        // A level of six pixels in two tiles per representation; the packed
+        // words are a separate cache identity from the depth floats.
+        for (word, first, expected) in [
+            (depth, 0, [0.0f32.to_bits(), 0.125f32.to_bits()]),
+            (packed, 0, [0x0012_3400, 0x0012_3401]),
+            (depth, 4, [0.5f32.to_bits(), 0.625f32.to_bits()]),
+            (packed, 4, [0x0012_3404, 0x0012_3405]),
+        ] {
+            assert_eq!(
+                unsafe {
+                    dreamgpu_texture_read(
+                        &m,
+                        &mut cache,
+                        &mut t,
+                        &mut errors,
+                        1,
+                        target,
+                        word,
+                        first,
+                        24,
+                        out.as_mut_ptr().add(1),
+                    )
+                },
+                0,
+                "{target:#x} {word:#x}"
+            );
+            let got =
+                [0, 1].map(|i| u32::from_le_bytes(out[1 + i * 4..5 + i * 4].try_into().unwrap()));
+            assert_eq!(got, expected, "{target:#x} {word:#x} {first}");
+            assert_eq!((out[0], out[25]), (0xaa, 0xaa));
+        }
+        // Each switch of representation rereads; nothing is left cached.
+        N.with(|v| {
+            let v = v.borrow();
+            assert_eq!(v.reads, 4);
+            assert!(v.targets.iter().all(|&x| x == target));
+        });
+        assert!(cache.pixels.is_null());
+    }
+    // Cube faces and 3D levels have no depth images: refused before reading.
+    let mut faces = [crate::texture::Face::EMPTY; crate::texture::FACES];
+    faces[0].widths[1] = 2;
+    faces[0].heights[1] = 2;
+    let mut cube = Texture {
+        target: GL_TEXTURE_CUBE_MAP,
+        faces: &mut faces,
+        ..Texture::default()
+    };
+    let mut out = [0u8; 16];
+    N.with(|v| *v.borrow_mut() = Native::default());
+    assert_eq!(
+        unsafe {
+            dreamgpu_texture_read(
+                &m,
+                &mut cache,
+                &mut cube,
+                &mut errors,
+                1,
+                GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+                DG_GL_TEXTURE_READ_DEPTH | 1,
+                0,
+                16,
+                out.as_mut_ptr(),
+            )
+        },
+        DG_GL_ERROR_TEXTURE
+    );
+    N.with(|v| assert_eq!(v.borrow().reads, 0));
+    assert!(alloc.live.is_empty());
     assert_eq!(errors, 0);
 }
 

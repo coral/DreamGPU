@@ -37,6 +37,9 @@ BOOL JglTexture3DAvailable(void) {
 BOOL JglTextureRectangleAvailable(void) {
     return FALSE;
 }
+BOOL JglDepthTextureAvailable(void) {
+    return FALSE;
+}
 BOOL JglVertexBufferObjectAvailable(void) {
     return FALSE;
 }

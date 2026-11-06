@@ -7,7 +7,9 @@
 #ifndef DG_GL_REGISTERS_H
 #define DG_GL_REGISTERS_H
 typedef struct {
-    ULONG Generation, Caps, Version, Valid;
+    /* Caps2 is DG_GL_REG_CAPS2 (gl.h), read with Caps when the host offers the
+     * GL transport and zero otherwise; older hosts read zero there anyway. */
+    ULONG Generation, Caps, Version, Valid, Caps2;
     ULONG CommandsLo, CommandsHi, CommandsValid;
     ULONG ResultLo, ResultHi, ResultCapacity, ResultValid;
 } DG_GL_REGISTERS;
@@ -23,6 +25,7 @@ static inline int DgGlRegistersRefresh(DG_GL_REGISTERS *state, ULONG generation,
         state->Generation = generation;
         state->Caps = read(context, DG_REG_CAPS);
         state->Version = read(context, DG_GL_REG_VERSION);
+        state->Caps2 = (state->Caps & DG_CAP_GL_TRANSPORT) ? read(context, DG_GL_REG_CAPS2) : 0;
         state->Valid = 1;
     }
     return (state->Caps & DG_CAP_GL_TRANSPORT) && state->Version == DG_GL_VERSION;

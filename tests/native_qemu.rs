@@ -12,6 +12,8 @@ mod cube_map;
 mod cursor;
 #[path = "native_qemu/depth.rs"]
 mod depth;
+#[path = "native_qemu/depth_texture.rs"]
+mod depth_texture;
 #[path = "native_qemu/discard.rs"]
 mod discard;
 #[path = "native_qemu/evaluator.rs"]

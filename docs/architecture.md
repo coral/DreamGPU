@@ -152,6 +152,22 @@ would. The host skips that stream's later queued batches, so nothing after
 the failure executes. Engine reset discards unfinished entries; the kernel
 reports them as failed and re-enables the queue for the new generation.
 
+### Capability words
+
+The device describes what it implements in capability words that never
+change for a realized device. `DG_REG_CAPS` (gpu.h) carries the display and GL
+transport bits and one bit per GL contract; with rectangle textures only
+three bits remained, kept in reserve. GL contracts since then are bits of the
+second word, `DG_GL_REG_CAPS2` (gl.h, register 0x1194). A register a host does
+not implement reads zero, so an older host offers none of the second word's
+features without any marker, and every bit is negotiated exactly as a first
+word bit is: the kernel (NT miniport, Win9x VxD) reads both words when the
+host offers the GL transport, caches them with the engine generation and
+reports the second, unchanged, in `DeviceError` of the `DG_ESCAPE_CAPABILITIES`
+reply, which older kernels leave zero; the frontend gates each feature, and
+its extension names, on its bit. Older frontends never ask for the second word
+and keep their behaviour. Like the first word it is zero without a GL engine.
+
 ### Client-array draws
 
 Guest pointers never cross the transport, so the frontend copies client

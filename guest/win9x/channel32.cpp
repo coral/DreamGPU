@@ -134,7 +134,9 @@ static DG_GL_QUEUE dg_gl_queue;
 static BOOL dg_gl_queue_supported, dg_gl_build_queued;
 static ULONG *dg_gl_build;
 static ULONG dg_gl_build_status, dg_gl_result_bytes, dg_gl_result_type, dg_gl_queue_sequence;
-static ULONG dg_gl_caps, dg_gl_caps_version, dg_gl_caps_generation;
+/* dg_gl_caps2 is DG_GL_REG_CAPS2 (gl.h): read with CAPS while the host offers
+ * the GL transport, zero otherwise; hosts without it read zero there. */
+static ULONG dg_gl_caps, dg_gl_caps2, dg_gl_caps_version, dg_gl_caps_generation;
 static BOOL dg_gl_caps_valid;
 struct DG9_SUBMIT {
     ULONG Token, Stream, Async, ResultCapacity;
@@ -173,6 +175,7 @@ static ULONG Dg9Caps(ULONG generation, BOOL force) {
     if (force || !dg_gl_caps_valid || dg_gl_caps_generation != generation) {
         dg_gl_caps = Dg9GlRead(NULL, DG_REG_CAPS);
         dg_gl_caps_version = Dg9GlRead(NULL, DG_GL_REG_VERSION);
+        dg_gl_caps2 = (dg_gl_caps & DG_CAP_GL_TRANSPORT) ? Dg9GlRead(NULL, DG_GL_REG_CAPS2) : 0;
         dg_gl_caps_generation = generation;
         dg_gl_caps_valid = TRUE;
     }
@@ -486,6 +489,8 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
         status = DG_ESCAPE_OK;
     } else if (request.Operation == DG_ESCAPE_CAPABILITIES && !request.Function) {
         reply.FunctionWords = Dg9Caps(reply.Generation, TRUE);
+        /* The second word, unchanged; older drivers leave DeviceError zero. */
+        reply.DeviceError = dg_gl_caps2;
         status = DG_ESCAPE_OK;
     } else if (request.Operation == DG_ESCAPE_QUERY) {
         reply.FunctionWords = Dg9GlWords(NULL, request.Function);

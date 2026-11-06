@@ -42,6 +42,9 @@ BOOL JglTextureRectangleAvailable(void) {
 BOOL JglFramebufferObjectAvailable(void) {
     return FALSE; /* Depth textures: tests/guest/opengl/framebuffer-object.cpp. */
 }
+BOOL JglDepthTextureAvailable(void) {
+    return FALSE; /* 1D and rectangle depth: tests/guest/opengl/depth-texture.cpp. */
+}
 BOOL JglCompiling(void) {
     return Compiling;
 }

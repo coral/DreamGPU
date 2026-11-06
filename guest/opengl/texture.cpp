@@ -315,12 +315,28 @@ static BOOL CompressedInternalFormat2D(GLint format) {
            JglCompressedTexturesAvailable();
 }
 
-/* Depth textures (EXT_packed_depth_stencil): TEXTURE_2D images only. */
+/* Depth textures: TEXTURE_2D images with EXT_packed_depth_stencil, and with
+ * ARB_depth_texture (the second capability word) TEXTURE_1D and, once
+ * negotiated, TEXTURE_RECTANGLE images too; proxies only with the latter. */
 static BOOL DepthTarget(GLenum target) {
-    return target == GL_TEXTURE_2D && JglFramebufferObjectAvailable();
+    return (target == GL_TEXTURE_2D && JglFramebufferObjectAvailable()) ||
+           (JglDepthTextureAvailable() &&
+            (target == GL_TEXTURE_2D || target == GL_TEXTURE_1D || JglRectangleTarget(target)));
+}
+static BOOL DepthProxy(GLenum target) {
+    return JglDepthTextureAvailable() &&
+           (target == 0x8063 /* PROXY_TEXTURE_1D */ || target == 0x8064 /* PROXY_TEXTURE_2D */ ||
+            (target == JGL_PROXY_TEXTURE_RECTANGLE && JglTextureRectangleAvailable()));
 }
 static BOOL DepthPixels(GLenum format) {
     return format == 0x1902 /* DEPTH_COMPONENT */ || format == JGL_DEPTH_STENCIL;
+}
+/* ARB_depth_texture: a depth internal format or depth pixels for a target that
+ * has no depth images (cube maps, 3D textures) is INVALID_OPERATION. Without
+ * it these stay the INVALID_VALUE/INVALID_ENUM of unknown formats. */
+static BOOL DepthMisplaced(GLint internal_format, GLenum format) {
+    return JglDepthTextureAvailable() &&
+           (JglDepthInternalFormat(internal_format) || DepthPixels(format));
 }
 
 /* 2D records target TEXTURE_2D or, once negotiated, one cube map face or
@@ -329,6 +345,10 @@ static BOOL Validate(GLenum target, GLint level, GLsizei width, GLsizei height, 
                      GLenum type, ULONG *components, GLint border = 0) {
     if (!JglImage2DTarget(target) && !JglRectangleTarget(target)) {
         JglCommandError(GL_INVALID_ENUM);
+        return FALSE;
+    }
+    if (JglCubeFace(target) && DepthMisplaced(0, format)) {
+        JglCommandError(GL_INVALID_OPERATION);
         return FALSE;
     }
     if (!(*components = PixelBytes(format, type, FALSE, DepthTarget(target))))
@@ -620,7 +640,15 @@ static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsize
                        GLsizei height, GLint border, GLenum format, GLenum type) {
     const BOOL cube = target == JGL_PROXY_TEXTURE_CUBE_MAP;
     const BOOL rectangle = target == JGL_PROXY_TEXTURE_RECTANGLE;
-    if (!JglReady() || !PixelBytes(format, type, TRUE))
+    /* ARB_depth_texture: depth proxies of 1D, 2D and rectangle images. */
+    const BOOL depth = DepthProxy(target) && JglDepthInternalFormat(internal_format);
+    if (!JglReady())
+        return;
+    if (cube && DepthMisplaced(internal_format, format)) {
+        JglSetError(GL_INVALID_OPERATION);
+        return;
+    }
+    if (!PixelBytes(format, type, TRUE, DepthProxy(target)))
         return;
     if (!JglTextureImagesAvailable()) {
         JglSetError(GL_INVALID_OPERATION);
@@ -637,10 +665,15 @@ static void ProxyImage(GLenum target, GLint level, GLint internal_format, GLsize
     }
     /* Cube map faces are square and borderless. */
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || height < 0 || border < 0 ||
-        border > 1 || (cube && (width != height || border)) ||
-        (!InternalFormat(internal_format) &&
+        border > 1 || (cube && (width != height || border)) || (depth && border) ||
+        (!InternalFormat(internal_format) && !depth &&
          !(target != 0x8063 && CompressedInternalFormat2D(internal_format)))) {
         JglSetError(GL_INVALID_VALUE);
+        return;
+    }
+    /* Depth images take depth pixels, and only they do. */
+    if (DepthProxy(target) && depth != DepthPixels(format)) {
+        JglSetError(GL_INVALID_OPERATION);
         return;
     }
     if (border && target == 0x8064 && S3tcInternalFormat(internal_format)) {
@@ -670,6 +703,10 @@ void APIENTRY glTexImage2D(GLenum target, GLint level, GLint internal_format, GL
     const BOOL compressed = CompressedInternalFormat2D(internal_format);
     const BOOL depth = DepthTarget(target) && JglDepthInternalFormat(internal_format);
     const BOOL rectangle = JglRectangleTarget(target);
+    if (JglCubeFace(target) && DepthMisplaced(internal_format, format)) {
+        JglCommandError(GL_INVALID_OPERATION);
+        return;
+    }
     /* Rectangles are never compressed (ARB_texture_rectangle). */
     if (rectangle && compressed) {
         JglCommandError(GL_INVALID_ENUM);
@@ -817,7 +854,7 @@ static BOOL Layout1D(GLsizei width, ULONG components, const void *pixels,
 }
 static BOOL Validate1D(GLint level, GLsizei width, GLint border, GLenum format, GLenum type,
                        ULONG *components) {
-    if (!(*components = PixelBytes(format, type)))
+    if (!(*components = PixelBytes(format, type, FALSE, DepthTarget(GL_TEXTURE_1D))))
         return FALSE;
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || border < 0 || border > 1 ||
         width < border * 2 ||
@@ -844,8 +881,15 @@ void APIENTRY glTexImage1D(GLenum target, GLint level, GLint internal_format, GL
     if (!NormalizeType(format, &type) ||
         !Validate1D(level, width, border, format, type, &components))
         return;
-    if (!InternalFormat(internal_format)) {
+    /* ARB_depth_texture: a borderless depth image takes depth pixels, and only
+     * a depth image does. */
+    const BOOL depth = DepthTarget(target) && JglDepthInternalFormat(internal_format);
+    if ((!InternalFormat(internal_format) && !depth) || (depth && border)) {
         JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    if (DepthTarget(target) && depth != DepthPixels(format)) {
+        JglCommandError(GL_INVALID_OPERATION);
         return;
     }
     if ((border && !JglTextureBordersAvailable()) || (!width && !JglTextureImagesAvailable())) {
@@ -887,7 +931,8 @@ void APIENTRY glTexSubImage1D(GLenum target, GLint level, GLint xoffset, GLsizei
     }
     // The native level supplies the real border and extent. During list
     // compilation these execution-dependent checks belong to native replay.
-    if (!NormalizeType(format, &type) || !(components = PixelBytes(format, type)))
+    if (!NormalizeType(format, &type) ||
+        !(components = PixelBytes(format, type, FALSE, DepthTarget(target))))
         return;
     if (level < 0 || level > DG_GL_MAX_TEXTURE_LEVEL || width < 0 || xoffset < -1 ||
         (ULONG)width > ((ULONG)DG_GL_MAX_TEXTURE_DIMENSION >> level) + 2) {
@@ -1105,6 +1150,10 @@ void APIENTRY glTexImage3DEXT(GLenum target, GLint level, GLenum internal_format
         error(GL_INVALID_ENUM);
         return;
     }
+    if (DepthMisplaced((GLint)internal_format, format)) {
+        error(GL_INVALID_OPERATION); /* 3D textures have no depth images. */
+        return;
+    }
     if ((!proxy && !NormalizeType(format, &type)) ||
         !(components = PixelBytes(format, type, proxy)))
         return;
@@ -1181,6 +1230,10 @@ void APIENTRY glTexSubImage3DEXT(GLenum target, GLint level, GLint xoffset, GLin
     }
     if (target != JGL_TEXTURE_3D) {
         JglCommandError(GL_INVALID_ENUM);
+        return;
+    }
+    if (DepthMisplaced(0, format)) {
+        JglCommandError(GL_INVALID_OPERATION); /* 3D textures have no depth images. */
         return;
     }
     if (!NormalizeType(format, &type) || !(components = PixelBytes(format, type)))

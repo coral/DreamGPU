@@ -87,6 +87,8 @@ static inline BOOL JglDepthInternalFormat(GLint format) {
     return format == 0x1902 || (format >= 0x81a5 && format <= 0x81a7) ||
            format == JGL_DEPTH_STENCIL || format == 0x88f0;
 }
+/* ARB_depth_texture (the second capability word), as in guest/opengl/internal.h. */
+BOOL JglDepthTextureAvailable(void);
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);

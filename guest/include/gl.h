@@ -254,7 +254,8 @@
  * 32), DEPTH_STENCIL and DEPTH24_STENCIL8 without a border; images carry format
  * DEPTH_COMPONENT with BYTE..FLOAT (one component) or DEPTH_STENCIL with
  * UNSIGNED_INT_24_8 (four bytes), as does DrawPixels. ARB_depth_texture is not
- * claimed: GetTexImage of a depth level is not supported. ReadPixels DEPTH and
+ * claimed by this capability (DG_CAP2_GL_DEPTH_TEXTURE claims it, below): GetTexImage
+ * of a depth level is not supported without it. ReadPixels DEPTH and
  * STENCIL modes read a framebuffer object's depth and stencil attachments.
  * With a framebuffer object bound for reading, a ReadPixels rectangle need not
  * fit the drawable: x and y stay below DG_GL_MAX_DIMENSION, the host reads the
@@ -339,7 +340,8 @@
  * TEXTURE_RECTANGLE in their existing records, TexImage2D and
  * GetTexLevelParameter also PROXY_TEXTURE_RECTANGLE. A rectangle image has
  * level zero only, no border, an uncompressed colour internal format (no S3TC,
- * generic compressed or depth format) and dimensions of any size up to
+ * generic compressed or, without DG_CAP2_GL_DEPTH_TEXTURE, depth format) and
+ * dimensions of any size up to
  * DG_GL_MAX_TEXTURE_DIMENSION; any other record is a fault, so the frontend
  * reports INVALID_VALUE (level, border, size, depth format) or INVALID_ENUM
  * (compressed format, compressed records, GetCompressedTexImage, GenerateMipmap)
@@ -464,6 +466,53 @@
 #define DG_GL_ENTRY_ERROR 52
 #define DG_GL_ENTRY_RESULT_BYTES 56
 #define DG_GL_ENTRY_RESULT_TYPE 60
+/* Second capability word. DG_REG_CAPS has three bits left (0x20000000,
+ * 0x40000000, 0x80000000), kept in reserve; GL features from here on are bits
+ * of CAPS2. A register a host does not implement reads zero, so a host
+ * without CAPS2 offers none of its features and needs no marker bit: every
+ * CAPS2 bit is negotiated exactly like a CAPS bit, and drivers that never
+ * read it are unaffected. Like CAPS it is invariant for a realized device and
+ * zero without a GL engine; it is read only together with CAPS and changes
+ * nothing else. Kernels report it unchanged in the DG_ESCAPE_CAPABILITIES
+ * reply's DeviceError (dg-escape.h), which older kernels leave zero, and
+ * frontends gate each feature on its bit. */
+#define DG_GL_REG_CAPS2 0x1194
+/* Depth textures (CAPS2): ARB_depth_texture and ARB_shadow, and
+ * ARB_fragment_program_shadow (SHADOW1D, SHADOW2D and SHADOWRECT program
+ * targets, native GL parses them) with DG_CAP_GL_FRAGMENT_PROGRAM, as a GeForce
+ * FX exposed them. Records use the core function numbers.
+ * TexImage1D/TexImage2D and their proxies, TexSubImage1D/TexSubImage2D and
+ * CopyTexImage1D/CopyTexImage2D of TEXTURE_1D, TEXTURE_2D and TEXTURE_RECTANGLE
+ * take the internal formats DEPTH_COMPONENT(16/24/32), DEPTH_STENCIL and
+ * DEPTH24_STENCIL8 without a border, with images in format DEPTH_COMPONENT
+ * (BYTE..FLOAT, one component) or DEPTH_STENCIL (UNSIGNED_INT_24_8, four
+ * bytes), or none for zero-defined storage, as DG_CAP_GL_FRAMEBUFFER_OBJECT
+ * already allows for TEXTURE_2D; cube maps and 3D textures have no depth
+ * images (the frontend reports INVALID_VALUE). CopyTex(Sub)Image of a depth
+ * level reads the read framebuffer's depth; FramebufferTexture1D/2D attach a
+ * depth level as DEPTH_ATTACHMENT (and a DEPTH_STENCIL one as
+ * STENCIL_ATTACHMENT too). Display lists capture them as the core records.
+ * TexParameter (every target) takes TEXTURE_COMPARE_MODE (NONE or
+ * COMPARE_R_TO_TEXTURE), TEXTURE_COMPARE_FUNC (LEQUAL or GEQUAL; there is no
+ * EXT_shadow_funcs) and DEPTH_TEXTURE_MODE (LUMINANCE, INTENSITY or ALPHA);
+ * native GL accepts more values, so the frontend judges these three and
+ * reports INVALID_ENUM. GetTexParameter answers them, GetTexLevelParameter
+ * TEXTURE_DEPTH_SIZE and TEXTURE_STENCIL_SIZE. Sampling, fixed-function
+ * environments and programs compare natively: R (r/q for projective lookups)
+ * against the texel by the function, giving 1.0 or 0.0, filtered (LINEAR
+ * averages the results of its texels), then expanded by DEPTH_TEXTURE_MODE.
+ * Native fixed function may take a 1D lookup's reference from t (Mesa's does);
+ * SHADOW1D programs use r.
+ * GetTexImage takes level-word bit DG_GL_TEXTURE_READ_DEPTH: alone it reads a
+ * depth level as one float32 depth (RESULT_FLOAT) per pixel, with
+ * DG_GL_TEXTURE_READ_FLOAT a DEPTH_STENCIL level as one UNSIGNED_INT_24_8 word
+ * (RESULT_INT) per pixel; pixel count and first pixel are as for colour. A
+ * colour read of a depth level, or a depth read of another level, is a native
+ * error that fails the batch: the frontend first asks TEXTURE_DEPTH_SIZE (and
+ * TEXTURE_STENCIL_SIZE for DEPTH_STENCIL) and reports INVALID_OPERATION
+ * itself. Residency charges a depth texel like a colour one. Without the
+ * capability every rule above is DG_CAP_GL_FRAMEBUFFER_OBJECT's. */
+#define DG_CAP2_GL_DEPTH_TEXTURE 0x1
 
 /* ADDR_LO/HI, BYTES, RESULT_ADDR_LO/HI, RESULT_CAPACITY and the programmed
  * GENERATION persist across submit and
@@ -718,12 +767,16 @@
 #define DG_GL_QUERY_BYTES 48
 #define DG_GL_MAX_RESULT_BYTES 512
 #define DG_GL_MAX_READBACK_BYTES 65536
-/* GetTexImage: level low15, FLOAT bit15 requests RGBA float32 (16 bytes/pixel)
+/* GetTexImage: level low14, FLOAT bit15 requests RGBA float32 (16 bytes/pixel)
  * with DG_CAP_GL_DEPTH_STENCIL_READBACK. Optional pixel count high16; zero
  * keeps legacy128 pixels. FLOAT returns RESULT_FLOAT, default RESULT_INT.
- * RGBA_FLOAT framebuffer mode uses four FLOAT words per pixel as well. */
+ * RGBA_FLOAT framebuffer mode uses four FLOAT words per pixel as well.
+ * DEPTH bit14 (DG_CAP2_GL_DEPTH_TEXTURE) reads depth instead: one float32 per
+ * pixel, or with FLOAT one UNSIGNED_INT_24_8 word of a DEPTH_STENCIL level.
+ * Levels are at most DG_GL_MAX_TEXTURE_LEVEL, so older hosts never saw bit14. */
 #define DG_GL_TEXTURE_READ_FLOAT 0x8000
-#define DG_GL_TEXTURE_READ_LEVEL_MASK 0x7fff
+#define DG_GL_TEXTURE_READ_DEPTH 0x4000
+#define DG_GL_TEXTURE_READ_LEVEL_MASK 0x3fff
 #define DG_GL_TEXTURE_READ_COUNT_SHIFT 16
 #define DG_GL_RESULT_BOOL 1
 #define DG_GL_RESULT_INT 2

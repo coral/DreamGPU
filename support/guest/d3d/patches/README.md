@@ -812,3 +812,46 @@ TextureCaps), the format flag assignment, `resource_init` and
 `surface_private_setup` under ASan/UBSan; `test_fbo_padded_targets.py` covers
 the unchanged rectangle-free selection. The diagnostic stack is rebased onto
 0049 with its `surface.c` call-site line numbers renumbered.
+
+`0050-depth-texture-formats.patch` makes Direct3D depth formats textures
+exactly where a GeForce FX 5800 had them. With `DG_CAP2_GL_DEPTH_TEXTURE`
+DreamGPU reports `GL_ARB_depth_texture` and `GL_ARB_shadow`, and
+`init_format_texture_info` no longer clears the depth formats' TEXTURE flag:
+`CheckDeviceFormat(D3DUSAGE_DEPTHSTENCIL, D3DRTYPE_TEXTURE)` answered D16,
+D24X8, D24S8, D16_LOCKABLE, D32 and the INTZ FourCC (and depth cube textures,
+whose flags `ARB_texture_cube_map` copies) available, where every one was
+`D3DERR_NOTAVAILABLE` before. A GeForce FX samples D16, D24X8 and D24S8 only,
+as NVIDIA's hardware shadow maps (`WINED3DFMT_FLAG_SHADOW`: the texture
+compares the coordinate's r with the stored depth), and has no cube or volume
+depth textures (nor has `ARB_depth_texture`; DreamGPU's frontend reports
+them as `GL_INVALID_OPERATION`). The depth rule now always clears the cube and
+volume TEXTURE flags of depth/stencil formats and, with `ARB_depth_texture`,
+the remaining ones of every depth format but those three; without it nothing
+changes. Rectangles can then hold the three formats, so NPOT depth-stencil
+surfaces of them become exact-size rectangles like colour targets (0049's
+rule; D32 and D16_LOCKABLE keep padded 2D textures), which the host attaches,
+copies, clears and reads as rectangle depth images. Depth-stencil surfaces
+themselves (`D3DRTYPE_SURFACE`) are unchanged. `test_depth_textures.py` runs
+the prepared assignment on the actual depth entries of `format_texture_info`
+and the actual `wined3d_check_device_format` for every depth format before and
+after the capability under ASan/UBSan; `test_rectangle_texture_types.py`
+runs `resource_init` for the rectangle choice.
+
+`0051-shadow-sampling-programs.patch` makes those textures compare in ARB
+fragment programs. Sampler state turns `TEXTURE_COMPARE_MODE` on for a shadow
+format, but `ARB_fragment_program_shadow` leaves a lookup through an ordinary
+target of a comparing depth texture undefined, and upstream's GLSL backend
+alone wrote shadow samplers. WineD3D now knows
+`GL_ARB_fragment_program_shadow`; the fixed-function replacement keys each
+stage by a shadow bit (in `texture_stage_op`'s padding, also cleared for a
+disabled stage, so the memcmp key stays exact) and the pixel shader backend by
+the existing `ps_compile_args.shadow`; both emit
+`OPTION ARB_fragment_program_shadow;` before any statement and the
+`SHADOW1D`, `SHADOW2D` or `SHADOWRECT` target (TEX, TXP and TXB alike), so
+D3D projected lookups compare r/q. Cube and volume targets never compare (an
+FX has no such depth textures). `cs.c` already invalidates the pixel shader
+state when a stage's shadow flag changes. `test_depth_textures.py` checks the
+prepared key, option placement and target selection and runs the selection
+helper under ASan/UBSan; the native QEMU test runs SHADOW1D/2D/RECT programs
+with TEX and TXP. The diagnostic stack is rebased onto the new
+`wined3d_private.h`.
