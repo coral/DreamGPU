@@ -455,6 +455,36 @@ and disposable-VM acceptance cycle:
   sampled with projected comparisons through fixed function, ps_1_1 and, on
   D3D9, ps_2_0 `texldp`, and a LINEAR boundary) has not yet run on a guest;
   macOS CGL, Win98/XP guests and games remain unverified.
+- Direct3D fixed-function vertex blending (skinning: `D3DRS_VERTEXBLEND` 1-3
+  weights over `D3DTS_WORLD`..`WORLD3`) needs no capability bit and no frontend
+  or host change. WineD3D's fixed-function pipeline blended only through
+  GL_ARB_vertex_blend, which Mesa lacks and a GeForce FX never listed, so it
+  claimed one matrix and drew skinned meshes in their bind pose. The
+  app-visible GL stays faithful (no ARB_vertex_blend; emulating it in the
+  frontend would need every modelview operation, display lists included,
+  shadowed bit-exactly in the guest, object-linear texture generation and
+  raster positions on the CPU and `vertex.weight` in host programs), and Wine
+  patch 0052 blends instead: each vertex's position and normal into world
+  space (sum of w_i v WORLDi, normals through each WORLDi inverse transpose,
+  the last weight 1 minus the others, as ARB_vertex_blend's WEIGHT_SUM_UNITY)
+  as client arrays of the draw, or per vertex in immediate mode, drawn under
+  the view matrix alone. Wine specifies lights, clip planes and texture
+  generation planes under the view matrix and lighting, NORMALIZE, texture
+  generation and fog read eye space, which view * sum(w_i WORLDi v) is
+  unchanged. Draws without blending are byte-identical; tweening, 0 weights
+  (indexed blending), unsupported weight formats and unreadable streams keep
+  today's unblended draw. D3D8 and D3D9 then report the GeForce FX 5800's
+  MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0 (before 1 and 0;
+  D3D7 wMaxVertexBlendMatrices likewise); VertexProcessingCaps stay D3D9 0x13b
+  and D3D8 0x13f (the FX's D3D9 0x17b adds TWEENING, which Wine's fixed
+  function does not implement). Source tests run the prepared helpers against
+  an eye-space ARB_vertex_blend reference; the native pixel test draws the
+  frontend's records of such draws with lighting, fog and a clip plane under
+  the view. The installed D3D8/9 probe (`tools/d3d/vertex-blend-probe.inc`:
+  two-, three- and four-matrix quads from user memory and indexed buffers, lit
+  normals with and without NORMALIZENORMALS; it skips below two matrices) has
+  not yet run on a guest; D3D7, macOS CGL, Win98/XP guests and games remain
+  unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

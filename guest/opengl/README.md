@@ -526,6 +526,25 @@ batch, and reports a mismatch, including a colour read of a depth level, as
 `EXT_packed_depth_stencil`'s `TEXTURE_2D` ones. `tests/guest/opengl/test_depth_texture.py`
 covers the contract, `test_icd_textures.py` the ICD's 1D depth copies.
 
+### No ARB_vertex_blend
+
+Neither provider offers `GL_ARB_vertex_blend` (or `GL_ARB_matrix_palette`):
+Mesa has neither, and a GeForce FX listed neither (its OpenGL had
+`EXT_vertex_weighting`; its Direct3D driver blended in its own vertex
+programs). WineD3D's fixed-function vertex blending, which used only that
+extension, is Wine patch 0052's CPU blend instead: positions and normals are
+blended into world space and drawn as ordinary client arrays (FLOAT 4
+positions, FLOAT 3 normals) under the view matrix, with `MatrixMode`,
+`PushMatrix`, `LoadMatrixf` and `PopMatrix` records around the draw, so the
+frontend sees nothing new and keeps no matrix state. Emulating the extension
+here would have meant shadowing every modelview operation bit-exactly
+(display lists, whose matrix commands apply to the matrix mode current when
+they execute, included), generating object-linear texture coordinates and
+blending raster positions on the CPU, and binding `vertex.weight` and
+`state.matrix.modelview[n]` in host vertex programs; and applications would
+see an extension the FX never had. `tests/native_qemu/vertex_blend.rs` draws
+such records.
+
 ## System OpenGL provider
 
 Cargo packages `application/dgpuicd.dll` as the normal system ICD, alongside

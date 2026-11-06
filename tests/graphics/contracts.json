@@ -452,6 +452,18 @@
       "scope": "installed-api",
       "path": "tools/d3d/depth-texture-probe.inc"
     },
+    "d3d-vertex-blend": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_vertex_blend.py"
+    },
+    "native-vertex-blend": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/vertex_blend.rs"
+    },
+    "guest-vertex-blend": {
+      "scope": "installed-api",
+      "path": "tools/d3d/vertex-blend-probe.inc"
+    },
     "glide3-core": {
       "scope": "source",
       "path": "tests/guest/glide/test_glide3_core.py"
@@ -1590,6 +1602,27 @@
         "guest-vbuffer"
       ],
       "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Wine patch 0041 gives fixed-function array draws (buffer objects) a float fog coordinate array with drawStridedSlow's values instead of emulating them in immediate mode; D3DCOLOR streams outside buffer objects stay in immediate mode without BGRA vertex arrays (with DG_CAP_GL_VERTEX_ARRAY_BGRA they take the fog coordinate array too). The installed D3D7 probe and D3D8/9 vertex buffer probe add exact untransformed buffer and UP fog quads, untested on guests. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
+    },
+    {
+      "id": "d3d.vertex-blend",
+      "area": 11,
+      "api": "D3D7/D3D8/D3D9 (Wine fixed-function pipeline), no GL_ARB_vertex_blend",
+      "operation": "non-indexed vertex blending (D3DRS_VERTEXBLEND 1-3 weights, WORLD..WORLD3) of positions and normals; MaxVertexBlendMatrices/MaxVertexBlendMatrixIndex",
+      "format": "FLOAT1-4 or D3DCOLOR blend weights, FLOAT3/4 positions, FLOAT3/4 normals",
+      "resource": "draw",
+      "usage": "skinned meshes",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "emulated",
+      "tests": [
+        "d3d-vertex-blend",
+        "native-vertex-blend",
+        "native",
+        "d3d-xyzrhw-arrays",
+        "guest-vertex-blend"
+      ],
+      "remaining": "No capability bit and no frontend or host change: GL_ARB_vertex_blend stays unadvertised (Mesa lacks it and a GeForce FX never listed it), and Wine patch 0052 blends on the CPU instead. WineD3D now reports the GeForce FX's MaxVertexBlendMatrices 4 and MaxVertexBlendMatrixIndex 0 (D3D8 and D3D9; before 1 and 0) and draws D3DRS_VERTEXBLEND 1-3 weights: each vertex's position and normal blended into world space (sum of w_i v WORLDi, normals through each WORLDi inverse transpose, the last weight 1 minus the others) as client arrays of an array draw, or per vertex in immediate mode, under the view matrix alone, so lights, clip planes, texture generation and fog keep eye space. Other draws, including tweening, 0 weights (indexed blending, not claimed), weights without blending and unreadable streams, are unchanged. VertexProcessingCaps stay D3D9 0x13b and D3D8 0x13f; the FX also claimed D3DVTXPCAPS_TWEENING, which Wine's fixed function does not implement. Source tests run the prepared helpers against an eye-space ARB_vertex_blend reference; native pixel tests (Linux) draw the frontend's records of such draws with lighting, fog and a clip plane under the view. The installed D3D8/9 probe (two-, three- and four-matrix quads from user memory and indexed buffers, lit normals with and without NORMALIZENORMALS), D3D7, macOS CGL, Win98/XP guests and games remain to be run."
     },
     {
       "id": "gl.cube-map",

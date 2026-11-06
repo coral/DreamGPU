@@ -207,6 +207,10 @@
     {
       "file": "0051-shadow-sampling-programs.patch",
       "sha256": "94349706492bf31a429b1910ec28227b8bb04f3b64284be1ad34a508f6d5f6f2"
+    },
+    {
+      "file": "0052-ffp-vertex-blend.patch",
+      "sha256": "a60d17c2acfa698be753c65ad0653c5b9058d3b9831217c5b8fedfdc728842e1"
     }
   ],
   "files": {
@@ -284,7 +288,7 @@
     },
     "wined3d/drawprim.c": {
       "before_sha256": "0a9787bbcc348297f29fb2b184c09bf5693b3706bca0f0f91df9555b83174d16",
-      "after_sha256": "ee20124c6d4a341b9c51d28b64783676f6b67bb50a78148a390ec4cc3c663b00"
+      "after_sha256": "0eccfd481ee087236cdbf7fc1085996282db40ab447654ce8ccc2b778254fe9e"
     },
     "ddraw/ddraw.c": {
       "before_sha256": "eac2ea8e83961ac43b27a543818cccd4cb3a9f0726dc1247e784fb8210817d2d",
@@ -344,7 +348,7 @@
     },
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",
-      "after_sha256": "e2e09e61191a99700f844124f1e8fe9bc4c5b9154be165b4dabe935f0b104336"
+      "after_sha256": "97c25065743eeed163d0a6b6775d3b81ee12da725c35acf362e030823880e6f4"
     },
     "wined3d/volume.c": {
       "before_sha256": "1c0abf7585df1f8282b26226553aa3943ff13266ee4f34c535655e8095061c7e",

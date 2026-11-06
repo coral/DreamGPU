@@ -1406,6 +1406,36 @@ int main(void)
 '''
 
 
+# 0052's vertex blending in drawStridedSlow: no draw here sets
+# D3DRS_VERTEXBLEND (an XYZRHW draw never blends), so its helpers are stubs
+# that decline; test_vertex_blend.py runs the real ones.
+BLEND_STUBS = r'''
+struct dg_vertex_blend { int unused; };
+static BOOL dg_vertex_blend_init(struct dg_vertex_blend *blend, const struct wined3d_context *context,
+        const struct wined3d_state *state, const struct wined3d_stream_info *si)
+{
+    (void)blend; (void)context; (void)state; (void)si;
+    return FALSE;
+}
+static void dg_vertex_blend_begin(const struct wined3d_gl_info *gl_info, const struct wined3d_state *state)
+{
+    (void)gl_info; (void)state;
+    abort();
+}
+static void dg_vertex_blend_end(const struct wined3d_gl_info *gl_info)
+{
+    (void)gl_info;
+    abort();
+}
+static void dg_vertex_blend_send(const struct wined3d_gl_info *gl_info, const struct dg_vertex_blend *blend,
+        LONG vertex)
+{
+    (void)gl_info; (void)blend; (void)vertex;
+    abort();
+}
+'''
+
+
 def function(source, signature):
     start = source.index(signature)
     end = source.index('\n}\n', start) + 3
@@ -1437,6 +1467,7 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-xyzrhw-arrays-') as temporary:
     arrays = slow.index('if (dg_xyzrhw_arrays(device, context, si, NumVertexes, glPrimType, idxData, idxSize, startIdx))')
     assert packed < arrays < slow.index('TRACE_(d3d_perf)("Using slow vertex array code\\n");')
     assert slow.count('dg_xyzrhw_arrays(') == 1
+    assert slow.count('dg_vertex_blend_init(') == 1
     assert 'ops->position[si->elements[WINED3D_FFP_POSITION].format->emit_idx](ptrToCoords);' in slow
     assert 'GL_EXTCALL(glFogCoordfEXT((float) (specularColor >> 24)));' in slow
     # Immediate mode is still what XYZRHW streams outside buffer objects
@@ -1473,7 +1504,7 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-xyzrhw-arrays-') as temporary:
     body = (PREAMBLE.replace('@ENUMS@', enums) + attributes + fog
             + function(drawprim, 'static BOOL dg_fog_coord_range(')
             + function(drawprim, 'static BOOL dg_fog_coord_fill(')
-            + slow.replace('if (dg_xyzrhw_arrays(', 'if (test_arrays_hook(') + xyzrhw + TEST)
+            + BLEND_STUBS + slow.replace('if (dg_xyzrhw_arrays(', 'if (test_arrays_hook(') + xyzrhw + TEST)
     (work / 'test.c').write_text(body)
     subprocess.run([os.environ.get('CC', 'cc'), '-std=c99', '-O1', '-g', '-Wall', '-Wextra', '-Werror',
                     '-Wno-unused-function', '-Wno-unused-parameter', '-fsanitize=address,undefined',

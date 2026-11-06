@@ -1,0 +1,481 @@
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -102,6 +102,210 @@
+         const struct wined3d_stream_info *si, UINT count, GLenum primitive,
+         const void *indices, UINT index_size, UINT start);
+ 
++/* DreamGPU: fixed-function vertex blending without GL_ARB_vertex_blend,
++ * which DreamGPU's host (Mesa) does not have and a GeForce FX never listed
++ * either: its Direct3D driver blended WORLD..WORLD3 itself
++ * (MaxVertexBlendMatrices 4, MaxVertexBlendMatrixIndex 0). With
++ * D3DRS_VERTEXBLEND at 1, 2 or 3 weights, a fixed-function draw's positions
++ * and normals are blended into world space on the CPU, as ARB_vertex_blend
++ * with WEIGHT_SUM_UNITY (which Wine enables) blends them into eye space: the
++ * weighted sum of each WORLDi transform of the position, and of each WORLDi
++ * inverse transpose of the normal, the last weight being 1 minus the others.
++ * The draw then takes the view matrix alone as its modelview. Wine
++ * specifies lights, clip planes and texture generation planes under the
++ * view matrix, and lighting, NORMALIZE, texture generation, fog and point
++ * sizes read eye coordinates, which are unchanged: view * sum(w_i WORLDi v)
++ * is sum(w_i (view WORLDi) v), and the normals' inverse transposes factor
++ * the same way for affine world matrices. Draws without blending, and draws
++ * whose inputs this does not read (FIXME once), draw exactly as before. */
++struct dg_vertex_blend
++{
++    unsigned int matrices; /* WORLD..WORLD(matrices - 1): 2 to MAX_VERTEX_BLENDS */
++    const struct wined3d_stream_info_element *weights, *position, *normal; /* normal: NULL without */
++    float world[MAX_VERTEX_BLENDS][4][4]; /* Direct3D rows: v' = v * world */
++    float normal_matrix[MAX_VERTEX_BLENDS][3][3]; /* n'[j] = sum_k normal_matrix[j][k] * n[k] */
++};
++
++/* The inverse of m's upper 3x3: a row vector normal n becomes n * inverse^T,
++ * whose component j is sum_k inverse[j][k] * n[k]. A singular matrix leaves
++ * normals unchanged, as Mesa's identity inverse does (det * det < 1e-25). */
++static void dg_vertex_blend_normal_matrix(float inverse[3][3], const float m[4][4])
++{
++    float c[3][3], det, scale;
++    unsigned int i, j;
++
++    c[0][0] = m[1][1] * m[2][2] - m[1][2] * m[2][1];
++    c[0][1] = m[1][2] * m[2][0] - m[1][0] * m[2][2];
++    c[0][2] = m[1][0] * m[2][1] - m[1][1] * m[2][0];
++    c[1][0] = m[0][2] * m[2][1] - m[0][1] * m[2][2];
++    c[1][1] = m[0][0] * m[2][2] - m[0][2] * m[2][0];
++    c[1][2] = m[0][1] * m[2][0] - m[0][0] * m[2][1];
++    c[2][0] = m[0][1] * m[1][2] - m[0][2] * m[1][1];
++    c[2][1] = m[0][2] * m[1][0] - m[0][0] * m[1][2];
++    c[2][2] = m[0][0] * m[1][1] - m[0][1] * m[1][0];
++    det = m[0][0] * c[0][0] + m[0][1] * c[0][1] + m[0][2] * c[0][2];
++    if (det * det < 1e-25f)
++    {
++        for (i = 0; i < 3; ++i)
++            for (j = 0; j < 3; ++j)
++                inverse[i][j] = i == j ? 1.0f : 0.0f;
++        return;
++    }
++    scale = 1.0f / det;
++    /* The inverse is the transposed cofactor matrix over the determinant. */
++    for (i = 0; i < 3; ++i)
++        for (j = 0; j < 3; ++j)
++            inverse[i][j] = c[j][i] * scale;
++}
++
++/* Whether a draw with these streams blends, and its matrices. Blending needs
++ * weights in the vertex; tweening, 0 weights (indexed blending, which is not
++ * claimed) and DISABLE draw unblended, as do vertex shaders, pretransformed
++ * vertices, Wine's own ARB_vertex_blend path and a generic-attribute
++ * (GLSL) pipeline, which blends itself. No GL call. */
++static BOOL dg_vertex_blend_init(struct dg_vertex_blend *blend, const struct wined3d_context *context,
++        const struct wined3d_state *state, const struct wined3d_stream_info *si)
++{
++    DWORD mode = state->render_states[WINED3D_RS_VERTEXBLEND];
++    static BOOL warned;
++    unsigned int i;
++
++    if (context->gl_info->supported[ARB_VERTEX_BLEND] || context->d3d_info->ffp_generic_attributes
++            || use_vs(state) || si->position_transformed
++            || mode < WINED3D_VBF_1WEIGHTS || mode > WINED3D_VBF_3WEIGHTS
++            || (si->use_map & ((1u << WINED3D_FFP_POSITION) | (1u << WINED3D_FFP_BLENDWEIGHT)))
++                    != ((1u << WINED3D_FFP_POSITION) | (1u << WINED3D_FFP_BLENDWEIGHT)))
++        return FALSE;
++
++    blend->weights = &si->elements[WINED3D_FFP_BLENDWEIGHT];
++    blend->position = &si->elements[WINED3D_FFP_POSITION];
++    blend->normal = si->use_map & (1u << WINED3D_FFP_NORMAL) ? &si->elements[WINED3D_FFP_NORMAL] : NULL;
++    /* Float weights (FLOAT1-4, missing components are 0) or a D3DCOLOR's
++     * four components, float positions with three or four components and
++     * float normals. */
++    switch (blend->weights->format->id)
++    {
++        case WINED3DFMT_R32_FLOAT:
++        case WINED3DFMT_R32G32_FLOAT:
++        case WINED3DFMT_R32G32B32_FLOAT:
++        case WINED3DFMT_R32G32B32A32_FLOAT:
++        case WINED3DFMT_B8G8R8A8_UNORM:
++            break;
++        default:
++            if (!warned++)
++                FIXME("Vertex blend weights of format %s are not supported.\n",
++                        debug_d3dformat(blend->weights->format->id));
++            return FALSE;
++    }
++    if ((blend->position->format->id != WINED3DFMT_R32G32B32_FLOAT
++            && blend->position->format->id != WINED3DFMT_R32G32B32A32_FLOAT)
++            || (blend->normal && blend->normal->format->id != WINED3DFMT_R32G32B32_FLOAT
++            && blend->normal->format->id != WINED3DFMT_R32G32B32A32_FLOAT))
++    {
++        if (!warned++)
++            FIXME("Vertex blending of position %s, normal %s is not supported.\n",
++                    debug_d3dformat(blend->position->format->id),
++                    blend->normal ? debug_d3dformat(blend->normal->format->id) : "none");
++        return FALSE;
++    }
++
++    blend->matrices = mode + 1;
++    for (i = 0; i < blend->matrices; ++i)
++    {
++        memcpy(blend->world[i], &state->transforms[WINED3D_TS_WORLD_MATRIX(i)], sizeof(blend->world[i]));
++        if (blend->normal)
++            dg_vertex_blend_normal_matrix(blend->normal_matrix[i], blend->world[i]);
++    }
++    return TRUE;
++}
++
++/* One vertex blended into world space: position (four components) and,
++ * with a normal stream, the normal. */
++static void dg_vertex_blend_vertex(const struct dg_vertex_blend *blend, const BYTE *weights,
++        const BYTE *position, const BYTE *normal, float *out_position, float *out_normal)
++{
++    float w[MAX_VERTEX_BLENDS] = {0.0f}, v[4] = {0.0f, 0.0f, 0.0f, 1.0f}, n[3], sum = 0.0f;
++    unsigned int last = blend->matrices - 1, i, j;
++
++    if (blend->weights->format->id == WINED3DFMT_B8G8R8A8_UNORM)
++    {
++        /* A D3DCOLOR's components are its red, green, blue and alpha bytes. */
++        DWORD color;
++        float c[4];
++
++        memcpy(&color, weights, sizeof(color));
++        c[0] = ((color >> 16) & 0xff) / 255.0f;
++        c[1] = ((color >> 8) & 0xff) / 255.0f;
++        c[2] = (color & 0xff) / 255.0f;
++        c[3] = (color >> 24) / 255.0f;
++        for (i = 0; i < last; ++i)
++            w[i] = c[i];
++    }
++    else
++    {
++        memcpy(w, weights, min((UINT)blend->weights->format->component_count, last) * sizeof(*w));
++    }
++    for (i = 0; i < last; ++i)
++        sum += w[i];
++    w[last] = 1.0f - sum;
++
++    memcpy(v, position, (blend->position->format->id == WINED3DFMT_R32G32B32A32_FLOAT ? 4 : 3) * sizeof(*v));
++    for (j = 0; j < 4; ++j)
++        out_position[j] = 0.0f;
++    for (i = 0; i < blend->matrices; ++i)
++    {
++        const float (*m)[4] = blend->world[i];
++
++        for (j = 0; j < 4; ++j)
++            out_position[j] += w[i] * (v[0] * m[0][j] + v[1] * m[1][j] + v[2] * m[2][j] + v[3] * m[3][j]);
++    }
++
++    if (!normal)
++        return;
++    memcpy(n, normal, sizeof(n));
++    for (j = 0; j < 3; ++j)
++        out_normal[j] = 0.0f;
++    for (i = 0; i < blend->matrices; ++i)
++    {
++        const float (*m)[3] = blend->normal_matrix[i];
++
++        for (j = 0; j < 3; ++j)
++            out_normal[j] += w[i] * (m[j][0] * n[0] + m[j][1] * n[1] + m[j][2] * n[2]);
++    }
++}
++
++/* Context activation is done by the caller. GL's modelview becomes the view
++ * matrix until dg_vertex_blend_end. */
++static void dg_vertex_blend_begin(const struct wined3d_gl_info *gl_info, const struct wined3d_state *state)
++{
++    gl_info->gl_ops.gl.p_glMatrixMode(GL_MODELVIEW);
++    gl_info->gl_ops.gl.p_glPushMatrix();
++    gl_info->gl_ops.gl.p_glLoadMatrixf(&state->transforms[WINED3D_TS_VIEW]._11);
++    checkGLcall("vertex blend modelview");
++}
++
++/* Context activation is done by the caller. */
++static void dg_vertex_blend_end(const struct wined3d_gl_info *gl_info)
++{
++    gl_info->gl_ops.gl.p_glPopMatrix();
++    checkGLcall("vertex blend modelview restore");
++}
++
++/* Context activation is done by the caller. drawStridedSlow's normal and
++ * position of a vertex, blended: the streams are in system memory there. */
++static void dg_vertex_blend_send(const struct wined3d_gl_info *gl_info, const struct dg_vertex_blend *blend,
++        LONG vertex)
++{
++    float position[4], normal[3];
++
++    dg_vertex_blend_vertex(blend, blend->weights->data.addr + vertex * blend->weights->stride,
++            blend->position->data.addr + vertex * blend->position->stride,
++            blend->normal ? blend->normal->data.addr + vertex * blend->normal->stride : NULL, position, normal);
++    if (blend->normal)
++        gl_info->gl_ops.gl.p_glNormal3fv(normal);
++    gl_info->gl_ops.gl.p_glVertex4fv(position);
++}
++
+ /* Context activation is done by the caller. */
+ static void drawStridedSlow(const struct wined3d_device *device, struct wined3d_context *context,
+         const struct wined3d_stream_info *si, UINT NumVertexes, GLenum glPrimType,
+@@ -124,6 +328,8 @@
+     const struct wined3d_stream_info_element *element;
+     UINT num_untracked_materials;
+     DWORD tex_mask = 0;
++    struct dg_vertex_blend blend;
++    BOOL blended;
+ 
+     if (dg_wine_draw_transformed(device, context, si, NumVertexes, glPrimType, idxData, idxSize, startIdx))
+         return;
+@@ -149,6 +355,11 @@
+         return;
+     }
+ 
++    /* DreamGPU: each vertex blended into world space, drawn under the view
++     * matrix (see dg_vertex_blend). */
++    if ((blended = dg_vertex_blend_init(&blend, context, state, si)))
++        dg_vertex_blend_begin(gl_info, state);
++
+     /* Start drawing in GL */
+     gl_info->gl_ops.gl.p_glBegin(glPrimType);
+ 
+@@ -333,15 +544,18 @@
+             }
+         }
+ 
++        /* DreamGPU: the blended normal and position instead. */
++        if (blended)
++            dg_vertex_blend_send(gl_info, &blend, SkipnStrides);
+         /* Normal -------------------------------- */
+-        if (normal)
++        else if (normal)
+         {
+             const void *ptrToCoords = normal + SkipnStrides * si->elements[WINED3D_FFP_NORMAL].stride;
+             ops->normal[si->elements[WINED3D_FFP_NORMAL].format->emit_idx](ptrToCoords);
+         }
+ 
+         /* Position -------------------------------- */
+-        if (position)
++        if (position && !blended)
+         {
+             const void *ptrToCoords = position + SkipnStrides * si->elements[WINED3D_FFP_POSITION].stride;
+             ops->position[si->elements[WINED3D_FFP_POSITION].format->emit_idx](ptrToCoords);
+@@ -353,6 +567,8 @@
+ 
+     gl_info->gl_ops.gl.p_glEnd();
+     checkGLcall("glEnd and previous calls");
++    if (blended)
++        dg_vertex_blend_end(gl_info);
+ }
+ 
+ /* Context activation is done by the caller. */
+@@ -1249,6 +1465,149 @@
+     return TRUE;
+ }
+ 
++/* DreamGPU: a blended array draw (see dg_vertex_blend) takes client arrays
++ * of the blended positions (four floats) and normals (three) in place of
++ * Wine's position and normal arrays; every other array stays as
++ * load_vertex_data set it. GL array index j is vertex load_base_vertex_index
++ * + j of every stream, as each array pointer is offset by that many
++ * vertices: start_idx.. for glDrawArrays, or each index (plus GL's base
++ * vertex) for glDrawElements. Streams are read through their system memory
++ * copy (0037), which conversion never writes. */
++#define DG_BLEND_LOCAL_VERTICES 64
++
++struct dg_vertex_blend_arrays
++{
++    float *values; /* NULL: not prepared */
++    ULONG_PTR positions, normals; /* GL array index j reads [j - first] */
++    float local[DG_BLEND_LOCAL_VERTICES * 7];
++};
++
++/* An element's vertex 0 in system memory, when vertices first..last lie
++ * within its stream; NULL otherwise. Stride zero, which drawStridedSlow
++ * repeats and GL arrays read packed, is not blended. */
++static const BYTE *dg_vertex_blend_source(struct wined3d_context *context, const struct wined3d_state *state,
++        const struct wined3d_stream_info_element *e, int64_t first, int64_t last)
++{
++    struct wined3d_buffer *buffer = state->streams[e->stream_idx].buffer;
++    const BYTE *memory;
++    ULONG_PTR offset;
++
++    if (!buffer || !(memory = buffer_get_sysmem(buffer, context))
++            || (!e->data.buffer_object && (ULONG_PTR)e->data.addr < (ULONG_PTR)memory))
++        return NULL;
++    /* A buffer object element holds its offset, a system memory one its address. */
++    offset = (ULONG_PTR)e->data.addr - (e->data.buffer_object ? 0 : (ULONG_PTR)memory);
++    if (!dg_xyzrhw_span(buffer->resource.size, offset, e->stride, e->format->byte_count, first, last))
++        return NULL;
++    return memory + offset;
++}
++
++/* The blended arrays of an array draw. FALSE, before any GL call, draws the
++ * streams unblended. */
++static BOOL dg_vertex_blend_prepare(struct dg_vertex_blend_arrays *arrays, const struct dg_vertex_blend *blend,
++        struct wined3d_context *context, const struct wined3d_state *state, const void *idx_data,
++        UINT idx_size, UINT start_idx, UINT index_count, BOOL indexed)
++{
++    const struct wined3d_gl_info *gl_info = context->gl_info;
++    const BYTE *weights, *position, *normal = NULL;
++    int64_t first, last, final, range, base, j;
++    const void *indices = NULL;
++    float *values, *normals;
++    INT index_base = 0;
++
++    arrays->values = NULL;
++    if (indexed)
++    {
++        UINT entries;
++
++        if (gl_info->supported[ARB_DRAW_ELEMENTS_BASE_VERTEX])
++            index_base = state->base_vertex_index;
++        /* The index buffer's system memory copy (0037) holds every index. */
++        if (!state->index_buffer || (idx_size != 2 && idx_size != 4))
++            return FALSE;
++        entries = state->index_buffer->resource.size / idx_size;
++        indices = idx_data ? idx_data : buffer_get_sysmem(state->index_buffer, context);
++        if (!indices || start_idx > entries || index_count > entries - start_idx)
++            return FALSE;
++    }
++    if (!dg_fog_coord_range(indices, idx_size, start_idx, index_count, index_base, &first, &last, &final))
++        return FALSE;
++    base = state->load_base_vertex_index;
++    if (!(weights = dg_vertex_blend_source(context, state, blend->weights, base + first, base + last))
++            || !(position = dg_vertex_blend_source(context, state, blend->position, base + first, base + last))
++            || (blend->normal && !(normal = dg_vertex_blend_source(context, state, blend->normal,
++                    base + first, base + last))))
++        return FALSE;
++
++    range = last - first + 1;
++    if ((uint64_t)range > ~(size_t)0 / (7 * sizeof(float)))
++        return FALSE;
++    values = range <= DG_BLEND_LOCAL_VERTICES ? arrays->local : malloc((size_t)range * 7 * sizeof(float));
++    if (!values)
++        return FALSE;
++    normals = values + 4 * range;
++    /* The pointers biased below the storage must not wrap. */
++    if ((uint64_t)first > (ULONG_PTR)values / (4 * sizeof(float))
++            || (uint64_t)first > (ULONG_PTR)normals / (3 * sizeof(float)))
++    {
++        if (values != arrays->local)
++            free(values);
++        return FALSE;
++    }
++    for (j = 0; j < range; ++j)
++    {
++        ULONG_PTR vertex = (ULONG_PTR)(base + first + j);
++
++        dg_vertex_blend_vertex(blend, weights + vertex * blend->weights->stride,
++                position + vertex * blend->position->stride,
++                normal ? normal + vertex * blend->normal->stride : NULL, values + 4 * j, normals + 3 * j);
++    }
++    arrays->values = values;
++    arrays->positions = (ULONG_PTR)values - (ULONG_PTR)first * 4 * sizeof(float);
++    arrays->normals = (ULONG_PTR)normals - (ULONG_PTR)first * 3 * sizeof(float);
++    return TRUE;
++}
++
++/* Context activation is done by the caller. */
++static void dg_vertex_blend_bind(const struct wined3d_gl_info *gl_info, const struct wined3d_state *state,
++        const struct dg_vertex_blend *blend, const struct dg_vertex_blend_arrays *arrays)
++{
++    /* Client arrays: Wine's array loaders leave a buffer object bound. */
++    if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
++        GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, 0));
++    gl_info->gl_ops.gl.p_glVertexPointer(4, GL_FLOAT, 0, (const void *)arrays->positions);
++    if (blend->normal)
++        gl_info->gl_ops.gl.p_glNormalPointer(GL_FLOAT, 0, (const void *)arrays->normals);
++    checkGLcall("vertex blend arrays");
++    dg_vertex_blend_begin(gl_info, state);
++}
++
++/* Context activation is done by the caller. The modelview, and the position
++ * and normal arrays exactly as load_vertex_data set them, so no descriptor
++ * keeps this storage and the next draw needs no reload. */
++static void dg_vertex_blend_unbind(const struct wined3d_gl_info *gl_info, const struct wined3d_state *state,
++        const struct dg_vertex_blend *blend, struct dg_vertex_blend_arrays *arrays)
++{
++    const struct wined3d_stream_info_element *e = blend->position;
++
++    dg_vertex_blend_end(gl_info);
++    if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
++        GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, e->data.buffer_object));
++    gl_info->gl_ops.gl.p_glVertexPointer(e->format->gl_vtx_format, e->format->gl_vtx_type, e->stride,
++            e->data.addr + state->load_base_vertex_index * e->stride);
++    if ((e = blend->normal))
++    {
++        if (gl_info->supported[ARB_VERTEX_BUFFER_OBJECT])
++            GL_EXTCALL(glBindBuffer(GL_ARRAY_BUFFER, e->data.buffer_object));
++        gl_info->gl_ops.gl.p_glNormalPointer(e->format->gl_vtx_type, e->stride,
++                e->data.addr + state->load_base_vertex_index * e->stride);
++    }
++    checkGLcall("vertex blend arrays release");
++    if (arrays->values != arrays->local)
++        free(arrays->values);
++    arrays->values = NULL;
++}
++
+ /* Routine common to the draw primitive and draw indexed primitive routines */
+ void draw_primitive(struct wined3d_device *device, UINT start_idx, UINT index_count,
+         UINT start_instance, UINT instance_count, BOOL indexed)
+@@ -1260,6 +1619,8 @@
+     const struct wined3d_gl_info *gl_info;
+     struct wined3d_context *context;
+     struct dg_fog_coords fog;
++    struct dg_vertex_blend blend;
++    struct dg_vertex_blend_arrays blend_arrays;
+     BOOL emulation = FALSE;
+     const void *idx_data = NULL;
+     UINT idx_size = 0;
+@@ -1267,6 +1628,7 @@
+ 
+     if (!index_count) return;
+     fog.values = NULL;
++    blend_arrays.values = NULL;
+ 
+     context = context_acquire(device, wined3d_rendertarget_view_get_surface(device->fb.render_targets[0]));
+     if (!context->valid)
+@@ -1496,10 +1858,24 @@
+     }
+     else
+     {
++        /* DreamGPU: blended positions and normals (see dg_vertex_blend). */
++        if (!instance_count && dg_vertex_blend_init(&blend, context, state, stream_info)
++                && !dg_vertex_blend_prepare(&blend_arrays, &blend, context, state, idx_data, idx_size,
++                        start_idx, index_count, indexed))
++        {
++            static BOOL warned;
++
++            if (!warned++)
++                FIXME("Drawing a blended draw unblended: its vertices are not all readable.\n");
++        }
+         if (fog.values)
+             dg_fog_coords_bind(gl_info, &fog);
++        if (blend_arrays.values)
++            dg_vertex_blend_bind(gl_info, state, &blend, &blend_arrays);
+         drawStridedFast(gl_info, state->gl_primitive_type, index_count, idx_size, idx_data,
+                 start_idx, state->base_vertex_index, start_instance, instance_count);
++        if (blend_arrays.values)
++            dg_vertex_blend_unbind(gl_info, state, &blend, &blend_arrays);
+         if (fog.values)
+             dg_fog_coords_unbind(gl_info, &fog);
+     }
+--- a/wined3d/state.c
++++ b/wined3d/state.c
+@@ -3798,7 +3798,8 @@
+     enum wined3d_vertex_blend_flags f = state->render_states[WINED3D_RS_VERTEXBLEND];
+     static unsigned int once;
+ 
+-    if (f == WINED3D_VBF_DISABLE)
++    /* DreamGPU: drawprim.c blends 1 to 3 weights itself (dg_vertex_blend). */
++    if (f == WINED3D_VBF_DISABLE || (f >= WINED3D_VBF_1WEIGHTS && f <= WINED3D_VBF_3WEIGHTS))
+         return;
+ 
+     if (!once++) FIXME("Vertex blend flags %#x not supported.\n", f);
+@@ -5659,7 +5660,11 @@
+     caps->xyzrhw = FALSE;
+     caps->ffp_generic_attributes = FALSE;
+     caps->max_active_lights = gl_info->limits.lights;
+-    caps->max_vertex_blend_matrices = gl_info->limits.blends;
++    /* DreamGPU: without ARB_vertex_blend drawprim.c blends WORLD..WORLD3 on
++     * the CPU (dg_vertex_blend), the GeForce FX's four matrices; indexed
++     * blending stays unclaimed, as on the FX. */
++    caps->max_vertex_blend_matrices = gl_info->supported[ARB_VERTEX_BLEND]
++            ? gl_info->limits.blends : MAX_VERTEX_BLENDS;
+     caps->max_vertex_blend_matrix_index = 0;
+     caps->vertex_processing_caps = WINED3DVTXPCAPS_DIRECTIONALLIGHTS
+             | WINED3DVTXPCAPS_MATERIALSOURCE7

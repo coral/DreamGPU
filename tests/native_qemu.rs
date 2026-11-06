@@ -54,6 +54,8 @@ mod texture_npot;
 mod textures;
 #[path = "native_qemu/vertex_array_bgra.rs"]
 mod vertex_array_bgra;
+#[path = "native_qemu/vertex_blend.rs"]
+mod vertex_blend;
 #[path = "native_qemu/vertex_buffer_object.rs"]
 mod vertex_buffer_object;
 #[path = "native_qemu/vertex_program.rs"]

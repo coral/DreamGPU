@@ -855,3 +855,47 @@ prepared key, option placement and target selection and runs the selection
 helper under ASan/UBSan; the native QEMU test runs SHADOW1D/2D/RECT programs
 with TEX and TXP. The diagnostic stack is rebased onto the new
 `wined3d_private.h`.
+
+`0052-ffp-vertex-blend.patch` gives the fixed-function pipeline vertex
+blending (`D3DRS_VERTEXBLEND` 1, 2 or 3 weights over `WORLD`..`WORLD3`)
+without `GL_ARB_vertex_blend`. WineD3D blended only through that extension,
+which Mesa lacks and a GeForce FX never listed; without it `vp_ffp_get_caps`
+claimed `gl_info->limits.blends` (one matrix), `state_vertexblend_w` printed a
+FIXME and blended draws came out in their bind pose. The FX's Direct3D driver
+blended four matrices itself and had no indexed blending, so the caps now
+claim `MAX_VERTEX_BLENDS` (4) and index 0 without the extension (D3D8/D3D9
+MaxVertexBlendMatrices 4, MaxVertexBlendMatrixIndex 0; D3D7
+wMaxVertexBlendMatrices 4), and `ffp_vertex_blend_matrices` keeps the
+WORLD1-3 states. A fixed-function draw with 1-3 weights in its vertices
+(`dg_vertex_blend_init`: float FLOAT1-4 or D3DCOLOR weights, float positions
+with three or four components, float normals) blends each position into world
+space as `sum_i w_i (v WORLDi)` and each normal through every WORLDi inverse
+transpose (`dg_vertex_blend_normal_matrix`, identity for a singular matrix as
+Mesa's inverse), the last weight being 1 minus the others, exactly
+ARB_vertex_blend's weighted sum with `WEIGHT_SUM_UNITY` but in world rather
+than eye space, and draws under the view matrix alone (`glPushMatrix`,
+`glLoadMatrixf(view)`, `glPopMatrix`). Wine specifies lights, clip planes and
+texture generation planes under the view matrix, and lighting, `NORMALIZE`,
+texture generation, fog and point sizes read eye space, which
+`view * sum(w_i WORLDi v)` leaves unchanged; normals factor the same way for
+affine world matrices. Array draws read every stream's system memory copy
+(0037) for GL array indices first..last (0041's index scan, plus the load base
+vertex), fill client arrays of positions (FLOAT 4) and normals (FLOAT 3) in
+place of Wine's own two, and put Wine's pointers back exactly as
+`load_vertex_data` set them, so the next draw needs no reload; every other
+array stays a buffer object or system memory array, which the frontend's
+buffer draw mixes. `drawStridedSlow` sends the blended normal and position of
+each vertex instead. Draws without blending take no new GL call; tweening, 0
+weights (indexed blending), vertex shaders, pretransformed vertices, other
+formats and vertices outside their streams keep the unblended draw. The
+weight count follows `D3DRS_VERTEXBLEND`, as Direct3D defines it, not the
+vertex format (missing weight components are 0). `test_vertex_blend.py` runs
+the prepared caps, state handler and blending helpers under ASan/UBSan against
+an eye-space ARB_vertex_blend reference (2-4 matrices, every weight format,
+non-uniform scale and shear, base vertices, buffer-object and system-memory
+streams, every fallback before any GL call); `test_xyzrhw_arrays.py` stubs the
+new hooks of `drawStridedSlow`; the native QEMU test `vertex_blend.rs` draws
+the resulting records with lighting, fog and a clip plane under the view; the
+installed D3D8/9 probe (`vertex-blend-probe.inc`) checks the caps and exact
+two-, three- and four-matrix and lit pixels. The diagnostic stack is rebased
+onto 0052 with its `drawprim.c` call-site line renumbered.
