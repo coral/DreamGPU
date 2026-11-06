@@ -223,6 +223,10 @@
     {
       "file": "0055-switcher-provider-exports.patch",
       "sha256": "25656875bec82b04980861a91f2ebf281dc4728ed683f78c3439662025a69141"
+    },
+    {
+      "file": "0056-partial-render-target-maps.patch",
+      "sha256": "fa5b6daf58a6411cbd79129947d23029d5a6b12ed48f783c9856672d4f063f15"
     }
   ],
   "files": {
@@ -244,7 +248,7 @@
     },
     "wined3d/surface.c": {
       "before_sha256": "4bcec494433e201eacf2d8f02408e6b556c15e4883a51d1ad051a406d2ed48a4",
-      "after_sha256": "d71c0ab0d0368c6d52b3c13df55c3aa42543e9d35528c8f6643a531707727947"
+      "after_sha256": "95ef752833e87b6166da308209e515ed67f36ac37ea5049aa537c0f36d491aa4"
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
@@ -324,7 +328,7 @@
     },
     "wined3d/wined3d_private.h": {
       "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
-      "after_sha256": "b804c18f945622a2e8526b4fd728299a0aee9e64893115eeb8047a5955b84607"
+      "after_sha256": "c917d98022bf5df4dc11db0764523723d5878d2990d2cfaf1f2e95cb3c51a376"
     },
     "wined3d/texture.c": {
       "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",

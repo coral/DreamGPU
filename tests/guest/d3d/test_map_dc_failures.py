@@ -66,7 +66,7 @@ struct wined3d_box { unsigned left,top,right,bottom,front,back; };
 struct wined3d_map_desc { unsigned row_pitch,slice_pitch; void *data; };
 struct wined3d_surface { struct resource resource; struct wined3d_texture *container;
  unsigned lockCount,locations,flags,pbo; BYTE *user_memory; struct { BYTE *bitmap_data; } dib;
- struct { unsigned left,top,right,bottom; } lockedRect; HDC hDC; };
+ struct { unsigned left,top,right,bottom; } lockedRect; HDC hDC; DWORD dg_partial_map; };
 struct wined3d_gl_info { int unused; };
 struct wined3d_context { BOOL valid; const struct wined3d_gl_info *gl_info; };
 static struct wined3d_gl_info gl;
@@ -107,6 +107,13 @@ static void *glMapBuffer(unsigned type,unsigned access) { assert(type==GL_PIXEL_
 static HRESULT surface_create_dib_section(struct wined3d_surface *s) { if(dib_error)return dib_error;s->hDC=dib;s->dib.bitmap_data=dib;return 0; }
 static void surface_release_client_storage(struct wined3d_surface *s) { ++client_releases;s->flags&=~SFLAG_CLIENT; }
 #include "wine-map-policy.h"
+/* 0056's rectangle-only maps need an FBO-rendered render target in its GL
+ * texture, which none of these surfaces is; test_partial_maps.py runs them.
+ * Here the map must consult it only for a non-discarding transfer. */
+#define DG_SURFACE_PARTIAL_MAP_NONE 0
+static unsigned partial_queries;
+static DWORD dg_surface_partial_map_read(struct wined3d_surface *s,const struct wined3d_box *b,DWORD flags)
+{ (void)s;(void)b;assert(!(flags&WINED3D_MAP_DISCARD));++partial_queries;return DG_SURFACE_PARTIAL_MAP_NONE; }
 '''
 TEST = r'''
 static struct wined3d_format format={4,4,4,16};

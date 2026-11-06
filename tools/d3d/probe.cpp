@@ -194,6 +194,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "depth-texture-probe.inc"
 #include "vertex-blend-probe.inc"
 #include "tween-probe.inc"
+#include "partial-lock-probe.inc"
 #include "shader-validation-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
@@ -382,6 +383,9 @@ static void Run(void) {
     if (failed)
         return;
     tween_probe::Run(device, surface);
+    if (failed)
+        return;
+    partial_lock_probe::Run(d3d, device, surface);
     if (failed)
         return;
     Log("STAGE present");

@@ -1023,3 +1023,66 @@ export to reach Wine, the system DLL or a stub as the policy above says, with
 and without a system DLL and for allowed and blacklisted callers; it also
 checks the stub arities and return values and reproduces the failure with
 d3d8's lists before 0055.
+
+`0056-partial-render-target-maps.patch` maps only the locked rectangle of a
+render target whose current copy is its GL texture. `wined3d_surface_map`
+loaded the whole map binding (`surface_load_location`), so any lock that found
+system memory stale downloaded every texel with `glGetTexImage`: in DreamGPU
+`ceil(width * height / 16384)` synchronous 64 KiB QUERY records. Unreal
+Tournament 2003's `ReduceMouseLag` locks backbuffer pixel `0,0-1,1`
+read-only after every present; at 800x600 that was 30 round trips and 1.9 MB
+per frame (75 FPS, 669 with the option off, Win2000 guest). A diagnostic
+`wined3d.dll` attributed every download to that lock: `resource_map` from
+`wined8.dll` (`d3d8_surface_LockRect`) with `WINED3D_MAP_READONLY`, a
+B8G8R8X8 800x600 rectangle backbuffer with `TEXTURE_RGB` current.
+
+`dg_surface_partial_map_mode` qualifies a map when the box is smaller than the
+surface, the flags are neither `DISCARD` nor (for writes) `NO_DIRTY_UPDATE`,
+Direct3D is initialized with `ORM_FBO` and blit framebuffers, and the surface
+is a non-multisampled render target (not depth/stencil) in
+B8G8R8A8/X8, R8G8B8A8/X8, B5G6R5, B5G5R5X1/A1 or B4G4R4A4/X4 with an identity
+fixup, no conversion or color-key conversion, an FBO-attachable format, a
+level-0 2D or rectangle texture, `SYSMEM` map binding with memory, no client
+storage or DIB section, not converted or pinned, not the front buffer, drawn
+into its texture (`draw_binding` `TEXTURE_RGB`), whose `TEXTURE_RGB` is
+current and `SYSMEM` not, and whose pitch is a whole number of pixels. Those
+are the cases where a framebuffer read equals the texture download Wine would
+do (the frontend converts both from the same RGBA8 wire form; luminance and
+other formats read differently from a framebuffer) and where offscreen
+rendering keeps D3D row y in texture row y, as `surface_blt_fbo` assumes.
+
+`dg_surface_partial_map_read` attaches the texture to the read framebuffer
+(`context_apply_fbo_state_blit`, `GL_COLOR_ATTACHMENT0`, `STATE_FRAMEBUFFER`
+invalidated), sets `PACK_ALIGNMENT` 1 and `PACK_ROW_LENGTH` pitch/bpp, reads
+the box into `heap_memory` at `top * pitch + left * bpp` and restores 0 and
+the device's surface alignment. A context that is missing, invalid or not
+current declines before any GL call and Wine's own path runs (and reports the
+failure as before). The map then publishes no location: neither `SYSMEM`
+validation nor the `~SYSMEM` invalidation of a writable map, and records the
+mode in the new `wined3d_surface.dg_partial_map`. `surface_unmap` clears it:
+a read-only map does nothing, a writable one binds the texture and calls
+`wined3d_surface_upload_data` for the box from `heap_memory` at the surface
+pitch, then invalidates everything but `TEXTURE_RGB`. If the texture stopped
+being current while mapped, or no context exists, it reports an ERR and keeps
+the texture (the rectangle is lost, as a failed lazy upload would lose it).
+The pointer, pitch, slice pitch, locked rectangle, lock counting and failure
+behaviour are those of Wine's map. The diagnostic patch's line references
+were renumbered for the inserted functions.
+
+`test_partial_maps.py` compiles the prepared `wined3d_surface_map`,
+`wined3d_surface_unmap`, `surface_unmap` and 0056's helpers under ASan/UBSan
+against a GL whose textures hold real texels: `ReadPixels` reads the texture
+attached to the read framebuffer with the pack state, uploads write rectangles,
+the location loader downloads and uploads whole surfaces, and draws rewrite
+texels and invalidate other locations. It checks read-only 1x1, 16x16 and
+last-pixel boxes (one `ReadPixels`, no download, Wine's pointer and pitch,
+nothing outside the box written, no location change), repeated maps without
+draws and maps interleaved with draws, writable boxes (box read, box-only
+upload at unmap, texture the only current copy, the next whole map downloads
+the merged image), NOOVERWRITE, 16-bit targets with padded pitch, restored
+pack and framebuffer state, Wine's path for full, `DISCARD`, `NO_DIRTY_UPDATE`
+and current-`SYSMEM` maps, depth/stencil and every other ineligible surface,
+and context failures at map and unmap. `test_map_dc_failures.py` stubs the
+helper (its surfaces never qualify). The installed D3D8/9 probe
+`tools/d3d/partial-lock-probe.inc` locks the backbuffer and lockable render
+targets.

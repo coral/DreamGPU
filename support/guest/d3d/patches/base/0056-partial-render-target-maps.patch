@@ -1,0 +1,248 @@
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -722,6 +722,173 @@
+     return WINED3D_OK;
+ }
+ 
++/* DreamGPU (0056): a map of a sub-rectangle of an FBO-rendered render target
++ * whose current copy is its GL texture transfers only that rectangle.
++ * Wine otherwise downloads the whole surface for any map (GetTexImage of
++ * every texel), although Direct3D lets the application touch only the locked
++ * rectangle. Unreal Tournament 2003's ReduceMouseLag locks one back buffer
++ * pixel read-only after every present: 800x600 texels each frame.
++ *
++ * The rectangle is read with ReadPixels from a read framebuffer holding the
++ * texture (offscreen rendering keeps D3D row y in texture row y, as
++ * surface_blt_fbo assumes) into the system memory copy at the rectangle's
++ * offset, so the pointer and pitch are exactly those of a full map. System
++ * memory stays invalid: only the rectangle is current, and the texture stays
++ * the authoritative copy. Unmapping a read-only map transfers nothing; a
++ * writable map uploads just its rectangle back into the texture, which stays
++ * the only current location. A later full map downloads as before.
++ *
++ * Everything else keeps Wine's full transfer: full or discarding maps,
++ * NO_DIRTY_UPDATE writes, a current system memory copy, depth/stencil,
++ * block, converted, color-keyed or padded-pitch formats, formats whose
++ * framebuffer read could differ from a texture read (only the 16- and 32-bit
++ * RGB(A) render target formats qualify), multisampling, front buffers,
++ * surfaces drawn other than into their texture, DIB, user memory, PBO and
++ * client storage, mipmap levels and cube faces. */
++#define DG_SURFACE_PARTIAL_MAP_NONE 0
++#define DG_SURFACE_PARTIAL_MAP_READ 1
++#define DG_SURFACE_PARTIAL_MAP_WRITE 2
++
++static BOOL dg_surface_partial_map_format(const struct wined3d_format *format)
++{
++    switch (format->id)
++    {
++        case WINED3DFMT_B8G8R8A8_UNORM:
++        case WINED3DFMT_B8G8R8X8_UNORM:
++        case WINED3DFMT_R8G8B8A8_UNORM:
++        case WINED3DFMT_R8G8B8X8_UNORM:
++        case WINED3DFMT_B5G6R5_UNORM:
++        case WINED3DFMT_B5G5R5X1_UNORM:
++        case WINED3DFMT_B5G5R5A1_UNORM:
++        case WINED3DFMT_B4G4R4A4_UNORM:
++        case WINED3DFMT_B4G4R4X4_UNORM:
++            return (format->byte_count == 2 || format->byte_count == 4) && !format->convert
++                    && is_identity_fixup(format->color_fixup);
++        default:
++            return FALSE;
++    }
++}
++
++/* The transfer a map of box with flags would use: NONE for Wine's own. */
++static DWORD dg_surface_partial_map_mode(const struct wined3d_surface *surface,
++        const struct wined3d_box *box, DWORD flags)
++{
++    const struct wined3d_texture *texture = surface->container;
++    const struct wined3d_device *device = surface->resource.device;
++    DWORD mode = flags & WINED3D_MAP_READONLY ? DG_SURFACE_PARTIAL_MAP_READ : DG_SURFACE_PARTIAL_MAP_WRITE;
++
++    if (!box || (!box->left && !box->top && box->right == surface->resource.width
++            && box->bottom == surface->resource.height))
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    if ((flags & WINED3D_MAP_DISCARD)
++            || (mode == DG_SURFACE_PARTIAL_MAP_WRITE && (flags & WINED3D_MAP_NO_DIRTY_UPDATE)))
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    if (!device->d3d_initialized || wined3d_settings.offscreen_rendering_mode != ORM_FBO
++            || !device->adapter->gl_info.fbo_ops.glBlitFramebuffer)
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    if (!(surface->resource.usage & WINED3DUSAGE_RENDERTARGET)
++            || (surface->resource.usage & WINED3DUSAGE_DEPTHSTENCIL)
++            || surface->resource.multisample_type
++            || (texture->resource.format_flags & (WINED3DFMT_FLAG_DEPTH | WINED3DFMT_FLAG_STENCIL
++            | WINED3DFMT_FLAG_COMPRESSED | WINED3DFMT_FLAG_BLOCKS | WINED3DFMT_FLAG_BROKEN_PITCH
++            | WINED3DFMT_FLAG_HEIGHT_SCALE))
++            || !(texture->resource.format_flags & WINED3DFMT_FLAG_FBO_ATTACHABLE)
++            || texture->resource.format != surface->resource.format
++            || !dg_surface_partial_map_format(surface->resource.format))
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    if ((texture->flags & (WINED3D_TEXTURE_CONVERTED | WINED3D_TEXTURE_PIN_SYSMEM))
++            || wined3d_format_get_color_key_conversion(texture, TRUE)
++            || (texture->swapchain && texture->swapchain->front_buffer == texture)
++            || texture->resource.draw_binding != WINED3D_LOCATION_TEXTURE_RGB)
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    if ((surface->flags & (SFLAG_CLIENT | SFLAG_DIBSECTION))
++            || surface->resource.map_binding != WINED3D_LOCATION_SYSMEM || !surface->resource.heap_memory
++            || (surface->texture_target != GL_TEXTURE_2D && surface->texture_target != GL_TEXTURE_RECTANGLE_ARB)
++            || surface->texture_level)
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    if ((surface->locations & WINED3D_LOCATION_SYSMEM)
++            || !(surface->locations & WINED3D_LOCATION_TEXTURE_RGB)
++            || wined3d_surface_get_pitch(surface) % surface->resource.format->byte_count)
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    return mode;
++}
++
++/* Read box from the texture into the system memory copy. Returns the map's
++ * mode, or NONE without any transfer when Wine's own path must be used. */
++static DWORD dg_surface_partial_map_read(struct wined3d_surface *surface,
++        const struct wined3d_box *box, DWORD flags)
++{
++    struct wined3d_device *device = surface->resource.device;
++    const struct wined3d_format *format = surface->resource.format;
++    DWORD mode = dg_surface_partial_map_mode(surface, box, flags);
++    const struct wined3d_gl_info *gl_info;
++    struct wined3d_context *context;
++    UINT pitch;
++    BYTE *mem;
++
++    if (mode == DG_SURFACE_PARTIAL_MAP_NONE)
++        return mode;
++    context = context_acquire(device, NULL);
++    if (!context || !context->valid || context_get_current() != context)
++    {
++        if (context)
++            context_release(context);
++        return DG_SURFACE_PARTIAL_MAP_NONE;
++    }
++    gl_info = context->gl_info;
++    pitch = wined3d_surface_get_pitch(surface);
++    mem = (BYTE *)surface->resource.heap_memory + box->top * pitch + box->left * format->byte_count;
++
++    TRACE("Reading %ux%u at %u,%u of surface %p (%s map).\n", box->right - box->left, box->bottom - box->top,
++            box->left, box->top, surface, mode == DG_SURFACE_PARTIAL_MAP_READ ? "read-only" : "writable");
++    context_apply_fbo_state_blit(context, GL_READ_FRAMEBUFFER, surface, NULL, WINED3D_LOCATION_TEXTURE_RGB);
++    gl_info->gl_ops.gl.p_glReadBuffer(GL_COLOR_ATTACHMENT0);
++    checkGLcall("glReadBuffer");
++    context_check_fbo_status(context, GL_READ_FRAMEBUFFER);
++    context_invalidate_state(context, STATE_FRAMEBUFFER);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, 1);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ROW_LENGTH, pitch / format->byte_count);
++    gl_info->gl_ops.gl.p_glReadPixels(box->left, box->top, box->right - box->left, box->bottom - box->top,
++            format->glFormat, format->glType, mem);
++    checkGLcall("glReadPixels");
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ROW_LENGTH, 0);
++    gl_info->gl_ops.gl.p_glPixelStorei(GL_PACK_ALIGNMENT, device->surface_alignment);
++    checkGLcall("glPixelStorei");
++    context_release(context);
++    return mode;
++}
++
++/* Unmap of a writable box-only map: the rectangle goes back into the texture,
++ * which stays the only current copy. */
++static void dg_surface_partial_map_upload(struct wined3d_surface *surface, const RECT *rect)
++{
++    struct wined3d_device *device = surface->resource.device;
++    struct wined3d_const_bo_address data = {0, surface->resource.heap_memory};
++    POINT dst_point = {rect->left, rect->top};
++    const struct wined3d_gl_info *gl_info;
++    struct wined3d_context *context;
++
++    if (!(surface->locations & WINED3D_LOCATION_TEXTURE_RGB))
++    {
++        ERR("Surface %p lost its texture copy while mapped; the mapped rectangle is not written back.\n", surface);
++        return;
++    }
++    context = context_acquire(device, NULL);
++    if (!context || !context->valid || context_get_current() != context)
++    {
++        ERR("No GL context to write back the mapped rectangle of surface %p.\n", surface);
++        if (context)
++            context_release(context);
++        return;
++    }
++    gl_info = context->gl_info;
++    wined3d_texture_bind_and_dirtify(surface->container, context, FALSE);
++    wined3d_surface_upload_data(surface, gl_info, surface->resource.format, rect,
++            wined3d_surface_get_pitch(surface), &dst_point, FALSE, &data);
++    context_release(context);
++    surface_invalidate_location(surface, ~WINED3D_LOCATION_TEXTURE_RGB);
++}
++
+ static void surface_unmap(struct wined3d_surface *surface)
+ {
+     struct wined3d_device *device = surface->resource.device;
+@@ -730,6 +897,18 @@
+ 
+     TRACE("surface %p.\n", surface);
+ 
++    if (surface->dg_partial_map != DG_SURFACE_PARTIAL_MAP_NONE)
++    {
++        DWORD mode = surface->dg_partial_map;
++        RECT rect = surface->lockedRect;
++
++        surface->dg_partial_map = DG_SURFACE_PARTIAL_MAP_NONE;
++        memset(&surface->lockedRect, 0, sizeof(surface->lockedRect));
++        if (mode == DG_SURFACE_PARTIAL_MAP_WRITE)
++            dg_surface_partial_map_upload(surface, &rect);
++        return;
++    }
++
+     memset(&surface->lockedRect, 0, sizeof(surface->lockedRect));
+ 
+     switch (surface->resource.map_binding)
+@@ -2846,6 +3025,7 @@
+     struct wined3d_context *context;
+     const struct wined3d_gl_info *gl_info;
+     BYTE *base_memory;
++    DWORD partial = DG_SURFACE_PARTIAL_MAP_NONE;
+     HRESULT hr;
+ 
+     TRACE("surface %p, map_desc %p, box %p, flags %#x.\n",
+@@ -2910,6 +3090,11 @@
+         TRACE("WINED3D_MAP_DISCARD flag passed, marking %s as up to date.\n",
+                 wined3d_debug_location(surface->resource.map_binding));
+     }
++    else if ((partial = dg_surface_partial_map_read(surface, box, flags)) != DG_SURFACE_PARTIAL_MAP_NONE)
++    {
++        TRACE("Mapped only the rectangle; %s stays current.\n",
++                wined3d_debug_location(WINED3D_LOCATION_TEXTURE_RGB));
++    }
+     else
+     {
+         struct wined3d_context *context2 = NULL;
+@@ -2979,10 +3164,11 @@
+         return E_OUTOFMEMORY;
+     }
+ 
+-    /* Publish writable/discarded storage only after a successful map. */
++    /* Publish writable/discarded storage only after a successful map. A
++     * rectangle-only map (0056) leaves the texture current until unmap. */
+     if (flags & WINED3D_MAP_DISCARD)
+         surface_validate_location(surface, surface->resource.map_binding);
+-    if (!(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
++    if (partial == DG_SURFACE_PARTIAL_MAP_NONE && !(flags & (WINED3D_MAP_NO_DIRTY_UPDATE | WINED3D_MAP_READONLY)))
+         surface_invalidate_location(surface, ~surface->resource.map_binding);
+ 
+     if (fmt_flags & WINED3DFMT_FLAG_BROKEN_PITCH)
+@@ -3024,6 +3210,7 @@
+     TRACE("Locked rect %s.\n", wine_dbgstr_rect(&surface->lockedRect));
+     TRACE("Returning memory %p, pitch %u.\n", map_desc->data, map_desc->row_pitch);
+ 
++    surface->dg_partial_map = partial;
+     return WINED3D_OK;
+ }
+ 
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2494,6 +2494,8 @@
+ 
+     RECT                      lockedRect;
+     int                       lockCount;
++    /* DreamGPU (0056): DG_SURFACE_PARTIAL_MAP_* of the current box-only map. */
++    DWORD                     dg_partial_map;
+ 
+     /* For GetDC */
+     struct wined3d_surface_dib dib;

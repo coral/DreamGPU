@@ -127,6 +127,15 @@ validation checks the count, destination RAM extent and accepted result capacity
 before submission. Large native results use heap ownership through completion;
 ordinary draw batches retain their existing small storage.
 
+Every 64KiB chunk is a synchronous round trip, and `glGetTexImage` reads the
+whole level (after `GetTexLevelParameteriv` WIDTH, HEIGHT and, for depth-capable
+targets, DEPTH_SIZE). An 800x600 RGBA8 level is 29 chunks of 16384 pixels
+(level word `0x40000000`) and a 4864-pixel tail (`0x13000000`). Wine patch
+0056 therefore reads a locked rectangle of a render target with one
+`glReadPixels` of that rectangle from a read framebuffer instead of
+downloading the whole surface (Unreal Tournament 2003 locks one backbuffer
+pixel per frame).
+
 Color readback supports RGB/BGR, RGBA/BGRA, individual channels, alpha,
 luminance and luminance-alpha. The output types include signed/unsigned 8-, 16-
 and 32-bit scalars, floats, RGB332/233, RGB565, RGBA4444/5551/8888/1010102,

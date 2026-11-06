@@ -1,0 +1,298 @@
+/* SPDX-License-Identifier: GPL-2.0-or-later
+ * Rectangle locks of render targets through the public D3D8/9 API (Wine
+ * 0056). Included by probe.cpp after tween-probe.inc. WineD3D downloaded the
+ * whole surface for any lock of a target whose current copy is its texture;
+ * Unreal Tournament 2003 locks one backbuffer pixel read-only after every
+ * present. 0056 reads only the locked rectangle and, after a writable lock,
+ * uploads only that rectangle back. Every pixel is cleared exactly (1x1
+ * Clear rectangles in a 20x20 region of distinct colours over a background),
+ * so each value is known. Per target:
+ * - a whole-surface read-only lock (Wine's full download) checks the
+ *   surface and records the pitch; the target is then repainted;
+ * - read-only 1x1 and 16x16 locks and the last pixel are exact and report
+ *   the same pitch;
+ * - eight 1x1 read-only locks, each after a Clear of that pixel, see the new
+ *   colour every time;
+ * - a writable 8x8 lock returns the current pixels; a pattern written into
+ *   it is, after the unlock and a Clear elsewhere (which renders into the
+ *   target's texture), exactly what a whole-surface lock then shows, with
+ *   every other pixel unchanged.
+ * With framebuffer objects (as rtt-probe.inc decides) the 1x1 lock must not
+ * have refreshed system memory: the pixel beside it still holds the
+ * repainted surface's previous value. That is how Wine lays out a lock (the
+ * returned pointer is into one surface-sized copy), not something Direct3D
+ * defines; it fails only when that neighbour holds the new value, which a
+ * whole-surface download writes. It is checked for the X8R8G8B8 targets
+ * only (Wine qualifies a format only when its own internal format attaches to
+ * a framebuffer). Targets: the X8R8G8B8 backbuffer, a lockable
+ * 400x300 X8R8G8B8 render target (beyond the 320x240 window) and, when
+ * claimed, a 400x300 R5G6B5 one (colours exact in 5/6 bits). Without
+ * framebuffer objects only the backbuffer is checked, for correctness.
+ */
+#if DG_D3D_VERSION == 8
+typedef D3DVIEWPORT8 LockViewport;
+#define LOCK_TARGET(device, width, height, format, out)                                            \
+    DEVICE(CreateRenderTarget, device, width, height, format, D3DMULTISAMPLE_NONE, TRUE, out)
+#else
+typedef D3DVIEWPORT9 LockViewport;
+#define LOCK_TARGET(device, width, height, format, out)                                            \
+    DEVICE(CreateRenderTarget, device, width, height, format, D3DMULTISAMPLE_NONE, 0, TRUE, out,   \
+           NULL)
+#endif
+
+namespace partial_lock_probe {
+
+static constexpr int Left = 40, Top = 30, Size = 20;
+static constexpr int Wide = 400, High = 300;
+/* The 1x1 lock, its neighbour, the 16x16 lock and the writable 8x8 lock. */
+static constexpr RECT Pixel = {45, 33, 46, 34};
+static constexpr RECT Square = {42, 32, 58, 48};
+static constexpr RECT Written = {44, 36, 52, 44};
+
+struct Target {
+    Surface *surface;
+    int width, height;
+    BOOL wide; /* X8R8G8B8, else R5G6B5 */
+    const char *name;
+};
+
+/* Colour components exactly representable in the target: 8 bits, or the
+ * 5/6-bit values' 8-bit expansions (which store and read back exactly). */
+static DWORD Argb(DWORD r, DWORD g, DWORD b, BOOL wide) {
+    if (!wide) {
+        r &= 31, g &= 63, b &= 31;
+        r = r << 3 | r >> 2, g = g << 2 | g >> 4, b = b << 3 | b >> 2;
+    }
+    return 0xff000000u | (r & 255) << 16 | (g & 255) << 8 | (b & 255);
+}
+/* The locked representation of a colour from Argb. */
+static DWORD Stored(DWORD argb, BOOL wide) {
+    if (wide)
+        return argb & 0x00ffffff;
+    return (argb >> 19 & 31) << 11 | (argb >> 10 & 63) << 5 | (argb >> 3 & 31);
+}
+static DWORD Background(int seed, BOOL wide) {
+    return Argb(16 + seed * 9, 32 + seed * 5, 48 + seed * 3, wide);
+}
+static DWORD Color(int x, int y, int seed, BOOL wide) {
+    return Argb(x * 11 + seed * 37 + 1, y * 13 + seed * 5 + 2, x * 7 + y * 3 + seed + 3, wide);
+}
+static BOOL Inside(const RECT &r, int x, int y) {
+    return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
+}
+static DWORD Expected(int x, int y, int seed, BOOL wide) {
+    const RECT region = {Left, Top, Left + Size, Top + Size};
+    return Stored(Inside(region, x, y) ? Color(x, y, seed, wide) : Background(seed, wide), wide);
+}
+/* The pattern written through the writable lock (Stored form). */
+static DWORD Pattern(int x, int y, BOOL wide) {
+    return Stored(Argb(255 - x * 5, 128 + y * 7, x * y + 17, wide), wide);
+}
+static DWORD Read(const D3DLOCKED_RECT &locked, int dx, int dy, BOOL wide) {
+    const BYTE *row = (const BYTE *)locked.pBits + dy * locked.Pitch;
+    return wide ? *(const DWORD *)(row + dx * 4) & 0x00ffffff : *(const WORD *)(row + dx * 2);
+}
+static void Write(const D3DLOCKED_RECT &locked, int dx, int dy, BOOL wide, DWORD value) {
+    BYTE *row = (BYTE *)locked.pBits + dy * locked.Pitch;
+    if (wide)
+        *(DWORD *)(row + dx * 4) = 0xff000000u | value;
+    else
+        *(WORD *)(row + dx * 2) = (WORD)value;
+}
+static BOOL Mismatch(const char *stage, int x, int y, DWORD actual, DWORD expected) {
+    Check(FALSE, stage, actual);
+    Number("pixel x", x);
+    Number("pixel y", y);
+    Number("pixel expected", expected);
+    return FALSE;
+}
+
+/* Clear the whole target to the background, then each region pixel. */
+static BOOL Paint(Device *dev, const Target &t, int seed) {
+    if (!HR(DEVICE(Clear, dev, 0, NULL, D3DCLEAR_TARGET, Background(seed, t.wide), 1, 0),
+            "FAIL partial lock background clear"))
+        return FALSE;
+    for (int y = Top; y < Top + Size; ++y)
+        for (int x = Left; x < Left + Size; ++x) {
+            const D3DRECT rect = {x, y, x + 1, y + 1};
+            if (!HR(DEVICE(Clear, dev, 1, &rect, D3DCLEAR_TARGET, Color(x, y, seed, t.wide), 1, 0),
+                    "FAIL partial lock pixel clear"))
+                return FALSE;
+        }
+    return TRUE;
+}
+static BOOL Lock(const Target &t, const RECT *rect, DWORD flags, D3DLOCKED_RECT *locked) {
+    locked->pBits = NULL;
+    locked->Pitch = 0;
+    return HR(SURFACE(LockRect, t.surface, locked, rect, flags), "FAIL partial lock LockRect") &&
+           Check(locked->pBits != NULL, "FAIL partial lock null pointer", 0);
+}
+static BOOL Unlock(const Target &t) {
+    return HR(SURFACE(UnlockRect, t.surface), "FAIL partial lock UnlockRect");
+}
+/* Every pixel of rect, from a lock of exactly rect. */
+static BOOL Compare(const char *stage, const Target &t, const D3DLOCKED_RECT &locked,
+                    const RECT &rect, int seed, const RECT *written) {
+    for (int y = rect.top; y < rect.bottom; ++y)
+        for (int x = rect.left; x < rect.right; ++x) {
+            const DWORD expected = written && Inside(*written, x, y) ? Pattern(x, y, t.wide)
+                                                                     : Expected(x, y, seed, t.wide);
+            const DWORD actual = Read(locked, x - rect.left, y - rect.top, t.wide);
+            if (actual != expected)
+                return Mismatch(stage, x, y, actual, expected);
+        }
+    return TRUE;
+}
+/* A read-only lock of rect compared with the target's current pixels. */
+static BOOL ReadBox(const char *stage, const Target &t, const RECT &rect, int seed, INT pitch) {
+    D3DLOCKED_RECT locked;
+    if (!Lock(t, &rect, D3DLOCK_READONLY, &locked))
+        return FALSE;
+    BOOL ok = Check(locked.Pitch == pitch, "FAIL partial lock pitch differs from a whole lock",
+                    (DWORD)locked.Pitch) &&
+              Compare(stage, t, locked, rect, seed, NULL);
+    return Unlock(t) && ok;
+}
+
+static BOOL Case(Device *dev, const Target &t, BOOL framebuffer_objects) {
+    const RECT whole = {0, 0, t.width, t.height};
+    const RECT last = {t.width - 1, t.height - 1, t.width, t.height};
+    D3DLOCKED_RECT locked;
+    INT pitch;
+    Log(t.name);
+    if (!rtt_probe::Target(dev, t.surface, NULL, t.width, t.height))
+        return FALSE;
+    /* Whole surface: Wine's full download, which makes system memory current. */
+    if (!Paint(dev, t, 1) || !Lock(t, NULL, D3DLOCK_READONLY, &locked))
+        return FALSE;
+    pitch = locked.Pitch;
+    Number("whole-lock pitch", (DWORD)pitch);
+    BOOL ok = Check(pitch >= t.width * (t.wide ? 4 : 2), "FAIL partial lock whole pitch", pitch) &&
+              Compare("FAIL partial lock whole surface", t, locked, whole, 1, NULL);
+    if (!Unlock(t) || !ok)
+        return FALSE;
+    /* Repainted: system memory is stale, the texture current. */
+    if (!Paint(dev, t, 2) || !Lock(t, &Pixel, D3DLOCK_READONLY, &locked))
+        return FALSE;
+    ok = Check(locked.Pitch == pitch, "FAIL partial lock pitch differs from a whole lock",
+               (DWORD)locked.Pitch) &&
+         Compare("FAIL partial lock 1x1 read-only", t, locked, Pixel, 2, NULL);
+    if (ok && framebuffer_objects && t.wide) {
+        /* Beside the locked pixel, inside the same row of Wine's copy. */
+        const DWORD beside = Read(locked, 1, 0, t.wide);
+        Number("pixel beside the 1x1 lock (previous paint)", beside);
+        ok = Check(beside != Expected(Pixel.right, Pixel.top, 2, t.wide),
+                   "FAIL partial lock 1x1 read-only downloaded the whole surface", beside);
+    }
+    if (!Unlock(t) || !ok)
+        return FALSE;
+    if (!ReadBox("FAIL partial lock 16x16 read-only", t, Square, 2, pitch) ||
+        !ReadBox("FAIL partial lock last pixel", t, last, 2, pitch))
+        return FALSE;
+    /* Maps interleaved with draws see each new value. */
+    for (int i = 0; i < 8; ++i) {
+        const D3DRECT rect = {Pixel.left, Pixel.top, Pixel.right, Pixel.bottom};
+        const DWORD color = Argb(i * 31 + 5, 200 - i * 17, i * 9 + 40, t.wide);
+        if (!HR(DEVICE(Clear, dev, 1, &rect, D3DCLEAR_TARGET, color, 1, 0),
+                "FAIL partial lock repeated clear") ||
+            !Lock(t, &Pixel, D3DLOCK_READONLY, &locked))
+            return FALSE;
+        const DWORD actual = Read(locked, 0, 0, t.wide);
+        ok = actual == Stored(color, t.wide) ||
+             Mismatch("FAIL partial lock repeated 1x1 read-only", Pixel.left, Pixel.top, actual,
+                      Stored(color, t.wide));
+        if (!Unlock(t) || !ok)
+            return FALSE;
+    }
+    {
+        const D3DRECT rect = {Pixel.left, Pixel.top, Pixel.right, Pixel.bottom};
+        if (!HR(DEVICE(Clear, dev, 1, &rect, D3DCLEAR_TARGET,
+                       Color(Pixel.left, Pixel.top, 2, t.wide), 1, 0),
+                "FAIL partial lock restore clear"))
+            return FALSE;
+    }
+    /* Writable box: current pixels in, a pattern out, nothing else changed. */
+    if (!Lock(t, &Written, 0, &locked))
+        return FALSE;
+    ok = Check(locked.Pitch == pitch, "FAIL partial lock writable pitch", (DWORD)locked.Pitch) &&
+         Compare("FAIL partial lock writable box contents", t, locked, Written, 2, NULL);
+    if (ok)
+        for (int y = Written.top; y < Written.bottom; ++y)
+            for (int x = Written.left; x < Written.right; ++x)
+                Write(locked, x - Written.left, y - Written.top, t.wide, Pattern(x, y, t.wide));
+    if (!Unlock(t) || !ok)
+        return FALSE;
+    /* Rendering elsewhere uses the target's texture: the written box must be in it. */
+    {
+        const D3DRECT rect = {last.left, last.top, last.right, last.bottom};
+        if (!HR(DEVICE(Clear, dev, 1, &rect, D3DCLEAR_TARGET, Background(2, t.wide), 1, 0),
+                "FAIL partial lock clear after writable lock"))
+            return FALSE;
+    }
+    if (!Lock(t, NULL, D3DLOCK_READONLY, &locked))
+        return FALSE;
+    ok = Compare("FAIL partial lock writable box after unlock", t, locked, whole, 2, &Written);
+    return Unlock(t) && ok;
+}
+
+static void Run(D3D *d3d, Device *dev, Surface *backbuffer) {
+    Surface *wide = NULL, *narrow = NULL;
+    Log("STAGE rectangle locks of render targets");
+    D3DDISPLAYMODE mode = {};
+    if (!HR(D3D_CALL(GetAdapterDisplayMode, d3d, D3DADAPTER_DEFAULT, &mode),
+            "FAIL partial lock adapter display mode"))
+        return;
+    /* As rtt_probe::Run: only framebuffer objects claim a target in the other depth. */
+    const D3DFORMAT other = mode.Format == D3DFMT_R5G6B5 ? D3DFMT_X8R8G8B8 : D3DFMT_R5G6B5;
+    const BOOL framebuffer_objects =
+        SUCCEEDED(D3D_CALL(CheckDeviceFormat, d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, mode.Format,
+                           D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, other));
+    const BOOL rgb565 =
+        framebuffer_objects &&
+        SUCCEEDED(D3D_CALL(CheckDeviceFormat, d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, mode.Format,
+                           D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, D3DFMT_R5G6B5));
+    Number("framebuffer objects (other-depth render target claimed)", framebuffer_objects);
+    if (!HR(DEVICE(SetRenderState, dev, D3DRS_COLORWRITEENABLE, 0xf),
+            "FAIL partial lock colour writes"))
+        return;
+#if DG_D3D_VERSION == 9
+    if (!HR(DEVICE(SetRenderState, dev, D3DRS_SCISSORTESTENABLE, FALSE),
+            "FAIL partial lock scissor"))
+        return;
+#endif
+    BOOL ok = Case(dev,
+                   {backbuffer, rtt_probe::ScreenWidth, rtt_probe::ScreenHeight, TRUE,
+                    "STAGE partial lock: X8R8G8B8 backbuffer 320x240"},
+                   framebuffer_objects);
+    if (ok && framebuffer_objects) {
+        ok = HR(LOCK_TARGET(dev, Wide, High, D3DFMT_X8R8G8B8, &wide),
+                "FAIL partial lock X8R8G8B8 render target creation") &&
+             Case(dev,
+                  {wide, Wide, High, TRUE,
+                   "STAGE partial lock: lockable X8R8G8B8 render target 400x300"},
+                  TRUE);
+        if (ok && rgb565)
+            ok = HR(LOCK_TARGET(dev, Wide, High, D3DFMT_R5G6B5, &narrow),
+                    "FAIL partial lock R5G6B5 render target creation") &&
+                 Case(dev,
+                      {narrow, Wide, High, FALSE,
+                       "STAGE partial lock: lockable R5G6B5 render target 400x300"},
+                      TRUE);
+        else if (ok)
+            Log("SKIP partial lock R5G6B5 render target: not claimed");
+    } else if (ok) {
+        Log("SKIP partial lock render targets and download check: offscreen targets render "
+            "through the backbuffer (no framebuffer objects)");
+    }
+    rtt_probe::Target(dev, backbuffer, NULL, rtt_probe::ScreenWidth, rtt_probe::ScreenHeight);
+    if (narrow)
+        SURFACE(Release, narrow);
+    if (wide)
+        SURFACE(Release, wide);
+    if (ok)
+        Log("PASS rectangle locks: read-only 1x1/16x16/last-pixel and writable 8x8 locks of "
+            "render targets exact, same pitch as a whole lock, fresh after each Clear, written box "
+            "kept by rendering");
+}
+
+} // namespace partial_lock_probe

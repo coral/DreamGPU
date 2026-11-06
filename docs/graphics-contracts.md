@@ -537,6 +537,37 @@ and disposable-VM acceptance cycle:
   before 0055 they fail without `msd3d8.dll`) make
   D3DX8's calls and the runtime's other cases; they and the games have not yet
   run on a guest.
+- A Direct3D lock of part of a render target whose current copy is its GL
+  texture transfers only the locked rectangle (Wine patch 0056; no frontend or
+  host change). WineD3D downloaded the whole surface for any lock that found
+  its system memory stale: `glGetTexImage` of every texel, which the frontend
+  splits into 64 KiB QUERY round trips (level word `count << 16 | level`:
+  `0x40000000` is 16384 RGBA8 pixels of level 0, `0x13000000` a 4864-pixel
+  tail; 29 + 1 for 800x600, each preceded by `GetTexLevelParameteriv` WIDTH,
+  HEIGHT and, on a rectangle, DEPTH_SIZE). Unreal Tournament 2003's
+  `ReduceMouseLag` locks one backbuffer pixel read-only (`D3DLOCK_READONLY`,
+  `0,0-1,1`) after every present: 75 FPS on a Win2000 guest at 800x600,
+  669 with the option off. 0056 reads the rectangle with one `glReadPixels`
+  (one QUERY) from a read framebuffer holding the texture, into the system
+  memory copy at the rectangle's offset, so the pointer and pitch are those
+  of a whole-surface lock. System memory is not marked current and the
+  texture stays authoritative: a read-only unlock transfers nothing, a
+  writable one uploads only the rectangle (`glTexSubImage2D`), and a later
+  whole lock downloads as before. It applies to backbuffers and lockable
+  render targets rendered into their texture through framebuffer objects, in
+  the 16- and 32-bit RGB(A) target formats; full and `DISCARD` locks,
+  `NO_DIRTY_UPDATE` writes, a current system memory copy, depth/stencil and
+  other formats, multisampling, the front buffer, `ORM_BACKBUFFER` and
+  onscreen drawables, DIB/user-memory/PBO/client storage, mipmap levels and
+  cube faces keep the full transfer, as does an unusable context. Source tests
+  run the prepared map/unmap state machine against a pixel-tracking GL. The
+  installed D3D8/9 probe (`tools/d3d/partial-lock-probe.inc`: read-only 1x1,
+  16x16 and last-pixel and writable 8x8 locks of the backbuffer and of
+  lockable X8R8G8B8 and R5G6B5 400x300 render targets, exact against cleared
+  pixels and the whole-lock pitch, and on 32-bit targets that a 1x1 lock left
+  the neighbouring pixel of Wine's copy unrefreshed) has not yet run on a
+  guest; UT2003's frame rate with `ReduceMouseLag=True`, Win98/XP guests and
+  macOS CGL remain unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

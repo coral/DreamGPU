@@ -472,6 +472,14 @@
       "scope": "installed-api",
       "path": "tools/d3d/tween-probe.inc"
     },
+    "d3d-partial-maps": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_partial_maps.py"
+    },
+    "guest-partial-locks": {
+      "scope": "installed-api",
+      "path": "tools/d3d/partial-lock-probe.inc"
+    },
     "d3d8-shader-validation": {
       "scope": "source",
       "path": "tests/guest/d3d/test_shader_validation.py"
@@ -626,6 +634,25 @@
         "readback"
       ],
       "remaining": "Prepared Wine source verifies rectangle/slice bounds before pointer publication, transfer failures and retry; installed API chain and all copy callsites remain unverified."
+    },
+    {
+      "id": "d3d.partial-target-lock",
+      "area": 4,
+      "api": "D3D8/D3D9 (Wine surface maps)",
+      "operation": "LockRect of a sub-rectangle of a render target (backbuffer or lockable render-target surface) whose current copy is its GL texture: read-only and writable, then UnlockRect",
+      "format": "X8R8G8B8, A8R8G8B8, X8B8G8R8, A8B8G8R8, R5G6B5, X1R5G5B5, A1R5G5B5, A4R4G4B4, X4R4G4B4",
+      "resource": "surface",
+      "usage": "CPU read/write of part of a render target (UT2003 ReduceMouseLag locks one backbuffer pixel per frame)",
+      "pool": "default",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-partial-maps",
+        "map",
+        "guest-partial-locks"
+      ],
+      "remaining": "No frontend or host change. WineD3D downloaded the whole surface (GetTexImage of every texel, 30 synchronous 64 KiB DreamGPU QUERY round trips for 800x600) for any lock that found system memory stale; UT2003's ReduceMouseLag locks one backbuffer pixel read-only after every present (75 FPS with it, 669 without on a Win2000 guest). Wine patch 0056 reads only the locked rectangle with one ReadPixels from a read framebuffer holding the target's texture, into the system-memory copy at the rectangle's offset (pointer and pitch exactly as before), and keeps the texture authoritative: system memory is not marked current, a read-only unlock transfers nothing and a writable unlock uploads only the rectangle (TexSubImage). Full and DISCARD locks, NO_DIRTY_UPDATE writes, a current system-memory copy, depth/stencil, block, converted, color-keyed and other formats, multisampling, the front buffer, targets drawn other than into their texture (ORM_BACKBUFFER, onscreen drawables), DIB/user-memory/PBO/client storage, mipmap levels and cube faces keep the full transfer; an unusable context falls back to it without a transfer. Source tests run the prepared map/unmap state machine against a pixel-tracking GL. The installed D3D8/9 probe (read-only 1x1, 16x16 and last-pixel and writable 8x8 locks of the backbuffer and of lockable X8R8G8B8 and R5G6B5 400x300 render targets, each exact with the whole-lock pitch, and a check that a 1x1 lock did not refresh the neighbouring pixel) has not yet run on a guest; UT2003 frame rate with ReduceMouseLag=True, Win98/XP guests and macOS CGL remain unverified."
     },
     {
       "id": "ddraw.dc",
