@@ -186,8 +186,16 @@ static void Dg9QueueEnsure(void) {
     if (!(Dg9GlRead(NULL, DG_GL_REG_STATUS) & DG_STATUS_BUSY))
         DgGlQueueEnable(&dg_gl_queue, &ops, Dg9GlRead(NULL, DG_REG_GENERATION));
 }
+/* Win9x requests are pinned in place (dg-memory.h), never copied by the OS:
+ * a request and its packet must fit DG9_MEMORY_MAX_BYTES. The queued transport
+ * therefore keeps the register transport's 64 KiB packets here; NT negotiates
+ * DG_ESCAPE_QUEUE_MAX_BYTES because its escape buffers are copied by GDI. */
+#define DG9_GL_PACKET_BYTES DG_ESCAPE_MAX_BYTES
+static_assert(sizeof(DG_ESCAPE_REQUEST) + DG9_GL_PACKET_BYTES <= DG9_MEMORY_MAX_BYTES,
+              "every negotiated Win9x packet must be pinnable");
+static_assert(DG9_GL_PACKET_BYTES <= DG_ESCAPE_QUEUE_MAX_BYTES);
 static ULONG Dg9LocalBytes(void) {
-    return DgGlQueueCurrent(&dg_gl_queue) ? DG_ESCAPE_QUEUE_MAX_BYTES : DG_ESCAPE_MAX_BYTES;
+    return DG9_GL_PACKET_BYTES;
 }
 static ULONG *Dg9Build(void) {
     if (dg_gl_build)
@@ -310,7 +318,7 @@ static BOOL Dg9GlInitialize(void) {
             dg_gl_queue.Page = static_cast<volatile ULONG *>(page);
             dg_gl_queue.PagePhysical = physical;
             while (dg_gl_queue.BufferCount < DG_GL_QUEUE_MAX_BUFFERS) {
-                void *buffer = api->Allocate(DG_ESCAPE_QUEUE_MAX_BYTES >> 12, &physical);
+                void *buffer = api->Allocate(DG9_GL_PACKET_BYTES >> 12, &physical);
                 if (!buffer)
                     break;
                 if (!physical || (physical & 4095)) {
@@ -321,7 +329,7 @@ static BOOL Dg9GlInitialize(void) {
                 dg_gl_queue.Buffers[dg_gl_queue.BufferCount].Physical = physical;
                 ++dg_gl_queue.BufferCount;
             }
-            dg_gl_queue.BufferBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+            dg_gl_queue.BufferBytes = DG9_GL_PACKET_BYTES;
         } else if (page) {
             api->Free(page);
         }
@@ -389,7 +397,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
         goto done;
     memcpy(&request, input.Address, sizeof(request));
     if (request.Version != DG_ESCAPE_VERSION || (request.Flags & ~DG_ESCAPE_SUBMIT_ASYNC) ||
-        request.Bytes > DG_ESCAPE_QUEUE_MAX_BYTES ||
+        request.Bytes > DG9_GL_PACKET_BYTES ||
         request.Bytes != params->cbInBuffer - sizeof(request) ||
         request.ResultCapacity > DG_ESCAPE_MAX_RESULT_BYTES ||
         request.ResultCapacity > params->cbOutBuffer - sizeof(reply) ||

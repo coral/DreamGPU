@@ -117,8 +117,10 @@ Two transports carry the same records with the same admission and ordering:
 - The register transport (every host): one batch at a time through the
   `DG_GL_REG_*` registers. The driver waits for each batch to finish.
 - The queued transport (`DG_GL_REG_QUEUE_VERSION` 1): a guest RAM page holds a
-  sixteen-entry ring and the counters; the kernel owns up to eight 128 KiB
-  packet buffers. Publishing a batch is one doorbell write, which QEMU serves
+  sixteen-entry ring and the counters; the kernel owns up to eight packet
+  buffers (128 KiB on NT, whose escape input GDI copies; 64 KiB on Win9x,
+  whose `DeviceIoControl` input is pinned in place and bounded by
+  `DG9_MEMORY_MAX_BYTES`). Publishing a batch is one doorbell write, which QEMU serves
   through an ioeventfd so the vCPU does not stop in the device model. The
   device copies and validates the entry on its main loop, the render thread
   executes it, and completion status is written back to the page by DMA.

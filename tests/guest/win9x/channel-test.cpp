@@ -168,8 +168,8 @@ static void DREAMGPU_CDECL signal_semaphore(DWORD value) {
     ++m.signals;
 }
 static void *DREAMGPU_CDECL allocate_dma(DWORD pages, DWORD *physical) {
-    /* Commands, results, then (queued transport) the page and 128 KiB buffers. */
-    assert(pages == 16 || (m.queue && (pages == 1 || pages == DG_ESCAPE_QUEUE_MAX_BYTES / 4096)));
+    /* Commands, results, then (queued transport) the page and 64 KiB buffers. */
+    assert(pages == 16 || (m.queue && pages == 1));
     ++m.allocations;
     *physical = 0x40000 + m.allocations * 0x100000 + (m.allocations == m.bad_alignment ? 1 : 0);
     BYTE *memory = m.allocations == m.alloc_fail
@@ -469,7 +469,12 @@ static void queued() {
     m.registers[DG_GL_REG_FUNCTION_WORDS / 4] = 2;
     const auto opened = request(DG_ESCAPE_OPEN);
     assert(opened.Status == 0 && opened.DeviceError == DG_ESCAPE_FEATURE_QUEUE);
-    assert(opened.MaxBytes == DG_ESCAPE_QUEUE_MAX_BYTES && opened.MaxRecords == DG_GL_MAX_RECORDS);
+    /* Regression (Win98 stale pixels): a negotiated packet must be pinnable.
+     * 128 KiB packets exceeded DG9_MEMORY_MAX_BYTES, so every large packet
+     * (uploads, DrawPixels, LFB writes) failed to pin and its context died. */
+    assert(opened.MaxBytes == DG_ESCAPE_MAX_BYTES &&
+           opened.MaxRecords == DG_ESCAPE_MAX_BYTES / DG_GL_HEADER_BYTES);
+    assert(sizeof(DG_ESCAPE_REQUEST) + opened.MaxBytes <= DG9_MEMORY_MAX_BYTES);
     assert(dg_gl_queue_supported && dg_gl_queue.BufferCount == DG_GL_QUEUE_MAX_BUFFERS);
     const DWORD client = opened.Client;
     DWORD command[12] = {DG_GL_CALL, 44, 0, 0, 0, 0, 0, 1, 0x77, 0, 0, 0};
@@ -481,6 +486,36 @@ static void queued() {
         assert(reply.Status == 0 && !reply.CompletedSequence);
         assert(m.reads == reads && m.writes == writes + 1 && m.doorbells == doorbells + 1);
         assert(m.last_client == client && m.last_stream == 4);
+    }
+    /* A maximal negotiated packet pins through the real memory core and is
+     * queued intact; one word more is a malformed envelope. */
+    {
+        m.registers[DG_GL_REG_FUNCTION_WORDS / 4] = DG_GL_FUNCTION_INLINE_DATA;
+        Dg9FunctionCacheRefresh(&dg_gl_function_cache, 1, 1);
+        const DWORD bytes = opened.MaxBytes;
+        DWORD header[10] = {DG_GL_DATA_CALL, bytes, 0, 0, 0, 0, 0, 1, 0x66, bytes - 40};
+        std::memset(m.input + 32, 0, bytes);
+        std::memcpy(m.input + 32, header, sizeof(header));
+        const unsigned doorbells = m.doorbells;
+        assert(request(DG_ESCAPE_SUBMIT, client, bytes, 0, 0, DG_ESCAPE_SUBMIT_ASYNC, 4).Status ==
+               0);
+        assert(m.doorbells == doorbells + 1 && m.last_opcode == DG_GL_DATA_CALL &&
+               m.last_operation == 0x66);
+        DG_ESCAPE_REQUEST input{DG_ESCAPE_VERSION,
+                                DG_ESCAPE_SUBMIT,
+                                client,
+                                bytes + 4,
+                                0,
+                                DG_ESCAPE_SUBMIT_ASYNC,
+                                0,
+                                4};
+        std::memcpy(m.input, &input, sizeof(input));
+        auto io = control(DG_ESCAPE, sizeof(input) + bytes + 4, sizeof(DG_ESCAPE_REPLY));
+        DWORD status = 0;
+        assert(DreamGpuGlControl(&io, &status) && status == 87 && m.doorbells == doorbells + 1);
+        cleaned();
+        m.registers[DG_GL_REG_FUNCTION_WORDS / 4] = 2;
+        Dg9FunctionCacheRefresh(&dg_gl_function_cache, 1, 1);
     }
     /* Stream 4 fails after its request returned. Stream 5's next request is
      * not executed; it reports the failure instead, once. */
