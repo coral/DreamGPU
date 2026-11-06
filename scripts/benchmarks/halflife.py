@@ -106,15 +106,19 @@ def parse_renderer_proof(raw):
         prefix = "ENGINE_GL_" + name + ": "
         values = [line[len(prefix):] for line in lines if line.startswith(prefix)]
         fields[name.lower()] = values[0] if len(values) == 1 else None
+    # hl.exe, hw.dll, opengl32.dll and dgpuicd.dll always; dgpugl.dll on NT only.
+    names = [value.replace("/", "\\").rsplit("\\", 1)[-1].lower() for value in modules]
+    required = {"hl.exe", "hw.dll", "opengl32.dll", "dgpuicd.dll"}
+    route = (len(names) == len(set(names)) and required <= set(names)
+             and set(names) <= required | {"dgpugl.dll"})
     accepted = (lines.count("RENDERER_PROOF system-icd-and-engine-strings") == 1
-                and len(modules) == 5 and len(set(value.lower() for value in modules)) == 5
+                and route
                 and fields["vendor"] == "DreamGPU"
                 and fields["renderer"] == "DreamGPU (native host OpenGL)"
                 and bool(fields["version"]))
     module_only = (lines.count("RENDERER_PROOF system-icd-modules") == 1
                    and lines.count("ENGINE_GL_STRINGS unavailable") == 1
-                   and len(modules) == 5 and len(set(value.lower() for value in modules)) == 5
-                   and not any(fields.values()))
+                   and route and not any(fields.values()))
     return {"status": "verified_by_runner" if accepted or module_only else "not_established",
             "engine_strings_observed": accepted,
             "modules": modules, "engine_gl": fields,

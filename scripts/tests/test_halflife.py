@@ -52,7 +52,13 @@ class ResultTests(unittest.TestCase):
         self.assertEqual(proof["status"], "verified_by_runner")
         self.assertFalse(proof["gpu_command_execution_proven"])
         self.assertEqual(hl.parse_result(ENGINE + evidence), hl.parse_result(ENGINE))
+        win98 = module_only.replace(b"RENDERER_MODULE C:\\WINNT\\system32\\dgpugl.dll\r\n", b"")
+        win98 = win98.replace(b"C:\\WINNT\\system32", b"C:\\WINDOWS\\SYSTEM")
+        self.assertEqual(hl.parse_renderer_proof(win98)["status"], "verified_by_runner")
         for invalid in (evidence.replace(b"DreamGPU (native host OpenGL)", b"GDI Generic"),
+                        module_only.replace(b"dgpuicd.dll", b"jrgopengl.dll"),
+                        module_only.replace(b"system32\\dgpugl.dll", b"system32\\dgpuicd.dll"),
+                        win98.replace(b"RENDERER_MODULE C:\\WINDOWS\\SYSTEM\\dgpuicd.dll\r\n", b""),
                         evidence + b"ENGINE_GL_VERSION: duplicate\r\n",
                         b"RENDERER_PROOF system-icd-and-engine-strings\r\n"):
             self.assertEqual(hl.parse_renderer_proof(invalid)["status"], "not_established")

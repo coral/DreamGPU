@@ -147,6 +147,10 @@ static inline BOOL DgRendererModules(DWORD pid, HANDLE process, const char *game
         ok = FALSE;
     if (!CloseHandle(snapshot))
         ok = FALSE;
-    return ok && mask == 31 && GetExitCodeProcess(process, &exit_code) && exit_code == STILL_ACTIVE;
+    /* NT loads dgpugl.dll beside the ICD; the Win9x route is the system
+     * opengl32.dll and dgpuicd.dll only. Wherever it loads, its path is checked. */
+    const unsigned required = (GetVersion() & 0x80000000u) ? 15u : 31u;
+    return ok && (mask & required) == required && GetExitCodeProcess(process, &exit_code) &&
+           exit_code == STILL_ACTIVE;
 }
 #endif
