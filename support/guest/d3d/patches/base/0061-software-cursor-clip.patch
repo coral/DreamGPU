@@ -1,0 +1,76 @@
+--- a/wined3d/swapchain.c
++++ b/wined3d/swapchain.c
+@@ -428,6 +428,37 @@
+     }
+ }
+ 
++/* DreamGPU: native Direct3D draws the part of its cursor inside the back
++ * buffer when the cursor crosses an edge (as later Wine does with
++ * wined3d_clip_blit). wined3d_surface_blt rejects a destination outside the
++ * surface (WINEDDERR_INVALIDRECT), so the whole cursor vanished there (0061).
++ * The cursor is drawn unscaled: each clipped destination edge moves the
++ * source edge by the same amount. FALSE when nothing is left. */
++static BOOL dg_swapchain_clip_cursor(LONG width, LONG height, RECT *dst, RECT *src)
++{
++    if (dst->left < 0)
++    {
++        src->left -= dst->left;
++        dst->left = 0;
++    }
++    if (dst->top < 0)
++    {
++        src->top -= dst->top;
++        dst->top = 0;
++    }
++    if (dst->right > width)
++    {
++        src->right -= dst->right - width;
++        dst->right = width;
++    }
++    if (dst->bottom > height)
++    {
++        src->bottom -= dst->bottom - height;
++        dst->bottom = height;
++    }
++    return dst->left < dst->right && dst->top < dst->bottom;
++}
++
+ static void swapchain_gl_present(struct wined3d_swapchain *swapchain, const RECT *src_rect_in,
+         const RECT *dst_rect_in, const RGNDATA *dirty_region, DWORD flags)
+ {
+@@ -466,13 +497,18 @@
+     {
+         struct wined3d_surface *cursor = surface_from_resource(
+                 wined3d_texture_get_sub_resource(swapchain->device->cursor_texture, 0));
++        /* DreamGPU: signed, so that a hotspot beyond the position is a
++         * negative edge rather than a wrapped UINT (0061). */
++        const LONG x = (LONG)swapchain->device->xScreenSpace - (LONG)swapchain->device->xHotSpot;
++        const LONG y = (LONG)swapchain->device->yScreenSpace - (LONG)swapchain->device->yHotSpot;
+         RECT destRect =
+         {
+-            swapchain->device->xScreenSpace - swapchain->device->xHotSpot,
+-            swapchain->device->yScreenSpace - swapchain->device->yHotSpot,
+-            swapchain->device->xScreenSpace + swapchain->device->cursorWidth - swapchain->device->xHotSpot,
+-            swapchain->device->yScreenSpace + swapchain->device->cursorHeight - swapchain->device->yHotSpot,
++            x,
++            y,
++            x + (LONG)swapchain->device->cursorWidth,
++            y + (LONG)swapchain->device->cursorHeight,
+         };
++        RECT cursor_rect = {0, 0, (LONG)cursor->resource.width, (LONG)cursor->resource.height};
+ 
+         TRACE("Rendering the software cursor.\n");
+ 
+@@ -481,8 +517,10 @@
+         if (swapchain->desc.windowed)
+             MapWindowPoints(NULL, swapchain->win_handle, (POINT *)&destRect, 2);
+ #endif
+-        wined3d_surface_blt(back_buffer, &destRect, cursor, NULL, WINEDDBLT_ALPHATEST,
+-                NULL, WINED3D_TEXF_POINT);
++        if (dg_swapchain_clip_cursor((LONG)back_buffer->resource.width, (LONG)back_buffer->resource.height,
++                &destRect, &cursor_rect))
++            wined3d_surface_blt(back_buffer, &destRect, cursor, &cursor_rect, WINEDDBLT_ALPHATEST,
++                    NULL, WINED3D_TEXF_POINT);
+     }
+ 
+     TRACE("Presenting HDC %p.\n", context->hdc);

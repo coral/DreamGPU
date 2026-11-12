@@ -243,6 +243,10 @@
     {
       "file": "0060-fullscreen-window-activation.patch",
       "sha256": "d32f4e25216eb4ebccc53ffb24b4cfb1d1723c2829d989004ab7ef049ea99adf"
+    },
+    {
+      "file": "0061-software-cursor-clip.patch",
+      "sha256": "be01c0a9e3384858c1a24393c013928d465b70bac7475709e2e1707bcdfd4a42"
     }
   ],
   "files": {
@@ -340,7 +344,7 @@
     },
     "wined3d/swapchain.c": {
       "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
-      "after_sha256": "ec459fe1c9f8b6f23d550713eddef1f6c86642535f20b099ae9c3c559ff1cf44"
+      "after_sha256": "b13d46194f097baa60e4aa01fa43a531c900b848cc132478b33a9f9c53a49acb"
     },
     "wined3d/wined3d_private.h": {
       "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",

@@ -1358,3 +1358,32 @@ matter), restored and covering the mode after activation, Reset to succeed
 and render (exact frames with X8R8G8B8), and the shrink requests never to
 nest. The diagnostic stack is rebased onto 0060 with its call-site line
 numbers renumbered.
+
+`0061-software-cursor-clip.patch` draws the part inside the back buffer of a
+Direct3D cursor that crosses an edge. WineD3D draws a cursor that is not a
+Windows cursor (any size but 32x32, or a 32x32 one that `SetCursorPos` could
+not reach) into the back buffer at Present with an alpha-tested
+`wined3d_surface_blt`. That blit rejects any destination rectangle outside
+the surface (`WINEDDERR_INVALIDRECT`), so the whole cursor vanished as soon as
+any part of it crossed the right or bottom edge, or the left or top edge
+through a hotspot beyond the position (whose unsigned difference also wrapped).
+Native Direct3D clips the cursor, as later Wine does with `wined3d_clip_blit`
+(Wine 1.9.x). 0061 computes the destination with signed edges, maps it to the
+client area in windowed mode as before, then clips it to the back buffer and
+moves each clipped source edge by the same amount (the cursor is never
+scaled); nothing is blitted when nothing is left.
+
+`test_software_cursor_clip.py` runs the prepared cursor block of
+`swapchain_gl_present` and its clip helper under ASan/UBSan, with the
+prepared rectangle validation of `wined3d_surface_blt` and an alpha-tested
+unscaled copy, for a non-square cursor inside, at the origin, touching and
+crossing each edge and corner (with hotspots beyond the position and with a
+windowed client offset), entirely outside, hidden and as a Windows cursor. It
+compares every back buffer pixel with the cursor's visible texels, requires
+no rejected or stretched blit, and each of thirteen mutations of the patch
+(among them the unclipped blit) fails it. The installed D3D8/9 probe
+(`tools/d3d/cursor-probe.inc`, run last on its own fullscreen 640x480
+device) reads presented frames back and requires the 16x16 cursor's visible
+part exactly, and nothing else, across the bottom-right corner and, with
+hotspot 8,8, across the top-left corner. The diagnostic stack is rebased
+onto 0061 with its call-site line numbers renumbered.

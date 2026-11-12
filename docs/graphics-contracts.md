@@ -701,6 +701,24 @@ and disposable-VM acceptance cycle:
   loss and activation) passes on Windows 2000 and remains to be rerun on XP
   and 98. Source tests execute the prepared functions against a user32
   model that discards hook-time edits; Splinter Cell remains to be rerun.
+- Direct3D cursor (`IDirect3DDevice8/9::SetCursorProperties`,
+  `SetCursorPosition`, `ShowCursor`). WineD3D makes a 32x32 image a Windows
+  cursor (the display drivers' native cursor plane) and draws any other size,
+  or a 32x32 one that `SetCursorPos` could not reach, into the back buffer at
+  Present with an alpha-tested blit. The installed D3D8/9 probe
+  (`tools/d3d/cursor-probe.inc`, run last on its own fullscreen 640x480
+  device) reads presented frames back with `GetFrontBuffer`/
+  `GetFrontBufferData`: a 16x16 cursor shown, moved and hidden, a 32x32
+  Windows cursor shown and moved (`GetCursorInfo`, nothing in the frame), and
+  a 32x32 cursor drawn once `ClipCursor` keeps the Windows cursor away, and
+  a 16x16 cursor across the bottom-right and (hotspot 8,8) top-left corners,
+  with nothing else in the frame. It has not run on a guest. WineD3D did not
+  draw a cursor any part of which was beyond the back buffer
+  (`wined3d_surface_blt` rejects the rectangle); Wine patch 0061 clips the
+  destination and source rectangles first, as native Direct3D and later Wine
+  do (source test: every pixel compared, 13 mutations rejected). Battlefield 1942 and Painkiller draw their own menu
+  cursor sprites at DirectInput-delta positions clamped to the screen, so
+  their vanishing cursors are an input-delta problem, not this path.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

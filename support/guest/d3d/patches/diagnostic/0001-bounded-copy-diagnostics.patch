@@ -294,12 +294,12 @@
          }
  
          context_apply_fbo_state_blit(context, GL_READ_FRAMEBUFFER, backbuffer, NULL, location);
-@@ -526,14 +527,14 @@
+@@ -564,14 +565,14 @@
       */
      if (!swapchain->render_to_fbo && render_to_fbo && wined3d_settings.offscreen_rendering_mode == ORM_FBO)
      {
 -        surface_load_location(back_buffer, context, WINED3D_LOCATION_TEXTURE_RGB);
-+        dg_surface_load_location(22, 529, back_buffer, context, WINED3D_LOCATION_TEXTURE_RGB);
++        dg_surface_load_location(22, 567, back_buffer, context, WINED3D_LOCATION_TEXTURE_RGB);
          surface_invalidate_location(back_buffer, WINED3D_LOCATION_DRAWABLE);
          swapchain->render_to_fbo = TRUE;
          swapchain_update_draw_bindings(swapchain);
@@ -307,16 +307,16 @@
      else
      {
 -        surface_load_location(back_buffer, context, back_buffer->container->resource.draw_binding);
-+        dg_surface_load_location(22, 536, back_buffer, context, back_buffer->container->resource.draw_binding);
++        dg_surface_load_location(22, 574, back_buffer, context, back_buffer->container->resource.draw_binding);
      }
  
      if (swapchain->render_to_fbo)
-@@ -626,7 +627,7 @@
+@@ -664,7 +665,7 @@
  
      TRACE("Copying surface %p to screen.\n", front);
  
 -    surface_load_location(front, NULL, WINED3D_LOCATION_DIB);
-+    dg_surface_load_location(22, 629, front, NULL, WINED3D_LOCATION_DIB);
++    dg_surface_load_location(22, 667, front, NULL, WINED3D_LOCATION_DIB);
  
      src_dc = front->hDC;
      window = swapchain->win_handle;
