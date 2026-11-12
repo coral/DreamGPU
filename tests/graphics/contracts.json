@@ -248,6 +248,14 @@
       "scope": "installed-api",
       "path": "tools/d3d/fog-probe.inc"
     },
+    "d3d-table-fog-shader-coordinate": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_table_fog_shader_coordinate.py"
+    },
+    "guest-d3d-table-fog": {
+      "scope": "installed-api",
+      "path": "tools/d3d/table-fog-probe.inc"
+    },
     "d3d-fog-coord-arrays": {
       "scope": "source",
       "path": "tests/guest/d3d/test_fog_coord_arrays.py"
@@ -1772,6 +1780,25 @@
         "guest-vbuffer"
       ],
       "remaining": "Negotiated by DG_CAP_GL_FOG_COORD (FogCoordf, FOG_COORDINATE_SOURCE, DrawArraysEXT slot 14). Wine previously emulated it by blending vertex colours before texturing, which darkens textured geometry instead of fogging it; the installed textured probe fails on that build and passes on Win2000 and XP. The Wine fast path packs specular-alpha fog coordinates. Wine patch 0041 gives fixed-function array draws (buffer objects) a float fog coordinate array with drawStridedSlow's values instead of emulating them in immediate mode; D3DCOLOR streams outside buffer objects stay in immediate mode without BGRA vertex arrays (with DG_CAP_GL_VERTEX_ARRAY_BGRA they take the fog coordinate array too). The installed D3D7 probe and D3D8/9 vertex buffer probe add exact untransformed buffer and UP fog quads, untested on guests. Table fog, range fog, vertex-processed fog modes, macOS CGL and Win98 remain unverified."
+    },
+    {
+      "id": "d3d.shader-table-fog",
+      "area": 11,
+      "api": "D3D8/D3D9 vertex shaders (WineD3D ARB backend, arbfp fragment pipe) with D3DRS_FOGTABLEMODE LINEAR/EXP/EXP2",
+      "operation": "table fog of draws whose vs_1_x/vs_2_x shader writes oFog: the oFog value through the table equation with FOGSTART/FOGEND/FOGDENSITY, as NVIDIA (before 61.77) and ATI drivers of 2003-2004 did",
+      "format": "float oFog",
+      "resource": "draw",
+      "usage": "render",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-table-fog-shader-coordinate",
+        "patches",
+        "guest-d3d-table-fog"
+      ],
+      "remaining": "WineD3D wrote the vertex output z as the fog coordinate under table fog, as the reference rasterizer and later drivers do; Far Cry's NVIDIA path (DreamGPU reports a GeForce FX) writes oFog with FOGTABLEMODE LINEAR, start 0 and end 1 and relies on the period drivers' use of oFog, so its terrain, water and boat were drawn in the fog colour (Wine bug 25761; Prince of Persia: The Sands of Time, bug 17423, does the same). Wine patch 0062 passes the oFog of vs_1_x/vs_2_x shaders with built-in varyings to result.fogcoord unclamped (whether the period drivers clamped it is undocumented; Wine's proof-of-concept fix left it unclamped); vertex fog keeps the clamped oFog factor, and vs_3_0, declared varyings and shaders without oFog keep the vertex output z. Known divergence, unchanged: without oFog native table fog uses W under a perspective D3DTS_PROJECTION and z/w (AMD) or the vertex output z (NVIDIA) under an orthographic one; WineD3D always uses the vertex output z. Source tests interpret the prepared epilogue with the prepared fog source selection (7 mutations rejected). The installed D3D8/9 probe (table-fog-probe.inc: oFog 0, 1, 0.25 under LINEAR 0..1, oFog 2 under 0..4, vertex fog oFog 1 and 0, fixed-function and ps_1_1 fragments) has not run on a guest; Far Cry and Prince of Persia remain to be run. The GLSL backend is never selected (no ARB_fragment_shader/ARB_vertex_shader) and is unchanged."
     },
     {
       "id": "d3d.vertex-blend",

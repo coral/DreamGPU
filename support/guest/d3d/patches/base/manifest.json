@@ -247,6 +247,10 @@
     {
       "file": "0061-software-cursor-clip.patch",
       "sha256": "be01c0a9e3384858c1a24393c013928d465b70bac7475709e2e1707bcdfd4a42"
+    },
+    {
+      "file": "0062-table-fog-shader-fog-coordinate.patch",
+      "sha256": "81f2022864a0713ca1f07b67407229d953f4411515d3b5ffa7aa15079c8c9dd9"
     }
   ],
   "files": {
@@ -380,7 +384,7 @@
     },
     "wined3d/arb_program_shader.c": {
       "before_sha256": "e817b87102cc16f41454f5925a79e7c4002cabff018cb9c28220f50977b3ae6a",
-      "after_sha256": "543753b73eb0c61965f3a1d04414984849f59cfe7f18051b43f5529366978d4f"
+      "after_sha256": "1cceff39cf7208c65b3bc6f64e36730d24ce03802b6ebdc1da3676642d77fa91"
     },
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",

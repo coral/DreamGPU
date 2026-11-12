@@ -1387,3 +1387,49 @@ device) reads presented frames back and requires the 16x16 cursor's visible
 part exactly, and nothing else, across the bottom-right corner and, with
 hotspot 8,8, across the top-left corner. The diagnostic stack is rebased
 onto 0061 with its call-site line numbers renumbered.
+
+`0062-table-fog-shader-fog-coordinate.patch` makes table fog (`FOGTABLEMODE`
+LINEAR, EXP or EXP2) use the fog coordinate a vs_1_x or vs_2_x shader writes
+to oFog. The ARB vertex program epilogue wrote the vertex output z as
+`result.fogcoord` whenever table fog was on, and the arbfp fog source is then
+FOGSOURCE_FFP with the application's FOGSTART/FOGEND. That is what the
+reference rasterizer and later drivers do, but NVIDIA drivers before 61.77 and
+the ATI drivers of 2003-2004 ran the shader's oFog through the table equation
+instead, and games of that time rely on it. Far Cry's NVIDIA path (DreamGPU
+reports a GeForce FX 5800) draws terrain, water and vehicles with vertex
+shaders that write oFog, FOGVERTEXMODE NONE, FOGTABLEMODE LINEAR, start 0 and
+end 1, so with the vertex output z (about the eye distance) all of it was the
+fog colour. The demo looks the same on Windows with later NVIDIA drivers and is
+correct with an AMD vendor ID (Wine bug 25761, closed invalid); Prince of
+Persia: The Sands of Time does the same (Wine bug 17423). A shader that writes
+oFog with built-in varyings (`TMP_FOGCOORD`) now passes it to
+`result.fogcoord` unclamped, as a fog coordinate rather than a factor: whether
+the period drivers clamped it is not documented, and Wine's proof-of-concept
+fix for bug 25761 left it unclamped. Vertex fog (`FOGTABLEMODE` NONE) still
+clamps oFog as the fog factor. vs_3_0 shaders, declared varyings and shaders
+without oFog keep the vertex output z.
+
+Known divergence, not changed: for a shader without oFog, native table fog
+uses W when `D3DTS_PROJECTION` is a perspective matrix, and with an
+orthographic one the depth z/w (AMD) or the vertex output z (NVIDIA); upstream
+Wine chooses between them with `ortho_fog`. WineD3D here always uses the
+vertex output z, which matches NVIDIA only for an orthographic projection.
+
+`test_table_fog_shader_coordinate.py` runs the prepared
+`vshader_add_footer` (with `need_helper_const` and `arb_get_helper_value`),
+`state_arbfp_fog` and `get_fog_start_end` under ASan/UBSan for vs_1_1, vs_2_0
+and vs_3_0 with and without oFog, built-in and declared varyings, table fog
+LINEAR/EXP/EXP2 and vertex fog, interprets each generated epilogue on a
+clip-space position and an oFog value, and compares the ARB_fog fragment
+factor and the final position: oFog through the table equation, unclamped
+(oFog 2 with end 4 is half fogged), for vs_1_x/vs_2_x shaders that write oFog,
+the vertex output z otherwise, and the clamped oFog factor with vertex fog.
+Each of seven mutations (among them the vertex output z, a clamped
+coordinate and a vertex shader fog source) fails it. The installed D3D8/9
+probe (`tools/d3d/table-fog-probe.inc`, after the vertex shader stage) draws a
+vs_1_1 quad that writes oFog under LINEAR table fog from 0 to 1 and requires
+the diffuse colour for oFog 0, the fog colour for oFog 1 and three quarters
+diffuse for oFog 0.25 (depth fog would give half or full fog), half fog for
+oFog 2 with end 4, and with vertex fog the diffuse colour for oFog 1 and the
+fog colour for oFog 0; the table cases also run after a ps_1_1. The
+diagnostic stack does not touch `arb_program_shader.c` and needs no rebase.

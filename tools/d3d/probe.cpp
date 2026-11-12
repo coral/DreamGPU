@@ -301,6 +301,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "cube-probe.inc"
 #include "shader-probe.inc"
 #include "vshader-probe.inc"
+#include "table-fog-probe.inc"
 #include "volume-probe.inc"
 #include "vbuffer-probe.inc"
 #include "bgra-probe.inc"
@@ -478,6 +479,9 @@ static void Run(void) {
     if (failed)
         return;
     vshader_probe::Run(device, surface);
+    if (failed)
+        return;
+    table_fog_probe::Run(device, surface);
     if (failed)
         return;
     volume_probe::Run(device, surface);

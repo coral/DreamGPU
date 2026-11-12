@@ -719,6 +719,23 @@ and disposable-VM acceptance cycle:
   do (source test: every pixel compared, 13 mutations rejected). Battlefield 1942 and Painkiller draw their own menu
   cursor sprites at DirectInput-delta positions clamped to the screen, so
   their vanishing cursors are an input-delta problem, not this path.
+- Table fog with a vertex shader that writes oFog (`D3DRS_FOGTABLEMODE`
+  LINEAR/EXP/EXP2, vs_1_x/vs_2_x). NVIDIA drivers before 61.77 and the ATI
+  drivers of 2003-2004 ran the shader's oFog through the table equation with
+  the application's start, end and density; the reference rasterizer and
+  later drivers use the depth. Far Cry's NVIDIA path (DreamGPU reports a
+  GeForce FX) writes oFog with LINEAR table fog from 0 to 1 and drew its
+  terrain, water and boat in the fog colour while WineD3D used the vertex
+  output z (Wine bug 25761; Prince of Persia: The Sands of Time, bug 17423).
+  Wine patch 0062 keeps the oFog of such shaders as the fog coordinate,
+  unclamped; vertex fog, vs_3_0 and shaders without oFog are unchanged.
+  Without oFog native table fog uses W under a perspective projection matrix,
+  which WineD3D does not (known divergence). Source test: the prepared
+  epilogue interpreted with the prepared fog source (7 mutations rejected).
+  The installed D3D8/9 probe (`tools/d3d/table-fog-probe.inc`, after the
+  vertex shader stage) requires oFog 0 clear, 1 fogged, 0.25 three quarters
+  clear and 2 of 4 half fogged under table fog, and oFog 1 clear and 0 fogged
+  under vertex fog; it has not run on a guest.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

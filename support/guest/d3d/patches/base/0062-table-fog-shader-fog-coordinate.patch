@@ -1,0 +1,24 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -3201,7 +3201,20 @@
+      */
+     if (args->super.fog_src == VS_FOG_Z)
+     {
+-        shader_addline(buffer, "MOV result.fogcoord, TMP_OUT.z;\n");
++        /* DreamGPU: NVIDIA (before 61.77) and ATI drivers of 2003-2004 ran
++         * the fog coordinate a vs_1_x/vs_2_x shader writes to oFog through the
++         * table fog equation (the application's FOGSTART/FOGEND/FOGDENSITY,
++         * FOGSOURCE_FFP); the reference rasterizer and later drivers use the
++         * depth instead. Games of that time rely on it: Far Cry's NVIDIA path
++         * (Wine bug 25761), Prince of Persia: The Sands of Time (bug 17423).
++         * DreamGPU reports a GeForce FX, so a shader that writes oFog keeps it
++         * here, unclamped like a fog coordinate (0062). Shaders without oFog
++         * keep the vertex output z. */
++        if (reg_maps->fog && reg_maps->shader_version.major < 3
++                && !strcmp(priv_ctx->fog_output, "TMP_FOGCOORD"))
++            shader_addline(buffer, "MOV result.fogcoord, TMP_FOGCOORD.x;\n");
++        else
++            shader_addline(buffer, "MOV result.fogcoord, TMP_OUT.z;\n");
+     }
+     else
+     {
