@@ -1,0 +1,472 @@
+--- a/wined3d/buffer.c
++++ b/wined3d/buffer.c
+@@ -103,12 +103,17 @@
+ }
+ 
+ /* Context activation is done by the caller */
++/* DreamGPU: without gl_info (no context exists) the buffer object died with
++ * the device's contexts; only its name is forgotten. */
+ static void delete_gl_buffer(struct wined3d_buffer *This, const struct wined3d_gl_info *gl_info)
+ {
+     if(!This->buffer_object) return;
+ 
+-    GL_EXTCALL(glDeleteBuffers(1, &This->buffer_object));
+-    checkGLcall("glDeleteBuffers");
++    if (gl_info)
++    {
++        GL_EXTCALL(glDeleteBuffers(1, &This->buffer_object));
++        checkGLcall("glDeleteBuffers");
++    }
+     This->buffer_object = 0;
+ 
+     if(This->query)
+@@ -631,11 +636,16 @@
+         /* Download the buffer, but don't permanently enable double buffering */
+         if (!(buffer->flags & WINED3D_BUFFER_DOUBLEBUFFER))
+         {
+-            buffer_get_sysmem(buffer, context);
++            if (context)
++                buffer_get_sysmem(buffer, context);
++            /* DreamGPU: without a context (after a failed reset) the content
++             * died with the buffer object; system memory defines it as zero. */
++            else if (!buffer->resource.heap_memory && !wined3d_resource_allocate_sysmem(&buffer->resource))
++                ERR("Failed to allocate system memory.\n");
+             buffer->flags &= ~WINED3D_BUFFER_DOUBLEBUFFER;
+         }
+ 
+-        delete_gl_buffer(buffer, context->gl_info);
++        delete_gl_buffer(buffer, context ? context->gl_info : NULL);
+         buffer->flags |= WINED3D_BUFFER_CREATEBO; /* Recreate the buffer object next load */
+         buffer_clear_dirty_areas(buffer);
+ 
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -3558,6 +3558,16 @@
+ 
+     TRACE("device %p, target %p.\n", device, target);
+ 
++    /* DreamGPU: after a failed reset no context exists, nor the shader,
++     * blitter and dummy-texture state a new one needs. Creating a bare one
++     * here would leave it unusable; callers handle the missing context and
++     * the next reset creates the primary context again. */
++    if (device->contexts_lost)
++    {
++        WARN("Device %p has no GL context after a failed reset.\n", device);
++        return NULL;
++    }
++
+     if (current_context && current_context->destroyed)
+         current_context = NULL;
+ 
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -359,7 +359,7 @@
+     RECT ds_rect = {0};
+ 
+     context = context_acquire(device, target);
+-    if (!context->valid)
++    if (!context || !context->valid)
+     {
+         context_release(context);
+         WARN("Invalid context, skipping clear.\n");
+@@ -1127,12 +1127,14 @@
+      * it was created. Thus make sure a context is active for the glDelete* calls
+      */
+     context = context_acquire(device, NULL);
+-    if(!context)
++    if(!context && !device->contexts_lost)
+     {
+     	device->d3d_initialized = FALSE;
+     	return WINED3D_OK;
+     }
+-    gl_info = context->gl_info;
++    /* DreamGPU: after a failed reset the device has no context; that reset
++     * already destroyed the GL objects and the GL state freed below. */
++    gl_info = &device->adapter->gl_info;
+ 
+     if (device->logo_texture)
+         wined3d_texture_decref(device->logo_texture);
+@@ -1151,23 +1153,26 @@
+ 
+     wine_rb_clear(&device->samplers, device_free_sampler, NULL);
+ 
+-    /* Destroy the depth blt resources, they will be invalid after the reset. Also free shader
+-     * private data, it might contain opengl pointers
+-     */
+-    if (device->depth_blt_texture)
++    if (context)
+     {
+-        gl_info->gl_ops.gl.p_glDeleteTextures(1, &device->depth_blt_texture);
+-        device->depth_blt_texture = 0;
+-    }
++        /* Destroy the depth blt resources, they will be invalid after the reset. Also free shader
++         * private data, it might contain opengl pointers
++         */
++        if (device->depth_blt_texture)
++        {
++            gl_info->gl_ops.gl.p_glDeleteTextures(1, &device->depth_blt_texture);
++            device->depth_blt_texture = 0;
++        }
+ 
+-    /* Destroy the shader backend. Note that this has to happen after all shaders are destroyed. */
+-    device->blitter->free_private(device);
+-    device->shader_backend->shader_free_private(device);
+-    destroy_dummy_textures(device, gl_info);
++        /* Destroy the shader backend. Note that this has to happen after all shaders are destroyed. */
++        device->blitter->free_private(device);
++        device->shader_backend->shader_free_private(device);
++        destroy_dummy_textures(device, gl_info);
+ #ifdef VBOX_WITH_WINE_FIX_ZEROVERTATTR
+-    /* DreamGPU: delete the zero attribute buffer while a context is current. */
+-    zv_destroy(device);
++        /* DreamGPU: delete the zero attribute buffer while a context is current. */
++        zv_destroy(device);
+ #endif
++    }
+ 
+     /* Release the context again as soon as possible. In particular,
+      * releasing the render target views below may release the last reference
+@@ -1227,6 +1232,7 @@
+     device->fb.render_targets = NULL;
+ 
+     device->d3d_initialized = FALSE;
++    device->contexts_lost = FALSE;
+ 
+     return WINED3D_OK;
+ }
+@@ -3363,12 +3369,15 @@
+         return WINED3DERR_INVALIDCALL;
+     }
+ 
+-    context = context_acquire(device, NULL);
+-    /* We only have to do this if we need to read the, swapbuffers performs a flush for us */
+-    context->gl_info->gl_ops.gl.p_glFlush();
+-    /* No checkGLcall here to avoid locking the lock just for checking a call that hardly ever
+-     * fails. */
+-    context_release(context);
++    /* DreamGPU: a lost device (no context) completes its scene too. */
++    if ((context = context_acquire(device, NULL)))
++    {
++        /* We only have to do this if we need to read the, swapbuffers performs a flush for us */
++        context->gl_info->gl_ops.gl.p_glFlush();
++        /* No checkGLcall here to avoid locking the lock just for checking a call that hardly ever
++         * fails. */
++        context_release(context);
++    }
+ 
+     device->inScene = FALSE;
+     return WINED3D_OK;
+@@ -4482,8 +4491,18 @@
+     struct wined3d_context *context;
+     struct wined3d_shader *shader;
+ 
+-    context = context_acquire(device, NULL);
+-    gl_info = context->gl_info;
++    /* DreamGPU: a failed reset already destroyed every context, every GL
++     * object with them and the shader and blitter state. */
++    if (device->contexts_lost)
++        return;
++
++    /* Without a context the GL objects cannot be reached: they die with the
++     * contexts destroyed below. Unloading forgets them and keeps or defines
++     * the CPU copies; no GL call reaches another context meanwhile, since no
++     * DreamGPU context is current on this thread. */
++    if (!(context = context_acquire(device, NULL)))
++        WARN("No context for device %p, forgetting its GL objects.\n", device);
++    gl_info = context ? context->gl_info : &device->adapter->gl_info;
+ 
+     LIST_FOR_EACH_ENTRY_SAFE(resource, cursor, &device->resources, struct wined3d_resource, resource_list_entry)
+     {
+@@ -4499,7 +4518,8 @@
+ 
+     if (device->depth_blt_texture)
+     {
+-        gl_info->gl_ops.gl.p_glDeleteTextures(1, &device->depth_blt_texture);
++        if (context)
++            gl_info->gl_ops.gl.p_glDeleteTextures(1, &device->depth_blt_texture);
+         device->depth_blt_texture = 0;
+     }
+ 
+@@ -4562,6 +4582,8 @@
+         device->blitter->free_private(device);
+         device->shader_backend->shader_free_private(device);
+         free(swapchain->context);
++        /* DreamGPU: a later reset or uninit must not free it again. */
++        swapchain->context = NULL;
+         return E_FAIL;
+     }
+ 
+@@ -4573,6 +4595,42 @@
+     return WINED3D_OK;
+ }
+ 
++/* DreamGPU: a state reset destroys every GL context before it creates the
++ * primary one again, and reads managed and implicit contents back through the
++ * current one first. Without a usable context nothing is changed: the reset
++ * reports a lost device and the application retries it. A device whose
++ * contexts a failed reset destroyed has nothing left to read back. */
++static BOOL device_reset_context_usable(struct wined3d_device *device)
++{
++    struct wined3d_context *context;
++    BOOL usable;
++
++    if (!device->d3d_initialized || device->contexts_lost)
++        return TRUE;
++
++    context = context_acquire(device, NULL);
++    usable = context && context->valid;
++    context_release(context);
++    return usable;
++}
++
++/* DreamGPU: the reset's old contexts are gone. When the primary context
++ * cannot be created again (no usable window or GL context), the device keeps
++ * no context, reports a lost device, and the next reset retries the creation. */
++static HRESULT device_reset_create_context(struct wined3d_device *device, struct wined3d_swapchain *swapchain)
++{
++    HRESULT hr;
++
++    device->contexts_lost = FALSE;
++    if (FAILED(hr = create_primary_opengl_context(device, swapchain)))
++    {
++        WARN("Failed to create the primary context again, hr %#x, the device stays lost.\n", hr);
++        device->contexts_lost = TRUE;
++        return WINED3DERR_DEVICELOST;
++    }
++    return WINED3D_OK;
++}
++
+ HRESULT CDECL wined3d_device_reset(struct wined3d_device *device,
+         const struct wined3d_swapchain_desc *swapchain_desc, const struct wined3d_display_mode *mode,
+         wined3d_device_reset_cb callback, BOOL reset_state)
+@@ -4592,6 +4650,11 @@
+         ERR("Failed to get the first implicit swapchain.\n");
+         return WINED3DERR_INVALIDCALL;
+     }
++    if (reset_state && !device_reset_context_usable(device))
++    {
++        WARN("No usable GL context, the device is lost.\n");
++        return WINED3DERR_DEVICELOST;
++    }
+     DisplayModeChanged = swapchain->reapply_mode;
+ 
+     if (reset_state)
+@@ -4865,7 +4928,7 @@
+     }
+ 
+     if (reset_state && device->d3d_initialized)
+-        hr = create_primary_opengl_context(device, swapchain);
++        hr = device_reset_create_context(device, swapchain);
+ 
+     /* All done. There is no need to reload resources or shaders, this will happen automatically on the
+      * first use
+--- a/wined3d/drawprim.c
++++ b/wined3d/drawprim.c
+@@ -1842,7 +1842,7 @@
+     blend_arrays.values = NULL;
+ 
+     context = context_acquire(device, wined3d_rendertarget_view_get_surface(device->fb.render_targets[0]));
+-    if (!context->valid)
++    if (!context || !context->valid)
+     {
+         context_release(context);
+         WARN("Invalid context, skipping draw.\n");
+--- a/wined3d/surface.c
++++ b/wined3d/surface.c
+@@ -1314,6 +1314,45 @@
+     return wined3d_surface_decref(surface_from_resource(resource));
+ }
+ 
++/* DreamGPU: unloading without a context. A valid CPU copy in the map
++ * location stays; a PBO cannot be read and is replaced by system memory.
++ * Content held only by unreachable GL objects is lost: system memory is
++ * defined as zero, and application or DIB memory keeps its last bytes, so
++ * later loads and maps find a valid location instead of none. */
++static void dg_surface_keep_cpu_copy(struct wined3d_surface *surface)
++{
++    void *memory = NULL;
++
++    if (surface->resource.map_binding == WINED3D_LOCATION_BUFFER)
++        surface->resource.map_binding = WINED3D_LOCATION_SYSMEM;
++    if (!(surface->locations & surface->resource.map_binding))
++    {
++        WARN("Surface %p content is lost with its GL objects.\n", surface);
++        switch (surface->resource.map_binding)
++        {
++            case WINED3D_LOCATION_SYSMEM:
++                surface_prepare_system_memory(surface);
++                if ((memory = surface->resource.heap_memory))
++                    memset(memory, 0, surface->resource.size);
++                break;
++            case WINED3D_LOCATION_USER_MEMORY:
++                memory = surface->user_memory;
++                break;
++            case WINED3D_LOCATION_DIB:
++                memory = surface->dib.bitmap_data;
++                break;
++        }
++        if (!memory)
++        {
++            ERR("No CPU storage for surface %p.\n", surface);
++            surface_invalidate_location(surface, ~0u);
++            return;
++        }
++        surface_validate_location(surface, surface->resource.map_binding);
++    }
++    surface_invalidate_location(surface, ~surface->resource.map_binding);
++}
++
+ static void surface_unload(struct wined3d_resource *resource)
+ {
+     struct wined3d_surface *surface = surface_from_resource(resource);
+@@ -1324,8 +1363,11 @@
+ 
+     TRACE("surface %p.\n", surface);
+ 
++    /* DreamGPU: without a context (after a failed reset) no GL object of this
++     * device is reachable; they die with its contexts. Forget their names
++     * without GL calls and keep the CPU copy. */
+     context = context_acquire(device, NULL);
+-    gl_info = context->gl_info;
++    gl_info = context ? context->gl_info : NULL;
+ 
+     if (resource->pool == WINED3D_POOL_DEFAULT)
+     {
+@@ -1364,16 +1406,25 @@
+         surface->flags |= SFLAG_LOST;
+ #endif
+     }
+-    else
++    else if (context)
+     {
+         surface_prepare_map_memory(surface);
+         surface_load_location(surface, context, surface->resource.map_binding);
+         surface_invalidate_location(surface, ~surface->resource.map_binding);
+     }
++    else
++    {
++        dg_surface_keep_cpu_copy(surface);
++    }
+ 
+     /* Destroy PBOs, but load them into real sysmem before */
+-    if (surface->pbo)
++    if (surface->pbo && gl_info)
+         surface_remove_pbo(surface, gl_info);
++    else if (surface->pbo)
++    {
++        surface->pbo = 0;
++        surface_invalidate_location(surface, WINED3D_LOCATION_BUFFER);
++    }
+ 
+     /* Destroy fbo render buffers. This is needed for implicit render targets, for
+      * all application-created targets the application has to release the surface
+@@ -1381,7 +1432,8 @@
+      */
+     LIST_FOR_EACH_ENTRY_SAFE(entry, entry2, &surface->renderbuffers, struct wined3d_renderbuffer_entry, entry)
+     {
+-        gl_info->fbo_ops.glDeleteRenderbuffers(1, &entry->id);
++        if (gl_info)
++            gl_info->fbo_ops.glDeleteRenderbuffers(1, &entry->id);
+         list_remove(&entry->entry);
+         free(entry);
+     }
+@@ -1390,12 +1442,14 @@
+ 
+     if (surface->rb_multisample)
+     {
+-        gl_info->fbo_ops.glDeleteRenderbuffers(1, &surface->rb_multisample);
++        if (gl_info)
++            gl_info->fbo_ops.glDeleteRenderbuffers(1, &surface->rb_multisample);
+         surface->rb_multisample = 0;
+     }
+     if (surface->rb_resolved)
+     {
+-        gl_info->fbo_ops.glDeleteRenderbuffers(1, &surface->rb_resolved);
++        if (gl_info)
++            gl_info->fbo_ops.glDeleteRenderbuffers(1, &surface->rb_resolved);
+         surface->rb_resolved = 0;
+     }
+ 
+--- a/wined3d/swapchain.c
++++ b/wined3d/swapchain.c
+@@ -438,7 +438,7 @@
+     BOOL render_to_fbo;
+ 
+     context = context_acquire(swapchain->device, back_buffer);
+-    if (!context->valid)
++    if (!context || !context->valid)
+     {
+         context_release(context);
+         WARN("Invalid context, skipping present.\n");
+--- a/wined3d/texture.c
++++ b/wined3d/texture.c
+@@ -108,6 +108,13 @@
+ 			
+ 			    context_release(context);
+         }
++        else
++        {
++            /* DreamGPU: without a context (after a failed reset) the textures
++             * died with the device's contexts; forget their names. */
++            texture->texture_rgb.name = 0;
++            texture->texture_srgb.name = 0;
++        }
+     }
+ 
+     wined3d_texture_set_dirty(texture);
+--- a/wined3d/volume.c
++++ b/wined3d/volume.c
+@@ -408,11 +408,17 @@
+ static void wined3d_volume_free_pbo(struct wined3d_volume *volume)
+ {
+     struct wined3d_context *context = context_acquire(volume->resource.device, NULL);
+-    const struct wined3d_gl_info *gl_info = context->gl_info;
++    const struct wined3d_gl_info *gl_info;
+ 
+     TRACE("Deleting PBO %u belonging to volume %p.\n", volume->pbo, volume);
+-    GL_EXTCALL(glDeleteBuffers(1, &volume->pbo));
+-    checkGLcall("glDeleteBuffers");
++    /* DreamGPU: without a context (after a failed reset) the PBO died with
++     * the device's contexts; only its name is forgotten. */
++    if (context)
++    {
++        gl_info = context->gl_info;
++        GL_EXTCALL(glDeleteBuffers(1, &volume->pbo));
++        checkGLcall("glDeleteBuffers");
++    }
+     volume->pbo = 0;
+     context_release(context);
+ }
+@@ -443,7 +449,16 @@
+     if (volume_prepare_system_memory(volume))
+     {
+         context = context_acquire(device, NULL);
+-        wined3d_volume_load_location(volume, context, WINED3D_LOCATION_SYSMEM);
++        if (context)
++            wined3d_volume_load_location(volume, context, WINED3D_LOCATION_SYSMEM);
++        else if (!(volume->locations & WINED3D_LOCATION_SYSMEM))
++        {
++            /* DreamGPU: without a context (after a failed reset) the content
++             * died with the texture; system memory defines it as zero. */
++            WARN("Volume %p content is lost with its GL objects.\n", volume);
++            memset(volume->resource.heap_memory, 0, volume->resource.size);
++            wined3d_volume_validate_location(volume, WINED3D_LOCATION_SYSMEM);
++        }
+         context_release(context);
+         wined3d_volume_invalidate_location(volume, ~WINED3D_LOCATION_SYSMEM);
+     }
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2104,7 +2104,11 @@
+     BYTE inScene : 1;                   /* A flag to check for proper BeginScene / EndScene call pairs */
+     BYTE softwareVertexProcessing : 1;  /* process vertex shaders using software or hardware */
+     BYTE filter_messages : 1;
+-    BYTE padding : 2;
++    /* DreamGPU: a reset destroyed every GL context, with its GL objects, and
++     * could not create the primary one again. No context may be acquired
++     * until a later reset creates it. */
++    BYTE contexts_lost : 1;
++    BYTE padding : 1;
+ 
+     unsigned char           surface_alignment; /* Line Alignment of surfaces                      */
+ 

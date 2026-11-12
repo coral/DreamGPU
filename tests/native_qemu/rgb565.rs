@@ -309,8 +309,9 @@ fn qemu_rgb565_images_targets_copies_and_lists_keep_six_bit_green() {
     let qemu = Qemu::start(&directory, &socket);
     let mut gl = Device { qemu, sequence: 0 };
     assert_ne!(gl.qemu.read(CAPS) & 0x100, 0);
-    // CAPS2 holds depth textures and exact RGB565; the next register is unused.
-    assert_eq!(gl.qemu.read(CAPS2), CAP2_DEPTH_TEXTURE | CAP2_RGB565);
+    // CAPS2 holds depth textures, exact RGB565 and bulk reads (bulk_read.rs);
+    // the next register is unused.
+    assert_eq!(gl.qemu.read(CAPS2), CAP2_DEPTH_TEXTURE | CAP2_RGB565 | 4);
     assert_eq!(gl.qemu.read(CAPS2 + 4), 0);
     gl.submit(&[
         (1, vec![0]),

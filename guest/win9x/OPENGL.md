@@ -282,6 +282,26 @@ the real Linux Win98 gate passes with `win98-bulk-v1`.
 Bulk evidence (`benchmarks/retro-gpu/win98-bulk.json`, historical Juke evidence) pins the exact
 package and output; this is a correctness result, not a game FPS claim.
 
+Results above 64 KiB (`DG_CAP2_GL_BULK_READ`, gl.h; `dg-gl-bulk.h`) come from a
+second driver-owned buffer: 1024 fixed, non-contiguous system pages allocated
+at the first OPEN that sees the capability, and one contiguous page listing
+their frames (from their page-table entries, which must be present). The
+device writes such a result only through that list (capacity word with
+`DG_GL_RESULT_PAGES`), on the register and the queued transport alike, so a
+timed-out query can only ever DMA into VxD memory. OPEN then offers 4 MiB in
+`MaxResultBytes`; without the capability, or if any allocation fails, it keeps
+the 64 KiB limit and frees what it took, and a later OPEN retries. A pin stays
+bounded by `DG9_MEMORY_MAX_BYTES`: a reply longer than that pins only its
+first window (holding the header) up front, and the rest of the result is
+copied in pinned 64 KiB windows before the reply is written; a window that
+cannot be pinned fails the request with no result bytes. The 4 MiB buffer is
+not cleared per query, because only the bytes the device reports are copied.
+Results of 64 KiB or less keep the contiguous buffer, its clearing and the
+register values exactly as before. `tests/guest/win9x/test_channel.py` covers
+both transports, scattered frames, unaligned and window-crossing outputs
+(64 KiB + 4, 3 x 64 KiB + 12, 1024 x 768 x 4, 4 MiB), a failed window, allocation
+failures, the bounds and an OPEN on a host without the capability.
+
 ## System ICD discovery
 
 The single production `drivers/win98/dgpumini.drv` includes the checked

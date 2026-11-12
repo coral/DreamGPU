@@ -231,10 +231,124 @@ fn query_types_sizes_padding_and_large_readback_caps_are_exact() {
         query_result_bytes(FEnum_glReadPixels, [0, 0, (128 << 16) | 128]),
         65536
     );
+    // Past a contiguous destination, only a bulk page list (gl.h
+    // DG_CAP2_GL_BULK_READ) takes the rectangle; the capacity check decides.
     assert_eq!(
         query_result_bytes(FEnum_glReadPixels, [0, 0, (129 << 16) | 128]),
+        66048
+    );
+    assert_eq!(
+        query_result_bytes(FEnum_glReadPixels, [0, 0, (1024 << 16) | 1024]),
+        DG_GL_MAX_BULK_RESULT_BYTES
+    );
+    assert_eq!(
+        query_result_bytes(FEnum_glReadPixels, [0, 0, (1024 << 16) | 1025]),
         0
     );
+    // DG_CAP2_GL_BULK_READ texture reads: SHAPE is five words of the level
+    // alone; UNITS counts DG_GL_TEXTURE_READ_UNIT pixels up to the bulk limit.
+    let units = |n: u32| DG_GL_TEXTURE_READ_UNITS | n << 16;
+    for (args, expected) in [
+        (
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE, 0],
+            (5, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE | 11, 0],
+            (5, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_3D, DG_GL_TEXTURE_READ_SHAPE | 3, 0],
+            (5, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_1D, DG_GL_TEXTURE_READ_SHAPE, 0],
+            (5, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_RECTANGLE_ARB, DG_GL_TEXTURE_READ_SHAPE, 0],
+            (5, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_RECTANGLE_ARB, DG_GL_TEXTURE_READ_SHAPE | 1, 0],
+            (0, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE | 12, 0],
+            (0, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE, 1],
+            (0, DG_GL_RESULT_INT),
+        ),
+        (
+            [
+                GL_TEXTURE_2D,
+                DG_GL_TEXTURE_READ_SHAPE | DG_GL_TEXTURE_READ_DEPTH,
+                0,
+            ],
+            (0, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_PROXY_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE, 0],
+            (0, DG_GL_RESULT_INT),
+        ),
+        ([GL_TEXTURE_2D, units(1), 0], (64, DG_GL_RESULT_INT)),
+        ([GL_TEXTURE_2D, units(0), 0], (0, DG_GL_RESULT_INT)),
+        (
+            [GL_TEXTURE_RECTANGLE_ARB, units(12288), 0],
+            (786432, DG_GL_RESULT_INT),
+        ),
+        (
+            [GL_TEXTURE_2D, units(16384) | 11, 5],
+            (1 << 20, DG_GL_RESULT_INT),
+        ),
+        ([GL_TEXTURE_2D, units(16385), 0], (0, DG_GL_RESULT_INT)),
+        (
+            [GL_TEXTURE_2D, units(4096) | DG_GL_TEXTURE_READ_FLOAT, 0],
+            (1 << 20, DG_GL_RESULT_FLOAT),
+        ),
+        (
+            [GL_TEXTURE_2D, units(4097) | DG_GL_TEXTURE_READ_FLOAT, 0],
+            (0, DG_GL_RESULT_FLOAT),
+        ),
+        (
+            [GL_TEXTURE_2D, units(16384) | DG_GL_TEXTURE_READ_DEPTH, 0],
+            (1 << 20, DG_GL_RESULT_FLOAT),
+        ),
+        (
+            [GL_TEXTURE_3D, units(1) | DG_GL_TEXTURE_READ_DEPTH, 0],
+            (0, DG_GL_RESULT_FLOAT),
+        ),
+        ([GL_TEXTURE_2D, units(1) | 12, 0], (0, DG_GL_RESULT_INT)),
+    ] {
+        assert_eq!(
+            query_shape(FEnum_glGetTexImage, args),
+            expected,
+            "{args:x?}"
+        );
+    }
+    // Without UNITS the count stays below the contiguous limit.
+    assert_eq!(
+        query_shape(FEnum_glGetTexImage, [GL_TEXTURE_2D, 16385 << 16, 0]).0,
+        0
+    );
+    for (args, expected) in [
+        ([GL_TEXTURE_2D, units(1), 0], 64),
+        ([GL_TEXTURE_2D, units(16384) | 3, 7], 1 << 20),
+        ([GL_TEXTURE_2D, units(16385), 0], 0),
+        ([GL_TEXTURE_2D, units(0), 0], 0),
+        ([GL_TEXTURE_RECTANGLE_ARB, units(1), 0], 0),
+        ([GL_TEXTURE_2D, units(1) | 12, 0], 0),
+        ([GL_TEXTURE_2D, 16384 << 16, 0], 16384),
+        ([GL_TEXTURE_2D, 16385 << 16, 0], 0),
+    ] {
+        assert_eq!(
+            query_shape(FEnum_glGetCompressedTexImage, args).0,
+            expected,
+            "{args:x?}"
+        );
+    }
     assert_eq!(
         query_result_bytes(FEnum_glGetMaterialfv, [GL_FRONT_AND_BACK, GL_DIFFUSE, 0]),
         0

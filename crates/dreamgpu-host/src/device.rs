@@ -294,17 +294,14 @@ pub(crate) unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult)
         let required = unsafe {
             crate::gl_validation::dreamgpu_gl_query_result_bytes(function, snapshot.data.add(36))
         };
-        if r.result_capacity < required || r.result_capacity > DG_GL_MAX_READBACK_BYTES {
-            return DG_GL_ERROR_BATCH;
+        match result_capacity(r.result_capacity) {
+            Some(capacity) if capacity >= required => (),
+            _ => return DG_GL_ERROR_BATCH,
         }
-        if r.result_capacity == 0
-            || r.result_address
-                .checked_add(r.result_capacity as u64)
-                .is_none()
-            || unsafe { (c.memory.ram)(opaque, r.result_address, r.result_capacity, 1) } == 0
-        {
+        if !unsafe { result_destination(c.memory, r.result_address, r.result_capacity) } {
             return DG_GL_ERROR_DMA;
         }
+        // The destination word, flag included, travels with the batch.
         out.result_capacity = r.result_capacity;
     }
     unsafe { (c.diagnostics_begin)(opaque, r.bytes) };
@@ -342,6 +339,114 @@ pub(crate) unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult)
         snapshot.release();
     }
     error
+}
+
+/// DMA write of host bytes into guest RAM; nonzero on success.
+pub type ResultWrite = unsafe extern "C" fn(*mut c_void, u64, *const u8, u32) -> u32;
+const PAGE: u32 = DG_GL_RESULT_PAGE_BYTES;
+
+/// The capacity a RESULT_CAPACITY word grants: up to DG_GL_MAX_READBACK_BYTES
+/// contiguous, or with DG_GL_RESULT_PAGES up to DG_GL_MAX_BULK_RESULT_BYTES
+/// through a page list (gl.h, DG_CAP2_GL_BULK_READ). None for zero or more.
+pub(crate) fn result_capacity(word: u32) -> Option<u32> {
+    let capacity = word & !DG_GL_RESULT_PAGES;
+    let limit = if word & DG_GL_RESULT_PAGES != 0 {
+        DG_GL_MAX_BULK_RESULT_BYTES
+    } else {
+        DG_GL_MAX_READBACK_BYTES
+    };
+    (1..=limit).contains(&capacity).then_some(capacity)
+}
+
+/// Visit the guest page of every DG_GL_RESULT_PAGE_BYTES of `bytes` named by
+/// the page list at `list`, in order. False, before any visit, unless the list
+/// is an aligned RAM page and every needed frame is nonzero writable RAM.
+unsafe fn result_pages(
+    m: Memory,
+    list: u64,
+    bytes: u32,
+    mut visit: impl FnMut(u32, u64) -> bool,
+) -> bool {
+    let count = bytes.div_ceil(PAGE) as usize;
+    let mut frames = [0u8; PAGE as usize];
+    if count == 0
+        || count * 4 > frames.len()
+        || !list.is_multiple_of(u64::from(PAGE))
+        || list.checked_add(u64::from(PAGE)).is_none()
+        || unsafe { (m.ram)(m.opaque, list, PAGE, 0) } == 0
+        || unsafe { (m.read)(m.opaque, list, frames.as_mut_ptr(), count as u32 * 4) } == 0
+    {
+        return false;
+    }
+    let page = |i: usize| u64::from(word(&frames, i * 4)) << 12;
+    // Check every page before the first visit: no partial writes on failure.
+    if (0..count).any(|i| page(i) == 0 || unsafe { (m.ram)(m.opaque, page(i), PAGE, 1) } == 0) {
+        return false;
+    }
+    (0..count).all(|i| visit(i as u32, page(i)))
+}
+
+/// Submission check of a QUERY destination: `word` is the RESULT_CAPACITY
+/// word, already within result_capacity. A contiguous range must be writable
+/// RAM; a page list must name writable RAM pages for its whole capacity.
+pub(crate) unsafe fn result_destination(m: Memory, address: u64, word: u32) -> bool {
+    let Some(capacity) = result_capacity(word) else {
+        return false;
+    };
+    if word & DG_GL_RESULT_PAGES != 0 {
+        unsafe { result_pages(m, address, capacity, |_, _| true) }
+    } else {
+        address.checked_add(u64::from(capacity)).is_some()
+            && unsafe { (m.ram)(m.opaque, address, capacity, 1) } != 0
+    }
+}
+
+/// Write a completed result of `bytes` (at most the word's capacity) to its
+/// destination, rechecked now: guest memory may have changed since submission.
+/// Nothing is written outside the range or the listed pages.
+pub(crate) unsafe fn result_write(
+    m: Memory,
+    write: ResultWrite,
+    address: u64,
+    word: u32,
+    data: *const u8,
+    bytes: u32,
+) -> bool {
+    if bytes == 0 || data.is_null() || result_capacity(word).is_none_or(|c| bytes > c) {
+        return false;
+    }
+    if word & DG_GL_RESULT_PAGES == 0 {
+        return address.checked_add(u64::from(bytes)).is_some()
+            && unsafe { (m.ram)(m.opaque, address, bytes, 1) } != 0
+            && unsafe { write(m.opaque, address, data, bytes) } != 0;
+    }
+    unsafe {
+        result_pages(m, address, bytes, |i, page| {
+            let offset = i * PAGE;
+            let length = (bytes - offset).min(PAGE);
+            write(m.opaque, page, data.add(offset as usize), length) != 0
+        })
+    }
+}
+
+/// Register-transport completion: write a QUERY result to the destination
+/// its submission accepted. Nonzero on success; zero is DG_GL_ERROR_DMA.
+///
+/// # Safety
+/// `memory` and `write` are the device's callbacks; `data` holds `bytes`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn dreamgpu_device_result_write(
+    memory: *const Memory,
+    write: ResultWrite,
+    address: u64,
+    word: u32,
+    data: *const u8,
+    bytes: u32,
+) -> u32 {
+    if memory.is_null() {
+        return 0;
+    }
+    u32::from(unsafe { result_write(*memory, write, address, word, data, bytes) })
 }
 
 #[cfg(test)]

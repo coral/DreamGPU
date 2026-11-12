@@ -482,6 +482,36 @@ and disposable-VM acceptance cycle:
   into a lockable R5G6B5 target plus clears of all 64 greens (rtt-probe) and
   lock all 64 greens (partial-lock probe), skipping both without the
   capability; they have not yet run on a guest.
+- Bulk reads (`DG_CAP2_GL_BULK_READ`, the third bit of the second capability
+  word) make a whole-surface readback one synchronous QUERY instead of one per
+  64 KiB. WineD3D downloads a whole surface for every full lock: Warcraft III
+  locks its 1024x768 back buffer read-only after each present, 3
+  `GetTexLevelParameteriv` and 48 `GetTexImage` round trips per frame (about
+  40 FPS, vCPU-bound, on a Win2000 guest). A QUERY's result may now go through
+  a page list (`DG_GL_RESULT_PAGES` in the capacity word): the kernel's
+  driver-owned 4 MiB buffer, never a caller's pages, described by a
+  driver-owned list of its frames; the device checks the list and every page
+  as writable RAM at submission and again before writing, and writes nothing
+  outside the listed pages. A level's shape (width, height, depth, depth and
+  stencil sizes, from the same native calls) is one query, and
+  `GetTexImage`/`GetCompressedTexImage` counts are in units of 64 pixels or
+  words, so the frontend reads that back buffer with 2 round trips (51
+  before); `ReadPixels` of a 1024x768 window takes 1 (48 before), packed
+  depth-stencil 2. Results are byte-identical to the chunked reads, which
+  older hosts, kernels and frontends keep using unchanged. NT and Win9x
+  kernels offer 4 MiB results only with the capability and their buffer;
+  Win9x copies the caller's output in pinned 64 KiB windows. The frontend
+  converts RGBA/BGRA 8-bit reads row by row. Native tests (Linux, Mesa on
+  Radeon) read 1024x768 RGBA8, a BGRA-uploaded 1023x767 rectangle, RGB565,
+  depth and packed depth-stencil levels, float levels across 4 MiB chunks,
+  unit counts around page, 64 KiB and 4 MiB boundaries, a DXT1 image and
+  whole-window colour, depth, stencil and float reads through both
+  transports, scattered over a reversed page list with canary pages, and
+  reject malformed lists (unaligned, zero, past RAM, ROM, over-capacity)
+  without writing. The installed D3D8/9 probe's whole-surface stage
+  (`tools/d3d/partial-lock-probe.inc`: 1024x768 X8R8G8B8 and R5G6B5 targets,
+  a colour per row and per 64th column, locked whole twice) has not yet run
+  on a guest; Warcraft III FPS remains to be measured.
 - Direct3D fixed-function vertex blending (skinning: `D3DRS_VERTEXBLEND` 1-3
   weights over `D3DTS_WORLD`..`WORLD3`) needs no capability bit and no frontend
   or host change. WineD3D's fixed-function pipeline blended only through
@@ -625,6 +655,25 @@ and disposable-VM acceptance cycle:
   Halo itself remains to be rerun. Native OpenGL guests that leave sprites
   enabled while drawing textured fixed-function primitives still meet Mesa's
   behaviour.
+- Device reset without a client area (frontend and Wine patch 0059). The
+  Warcraft III demo (D3D8, Win2000) died with a NULL dereference in
+  `wined3d_device_reset` -> `delete_opengl_contexts` after it lost focus:
+  dgpugl.dll created no context on a window without a client area, so the
+  reset that followed focus returning to the still-minimized fullscreen
+  window failed after destroying every context, and its retry found none.
+  WineD3D's hidden backup window (empty client area) failed the same way
+  (Halo logs, last error 0x6). The frontend now accepts any window DC of the
+  process: a context keeps its drawable without a client area, a new one gets
+  a 1x1 placeholder that the first window with a client area replaces, and
+  nothing is presented meanwhile. 0059 fails a reset cleanly with
+  `D3DERR_DEVICELOST` when its context cannot be made current, keeps a device
+  whose primary context could not be created again lost without any context
+  until a later reset creates it, and lets teardown, uninit, unloads and the
+  game's scene loop run without a context. Source tests execute the frontend
+  and the prepared functions; the installed D3D8/9 probe
+  (`tools/d3d/reset-probe.inc`: visible, minimized twice, restored without a
+  reset, hidden/shown and final resets, four exact frames) has not yet run on
+  a guest, and Warcraft III remains to be rerun.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

@@ -128,6 +128,17 @@ Two transports carry the same records with the same admission and ordering:
   a query result, a synchronous submission. It arms the interrupt for that
   one condition first; otherwise no interrupt is raised.
 
+A QUERY returns its result by DMA into driver-owned memory, at most 64 KiB
+contiguous. With `DG_CAP2_GL_BULK_READ` a result may instead go through a
+page list (`DG_GL_RESULT_PAGES`): each kernel keeps a 4 MiB buffer of
+separately allocated pages and one list page of their frames for the
+adapter's life and serves results above 64 KiB from it, copying them to the
+caller as before (Win9x in pinned 64 KiB windows of the caller's output).
+The device checks the list and each page as writable RAM at submission and
+again before writing; it never writes outside the listed pages, and a query
+that times out can only land in driver memory. A whole 1024x768 surface is
+then one read after a one-query level shape instead of 51 round trips.
+
 The kernel enables the queue when the host offers it and falls back to the
 register transport otherwise; older drivers never see it. A frontend that
 sees `DG_ESCAPE_FEATURE_QUEUE` at OPEN names its context as a stream in every

@@ -36,7 +36,8 @@ for line in ("pub const DG_CAP2_GL_RGB565: u32 = 2;", "pub const DG_GL_RGB565: u
     assert line in bindings, line
 qemu = (ROOT / "vendor/qemu/hw/display/dreamgpu.c").read_text()
 assert re.search(r"case DG_GL_REG_CAPS2:\s*\n(?:\s*/\*.*\*/\n)?\s*return s->gpu_socket && "
-                 r"\*s->gpu_socket\s*\?\s*DG_CAP2_GL_DEPTH_TEXTURE \| DG_CAP2_GL_RGB565\s*:\s*0;",
+                 r"\*s->gpu_socket\s*\?\s*DG_CAP2_GL_DEPTH_TEXTURE \| DG_CAP2_GL_RGB565"
+                     r"(?:\s*\|\s*DG_CAP2_GL_\w+)*\s*:\s*0;",
                  qemu)
 # No extension name names the capability.
 assert "565" not in (HERE / "extension-names.h").read_text()

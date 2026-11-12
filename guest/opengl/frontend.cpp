@@ -46,6 +46,10 @@ typedef struct {
     volatile LONG Owner;
     HDC DC;
     HWND Window;
+    /* The window whose client area sized the drawable; NULL for a placeholder
+     * made while the current window had no client area. Window is the current
+     * DC's window, which can differ while that has no client area. */
+    HWND DrawableWindow;
     BOOL Created, Drawable, Failed, InBegin, Deleting, Uncertain, FrontDirty, EverCurrent,
         ShareEstablished;
     /* The host associated this drawable with the context (MAKE_CURRENT
@@ -67,6 +71,8 @@ typedef struct {
     JGL_NAMES *Names;
     JGL_STATE_CACHE State;
     void *LargeQuery;
+    /* Bytes of LargeQuery: it grows to the largest query made so far. */
+    ULONG LargeQueryBytes;
     ULONG *Readback;
     GLubyte *ProgramError;
     PACKET Packet;
@@ -84,6 +90,10 @@ static ULONG HostCapabilities;
 /* The second capability word (gl.h DG_GL_REG_CAPS2), zero from older drivers
  * and hosts; reset and negotiated with HostCapabilities. */
 static ULONG HostCapabilities2;
+/* DG_WINDOW_CAP_* of the last successful window binding. They describe the
+ * display driver, not one window: a context first made current where it
+ * cannot bind (no client area) starts with them. Reset with the client. */
+static ULONG WindowCapabilities;
 static HDC Display;
 static HANDLE Heap;
 static HINSTANCE Module;
@@ -150,6 +160,13 @@ BOOL JglDepthTextureAvailable(void) {
 }
 BOOL JglRgb565Available(void) {
     return Client && (HostCapabilities2 & DG_CAP2_GL_RGB565);
+}
+/* Bulk reads (gl.h DG_CAP2_GL_BULK_READ): the level-shape query, unit-counted
+ * texture reads and large ReadPixels rectangles, up to the result size the
+ * driver negotiated (4 MiB with its bulk buffer, else the contiguous limit).
+ * Zero without the capability: callers keep the chunked reads. */
+ULONG JglBulkCapacity(void) {
+    return Client && (HostCapabilities2 & DG_CAP2_GL_BULK_READ) ? MaxResultBytes : 0;
 }
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
@@ -870,15 +887,18 @@ void JglDrawableSize(ULONG *width, ULONG *height) {
     *width = c ? c->Width : 0;
     *height = c ? c->Height : 0;
 }
+/* The contiguous result limit of the chunked reads; bulk reads use
+ * JglBulkCapacity. */
 ULONG JglReadbackCapacity(void) {
-    return MaxResultBytes;
+    return MaxResultBytes < DG_ESCAPE_MAX_RESULT_BYTES ? MaxResultBytes
+                                                       : DG_ESCAPE_MAX_RESULT_BYTES;
 }
 ULONG *JglReadbackBuffer(void) {
     JGL_CONTEXT *c = CurrentContext();
     if (!c)
         return NULL;
     if (!c->Readback)
-        c->Readback = (ULONG *)HeapAlloc(Heap, 0, MaxResultBytes);
+        c->Readback = (ULONG *)HeapAlloc(Heap, 0, JglReadbackCapacity());
     if (!c->Readback)
         Error(c, GL_OUT_OF_MEMORY);
     return c->Readback;
@@ -993,43 +1013,40 @@ struct ContextDeleter {
 };
 extern "C" {
 
-BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output, ULONG capacity,
-              ULONG *bytes) {
-    JGL_CONTEXT *c;
+typedef struct {
+    DG_ESCAPE_REPLY Reply;
+    BYTE Data[];
+} QUERY_RESULT;
+/* The context's reply buffer for results above the stack buffer, grown to
+ * the largest capacity asked so far (a bulk read can ask for megabytes). */
+static QUERY_RESULT *LargeResult(JGL_CONTEXT *c, ULONG capacity) {
+    const ULONG need = sizeof(DG_ESCAPE_REPLY) + capacity;
+    if (c->LargeQueryBytes < need) {
+        if (c->LargeQuery)
+            HeapFree(Heap, 0, c->LargeQuery);
+        c->LargeQuery = HeapAlloc(Heap, 0, need);
+        c->LargeQueryBytes = c->LargeQuery ? need : 0;
+    }
+    if (!c->LargeQuery)
+        Error(c, GL_OUT_OF_MEMORY);
+    return (QUERY_RESULT *)c->LargeQuery;
+}
+/* Submit the sole QUERY record and validate its typed reply in `result`
+ * (capacity bytes after the header). The result bytes, or NULL after the
+ * error/failure handling every query shares. With zero_data the data area is
+ * cleared first; without, only the header: the kernel and DrvEscape never
+ * expose bytes past ResultBytes and only ResultBytes are ever used. */
+static const BYTE *Exchange(JGL_CONTEXT *c, QUERY_RESULT *result, ULONG function,
+                            const ULONG arguments[3], ULONG type, ULONG capacity, BOOL zero_data) {
     ULONG *record, unit;
     int status;
-    typedef struct {
-        DG_ESCAPE_REPLY Reply;
-        BYTE Data[];
-    } QUERY_RESULT;
-    union {
-        DG_ESCAPE_REPLY Align;
-        BYTE Data[sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_LEGACY_RESULT_BYTES];
-    } small;
-    QUERY_RESULT *result = (QUERY_RESULT *)small.Data;
-    if (bytes)
-        *bytes = 0;
-    if (!JglReady())
-        return FALSE;
-    c = CurrentContext();
-    if (!output || !capacity || capacity > MaxResultBytes || !Flush(c))
-        return FALSE;
-    if (capacity > DG_ESCAPE_LEGACY_RESULT_BYTES) {
-        if (!c->LargeQuery)
-            c->LargeQuery = HeapAlloc(Heap, 0, sizeof(DG_ESCAPE_REPLY) + MaxResultBytes);
-        if (!c->LargeQuery) {
-            Error(c, GL_OUT_OF_MEMORY);
-            return FALSE;
-        }
-        result = (decltype(result))c->LargeQuery;
-    }
     record = Record(c, DG_GL_QUERY, c->Id, c->Id, 4);
     if (!record)
-        return FALSE;
+        return NULL;
     record[0] = function;
     CopyMemory(record + 1, arguments, 12);
     do {
-        ZeroMemory(result, sizeof(result->Reply) + capacity);
+        ZeroMemory(result, sizeof(result->Reply) + (zero_data ? capacity : 0));
         ZeroMemory(&c->Packet.Request, sizeof(c->Packet.Request));
         c->Packet.Request.Version = DG_ESCAPE_VERSION;
         c->Packet.Request.Operation = DG_ESCAPE_SUBMIT;
@@ -1049,7 +1066,7 @@ BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output
          * failed synchronous flush before this query would have reported. */
         c->Failed = TRUE;
         Error(c, GL_INVALID_OPERATION);
-        return FALSE;
+        return NULL;
     }
     unit = type == DG_GL_RESULT_DOUBLE                                ? 8
            : (type == DG_GL_RESULT_INT || type == DG_GL_RESULT_FLOAT) ? 4
@@ -1068,12 +1085,54 @@ BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output
              * manufacture a fresh error on every later glGetError query. */
             c->Failed = TRUE;
         }
-        return FALSE;
+        return NULL;
     }
-    CopyMemory(output, result->Data, result->Reply.ResultBytes);
+    return result->Data;
+}
+BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output, ULONG capacity,
+              ULONG *bytes) {
+    JGL_CONTEXT *c;
+    const BYTE *data;
+    union {
+        DG_ESCAPE_REPLY Align;
+        BYTE Data[sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_LEGACY_RESULT_BYTES];
+    } small;
+    QUERY_RESULT *result = (QUERY_RESULT *)small.Data;
+    if (bytes)
+        *bytes = 0;
+    if (!JglReady())
+        return FALSE;
+    c = CurrentContext();
+    if (!output || !capacity || capacity > MaxResultBytes || !Flush(c))
+        return FALSE;
+    if (capacity > DG_ESCAPE_LEGACY_RESULT_BYTES && !(result = LargeResult(c, capacity)))
+        return FALSE;
+    data = Exchange(c, result, function, arguments, type, capacity, TRUE);
+    if (!data)
+        return FALSE;
+    CopyMemory(output, data, result->Reply.ResultBytes);
     if (bytes)
         *bytes = result->Reply.ResultBytes;
     return TRUE;
+}
+/* JglQuery without the copy: the result bytes stay in the context's reply
+ * buffer, valid until its next query. Bulk reads convert straight from it. */
+const void *JglQueryBulk(ULONG function, const ULONG arguments[3], ULONG type, ULONG capacity,
+                         ULONG *bytes) {
+    JGL_CONTEXT *c;
+    QUERY_RESULT *result;
+    const BYTE *data;
+    if (bytes)
+        *bytes = 0;
+    if (!JglReady())
+        return NULL;
+    c = CurrentContext();
+    if (!capacity || capacity > MaxResultBytes || !Flush(c) || !(result = LargeResult(c, capacity)))
+        return NULL;
+    data = Exchange(c, result, function, arguments, type, capacity, FALSE);
+    if (data && bytes)
+        *bytes = result->Reply.ResultBytes;
+    return data;
 }
 
 static JGL_CONTEXT *Lookup(HGLRC handle) {
@@ -1098,8 +1157,9 @@ static BOOL WindowGeometry(HDC dc, HWND *window, ULONG *width, ULONG *height) {
 static BOOL MatchingGeometry(JGL_CONTEXT *c) {
     HWND window;
     ULONG width, height;
-    return WindowGeometry(c->DC, &window, &width, &height) && window == c->Window && width &&
-           height && width == c->Width && height == c->Height;
+    return WindowGeometry(c->DC, &window, &width, &height) && window == c->Window &&
+           window == c->DrawableWindow && width && height && width == c->Width &&
+           height == c->Height;
 }
 static BOOL Bind(JGL_CONTEXT *c) {
     DG_WINDOW_BIND request;
@@ -1119,7 +1179,7 @@ static BOOL Bind(JGL_CONTEXT *c) {
     if (c->Binding)
         JglTransportUnbind(c->Binding);
     c->Binding = reply.Binding;
-    c->Capabilities = reply.Capabilities;
+    c->Capabilities = WindowCapabilities = reply.Capabilities;
     c->Bound = TRUE;
     return TRUE;
 }
@@ -1163,6 +1223,7 @@ static void CloseIdleClient(PACKET *packet) {
         Client = 0;
         HostCapabilities = HostCapabilities2 = 0;
         TransportFeatures = 0;
+        WindowCapabilities = 0;
         ReleaseDC(NULL, Display);
         Display = NULL;
     }
@@ -1175,7 +1236,11 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
     HWND window;
     ULONG width, height;
     dreamgpu::unique_owner<JGL_CONTEXT, ContextDeleter> pending;
-    if (!WindowGeometry(dc, &window, &width, &height) || !width || !height) {
+    /* Any window DC of this process qualifies, as with a native ICD, also a
+     * minimized or hidden window without a client area: WineD3D recreates its
+     * contexts in IDirect3DDevice8::Reset while a fullscreen game is minimized.
+     * wglMakeCurrent establishes the drawable. */
+    if (!WindowGeometry(dc, &window, &width, &height)) {
         SetLastError(ERROR_INVALID_WINDOW_HANDLE);
         return NULL;
     }
@@ -1202,9 +1267,10 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
         TransportFeatures = reply.DeviceError & DG_ESCAPE_FEATURE_QUEUE;
         MaxWords = reply.MaxBytes / 4 < PACKET_WORDS ? reply.MaxBytes / 4 : PACKET_WORDS;
         MaxRecords = reply.MaxRecords < DG_GL_MAX_RECORDS ? reply.MaxRecords : DG_GL_MAX_RECORDS;
-        MaxResultBytes = reply.MaxResultBytes < DG_ESCAPE_MAX_RESULT_BYTES
+        /* Above DG_ESCAPE_MAX_RESULT_BYTES only bulk reads ask for more. */
+        MaxResultBytes = reply.MaxResultBytes < DG_ESCAPE_BULK_RESULT_BYTES
                              ? reply.MaxResultBytes
-                             : DG_ESCAPE_MAX_RESULT_BYTES;
+                             : DG_ESCAPE_BULK_RESULT_BYTES;
         MaxResultBytes &= ~3UL;
         if (!Client || MaxWords < 32 || !MaxRecords ||
             MaxResultBytes < DG_ESCAPE_LEGACY_RESULT_BYTES) {
@@ -1242,6 +1308,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
     c->Window = window;
     c->Width = width;
     c->Height = height;
+    c->Capabilities = WindowCapabilities;
     if (!Control(c, DG_GL_CREATE_CONTEXT, c->Id, 0, &share, 1)) {
         if (c->Uncertain) {
             /* No public handle exists, but creation may have executed. Keep
@@ -1467,16 +1534,21 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
     if (!c || !c->Created || c->Failed || c->Deleting || c->InBegin ||
         (c->Owner && c->Owner != thread) || !WindowGeometry(dc, &window, &width, &height))
         goto done;
-    /* A minimized window has a zero-sized client rect, but its GL context
-     * and pixels remain usable (including worker-thread readback). Keep the
-     * last drawable for this window. Initial binding still needs a client
-     * area so the native driver can establish presentation capabilities. */
+    /* A window without a client area (minimized, or a hidden helper such as
+     * WineD3D's backup window) owns no pixels; a native ICD still makes the
+     * context current on it. The context keeps its drawable, whichever window
+     * it was made for, so its pixels remain usable (including worker-thread
+     * readback); a context without one gets a 1x1 placeholder, which the
+     * first window with a client area replaces. Nothing is presented
+     * meanwhile: the binding is dropped and renewed with a visible window. */
     visible = width && height;
     if (!visible) {
-        if (!c->Drawable || c->Window != window)
-            goto done;
-        width = c->Width;
-        height = c->Height;
+        if (c->Drawable) {
+            width = c->Width;
+            height = c->Height;
+        } else {
+            width = height = 1;
+        }
         if (c->Binding) {
             JglTransportUnbind(c->Binding);
             c->Binding = 0;
@@ -1484,7 +1556,8 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
     }
     /* A drawable belongs to this context in the initial frontend. Rebinding a
      * context to a resized/different window recreates its bounded backbuffer. */
-    if (c->Drawable && (c->Window != window || c->Width != width || c->Height != height)) {
+    if (c->Drawable && visible &&
+        (c->DrawableWindow != window || c->Width != width || c->Height != height)) {
         if (!Flush(c) || !Control(c, DG_GL_DESTROY_DRAWABLE, 0, c->Id, NULL, 0))
             goto done;
         c->Drawable = FALSE;
@@ -1503,6 +1576,7 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
         if (!Control(c, DG_GL_CREATE_DRAWABLE, 0, c->Id, size, 2))
             goto done;
         c->Drawable = TRUE;
+        c->DrawableWindow = visible ? window : NULL;
         c->Attached = c->Bound = FALSE;
     }
     c->EverCurrent = TRUE;
@@ -1616,9 +1690,11 @@ BOOL WINAPI wglSwapBuffers(HDC dc) {
      * work without resizing or discarding its offscreen framebuffer. */
     if (!width || !height)
         return FlushCurrent(c);
-    if (width != c->Width || height != c->Height) {
+    if (width != c->Width || height != c->Height || window != c->DrawableWindow) {
         /* Windows can resize a current drawable without another MakeCurrent
-         * call (UT's XP fullscreen transition does this). Reuse the existing
+         * call (UT's XP fullscreen transition does this), or restore a window
+         * whose context kept another window's drawable or a placeholder while
+         * it had no client area. Reuse the existing
          * ordered drawable replacement: flush old commands, recreate bounded
          * attachments, then replace the binding for the same context.
          * Contents across a resize are undefined; never publish old geometry.

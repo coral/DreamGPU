@@ -750,7 +750,9 @@ int main(void) {
         assert(DgValidateGlResult(DG_GL_RESULT_DOUBLE, 128, 128, result));
         assert(!DgValidateGlResult(DG_GL_RESULT_DOUBLE, 4, 512, result));
         assert(!DgValidateGlResult(DG_GL_RESULT_INT, 8, 4, result));
-        assert(!DgValidateGlResult(DG_GL_RESULT_INT, 4, 65537, result));
+        /* Capacities above 64 KiB are bulk page-list results (dg-gl-bulk.h). */
+        assert(DgValidateGlResult(DG_GL_RESULT_INT, 4, 65537, result));
+        assert(!DgValidateGlResult(DG_GL_RESULT_INT, 4, DG_ESCAPE_BULK_RESULT_BYTES + 1, result));
         assert(!DgValidateGlResult(DG_GL_RESULT_INT, 0, 512, result));
         assert(!DgValidateGlResult(999, 4, 512, result));
         assert(DgValidateGlResult(DG_GL_RESULT_BOOL, 16, 512, result));

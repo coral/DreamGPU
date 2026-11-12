@@ -332,7 +332,7 @@ pub unsafe extern "C" fn dreamgpu_submission_query(
     required: u32,
 ) -> *mut u8 {
     unsafe {
-        if required > DG_GL_MAX_READBACK_BYTES {
+        if required > DG_GL_MAX_BULK_RESULT_BYTES {
             return ptr::null_mut();
         }
         if required <= DG_GL_MAX_RESULT_BYTES {

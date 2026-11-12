@@ -478,6 +478,12 @@ ULONG JglReadbackCapacity(void);
 ULONG *JglReadbackBuffer(void);
 BOOL JglQuery(ULONG function, const ULONG arguments[3], ULONG type, void *output, ULONG capacity,
               ULONG *bytes);
+/* DG_CAP2_GL_BULK_READ: the negotiated result size, zero without the
+ * capability. JglQueryBulk returns the result bytes in the context's reply
+ * buffer, valid until its next query, or NULL after the usual error. */
+ULONG JglBulkCapacity(void);
+const void *JglQueryBulk(ULONG function, const ULONG arguments[3], ULONG type, ULONG capacity,
+                         ULONG *bytes);
 #ifdef __cplusplus
 }
 #endif

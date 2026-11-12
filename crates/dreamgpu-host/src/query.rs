@@ -115,7 +115,7 @@ unsafe fn execute(
         return Err(DG_GL_ERROR_CONTEXT);
     }
     let required = unsafe { dreamgpu_gl_query_result_bytes(function, args) };
-    if required > capacity || required > DG_GL_MAX_READBACK_BYTES {
+    if required > capacity || required > DG_GL_MAX_BULK_RESULT_BYTES {
         return Err(DG_GL_ERROR_LIMIT);
     }
     let words = unsafe { core::slice::from_raw_parts(args, 12) };
@@ -240,6 +240,26 @@ unsafe fn execute(
             )
         };
     }
+    if function == FEnum_glGetTexImage && b & DG_GL_TEXTURE_READ_SHAPE != 0 {
+        // The level's shape (DG_CAP2_GL_BULK_READ): the native answers of the
+        // GetTexLevelParameteriv queries a frontend makes before reading it.
+        let words = unsafe {
+            shape(
+                api,
+                a,
+                b & DG_GL_TEXTURE_READ_LEVEL_MASK & !DG_GL_TEXTURE_READ_SHAPE,
+            )?
+        };
+        for (i, word) in words.into_iter().enumerate() {
+            unsafe {
+                core::ptr::copy_nonoverlapping(word.to_le_bytes().as_ptr(), result.add(i * 4), 4);
+            }
+        }
+        unsafe {
+            *bytes = required;
+        }
+        return Ok(());
+    }
     if matches!(
         function,
         FEnum_glGetTexImage | FEnum_glGetCompressedTexImage
@@ -250,10 +270,12 @@ unsafe fn execute(
         unsafe { crate::framebuffer::touch(state.context) };
         // The compressed flag is host-internal: it selects the native compressed
         // image (and a separate cache identity) inside the shared read cache.
+        // UNITS only scales the count, already folded into `required`.
+        let level = b & 0xffff & !DG_GL_TEXTURE_READ_UNITS;
         let level = if function == FEnum_glGetCompressedTexImage {
-            (b & 0xffff) | crate::texture::READ_COMPRESSED
+            level | crate::texture::READ_COMPRESSED
         } else {
-            b & 0xffff
+            level
         };
         let error = unsafe { read(opaque, a, level, d, required, result) };
         if error != 0 {
@@ -650,6 +672,32 @@ unsafe fn execute(
         *bytes = required;
     }
     Ok(())
+}
+
+/// TEXTURE_WIDTH, TEXTURE_HEIGHT, TEXTURE_DEPTH (TEXTURE_3D, else 1),
+/// TEXTURE_DEPTH_SIZE and TEXTURE_STENCIL_SIZE (1D, 2D and rectangle targets,
+/// the stencil size only of a depth level, else zero) of the bound level,
+/// from the same native calls as separate GetTexLevelParameteriv queries.
+unsafe fn shape(api: &DreamGpuGlApi, target: u32, level: u32) -> Result<[u32; 5], u32> {
+    let get = api
+        .dg_glGetTexLevelParameteriv
+        .ok_or(DG_GL_ERROR_UNSUPPORTED)?;
+    let value = |pname: u32| {
+        let mut value = 0i32;
+        unsafe { get(target, level as i32, pname, &mut value) };
+        value as u32
+    };
+    let mut words = [value(GL_TEXTURE_WIDTH), value(GL_TEXTURE_HEIGHT), 1, 0, 0];
+    if target == GL_TEXTURE_3D {
+        words[2] = value(GL_TEXTURE_DEPTH);
+    }
+    if crate::gl_validation::depth_target(target) {
+        words[3] = value(GL_TEXTURE_DEPTH_SIZE);
+        if words[3] != 0 {
+            words[4] = value(GL_TEXTURE_STENCIL_SIZE);
+        }
+    }
+    Ok(words)
 }
 
 /// ARB program queries answered from the context's program state, or natively

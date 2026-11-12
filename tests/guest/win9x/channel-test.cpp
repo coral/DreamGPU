@@ -35,12 +35,44 @@ struct Model {
     } dma[16]{};
     unsigned dma_count{}, reads{}, writes{}, doorbells{}, queue_fail_function{};
     DWORD consumed{}, last_stream{}, last_client{};
+    /* Bulk results: the driver's fixed pages (Memory->Allocate), the frames
+     * their page table entries name, and what the device writes there. */
+    BYTE *bulk_pages{};
+    unsigned user_allocations{}, user_frees{}, user_alloc_fail{}, absent_pte{}, pin_fail_first{};
+    DWORD bulk_bytes{}, bulk_seed{}, bulk_list{}, bulk_word{};
 } m;
+/* Caller output of a bulk request at linear pages BULK_FIRST.. (4 MiB result,
+ * reply header and an unaligned start). Outside Model: m is reset by value. */
+constexpr DWORD BULK_FIRST = 0x1000;
+alignas(4096) static BYTE bulk_output[DG_ESCAPE_BULK_RESULT_BYTES + 8192];
+/* Frame of bulk page i: descending with gaps, so the list is truly scattered. */
+static DWORD bulk_frame(DWORD i) {
+    return 0x80000 + (DG_GL_BULK_PAGES - 1 - i) * 3;
+}
+static BYTE *bulk_page(DWORD frame) {
+    assert(m.bulk_pages && frame >= 0x80000 && (frame - 0x80000) % 3 == 0);
+    const DWORD i = DG_GL_BULK_PAGES - 1 - (frame - 0x80000) / 3;
+    assert(i < DG_GL_BULK_PAGES);
+    return m.bulk_pages + i * 4096;
+}
+static BYTE bulk_byte(DWORD seed, DWORD at) {
+    return static_cast<BYTE>(at * 131 + (at >> 12) * 7 + (at >> 16) + seed);
+}
 static BYTE *dma_memory(DWORD physical) {
     for (unsigned i = 0; i < m.dma_count; ++i)
         if (physical >= m.dma[i].physical && physical < m.dma[i].physical + m.dma[i].pages * 4096)
             return m.dma[i].memory + (physical - m.dma[i].physical);
     std::abort();
+}
+/* The device's page-list write (gl.h DG_GL_RESULT_PAGES): byte i lands at
+ * frame[i / 4096] << 12 + i % 4096, within the capacity. */
+static void write_bulk(DWORD list, DWORD word, DWORD bytes) {
+    assert((word & DG_GL_RESULT_PAGES) && bytes <= (word & ~DG_GL_RESULT_PAGES) && !(list & 4095));
+    const auto *frames = reinterpret_cast<const DWORD *>(dma_memory(list));
+    m.bulk_list = list;
+    m.bulk_word = word;
+    for (DWORD at = 0; at < bytes; ++at)
+        bulk_page(frames[at / 4096])[at % 4096] = bulk_byte(m.bulk_seed, at);
 }
 static DWORD *page_word(DWORD offset) {
     return reinterpret_cast<DWORD *>(dma_memory(m.registers[DG_GL_REG_QUEUE_ADDR_LO / 4]) + offset);
@@ -67,7 +99,14 @@ static void doorbell() {
         *page_word(entry + DG_GL_ENTRY_STATUS) = DG_STATUS_DONE | (failed ? DG_STATUS_ERROR : 0);
         *page_word(entry + DG_GL_ENTRY_ERROR) = failed ? DG_GL_ERROR_HOST : 0;
         *page_word(entry + DG_GL_ENTRY_RESULT_BYTES) = 0;
-        if (batch[0] == DG_GL_QUERY) {
+        if (batch[0] == DG_GL_QUERY &&
+            (*page_word(entry + DG_GL_ENTRY_RESULT_CAPACITY) & DG_GL_RESULT_PAGES)) {
+            assert(!*page_word(entry + DG_GL_ENTRY_RESULT_ADDR_HI));
+            write_bulk(*page_word(entry + DG_GL_ENTRY_RESULT_ADDR_LO),
+                       *page_word(entry + DG_GL_ENTRY_RESULT_CAPACITY), m.bulk_bytes);
+            *page_word(entry + DG_GL_ENTRY_RESULT_BYTES) = m.bulk_bytes;
+            *page_word(entry + DG_GL_ENTRY_RESULT_TYPE) = DG_GL_RESULT_INT;
+        } else if (batch[0] == DG_GL_QUERY) {
             assert(*page_word(entry + DG_GL_ENTRY_RESULT_CAPACITY));
             *dma_memory(*page_word(entry + DG_GL_ENTRY_RESULT_ADDR_LO)) = 1;
             *page_word(entry + DG_GL_ENTRY_RESULT_BYTES) = 1;
@@ -86,28 +125,45 @@ static void doorbell() {
 static DWORD DREAMGPU_CDECL check_pages(void *, DWORD, DWORD count) {
     return count;
 }
-static DWORD DREAMGPU_CDECL pin_pages(void *, DWORD first, DWORD, void **address) {
+static DWORD DREAMGPU_CDECL pin_pages(void *, DWORD first, DWORD count, void **address) {
     ++m.pins;
-    if (m.pins == m.pin_fail) {
+    if (m.pins == m.pin_fail ||
+        (m.pin_fail_first && first <= m.pin_fail_first && m.pin_fail_first < first + count)) {
         --m.pins;
         return 0;
     }
-    *address = first == 0x10 ? m.input : first == 0x20 ? m.output : m.returned;
+    if (first >= BULK_FIRST) {
+        assert((first - BULK_FIRST + count) * 4096 <= sizeof(bulk_output));
+        *address = bulk_output + (first - BULK_FIRST) * 4096;
+    } else
+        *address = first == 0x10 ? m.input : first == 0x20 ? m.output : m.returned;
     return 0xc0000000u + (first << 12);
 }
-static int DREAMGPU_CDECL copy_ptes(void *, DWORD, DWORD count, DWORD *out) {
+static int DREAMGPU_CDECL copy_ptes(void *, DWORD first, DWORD count, DWORD *out) {
+    const bool bulk = m.bulk_pages &&
+                      first == static_cast<DWORD>(reinterpret_cast<uintptr_t>(m.bulk_pages) >> 12);
     for (DWORD i = 0; i < count; ++i)
-        out[i] = 7;
+        out[i] = bulk ? (bulk_frame(i) << 12 | (m.absent_pte == i + 1 ? 6 : 7)) : 7;
     return 1;
 }
 static void DREAMGPU_CDECL unlock_pages(void *, DWORD, DWORD) {
     ++m.unpins;
 }
-static void *DREAMGPU_CDECL allocate_user(void *, DWORD) {
-    std::abort();
+/* Fixed system pages: only the bulk buffer asks the channel for them. */
+static void *DREAMGPU_CDECL allocate_user(void *, DWORD pages) {
+    assert(pages == DG_GL_BULK_PAGES && !m.bulk_pages);
+    if (++m.user_allocations == m.user_alloc_fail)
+        return nullptr;
+    m.bulk_pages = static_cast<BYTE *>(std::aligned_alloc(4096, pages * 4096));
+    assert(m.bulk_pages);
+    std::memset(m.bulk_pages, 0, pages * 4096);
+    return m.bulk_pages;
 }
-static void DREAMGPU_CDECL free_user(void *, void *) {
-    std::abort();
+static void DREAMGPU_CDECL free_user(void *, void *address) {
+    assert(address && address == m.bulk_pages);
+    ++m.user_frees;
+    std::free(address);
+    m.bulk_pages = nullptr;
 }
 static const DG9_MEMORY_SERVICES memory_services{check_pages,  pin_pages,     copy_ptes,
                                                  unlock_pages, allocate_user, free_user};
@@ -169,7 +225,7 @@ static void DREAMGPU_CDECL signal_semaphore(DWORD value) {
 }
 static void *DREAMGPU_CDECL allocate_dma(DWORD pages, DWORD *physical) {
     /* Commands, results, then (queued transport) the page and 64 KiB buffers. */
-    assert(pages == 16 || (m.queue && pages == 1));
+    assert(pages == 16 || pages == 1);
     ++m.allocations;
     *physical = 0x40000 + m.allocations * 0x100000 + (m.allocations == m.bad_alignment ? 1 : 0);
     BYTE *memory = m.allocations == m.alloc_fail
@@ -199,7 +255,14 @@ static DWORD DREAMGPU_CDECL submit(DWORD physical, DWORD bytes, DG_ESCAPE_REPLY 
     if (m.submit_status && (!m.fail_opcode || m.fail_opcode == m.last_opcode))
         return m.submit_status;
     reply->CompletedSequence = m.submits;
-    if (m.last_opcode == DG_GL_QUERY) {
+    if (m.last_opcode == DG_GL_QUERY &&
+        (m.registers[DG_GL_REG_RESULT_CAPACITY / 4] & DG_GL_RESULT_PAGES)) {
+        assert(!m.registers[DG_GL_REG_RESULT_ADDR_HI / 4]);
+        write_bulk(m.registers[DG_GL_REG_RESULT_ADDR_LO / 4],
+                   m.registers[DG_GL_REG_RESULT_CAPACITY / 4], m.bulk_bytes);
+        m.registers[DG_GL_REG_RESULT_TYPE / 4] = DG_GL_RESULT_INT;
+        m.registers[DG_GL_REG_RESULT_BYTES / 4] = m.bulk_bytes;
+    } else if (m.last_opcode == DG_GL_QUERY) {
         m.query_sequence = reply->CompletedSequence;
         dg_gl_result[0] = 1;
         m.registers[DG_GL_REG_RESULT_TYPE / 4] = DG_GL_RESULT_BOOL;
@@ -308,6 +371,9 @@ static void initialize() {
     dg_gl_mutex = 0;
     dg_gl_commands = nullptr;
     dg_gl_result = nullptr;
+    dg_gl_bulk = nullptr;
+    dg_gl_bulk_list = nullptr;
+    dg_gl_bulk_physical = 0;
     dg_gl_limits = {};
     dg_gl_function_cache = {};
     dg_gl_owners = {};
@@ -568,9 +634,179 @@ static void queued() {
     assert(m.allocations == m.frees && m.sem_created == m.sem_destroyed);
     m.queue = false;
 }
+/* One QUERY whose result goes to the caller's output at linear page
+ * BULK_FIRST plus `offset`; the reply header is copied out of that buffer. */
+static DG_ESCAPE_REPLY bulk_query(DWORD client, DWORD capacity, DWORD offset, DWORD *status,
+                                  DWORD stream = 0, DWORD out_bytes = 0) {
+    const DWORD query[12] = {DG_GL_QUERY, 48, 0, 0, 0, 0, 0, 1, 0x88, 0, 0, 0};
+    std::memcpy(m.input + 32, query, 48);
+    DG_ESCAPE_REQUEST input{
+        DG_ESCAPE_VERSION, DG_ESCAPE_SUBMIT, client, 48, 0, 0, capacity, stream};
+    std::memcpy(m.input, &input, sizeof(input));
+    std::memset(bulk_output, 0xa5, sizeof(bulk_output));
+    std::memset(m.returned, 0xa5, sizeof(m.returned));
+    auto io = control(DG_ESCAPE, sizeof(input) + 48,
+                      out_bytes ? out_bytes : sizeof(DG_ESCAPE_REPLY) + capacity);
+    io.lpOutBuffer = (BULK_FIRST << 12) + offset;
+    *status = 999;
+    assert(DreamGpuGlControl(&io, status));
+    cleaned();
+    DG_ESCAPE_REPLY reply;
+    std::memcpy(&reply, bulk_output + offset, sizeof(reply));
+    return reply;
+}
+static DWORD returned_count() {
+    DWORD count;
+    std::memcpy(&count, m.returned + 1, sizeof(count));
+    return count;
+}
+/* A successful bulk result: exactly its bytes behind the header, through the
+ * scattered frame list, and nothing written before or after them. */
+static void expect_bulk(DWORD client, DWORD bytes, DWORD offset, DWORD stream = 0) {
+    m.bulk_bytes = bytes;
+    m.bulk_seed += 17;
+    m.bulk_list = m.bulk_word = 0;
+    DWORD status;
+    const auto reply = bulk_query(client, bytes, offset, &status, stream);
+    assert(status == 0 && reply.Status == DG_ESCAPE_OK && reply.ResultBytes == bytes &&
+           reply.ResultType == DG_GL_RESULT_INT && returned_count() == sizeof(reply) + bytes);
+    assert(m.bulk_list == dg_gl_bulk_physical && m.bulk_word == (bytes | DG_GL_RESULT_PAGES));
+    const BYTE *result = bulk_output + offset + sizeof(reply);
+    for (DWORD at = 0; at < bytes; ++at)
+        assert(result[at] == bulk_byte(m.bulk_seed, at));
+    for (DWORD at = 0; at < offset; ++at)
+        assert(bulk_output[at] == 0xa5);
+    for (DWORD at = offset + sizeof(reply) + bytes; at < sizeof(bulk_output); ++at)
+        assert(bulk_output[at] == 0xa5);
+}
+static void enable_bulk_host() {
+    m.registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE | DG_CAP2_GL_BULK_READ;
+    m.registers[DG_GL_REG_FUNCTION_WORDS / 4] = DG_GL_FUNCTION_QUERY;
+}
+/* Bulk results (gl.h DG_CAP2_GL_BULK_READ): OPEN offers 4 MiB only with the
+ * capability and the driver's buffer, results larger than the contiguous
+ * buffer reach the caller exactly through the frame list and pinned output
+ * windows, and everything else is as before. */
+static void bulk() {
+    assert(DgGlResultLimit(0, 0, 0) == 512 && DgGlResultLimit(DG_CAP_GL_TRANSPORT, 0, 1) == 512 &&
+           DgGlResultLimit(DG_CAP_GL_BULK_READBACK, 0, 1) == 65536 &&
+           DgGlResultLimit(DG_CAP_GL_BULK_READBACK, DG_CAP2_GL_BULK_READ, 0) == 65536 &&
+           DgGlResultLimit(0, DG_CAP2_GL_BULK_READ, 1) == DG_ESCAPE_BULK_RESULT_BYTES);
+    /* Without the capability nothing is allocated; failed allocations leave
+     * the contiguous limit and free what they took; a later OPEN retries. */
+    initialize();
+    m.registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE;
+    assert(request(DG_ESCAPE_OPEN).MaxResultBytes == 65536 && !m.user_allocations && !dg_gl_bulk &&
+           m.allocations == 2);
+    DreamGpuGlShutdown();
+    for (unsigned mode = 0; mode < 3; ++mode) {
+        initialize();
+        enable_bulk_host();
+        if (mode == 0)
+            m.alloc_fail = 3; /* the list page, after commands and results */
+        else if (mode == 1)
+            m.user_alloc_fail = 1;
+        else
+            m.absent_pte = 300;
+        assert(request(DG_ESCAPE_OPEN).MaxResultBytes == 65536 && !dg_gl_bulk);
+        assert(m.allocations == 3 && m.frees == (mode ? 1u : 0u) &&
+               m.user_allocations == (mode ? 1u : 0u) && m.user_frees == (mode == 2 ? 1u : 0u));
+        m.alloc_fail = m.user_alloc_fail = m.absent_pte = 0;
+        const auto reopened = request(DG_ESCAPE_OPEN);
+        assert(reopened.MaxResultBytes == DG_ESCAPE_BULK_RESULT_BYTES && dg_gl_bulk);
+        DreamGpuGlShutdown();
+        /* The model counts a failed allocation, which has nothing to free. */
+        assert(m.allocations == m.frees + (mode == 0) &&
+               m.user_allocations == m.user_frees + (mode == 1) && !dg_gl_bulk);
+    }
+    /* Register transport. */
+    initialize();
+    enable_bulk_host();
+    const auto opened = request(DG_ESCAPE_OPEN);
+    assert(opened.Status == 0 && opened.MaxResultBytes == DG_ESCAPE_BULK_RESULT_BYTES);
+    assert(dg_gl_bulk == m.bulk_pages && dg_gl_bulk_physical && !(dg_gl_bulk_physical & 4095));
+    for (DWORD i = 0; i < DG_GL_BULK_PAGES; ++i)
+        assert(dg_gl_bulk_list[i] == bulk_frame(i));
+    const DWORD client = opened.Client;
+    Dg9FunctionCacheRefresh(&dg_gl_function_cache, 1, 1);
+    for (const DWORD bytes : {65536u + 4, 3 * 65536u + 12, 1024u * 768 * 4, 4096u * 100 + 4,
+                              static_cast<DWORD>(DG_ESCAPE_BULK_RESULT_BYTES)})
+        expect_bulk(client, bytes, 0);
+    /* An unaligned caller buffer, and a result whose head ends mid-page. */
+    expect_bulk(client, 1024 * 768 * 4, 0x10);
+    expect_bulk(client, 65536 + 4, 4093);
+    /* Contiguous results keep their buffer, plain capacity and cleared tail. */
+    std::memcpy(m.input + 32, (const DWORD[12]){DG_GL_QUERY, 48, 0, 0, 0, 0, 0, 1, 0x88, 0, 0, 0},
+                48);
+    for (const DWORD capacity : {1u, 65536u}) {
+        dg_gl_result[capacity - 1] = 0x5a;
+        const auto small = request(DG_ESCAPE_SUBMIT, client, 48, capacity);
+        assert(small.Status == 0 && small.ResultBytes == 1 && m.output[sizeof(small)] == 1);
+        assert(m.registers[DG_GL_REG_RESULT_ADDR_LO / 4] == dg_gl_result_physical &&
+               m.registers[DG_GL_REG_RESULT_CAPACITY / 4] == capacity &&
+               dg_gl_result[capacity - 1] == (capacity == 1));
+    }
+    /* An output window that cannot be pinned fails the request after the
+     * query ran: no result bytes are claimed, nothing is left pinned. */
+    {
+        m.bulk_bytes = 1024 * 768 * 4;
+        m.pin_fail_first = BULK_FIRST + 40;
+        const unsigned submits = m.submits;
+        DWORD status;
+        const auto failed = bulk_query(client, m.bulk_bytes, 0, &status);
+        assert(status == 0 && failed.Status == DG_ESCAPE_INVALID && !failed.ResultBytes &&
+               !failed.ResultType && returned_count() == sizeof(failed) &&
+               m.submits == submits + 1);
+        m.pin_fail_first = 0;
+    }
+    /* Bounds: a capacity or output beyond the bulk size is a malformed
+     * envelope; neither runs. */
+    {
+        const unsigned submits = m.submits;
+        DWORD status;
+        bulk_query(client, DG_ESCAPE_BULK_RESULT_BYTES + 4, 0, &status);
+        assert(status == 87 && m.submits == submits);
+        bulk_query(client, DG_ESCAPE_BULK_RESULT_BYTES + 4, 0, &status, 0,
+                   sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_BULK_RESULT_BYTES);
+        assert(status == 87 && m.submits == submits && bulk_output[0] == 0xa5);
+        bulk_query(client, 65536 + 4, 0, &status, 0, sizeof(DG_ESCAPE_REPLY) + 65536);
+        assert(status == 87 && m.submits == submits);
+        /* A desktop restored on a host without the capability: the next
+         * OPEN rereads CAPS2, and every client gets the contiguous limit. */
+        m.registers[DG_GL_REG_CAPS2 / 4] = DG_CAP2_GL_DEPTH_TEXTURE;
+        assert(request(DG_ESCAPE_OPEN).MaxResultBytes == 65536);
+        const auto refused = bulk_query(client, 65536 + 4, 0, &status);
+        assert(status == 0 && refused.Status == DG_ESCAPE_INVALID &&
+               refused.MaxResultBytes == 65536 && m.submits == submits);
+        enable_bulk_host();
+    }
+    assert(request(DG_ESCAPE_CLOSE, client).Status == 0);
+    DreamGpuGlShutdown();
+    assert(m.allocations == m.frees && m.user_allocations == m.user_frees && !dg_gl_bulk &&
+           !dg_gl_bulk_list && m.sem_created == m.sem_destroyed);
+    /* Queued transport: the entry names the list and the capacity word. */
+    initialize();
+    m.queue = true;
+    m.registers[DG_GL_REG_QUEUE_VERSION / 4] = DG_GL_QUEUE_VERSION;
+    m.registers[DG_GL_REG_MAX_BYTES / 4] = DG_GL_MAX_BYTES;
+    m.registers[DG_GL_REG_MAX_RECORDS / 4] = DG_GL_MAX_RECORDS;
+    enable_bulk_host();
+    const auto queued_open = request(DG_ESCAPE_OPEN);
+    assert(queued_open.DeviceError == DG_ESCAPE_FEATURE_QUEUE &&
+           queued_open.MaxResultBytes == DG_ESCAPE_BULK_RESULT_BYTES);
+    Dg9FunctionCacheRefresh(&dg_gl_function_cache, 1, 1);
+    for (const DWORD bytes : {65536u + 4, 1024u * 768 * 4, 3 * 65536u + 12,
+                              static_cast<DWORD>(DG_ESCAPE_BULK_RESULT_BYTES)}) {
+        const unsigned doorbells = m.doorbells;
+        expect_bulk(queued_open.Client, bytes, 0, 5);
+        assert(m.doorbells == doorbells + 1);
+    }
+    assert(request(DG_ESCAPE_CLOSE, queued_open.Client).Status == 0);
+    DreamGpuGlShutdown();
+    assert(m.allocations == m.frees && m.user_allocations == m.user_frees);
+    m.queue = false;
+}
 int main() {
-    assert(Dg9GlResultLimit(0) == 512 && Dg9GlResultLimit(DG_CAP_GL_TRANSPORT) == 512 &&
-           Dg9GlResultLimit(DG_CAP_GL_BULK_READBACK) == 65536);
     for (unsigned mode = 1; mode <= 4; ++mode) {
         initialize();
         if (mode <= 2)
@@ -704,9 +940,11 @@ int main() {
     format_fault(16, 3200, 32, 3200);
     format_fault(16, 1600, 32, 3200);
     queued();
+    bulk();
     std::puts("PASS actual C++ Win98 channel/window: pin/allocation failure ownership, OS "
               "identity, privileged packet rejection, typed result identity across cleanup, "
               "retained-frame lifecycle, GDI clips/coherence, timeout and waiter-safe teardown, "
               "XRGB8888/RGB565 format word on SEED/BLIT/READBACK/RETURN/DISCARD, "
-              "format-change fault, queued transport doorbells and deferred failures");
+              "format-change fault, queued transport doorbells and deferred failures, bulk results "
+              "through scattered frames and pinned output windows");
 }

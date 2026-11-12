@@ -132,6 +132,8 @@ static void Reassembles(size_t first, ULONG level, ULONG x, ULONG y, ULONG width
 /* Host answers: level state and the native compressed image, in words. */
 static GLint LevelCompressed, LevelSize;
 static ULONG ReadLevel, ShortChunk, NextWord, LevelQueries;
+/* A DG_CAP2_GL_BULK_READ image larger than Source. */
+static std::vector<BYTE> BulkSource;
 static std::vector<std::pair<ULONG, ULONG>> Chunks; /* first word, words */
 static BOOL Answer(const ULONG *r, DG_ESCAPE_REPLY *reply, ULONG capacity) {
     GLint values[4] = {(GLint)DXT1, (GLint)DXT1A, (GLint)DXT3, (GLint)DXT5};
@@ -142,6 +144,20 @@ static BOOL Answer(const ULONG *r, DG_ESCAPE_REPLY *reply, ULONG capacity) {
         values[0] = r[11] == TEXTURE_COMPRESSED ? LevelCompressed : LevelSize;
         count = 1;
         ++LevelQueries;
+    } else if (r[8] == FEnum_glGetCompressedTexImage && (r[10] & DG_GL_TEXTURE_READ_UNITS)) {
+        /* Whole units, zero past the image end, as the host answers. */
+        const ULONG words = (r[10] >> DG_GL_TEXTURE_READ_COUNT_SHIFT) * DG_GL_TEXTURE_READ_UNIT,
+                    at = r[11];
+        assert(r[9] == GL_TEXTURE_2D && (r[10] & 0xffff) == (ReadLevel | DG_GL_TEXTURE_READ_UNITS));
+        assert(words && capacity == words * 4 && at == NextWord && at * 4 < (ULONG)LevelSize);
+        const ULONG present = std::min<ULONG>(words * 4, (ULONG)LevelSize - at * 4);
+        memcpy(reply + 1, BulkSource.data() + at * 4, present);
+        memset((BYTE *)(reply + 1) + present, 0, words * 4 - present);
+        reply->ResultBytes = words * 4;
+        reply->ResultType = DG_GL_RESULT_INT;
+        Chunks.emplace_back(at, words);
+        NextWord += words;
+        return TRUE;
     } else if (r[8] == FEnum_glGetCompressedTexImage) {
         const ULONG words = r[10] >> DG_GL_TEXTURE_READ_COUNT_SHIFT, at = r[11];
         assert(r[9] == GL_TEXTURE_2D && (r[10] & 0xffff) == ReadLevel && words);
@@ -167,10 +183,12 @@ static BOOL Answer(const ULONG *r, DG_ESCAPE_REPLY *reply, ULONG capacity) {
     return TRUE;
 }
 
+static ULONG OpenCaps2;
 static JGL_CONTEXT *Open(ULONG caps, ULONG packet = DG_ESCAPE_MAX_BYTES,
                          ULONG result = DG_ESCAPE_MAX_RESULT_BYTES) {
     Reset();
     HostCaps = caps;
+    HostCaps2 = OpenCaps2;
     HostMaxBytes = packet;
     HostMaxResultBytes = result;
     SubmittedRecord = Capture;
@@ -694,6 +712,40 @@ static void Readback(void) {
     Close(c);
 }
 
+/* DG_CAP2_GL_BULK_READ: unit-counted reads of the negotiated result size,
+ * of which only the image's words reach the caller. */
+static void BulkReadback(void) {
+    BulkSource.resize((1 << 20) + 4096);
+    for (size_t i = 0; i < BulkSource.size(); ++i)
+        BulkSource[i] = (BYTE)(i * 151 + (i >> 9) * 13 + 5);
+    std::vector<BYTE> image((1 << 20) + 512);
+    for (ULONG result : {(ULONG)DG_ESCAPE_BULK_RESULT_BYTES, (ULONG)DG_ESCAPE_MAX_RESULT_BYTES}) {
+        OpenCaps2 = DG_CAP2_GL_BULK_READ;
+        JGL_CONTEXT *c = Open(DG_CAP_GL_COMPRESSED_TEXTURES, DG_ESCAPE_MAX_BYTES, result);
+        assert(JglBulkCapacity() == result && JglReadbackCapacity() == DG_ESCAPE_MAX_RESULT_BYTES);
+        /* A 1 MiB image (1024x2048 DXT1, or 1024x1024 DXT5) and one a word
+         * short of whole units, so the last unit is padded. */
+        for (GLint size : {1 << 20, (1 << 20) + 252}) {
+            std::fill(image.begin(), image.end(), 0xa5);
+            ReadLevel = 0;
+            LevelSize = size;
+            NextWord = LevelQueries = 0;
+            Chunks.clear();
+            glGetCompressedTexImage(GL_TEXTURE_2D, 0, image.data());
+            const ULONG per = result / 4 / DG_GL_TEXTURE_READ_UNIT * DG_GL_TEXTURE_READ_UNIT;
+            assert(!c->Error && LevelQueries == 2);
+            assert(Chunks.size() == ((ULONG)size / 4 + per - 1) / per);
+            if (result == DG_ESCAPE_BULK_RESULT_BYTES)
+                assert(Chunks.size() == 1);
+            assert(!memcmp(image.data(), BulkSource.data(), size));
+            for (size_t i = size; i < image.size(); ++i)
+                assert(image[i] == 0xa5);
+        }
+        Close(c);
+    }
+    OpenCaps2 = 0;
+}
+
 /* TexImage2D accepts compressed internal formats only when negotiated and
  * only for 2D; the uncompressed upload itself is unchanged. */
 static void UncompressedUploads(void) {
@@ -806,13 +858,15 @@ int main() {
     SingleRecords();
     Bands();
     Readback();
+    BulkReadback();
     UncompressedUploads();
     Lists();
     Reset();
     assert(!Allocations);
     puts("PASS compressed textures actual frontend: negotiation and hidden names; local "
          "validation with nothing sent; exact image/sub-image records and payloads; allocation "
-         "plus whole block-row bands and block chunks; proxies; chunked readback; compressed "
+         "plus whole block-row bands and block chunks; proxies; chunked and bulk readback; "
+         "compressed "
          "TexImage2D formats; deferred list errors");
     return 0;
 }

@@ -1,6 +1,7 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later */
 #include <assert.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include "compatibility.cpp"
 extern "C" BOOL JglDepthStencilReadbackAvailable(void);
@@ -32,6 +33,26 @@ ULONG JglReadbackCapacity(void) {
 }
 ULONG *JglReadbackBuffer(void) {
     return Readback;
+}
+/* Without DG_CAP2_GL_BULK_READ: the chunked reads. */
+ULONG JglBulkCapacity(void) {
+    return 0;
+}
+const void *JglQueryBulk(ULONG function, const ULONG args[3], ULONG type, ULONG capacity,
+                         ULONG *bytes) {
+    (void)function;
+    (void)args;
+    (void)type;
+    (void)capacity;
+    (void)bytes;
+    assert(!"no bulk reads without DG_CAP2_GL_BULK_READ");
+    return NULL;
+}
+void *JglAllocate(ULONG bytes) {
+    return malloc(bytes);
+}
+void JglFree(void *memory) {
+    free(memory);
 }
 static JGL_UNPACK Pack = {4, 0, 0, 0, 0, 0, 0, 0};
 static void Marker(void) {}

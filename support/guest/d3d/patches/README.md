@@ -1183,3 +1183,60 @@ quadrant-textured pretransformed quad in Halo's 28-byte layout as an indexed
 fan, a 16-pixel point and an untransformed quad after the point, and compares
 every pixel; the point shows upright quadrants when dgpugl.dll reports
 `GL_ARB_point_sprite`, and otherwise its own texel (logged as a skip).
+
+`0059-reset-without-context.patch` keeps WineD3D's device reset, uninit and
+resource unloading working when no GL context exists. A state reset
+(`wined3d_device_reset`) unloads every resource and destroys every context
+(`delete_opengl_contexts`) before `create_primary_opengl_context` creates the
+primary one again on the device window. Warcraft III (D3D8) resets when it
+regains focus, and Windows may return focus while its fullscreen window is
+still minimized. dgpugl.dll then refused a context on a window without a
+client area (fixed in the frontend, see `guest/opengl/README.md`), so the
+reset failed after its teardown, freeing the shader and blitter state and the
+swapchain's context array but leaving the pointer. The game's retry acquired
+a context, found none and could create none, and `delete_opengl_contexts`
+dereferenced the NULL result (`wined3d.dll+0x92BE9` in the m41 package);
+otherwise it would have freed that state and array a second time.
+
+Before changing anything, a state reset now requires the device's context to
+be made current (its GL objects are read back through it). When it cannot be,
+the reset returns `WINED3DERR_DEVICELOST` and the device is unchanged; D3D8/9
+report it to the application, which keeps its device in the not-reset state
+and retries. When the primary context cannot be created again after the
+teardown, the device records that it has no context (`contexts_lost`, one of
+the device's padding bits), the reset returns `WINED3DERR_DEVICELOST`, and the
+swapchain no longer names the freed array. While lost, `context_acquire`
+returns NULL instead of creating a context without the shader, blitter and
+dummy-texture state; the next reset skips the completed teardown and creates
+the primary context again, and uninit skips the GL state already freed. Later
+Wine treats `context_acquire` as fallible as well; this keeps the pinned
+reset order (teardown, state initialization, creation).
+
+Without a context, GL objects cannot be reached; they die with the contexts.
+Reset teardown, uninit and resource unloading then forget their names without
+GL calls: a valid CPU copy in the map location stays, a PBO map binding falls
+back to system memory, content held only in GL becomes zero system memory
+(application and DIB memory keep their bytes), and buffers, volumes and
+textures follow the same rule. `EndScene`, clears, draws and presents already
+skipped an invalid context and now also skip a missing one, so a game that
+keeps its loop running between failed resets does not crash. No GL call is
+made through a context Wine does not hold: no DreamGPU context is current on
+the thread when none can be acquired, and the frontend ignores such calls.
+The GLSL shader backend (`shader_glsl_destroy`) is not changed; DreamGPU never
+selects it.
+
+`test_reset_context_loss.py` runs the prepared `delete_opengl_contexts`,
+`create_primary_opengl_context`, the two reset steps, `wined3d_device_end_scene`,
+`wined3d_device_uninit_3d`, `swapchain_destroy_contexts` and the surface,
+buffer, volume and texture unloads under ASan/UBSan against counted context,
+GL and allocation boundaries: an unusable context leaves the device intact,
+Warcraft III's sequence (failed re-creation, retry, scenes, recovery), uninit
+of a lost device and a teardown without any context, with CPU contents kept
+or defined. It checks the order of the steps in the prepared
+`wined3d_device_reset`, and each of eleven mutations of the patch fails it.
+`test_context_migration.py` runs the prepared `context_acquire` of a lost
+device. The installed D3D8/9 probe (`tools/d3d/reset-probe.inc`), run before the other
+probe stages create resources, resets its windowed device with the window
+visible, hidden, minimized (twice, with a scene and Present between) and
+visible again, and renders after restoring without a reset; four reference
+frames must match exactly, and the later stages then run on the reset device.

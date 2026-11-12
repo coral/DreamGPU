@@ -61,6 +61,10 @@ void APIENTRY glLightModelf(GLenum, GLfloat);
 #define GL_TEXTURE_WIDTH 0x1000
 ULONG JglReadbackCapacity(void);
 ULONG *JglReadbackBuffer(void);
+ULONG JglBulkCapacity(void);
+const void *JglQueryBulk(ULONG, const ULONG *, ULONG, ULONG, ULONG *);
+void *JglAllocate(ULONG);
+void JglFree(void *);
 #ifdef __cplusplus
 }
 #endif

@@ -21,6 +21,7 @@ typedef int BOOL;
 #include "dg-function-cache.h"
 #include "packet32.h"
 #include "dg-gl-queue.h"
+#include "dg-gl-bulk.h"
 #include "../include/ownership.hpp"
 static const DG9_CHANNEL_SERVICES *api;
 extern "C" void DREAMGPU_CDECL DreamGpuChannelBind(const DG9_CHANNEL_SERVICES *services) {
@@ -88,12 +89,24 @@ struct dma_deleter {
     }
 };
 using dma_owner = dreamgpu::unique_owner<BYTE, dma_deleter>;
+struct page_deleter {
+    void operator()(BYTE *pages) const noexcept {
+        api->Memory->Free(nullptr, pages);
+    }
+};
+using page_owner = dreamgpu::unique_owner<BYTE, page_deleter>;
 static void Dg9WindowRetire(DWORD client);
 static DG9_OWNER_TABLE dg_gl_owners;
 static BOOL dg_gl_initialized, dg_gl_faulted;
 static DWORD dg_gl_mutex, dg_gl_physical, dg_gl_result_physical;
 static ULONG *dg_gl_commands;
 static BYTE *dg_gl_result;
+/* Bulk results (dg-gl-bulk.h): DG_GL_BULK_PAGES fixed system pages, not
+ * contiguous, and one contiguous page listing their frames for the device.
+ * Driver-owned for the VxD's life like dg_gl_result; never a caller's pages. */
+static BYTE *dg_gl_bulk;
+static ULONG *dg_gl_bulk_list;
+static DWORD dg_gl_bulk_physical;
 static DG_GL_LIMITS dg_gl_limits;
 static DG9_FUNCTION_CACHE dg_gl_function_cache;
 /* A client lease releases under the same IRQ exclusion as acquisition.
@@ -138,8 +151,10 @@ static ULONG dg_gl_build_status, dg_gl_result_bytes, dg_gl_result_type, dg_gl_qu
  * the GL transport, zero otherwise; hosts without it read zero there. */
 static ULONG dg_gl_caps, dg_gl_caps2, dg_gl_caps_version, dg_gl_caps_generation;
 static BOOL dg_gl_caps_valid;
+/* ResultCapacity is the RESULT_CAPACITY word (DG_GL_RESULT_PAGES for the
+ * bulk list) and ResultPhysical its destination; both zero without a query. */
 struct DG9_SUBMIT {
-    ULONG Token, Stream, Async, ResultCapacity;
+    ULONG Token, Stream, Async, ResultCapacity, ResultPhysical;
 };
 static ULONG Dg9QueueRead(void *, ULONG reg) {
     return api->Read(reg);
@@ -252,7 +267,7 @@ static ULONG Dg9GlSubmit(ULONG bytes, DG_ESCAPE_REPLY *reply, const DG9_SUBMIT *
         sequence = ++dg_gl_queue_sequence;
     const ULONG index = DgGlQueuePublish(
         &dg_gl_queue, &ops, bytes, sequence, commands[7], submit ? submit->Token : 0,
-        submit ? submit->Stream : 0, submit && submit->ResultCapacity ? dg_gl_result_physical : 0,
+        submit ? submit->Stream : 0, submit && submit->ResultCapacity ? submit->ResultPhysical : 0,
         submit ? submit->ResultCapacity : 0, submit && submit->Async);
     if (submit && submit->Async)
         return DG_ESCAPE_OK;
@@ -343,9 +358,57 @@ static BOOL Dg9GlInitialize(void) {
     return TRUE;
 }
 
-static ULONG Dg9GlResultLimit(ULONG capabilities) {
-    return capabilities & DG_CAP_GL_BULK_READBACK ? DG_ESCAPE_MAX_RESULT_BYTES
-                                                  : DG_ESCAPE_LEGACY_RESULT_BYTES;
+static void Dg9BulkRelease(void) {
+    if (dg_gl_bulk)
+        api->Memory->Free(nullptr, dg_gl_bulk);
+    if (dg_gl_bulk_list)
+        api->Free(dg_gl_bulk_list);
+    dg_gl_bulk = nullptr;
+    dg_gl_bulk_list = nullptr;
+    dg_gl_bulk_physical = 0;
+}
+/* The bulk buffer, once, when the host offers bulk reads. Its pages are fixed
+ * for the VxD's life, so the frames read here stay valid; any failure leaves
+ * bulk off (MaxResultBytes stays at the contiguous limit). */
+static void Dg9BulkEnsure(void) {
+    const DG9_MEMORY_SERVICES *memory = api->Memory;
+    if (dg_gl_bulk || !(dg_gl_caps2 & DG_CAP2_GL_BULK_READ) || !memory || !memory->Allocate ||
+        !memory->Free || !memory->CopyPtes)
+        return;
+    DWORD physical = 0;
+    dma_owner list(static_cast<BYTE *>(api->Allocate(1, &physical)));
+    if (!list || !physical || (physical & 4095))
+        return;
+    page_owner pages(static_cast<BYTE *>(memory->Allocate(nullptr, DG_GL_BULK_PAGES)));
+    const auto linear = reinterpret_cast<uintptr_t>(pages.get());
+    if (!pages || (linear & 4095))
+        return;
+    /* The page table entries land in the list page, then become frames. */
+    auto *frames = reinterpret_cast<ULONG *>(list.get());
+    if (!memory->CopyPtes(nullptr, static_cast<DWORD>(linear >> 12), DG_GL_BULK_PAGES, frames))
+        return;
+    for (ULONG i = 0; i < DG_GL_BULK_PAGES; ++i) {
+        const ULONG pte = frames[i];
+        if (!(pte & 1) || !DgGlBulkSetFrame(frames, i, pte & ~4095UL))
+            return;
+    }
+    dg_gl_bulk = pages.release();
+    dg_gl_bulk_list = reinterpret_cast<ULONG *>(list.release());
+    dg_gl_bulk_physical = physical;
+}
+/* Copy a bulk result's tail into the caller's output after its pinned first
+ * window, one pinned window at a time (DG9_MEMORY_MAX_BYTES bounds a pin). */
+static BOOL Dg9CopyOut(DWORD address, const BYTE *data, DWORD bytes) {
+    for (DWORD done = 0; done < bytes;) {
+        const DWORD count = bytes - done < 65536 ? bytes - done : 65536;
+        DG9_USER_LOCK window{};
+        if (!Dg9LockUser(address + done, count, TRUE, &window))
+            return FALSE;
+        pin_owner window_pin(&window);
+        memcpy(window.Address, data + done, count);
+        done += count;
+    }
+    return TRUE;
 }
 
 extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *params, DWORD *result) {
@@ -359,7 +422,8 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
     DG9_OWNER_KEY owner;
     DG9_HANDLE_KEY handle;
     ULONG status = DG_ESCAPE_INVALID, token = 0, query = 0;
-    DWORD flags;
+    DWORD flags, pinned = 0;
+    BOOL bulk = FALSE;
     BOOL acquired;
     if (!DgVxdRegisters())
         return FALSE;
@@ -391,18 +455,22 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
     memset(&reply, 0, sizeof(reply));
     if (!DgVxdRegisters() || Dg9GlCritical() || params->lpOverlapped ||
         params->cbInBuffer < sizeof(request) || params->cbOutBuffer < sizeof(reply) ||
-        params->cbOutBuffer > sizeof(reply) + DG_ESCAPE_MAX_RESULT_BYTES || !params->tagProcess ||
+        params->cbOutBuffer > sizeof(reply) + DG_ESCAPE_BULK_RESULT_BYTES || !params->tagProcess ||
         !params->hDevice)
         return TRUE;
+    /* A bulk reply is longer than one pin may be: pin the window holding the
+     * reply header now and the rest only to copy a result into it. */
+    pinned =
+        params->cbOutBuffer < DG9_MEMORY_MAX_BYTES ? params->cbOutBuffer : DG9_MEMORY_MAX_BYTES;
     if (!Dg9LockUser(params->lpInBuffer, params->cbInBuffer, FALSE, &input) ||
-        !Dg9LockUser(params->lpOutBuffer, params->cbOutBuffer, TRUE, &output) ||
+        !Dg9LockUser(params->lpOutBuffer, pinned, TRUE, &output) ||
         !Dg9LockUser(params->lpcbBytesReturned, sizeof(DWORD), TRUE, &returned))
         goto done;
     memcpy(&request, input.Address, sizeof(request));
     if (request.Version != DG_ESCAPE_VERSION || (request.Flags & ~DG_ESCAPE_SUBMIT_ASYNC) ||
         request.Bytes > DG9_GL_PACKET_BYTES ||
         request.Bytes != params->cbInBuffer - sizeof(request) ||
-        request.ResultCapacity > DG_ESCAPE_MAX_RESULT_BYTES ||
+        request.ResultCapacity > DG_ESCAPE_BULK_RESULT_BYTES ||
         request.ResultCapacity > params->cbOutBuffer - sizeof(reply) ||
         ((request.Flags & DG_ESCAPE_SUBMIT_ASYNC) && request.ResultCapacity) ||
         (request.Operation != DG_ESCAPE_SUBMIT &&
@@ -427,8 +495,8 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
     reply.FunctionWords = (ULONG)-1;
     Dg9QueueEnsure();
     reply.Generation = Dg9Generation();
-    reply.MaxResultBytes =
-        Dg9GlResultLimit(Dg9Caps(reply.Generation, request.Operation == DG_ESCAPE_OPEN));
+    reply.MaxResultBytes = DgGlResultLimit(
+        Dg9Caps(reply.Generation, request.Operation == DG_ESCAPE_OPEN), dg_gl_caps2, !!dg_gl_bulk);
     if (dg_gl_caps_version != DG_GL_VERSION || !(dg_gl_caps & DG_CAP_GL_TRANSPORT) ||
         !DgGlLimitsRefreshLocal(&dg_gl_limits, reply.Generation,
                                 request.Operation == DG_ESCAPE_OPEN, Dg9LocalBytes(), Dg9GlRead,
@@ -455,6 +523,8 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
             goto unlock;
         }
         reply.DeviceError = DgGlQueueCurrent(&dg_gl_queue) ? DG_ESCAPE_FEATURE_QUEUE : 0;
+        Dg9BulkEnsure();
+        reply.MaxResultBytes = DgGlResultLimit(dg_gl_caps, dg_gl_caps2, !!dg_gl_bulk);
     }
     reply.MaxBytes = dg_gl_limits.MaxBytes;
     reply.MaxRecords = dg_gl_limits.MaxRecords;
@@ -528,17 +598,26 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
             dg_gl_build = NULL;
             goto unlock;
         }
-        if (query) {
+        /* Larger results go to the bulk pages through their list. Only the
+         * bytes the device reports are ever copied out, so those 4 MiB are
+         * not cleared per query; small results keep the cleared buffer. */
+        bulk = query && DgGlBulkResult(request.ResultCapacity);
+        if (bulk && !dg_gl_bulk) {
+            dg_gl_build = NULL;
+            goto unlock;
+        }
+        if (query && !bulk)
             memset(dg_gl_result, 0, request.ResultCapacity);
-            if (!dg_gl_build_queued) {
-                Dg9GlWrite(DG_GL_REG_RESULT_ADDR_LO, dg_gl_result_physical);
-                Dg9GlWrite(DG_GL_REG_RESULT_ADDR_HI, 0);
-                Dg9GlWrite(DG_GL_REG_RESULT_CAPACITY, request.ResultCapacity);
-            }
+        const ULONG result_physical = bulk ? dg_gl_bulk_physical : dg_gl_result_physical;
+        const ULONG result_word = query ? DgGlResultWord(request.ResultCapacity) : 0;
+        if (query && !dg_gl_build_queued) {
+            Dg9GlWrite(DG_GL_REG_RESULT_ADDR_LO, result_physical);
+            Dg9GlWrite(DG_GL_REG_RESULT_ADDR_HI, 0);
+            Dg9GlWrite(DG_GL_REG_RESULT_CAPACITY, result_word);
         }
         const DG9_SUBMIT submit = {request.Stream ? token : 0, request.Stream,
-                                   (request.Flags & DG_ESCAPE_SUBMIT_ASYNC) != 0,
-                                   request.ResultCapacity};
+                                   (request.Flags & DG_ESCAPE_SUBMIT_ASYNC) != 0, result_word,
+                                   query ? result_physical : 0};
         status = Dg9GlSubmit(request.Bytes, &reply, &submit);
         if (status == DG_ESCAPE_HOST && request.Stream &&
             reply.DeviceError == DG_GL_ERROR_SKIPPED) {
@@ -555,7 +634,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
             reply.ResultBytes = dg_gl_result_bytes;
             reply.ResultType = dg_gl_result_type;
             if (!DreamGpuValidateResult(reply.ResultType, reply.ResultBytes, request.ResultCapacity,
-                                        dg_gl_result)) {
+                                        bulk ? dg_gl_bulk : dg_gl_result)) {
                 reply.ResultBytes = reply.ResultType = 0;
                 status = DG_ESCAPE_HOST;
             }
@@ -565,10 +644,25 @@ unlock:
     client_lease.reset();
     if (dg_gl_initialized)
         Dg9GlDrain(&reply);
-    reply.Status = status;
-    memcpy(output.Address, &reply, sizeof(reply));
-    if (reply.ResultBytes)
-        memcpy((BYTE *)output.Address + sizeof(reply), dg_gl_result, reply.ResultBytes);
+    {
+        /* Still under the mutex: no later query replaces the result first.
+         * The part beyond the first window is copied before the reply is
+         * written, so a window that cannot be pinned fails the request. */
+        const BYTE *data = bulk ? dg_gl_bulk : dg_gl_result;
+        DWORD head = reply.ResultBytes;
+        if (head > pinned - sizeof(reply)) {
+            head = pinned - sizeof(reply);
+            if (!Dg9CopyOut(params->lpOutBuffer + pinned, data + head, reply.ResultBytes - head)) {
+                status = DG_ESCAPE_INVALID;
+                reply.ResultBytes = reply.ResultType = 0;
+                head = 0;
+            }
+        }
+        reply.Status = status;
+        memcpy(output.Address, &reply, sizeof(reply));
+        if (head)
+            memcpy((BYTE *)output.Address + sizeof(reply), data, head);
+    }
     {
         const DWORD count = sizeof(reply) + reply.ResultBytes;
         memcpy(returned.Address, &count, sizeof(count));
@@ -592,6 +686,7 @@ extern "C" void DREAMGPU_CDECL DreamGpuGlShutdown(void) {
         api->Free(dg_gl_commands);
     if (dg_gl_result)
         api->Free(dg_gl_result);
+    Dg9BulkRelease();
     /* The device reset preceding shutdown disabled the queue page. */
     for (ULONG i = 0; i < dg_gl_queue.BufferCount; ++i)
         api->Free(dg_gl_queue.Buffers[i].Memory);

@@ -135,14 +135,17 @@ impl Queue {
             } else {
                 c.bulk_result.cast_const()
             };
-            let m = cb.gl.memory;
-            let ok = c.result_bytes <= e.result_capacity
-                && c.result_bytes <= DG_GL_MAX_READBACK_BYTES
-                && e.result_address
-                    .checked_add(u64::from(c.result_bytes))
-                    .is_some()
-                && unsafe { (m.ram)(m.opaque, e.result_address, c.result_bytes, 1) } != 0
-                && unsafe { (cb.write)(m.opaque, e.result_address, data, c.result_bytes) } != 0;
+            // A contiguous range or a page list (DG_GL_RESULT_PAGES), rechecked.
+            let ok = unsafe {
+                crate::device::result_write(
+                    cb.gl.memory,
+                    cb.write,
+                    e.result_address,
+                    e.result_capacity,
+                    data,
+                    c.result_bytes,
+                )
+            };
             if ok {
                 (bytes, kind) = (c.result_bytes, c.result_type);
             } else {

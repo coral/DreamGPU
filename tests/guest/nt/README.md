@@ -36,6 +36,17 @@ and error-to-success completion without leaking the previous error code.
 Busy/completed-sequence checks and the blocking completion wait remain in the
 transport; these cache tests do not replace native reset/migration validation.
 
+`gl-bulk.c` covers the driver side of bulk results (`dg-gl-bulk.h`,
+`DG_CAP2_GL_BULK_READ`): capacities up to 64 KiB keep the contiguous buffer
+and above it name the page list with `DG_GL_RESULT_PAGES`; the offered
+`MaxResultBytes` across the capability bits and buffer state; the frame list
+(alignment, zero, 32-bit frames, bounds); the result validator's 4 MiB bound;
+and the register cache alternating small and bulk destinations.
+
+`escape.cpp` compiles the real `DrvEscape` against a recording miniport: the
+exact result extent, a zeroed tail, buffered aliasing, and the 64 KiB and
+4 MiB capacity/output bounds (a 3 MiB result in one escape).
+
 Native QEMU tests separately verify that an oversized batch cannot execute its
 clear prefix and that a primitive remains ordered across a 1024-record boundary:
 

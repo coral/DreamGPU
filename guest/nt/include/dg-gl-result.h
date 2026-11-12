@@ -7,7 +7,7 @@
 #define DG_GL_RESULT_H
 static int DgValidateGlResult(ULONG type, ULONG bytes, ULONG capacity, const unsigned char *data) {
     ULONG i;
-    if (!data || !bytes || bytes > capacity || capacity > DG_ESCAPE_MAX_RESULT_BYTES)
+    if (!data || !bytes || bytes > capacity || capacity > DG_ESCAPE_BULK_RESULT_BYTES)
         return 0;
     switch (type) {
         case DG_GL_RESULT_BOOL:

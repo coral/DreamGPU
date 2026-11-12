@@ -20,6 +20,7 @@ extern "C" {
 #include "dg-gl-queue.h"
 #include "dg-gl-validate.h"
 #include "dg-gl-result.h"
+#include "dg-gl-bulk.h"
 #include "dg-gl-signature.h"
 #include "dg-kernel.h"
 
@@ -137,6 +138,12 @@ typedef struct {
     PHYSICAL_ADDRESS GlAddress;
     PVOID GlResult;
     PHYSICAL_ADDRESS GlResultAddress;
+    /* DG_CAP2_GL_BULK_READ: a nonpaged DG_ESCAPE_BULK_RESULT_BYTES buffer and
+     * the contiguous page listing its frames, both driver-owned for the
+     * adapter's life. Requests above DG_ESCAPE_MAX_RESULT_BYTES use them. */
+    PVOID BulkResult;
+    ULONG *BulkList;
+    PHYSICAL_ADDRESS BulkListAddress;
     DG_GL_SIGNATURE_CACHE *GlSignatures;
     ULONG GlSignatureGeneration;
     DG_GL_LIMITS GlLimits;
@@ -700,6 +707,44 @@ typedef struct {
     ULONG Token, Stream, Async, ResultCapacity;
 } DG_SUBMIT;
 
+/* A query's destination: the contiguous result buffer, or for a bulk
+ * capacity the list page naming the bulk buffer's frames (gl.h). */
+static ULONG ResultAddress(DG_TRANSPORT *t, const DG_SUBMIT *submit) {
+    return DgGlBulkResult(submit->ResultCapacity) ? t->BulkListAddress.LowPart
+                                                  : t->GlResultAddress.LowPart;
+}
+
+/* Allocate the bulk buffer and its list once. Any failure leaves bulk results
+ * off until a later OPEN tries again. Nonpaged pool of a page or more is page
+ * aligned and resident; DgGlBulkSetFrame rejects anything else. */
+static VOID BulkEnsure(DG_TRANSPORT *t) {
+    PHYSICAL_ADDRESS highest;
+    ULONG i;
+    if (t->BulkResult || !(t->GlRegisters.Caps2 & DG_CAP2_GL_BULK_READ))
+        return;
+    highest.QuadPart = 0xffffffffULL;
+    t->BulkList = (ULONG *)MmAllocateContiguousMemory(PAGE_SIZE, highest);
+    t->BulkResult = ExAllocatePoolWithTag(NonPagedPool, DG_ESCAPE_BULK_RESULT_BYTES, 'bGRJ');
+    if (t->BulkList && t->BulkResult) {
+        RtlZeroMemory(t->BulkList, PAGE_SIZE);
+        t->BulkListAddress = MmGetPhysicalAddress(t->BulkList);
+        for (i = 0; i < DG_GL_BULK_PAGES; ++i)
+            if (!DgGlBulkSetFrame(
+                    t->BulkList, i,
+                    (unsigned long long)MmGetPhysicalAddress((PUCHAR)t->BulkResult + i * PAGE_SIZE)
+                        .QuadPart))
+                break;
+        if (i == DG_GL_BULK_PAGES && !t->BulkListAddress.HighPart)
+            return;
+    }
+    if (t->BulkList)
+        MmFreeContiguousMemory(t->BulkList);
+    if (t->BulkResult)
+        ExFreePool(t->BulkResult);
+    t->BulkList = NULL;
+    t->BulkResult = NULL;
+}
+
 static ULONG SubmitQueued(DG_TRANSPORT *t, ULONG *commands, ULONG bytes, DG_ESCAPE_REPLY *reply,
                           const DG_SUBMIT *submit) {
     DG_GL_QUEUE_OPS ops = QueueOps(t);
@@ -716,8 +761,9 @@ static ULONG SubmitQueued(DG_TRANSPORT *t, ULONG *commands, ULONG bytes, DG_ESCA
     t->Diagnostics[23] = sequence;
     index = DgGlQueuePublish(&t->Queue, &ops, bytes, sequence, generation,
                              submit ? submit->Token : 0, submit ? submit->Stream : 0,
-                             submit && submit->ResultCapacity ? t->GlResultAddress.LowPart : 0,
-                             submit ? submit->ResultCapacity : 0, submit && submit->Async);
+                             submit && submit->ResultCapacity ? ResultAddress(t, submit) : 0,
+                             submit ? DgGlResultWord(submit->ResultCapacity) : 0,
+                             submit && submit->Async);
     t->Diagnostics[45] = t->Queue.Doorbells;
     if (submit && submit->Async)
         return DG_ESCAPE_OK;
@@ -1245,7 +1291,7 @@ static VOID NTAPI DriverUnload(PDRIVER_OBJECT driver) {
          * releasing that page: engine reset changes generation and clears
          * its pending result destination synchronously under QEMU's BQL. */
         WriteReg(t, DG_REG_RESET, 1);
-        if (t->GlResult && ReadReg(t, DG_REG_GENERATION) == generation) {
+        if ((t->GlResult || t->BulkResult) && ReadReg(t, DG_REG_GENERATION) == generation) {
             /* A latched coherence fault deliberately refuses engine reset.
              * Never pretend it cancelled a pending DMA or free its target. */
             DesktopFault(t, DG_ESCAPE_STOPPED);
@@ -1281,6 +1327,10 @@ static VOID NTAPI DriverUnload(PDRIVER_OBJECT driver) {
             MmFreeContiguousMemory((PVOID)t->Queue.Page);
         if (t->GlResult)
             MmFreeContiguousMemory(t->GlResult);
+        if (t->BulkResult)
+            ExFreePool(t->BulkResult);
+        if (t->BulkList)
+            MmFreeContiguousMemory(t->BulkList);
         if (t->GlSignatures)
             ExFreePool(t->GlSignatures);
         if (t->CursorPixels)
@@ -1316,7 +1366,7 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
     if (request.Version != DG_ESCAPE_VERSION || (request.Flags & ~DG_ESCAPE_SUBMIT_ASYNC) ||
         request.Bytes > DG_ESCAPE_QUEUE_MAX_BYTES ||
         request.Bytes != input_bytes - sizeof(request) ||
-        request.ResultCapacity > DG_ESCAPE_MAX_RESULT_BYTES ||
+        request.ResultCapacity > DG_ESCAPE_BULK_RESULT_BYTES ||
         request.ResultCapacity > output_bytes - sizeof(reply) ||
         ((request.Flags & DG_ESCAPE_SUBMIT_ASYNC) && request.ResultCapacity) ||
         (request.Operation != DG_ESCAPE_SUBMIT &&
@@ -1341,9 +1391,10 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
         result = DG_ESCAPE_UNSUPPORTED;
         goto unlock;
     }
-    reply.MaxResultBytes = (t->GlRegisters.Caps & DG_CAP_GL_BULK_READBACK)
-                               ? DG_ESCAPE_MAX_RESULT_BYTES
-                               : DG_ESCAPE_LEGACY_RESULT_BYTES;
+    if (request.Operation == DG_ESCAPE_OPEN)
+        BulkEnsure(t);
+    reply.MaxResultBytes =
+        DgGlResultLimit(t->GlRegisters.Caps, t->GlRegisters.Caps2, t->BulkResult != NULL);
     if (request.ResultCapacity > reply.MaxResultBytes)
         goto unlock;
     reply.MaxBytes = t->GlLimits.MaxBytes;
@@ -1510,7 +1561,20 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
                 t->Build = NULL;
                 break;
             }
-            if (query) {
+            if (query && DgGlBulkResult(request.ResultCapacity)) {
+                /* MaxResultBytes admitted this capacity only with the bulk
+                 * buffer present. It is not cleared: the device writes every
+                 * reported RESULT_BYTES before completing, and only those are
+                 * validated and copied, so no earlier result can escape. */
+                if (!t->BulkResult) {
+                    t->Build = NULL;
+                    break;
+                }
+                if (!t->BuildQueued)
+                    DgGlProgramResult(&t->GlRegisters, t->BulkListAddress.LowPart,
+                                      t->BulkListAddress.HighPart,
+                                      DgGlResultWord(request.ResultCapacity), WriteGlRegister, t);
+            } else if (query) {
                 if (!t->GlResult) {
                     highest.QuadPart = 0xffffffffULL;
                     t->GlResult = MmAllocateContiguousMemory(DG_ESCAPE_MAX_RESULT_BYTES, highest);
@@ -1552,14 +1616,19 @@ ULONG DgTransportGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID outpu
             KeMemoryBarrier();
             bytes = t->ResultBytes;
             type = t->ResultType;
-            if (!DgValidateGlResult(type, bytes, request.ResultCapacity,
-                                    (const unsigned char *)t->GlResult)) {
-                result = DG_ESCAPE_HOST;
-                break;
+            {
+                const PVOID data =
+                    DgGlBulkResult(request.ResultCapacity) ? t->BulkResult : t->GlResult;
+                if (!DgValidateGlResult(type, bytes, request.ResultCapacity,
+                                        (const unsigned char *)data)) {
+                    result = DG_ESCAPE_HOST;
+                    break;
+                }
+                /* Still under GlMutex: no later query may replace the completed
+                 * DMA result until its immutable bytes have been copied to this
+                 * caller. */
+                RtlCopyMemory((PUCHAR)output + sizeof(reply), data, bytes);
             }
-            /* Still under GlMutex: no later query may replace the completed DMA
-             * result until its immutable bytes have been copied to this caller. */
-            RtlCopyMemory((PUCHAR)output + sizeof(reply), t->GlResult, bytes);
             reply.ResultBytes = bytes;
             reply.ResultType = type;
             break;

@@ -596,6 +596,16 @@ fn float_color_readback_retains_more_than_eight_bits_and_bounds_words() {
         (
             FEnum_glReadPixels,
             [DG_GL_READ_RGBA_FLOAT, 0, (65 << 16) | 64],
+            66560,
+        ),
+        (
+            FEnum_glReadPixels,
+            [DG_GL_READ_RGBA_FLOAT, 0, (512 << 16) | 512],
+            DG_GL_MAX_BULK_RESULT_BYTES,
+        ),
+        (
+            FEnum_glReadPixels,
+            [DG_GL_READ_RGBA_FLOAT, 0, (512 << 16) | 513],
             0,
         ),
         (
@@ -703,4 +713,173 @@ fn subpixel_precision_queries_use_native_values_and_exact_typed_bounds() {
         assert!(out[1 + expected.len()..].iter().all(|b| *b == 0xa5));
     }
     assert_eq!(errors, 0);
+}
+
+std::thread_local! { static LEVELS: RefCell<Vec<(u32, i32, u32)>> = const { RefCell::new(Vec::new()) }; }
+/// A 1027x769 level; a TEXTURE_2D at level 2 is a DEPTH_STENCIL level.
+unsafe extern "C" fn level_parameter(target: u32, level: i32, pname: u32, out: *mut i32) {
+    LEVELS.with(|l| l.borrow_mut().push((target, level, pname)));
+    let value = match pname {
+        GL_TEXTURE_WIDTH => 1027,
+        GL_TEXTURE_HEIGHT => 769,
+        GL_TEXTURE_DEPTH => 9,
+        GL_TEXTURE_DEPTH_SIZE => i32::from(target == GL_TEXTURE_2D && level == 2) * 24,
+        GL_TEXTURE_STENCIL_SIZE => 8,
+        _ => panic!("unexpected level parameter {pname:#x}"),
+    };
+    unsafe { out.write(value) };
+}
+unsafe extern "C" fn texture_read(
+    _: *mut c_void,
+    target: u32,
+    level: u32,
+    first: u32,
+    capacity: u32,
+    result: *mut u8,
+) -> u32 {
+    // The host read sees the level and read flags, never SHAPE or UNITS.
+    assert_eq!((target, level, first), (GL_TEXTURE_RECTANGLE_ARB, 0, 64));
+    for i in 0..capacity {
+        unsafe { result.add(i as usize).write(i as u8) };
+    }
+    0
+}
+
+#[test]
+fn level_shape_is_the_native_level_parameters_in_one_query() {
+    let mut a = api();
+    a.dg_glGetTexLevelParameteriv = Some(level_parameter);
+    let s = state();
+    let mut errors = 0;
+    let shape = |target: u32, level: u32| {
+        let mut out = [0xee; 22];
+        LEVELS.with(|l| l.borrow_mut().clear());
+        let r = run(
+            &a,
+            &s,
+            &mut 0,
+            FEnum_glGetTexImage,
+            [target, level | DG_GL_TEXTURE_READ_SHAPE, 0],
+            &mut out[1..21],
+        );
+        assert_eq!(r, (0, 20, DG_GL_RESULT_INT));
+        assert_eq!((out[0], out[21]), (0xee, 0xee));
+        let words: Vec<u32> = out[1..21]
+            .chunks(4)
+            .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+            .collect();
+        (
+            words,
+            LEVELS.with(|l| l.borrow().iter().map(|c| c.2).collect::<Vec<_>>()),
+        )
+    };
+    // Colour 2D level: width, height, depth 1, then the depth size only.
+    assert_eq!(
+        shape(GL_TEXTURE_2D, 0),
+        (
+            vec![1027, 769, 1, 0, 0],
+            vec![GL_TEXTURE_WIDTH, GL_TEXTURE_HEIGHT, GL_TEXTURE_DEPTH_SIZE]
+        )
+    );
+    // A depth-stencil level adds the stencil size.
+    assert_eq!(
+        shape(GL_TEXTURE_2D, 2),
+        (
+            vec![1027, 769, 1, 24, 8],
+            vec![
+                GL_TEXTURE_WIDTH,
+                GL_TEXTURE_HEIGHT,
+                GL_TEXTURE_DEPTH_SIZE,
+                GL_TEXTURE_STENCIL_SIZE
+            ]
+        )
+    );
+    // 3D levels report their depth and have no depth images; cube faces
+    // neither.
+    assert_eq!(
+        shape(GL_TEXTURE_3D, 1),
+        (
+            vec![1027, 769, 9, 0, 0],
+            vec![GL_TEXTURE_WIDTH, GL_TEXTURE_HEIGHT, GL_TEXTURE_DEPTH]
+        )
+    );
+    assert_eq!(
+        shape(GL_TEXTURE_CUBE_MAP_POSITIVE_X, 0).1,
+        vec![GL_TEXTURE_WIDTH, GL_TEXTURE_HEIGHT]
+    );
+    LEVELS.with(|l| {
+        assert!(l
+            .borrow()
+            .iter()
+            .all(|c| c.0 == GL_TEXTURE_CUBE_MAP_POSITIVE_X))
+    });
+    // Flags beside SHAPE, a first pixel, or a capacity short of five words.
+    let mut out = [0u8; 20];
+    for args in [
+        [
+            GL_TEXTURE_2D,
+            DG_GL_TEXTURE_READ_SHAPE | DG_GL_TEXTURE_READ_FLOAT,
+            0,
+        ],
+        [
+            GL_TEXTURE_2D,
+            DG_GL_TEXTURE_READ_SHAPE | DG_GL_TEXTURE_READ_UNITS,
+            0,
+        ],
+        [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE | 1 << 16, 0],
+        [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE, 1],
+        [GL_TEXTURE_RECTANGLE_ARB, DG_GL_TEXTURE_READ_SHAPE | 1, 0],
+        [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE | 12, 0],
+    ] {
+        assert_ne!(
+            run(&a, &s, &mut errors, FEnum_glGetTexImage, args, &mut out).0,
+            0
+        );
+    }
+    assert_eq!(
+        run(
+            &a,
+            &s,
+            &mut errors,
+            FEnum_glGetTexImage,
+            [GL_TEXTURE_2D, DG_GL_TEXTURE_READ_SHAPE, 0],
+            &mut out[..16]
+        )
+        .0,
+        DG_GL_ERROR_LIMIT
+    );
+}
+
+#[test]
+fn unit_counted_reads_pass_the_bare_level_to_the_texture_read() {
+    let a = api();
+    let s = state();
+    let args: Vec<u8> = [
+        GL_TEXTURE_RECTANGLE_ARB,
+        DG_GL_TEXTURE_READ_UNITS | 3 << 16,
+        64,
+    ]
+    .into_iter()
+    .flat_map(u32::to_le_bytes)
+    .collect();
+    let mut out = vec![0xee; 3 * 64 * 4 + 1];
+    let (mut bytes, mut kind) = (0, 0);
+    let error = unsafe {
+        dreamgpu_gl_query(
+            &a,
+            &s,
+            &mut 0,
+            FEnum_glGetTexImage,
+            args.as_ptr(),
+            out.as_mut_ptr(),
+            3 * 64 * 4,
+            Some(texture_read),
+            core::ptr::null_mut(),
+            &mut bytes,
+            &mut kind,
+        )
+    };
+    assert_eq!((error, bytes, kind), (0, 768, DG_GL_RESULT_INT));
+    assert_eq!(out[767], 255);
+    assert_eq!(out[768], 0xee);
 }

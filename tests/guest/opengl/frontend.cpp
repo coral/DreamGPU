@@ -16,6 +16,8 @@ static ULONG BindCapabilities, Presents, PresentFlags;
 static ULONG SharedWith[128];
 static BOOL HostContexts[128], HostDrawables[128];
 static ULONG Width = 320, Height = 240;
+/* Window 2 has no client area: WineD3D's hidden backup window. */
+static BOOL EmptySecond;
 static ULONG HostSecondaryWords;
 static ULONG HostCaps, CapabilityQueries, CapabilityFailure;
 /* The second capability word a driver reports in the CAPABILITIES reply's
@@ -123,6 +125,10 @@ DWORD GetWindowThreadProcessId(HWND window, DWORD *process) {
 }
 BOOL GetClientRect(HWND window, RECT *rect) {
     assert(window);
+    if (EmptySecond && window == (HWND)2) {
+        *rect = (RECT){0, 0, 0, 0};
+        return TRUE;
+    }
     *rect = (RECT){0, 0, (LONG)Width, (LONG)Height};
     return TRUE;
 }
@@ -395,6 +401,8 @@ static void Reset(void) {
     RetiredPresents = UnreadyPresents = Binds = 0;
     Width = 320;
     Height = 240;
+    EmptySecond = FALSE;
+    WindowCapabilities = 0;
     MaxWords = PACKET_WORDS;
     MaxRecords = DG_GL_MAX_RECORDS;
     HostMaxResultBytes = DG_ESCAPE_MAX_RESULT_BYTES;
@@ -561,6 +569,128 @@ static void LazyRelease(void) {
     Width = 320;
     BindCapabilities = 0;
 }
+/* A native ICD makes a context current on any window DC with the pixel
+ * format, also one without a client area. WineD3D's Reset recreates its
+ * contexts while a fullscreen game is minimized, then falls back to a hidden
+ * backup window when the game window's DC fails. */
+static void NoClientArea(void) {
+    HGLRC context, shared;
+    JGL_CONTEXT *c;
+    ULONG binds, destroyed, presents, id;
+    /* A fresh context on a minimized window: creation, sharing and
+     * MakeCurrent succeed with a 1x1 placeholder and no window binding. */
+    Reset();
+    presents = Presents;
+    Width = Height = 0;
+    assert(wglSetPixelFormat((HDC)1, 1, NULL) && wglGetPixelFormat((HDC)1) == 1);
+    context = wglCreateContext((HDC)1);
+    assert(context);
+    c = Lookup(context);
+    assert(wglMakeCurrent((HDC)1, context) && wglGetCurrentContext() == context);
+    assert(c->Drawable && c->Width == 1 && c->Height == 1 && !c->DrawableWindow && !Binds);
+    assert(HostDrawables[c->Id] && c->Attached && !c->Failed);
+    /* No binding has reported the presentation capabilities yet. */
+    glDrawBuffer(GL_BACK);
+    assert(glGetError() == GL_INVALID_OPERATION && !c->Failed);
+    glClear(GL_COLOR_BUFFER_BIT);
+    assert(wglSwapBuffers((HDC)1) && Presents == presents && glGetError() == GL_NO_ERROR);
+    /* Restoring the window replaces the placeholder and binds. */
+    Width = 320;
+    Height = 240;
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    assert(wglMakeCurrent(NULL, NULL) && wglMakeCurrent((HDC)1, context));
+    assert(c->Width == 320 && c->Height == 240 && c->DrawableWindow == (HWND)1);
+    assert(DestroyDrawables == 1 && Binds == 1 && c->Capabilities == DG_WINDOW_CAP_FRONT_ONLY);
+    assert(wglSwapBuffers((HDC)1) && Presents == presents + 1);
+    /* Minimizing again keeps that drawable and drops the binding. */
+    Width = Height = 0;
+    assert(wglMakeCurrent(NULL, NULL) && wglMakeCurrent((HDC)1, context));
+    assert(c->Width == 320 && DestroyDrawables == 1 && !c->Binding);
+    assert(wglMakeCurrent(NULL, NULL));
+    assert(wglDeleteContext(context) && !Allocations);
+    Reset();
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    shared = Create();
+    assert(Binds == 1 && WindowCapabilities == DG_WINDOW_CAP_FRONT_ONLY);
+    /* WineD3D's Reset: the old context is current on the minimized window,
+     * the new one is created there and shares its namespace. */
+    Width = Height = 0;
+    context = wglCreateContext((HDC)1);
+    assert(context && wglShareLists(shared, context));
+    c = Lookup(context);
+    assert(c->Capabilities == DG_WINDOW_CAP_FRONT_ONLY);
+    assert(wglMakeCurrent((HDC)1, context) && c->Width == 1 && Binds == 1);
+    /* The driver's capabilities apply before this context's first binding. */
+    glDrawBuffer(GL_BACK);
+    assert(glGetError() == GL_NO_ERROR);
+    glBindTexture(GL_TEXTURE_2D, 7);
+    assert(glIsTexture(7));
+    /* Swapping the restored window replaces the placeholder without an
+     * intervening MakeCurrent: the context stayed current. */
+    presents = Presents;
+    Width = 320;
+    Height = 240;
+    assert(wglSwapBuffers((HDC)1) && c->Width == 320 && c->DrawableWindow == (HWND)1);
+    assert(DestroyDrawables == 1 && Binds == 2 && Presents == presents + 1);
+    assert(wglMakeCurrent(NULL, NULL));
+    assert(wglMakeCurrent((HDC)1, shared) && glIsTexture(7) && wglMakeCurrent(NULL, NULL));
+    assert(wglDeleteContext(context) && wglDeleteContext(shared) && !Allocations);
+    /* The backup window: a hidden window without a client area, created by
+     * another thread, takes the pixel format once; the context keeps its
+     * game-window drawable there and returns to it unchanged. */
+    Reset();
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    context = Create();
+    c = Lookup(context);
+    id = c->Id;
+    glDrawBuffer(GL_BACK);
+    glClear(GL_COLOR_BUFFER_BIT);
+    EmptySecond = TRUE;
+    assert(!wglGetPixelFormat((HDC)2) && wglSetPixelFormat((HDC)2, 1, NULL));
+    assert(!wglSetPixelFormat((HDC)2, 1, NULL) && wglGetPixelFormat((HDC)2) == 1);
+    binds = Binds;
+    destroyed = DestroyDrawables;
+    assert(wglMakeCurrent(NULL, NULL));
+    Thread = 1;
+    assert(wglMakeCurrent((HDC)2, context) && wglGetCurrentDC() == (HDC)2);
+    assert(c->Window == (HWND)2 && c->DrawableWindow == (HWND)1 && !c->Binding);
+    assert(c->Width == 320 && c->Height == 240 && HostDrawables[id]);
+    assert(DestroyDrawables == destroyed && Binds == binds);
+    glClear(GL_COLOR_BUFFER_BIT);
+    assert(glGetError() == GL_NO_ERROR && !c->Failed);
+    /* Nothing is published on the backup window. */
+    presents = Presents;
+    assert(wglSwapBuffers((HDC)2) && Presents == presents);
+    /* Swapping the game window's DC needs that DC current, as before. */
+    assert(!wglSwapBuffers((HDC)1));
+    assert(wglMakeCurrent(NULL, NULL));
+    Thread = 0;
+    assert(wglMakeCurrent((HDC)1, context) && DestroyDrawables == destroyed);
+    assert(c->Window == (HWND)1 && Binds == binds + 1 && wglSwapBuffers((HDC)1));
+    assert(Presents == presents + 1 && !c->Failed);
+    /* A window regaining a client area never presents the drawable a context
+     * kept for another window: it gets its own. */
+    assert(wglMakeCurrent((HDC)2, context));
+    EmptySecond = FALSE;
+    assert(wglSwapBuffers((HDC)2) && c->DrawableWindow == (HWND)2);
+    assert(DestroyDrawables == destroyed + 1 && Presents == presents + 2);
+    assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context) && !Allocations);
+    /* A placeholder drawable that cannot be created fails MakeCurrent
+     * cleanly and recovers once the host accepts it. */
+    Reset();
+    Width = Height = 0;
+    context = wglCreateContext((HDC)1);
+    assert(context);
+    FailOperation = DG_GL_CREATE_DRAWABLE;
+    FailStatus = DG_ESCAPE_HOST;
+    FailError = DG_GL_ERROR_LIMIT;
+    assert(!wglMakeCurrent((HDC)1, context) && !wglGetCurrentContext());
+    assert(!Lookup(context)->Drawable && Lookup(context)->Failed);
+    assert(wglDeleteContext(context) && !Allocations);
+    Width = 320;
+    Height = 240;
+    BindCapabilities = 0;
+}
 int main(void) {
     HGLRC context, other;
     JGL_CONTEXT *c;
@@ -701,6 +831,45 @@ int main(void) {
         assert(!Allocations);
         free(output);
     }
+    /* DG_CAP2_GL_BULK_READ: a driver offering more than 64 KiB is held to
+     * the bulk size, for bulk reads only; chunked readers keep the
+     * contiguous limit. The reply buffer grows once to the largest read. */
+    for (ULONG offer : {(ULONG)DG_ESCAPE_BULK_RESULT_BYTES, (ULONG)DG_ESCAPE_BULK_RESULT_BYTES * 2})
+        for (ULONG caps2 : {(ULONG)0, (ULONG)DG_CAP2_GL_BULK_READ}) {
+            const ULONG surface = 1024 * 768 * 4;
+            ULONG args[3] = {0, 0, 1024 | (768 << 16)}, bytes, allocations;
+            BYTE *output = (BYTE *)malloc(65536);
+            const BYTE *result;
+            Reset();
+            HostMaxResultBytes = offer;
+            HostCaps2 = caps2;
+            context = Create();
+            assert(JglReadbackCapacity() == DG_ESCAPE_MAX_RESULT_BYTES);
+            assert(JglBulkCapacity() == (caps2 ? DG_ESCAPE_BULK_RESULT_BYTES : 0));
+            assert(JglReadbackBuffer());
+            calls = Calls;
+            allocations = Allocations;
+            result = (const BYTE *)JglQueryBulk(FEnum_glReadPixels, args, DG_GL_RESULT_INT, surface,
+                                                &bytes);
+            assert(result && bytes == surface && Calls == calls + 1);
+            for (i = 0; i < surface; i += 4093)
+                assert(result[i] == 0x5a);
+            assert(Allocations == allocations + 1);
+            assert(JglQueryBulk(FEnum_glReadPixels, args, DG_GL_RESULT_INT, surface, &bytes) ==
+                   result);
+            args[2] = 128 | (128 << 16);
+            assert(JglQuery(FEnum_glReadPixels, args, DG_GL_RESULT_INT, output, 65536, &bytes));
+            assert(bytes == 65536 && output[65535] == 0x5a && Allocations == allocations + 1);
+            /* Never more than the negotiated size: nothing is sent. */
+            calls = Calls;
+            assert(!JglQueryBulk(FEnum_glReadPixels, args, DG_GL_RESULT_INT,
+                                 DG_ESCAPE_BULK_RESULT_BYTES + 4, &bytes));
+            assert(!bytes && Calls == calls);
+            assert(wglMakeCurrent(NULL, NULL));
+            assert(wglDeleteContext(context));
+            assert(!Allocations);
+            free(output);
+        }
     /* A newer DLL must honor an older driver's 256-record reply. The new
      * 1024-record budget also splits inside Begin without changing GL order. */
     for (ULONG budget = 256; budget <= 1024; budget *= 4) {
@@ -1047,22 +1216,7 @@ int main(void) {
     assert(Presents == calls + 1 && !c->Failed);
     assert(wglDeleteContext(context));
     BindCapabilities = 0;
-    /* Initial native binding needs visible geometry; failure must be
-     * recoverable when the window becomes visible, without a fake drawable. */
-    Reset();
-    Width = Height = 0;
-    assert(!wglCreateContext((HDC)1));
-    Width = 320;
-    Height = 240;
-    context = wglCreateContext((HDC)1);
-    assert(context);
-    Width = Height = 0;
-    assert(!wglMakeCurrent((HDC)1, context) && !Lookup(context)->Drawable);
-    assert(!Lookup(context)->Failed && !wglGetCurrentContext());
-    Width = 320;
-    Height = 240;
-    assert(wglMakeCurrent((HDC)1, context) && !DestroyDrawables);
-    assert(wglDeleteContext(context));
+    NoClientArea();
     /* Failed resize must never present the old attachment, retain thread
      * ownership, or leak the already-destroyed drawable during cleanup. */
     Reset();

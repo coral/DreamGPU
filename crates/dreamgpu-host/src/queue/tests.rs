@@ -293,13 +293,12 @@ impl Device {
             preset
         } else {
             h.executed.push(seq);
+            let m = memory((h as *mut Host).cast());
             if let Some(result) = h.results.get(&seq) {
                 unsafe {
-                    ptr::copy_nonoverlapping(
-                        result.as_ptr(),
-                        (*b).result.as_mut_ptr(),
-                        result.len(),
-                    );
+                    // Results past the inline bytes are bulk allocations.
+                    let out = sub::dreamgpu_submission_query(b, &m, result.len() as u32);
+                    ptr::copy_nonoverlapping(result.as_ptr(), out, result.len());
                     (*b).result_bytes = result.len() as u32;
                     (*b).result_type = DG_GL_RESULT_INT;
                 }
@@ -327,6 +326,10 @@ impl Device {
         assert_eq!(c.sequence, seq);
         let cb = self.callbacks();
         let outcome = unsafe { dreamgpu_queue_complete(&mut *self.queue, &cb, &c) };
+        // The device owns a polled bulk result, as QEMU's completion does.
+        if !c.bulk_result.is_null() {
+            unsafe { release(cb.gl.memory.opaque, c.bulk_result) };
+        }
         Some((seq, outcome))
     }
     fn drain(&mut self) -> Vec<u32> {
@@ -618,6 +621,76 @@ fn query_results_are_dmaed_with_their_entry() {
             .word(d.entry(2) + u64::from(DG_GL_ENTRY_RESULT_BYTES)),
         0
     );
+}
+
+#[test]
+fn page_list_results_scatter_and_are_rechecked_at_completion() {
+    const LIST: u64 = 0x9000;
+    // Four scattered destination pages, out of order, above the buffers.
+    let pages = [0xe3000u64, 0xe1000, 0xe7000, 0xe5000];
+    let bytes = 3 * 4096 + 100;
+    let word = DG_GL_RESULT_PAGES | (4 * 4096);
+    let data: Vec<u8> = (0..bytes).map(|i| (i % 251) as u8).collect();
+    let mut d = Device::new();
+    for (i, page) in pages.iter().enumerate() {
+        d.host.set(LIST + i as u64 * 4, (page >> 12) as u32);
+    }
+    d.host.ram[0xe0000..0xe8000].fill(0xcc);
+    for seq in [1, 2] {
+        d.host.results.insert(seq, data.clone());
+    }
+    let query = |d: &mut Device, seq: u32| {
+        let buffer = BUFFERS + u64::from(d.produced % 8) * 0x8000;
+        let e = d.entry(d.produced);
+        d.publish(seq, DG_GL_QUERY, DG_GL_QUERY_BYTES, (0, 0), word);
+        d.host.set(buffer + 32, FEnum_glGetError);
+        d.host
+            .set(e + u64::from(DG_GL_ENTRY_RESULT_ADDR_LO), LIST as u32);
+    };
+    query(&mut d, 1);
+    d.doorbell();
+    d.drain();
+    assert_eq!(d.status(0), (OK, 0));
+    assert_eq!(
+        d.host
+            .word(d.entry(0) + u64::from(DG_GL_ENTRY_RESULT_BYTES)),
+        bytes
+    );
+    for (i, page) in pages.iter().enumerate() {
+        let start = i * 4096;
+        let n = (bytes as usize).saturating_sub(start).min(4096);
+        let p = *page as usize;
+        assert_eq!(&d.host.ram[p..p + n], &data[start..start + n]);
+        assert!(d.host.ram[p + n..p + 4096].iter().all(|b| *b == 0xcc));
+    }
+    // The pages between the listed ones are untouched.
+    for gap in [0xe0000usize, 0xe2000, 0xe4000, 0xe6000] {
+        assert!(d.host.ram[gap..gap + 4096].iter().all(|b| *b == 0xcc));
+    }
+    // A list frame rewritten after submission to a page outside RAM: the
+    // completion fails with DG_GL_ERROR_DMA and no destination is written.
+    d.host.ram[0xe0000..0xe8000].fill(0xcc);
+    query(&mut d, 2);
+    d.doorbell();
+    d.host.set(LIST + 8, 0x7_0000);
+    let writes = d.host.writes;
+    while d.step().is_some() {}
+    assert_eq!(d.status(1), (FAILED, DG_GL_ERROR_DMA));
+    assert_eq!(
+        d.host
+            .word(d.entry(1) + u64::from(DG_GL_ENTRY_RESULT_BYTES)),
+        0
+    );
+    assert!(d.host.ram[0xe0000..0xe8000].iter().all(|b| *b == 0xcc));
+    // Only the entry status, presentation and completion words were written.
+    assert_eq!(d.host.writes - writes, 3);
+    // A zero frame is refused at the doorbell: the batch never executes.
+    d.host.set(LIST + 8, 0);
+    query(&mut d, 3);
+    d.doorbell();
+    d.drain();
+    assert_eq!(d.status(2), (FAILED, DG_GL_ERROR_DMA));
+    assert!(!d.host.executed.contains(&3));
 }
 
 #[test]

@@ -2,6 +2,8 @@
 
 #[path = "native_qemu/border_sampling.rs"]
 mod border_sampling;
+#[path = "native_qemu/bulk_read.rs"]
+mod bulk_read;
 #[path = "native_qemu/client_arrays.rs"]
 mod client_arrays;
 #[path = "native_qemu/compressed.rs"]

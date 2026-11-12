@@ -29,6 +29,12 @@
 #define DG_ESCAPE_MAX_CLIENTS 32
 #define DG_ESCAPE_LEGACY_RESULT_BYTES 512
 #define DG_ESCAPE_MAX_RESULT_BYTES 65536
+/* Larger results, offered in MaxResultBytes by a driver whose host has
+ * DG_CAP2_GL_BULK_READ (gl.h) and which holds a driver-owned page-list buffer
+ * of this size. A SUBMIT whose ResultCapacity exceeds DG_ESCAPE_MAX_RESULT_BYTES
+ * is served from that buffer and copied to the reply as before. Older drivers
+ * never offer more than MAX_RESULT_BYTES and older frontends never ask for it. */
+#define DG_ESCAPE_BULK_RESULT_BYTES 0x400000
 #define DG_ESCAPE_OK 0
 #define DG_ESCAPE_INVALID 1
 #define DG_ESCAPE_UNSUPPORTED 2

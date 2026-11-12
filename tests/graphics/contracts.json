@@ -460,6 +460,10 @@
       "scope": "native-transport",
       "path": "tests/native_qemu/rgb565.rs"
     },
+    "native-bulk-read": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/bulk_read.rs"
+    },
     "d3d-rgb565-storage": {
       "scope": "source",
       "path": "tests/guest/d3d/test_rgb565_storage.py"
@@ -499,6 +503,14 @@
     "guest-point-sprites": {
       "scope": "installed-api",
       "path": "tools/d3d/point-sprite-probe.inc"
+    },
+    "d3d-reset-context-loss": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_reset_context_loss.py"
+    },
+    "guest-device-reset": {
+      "scope": "installed-api",
+      "path": "tools/d3d/reset-probe.inc"
     },
     "d3d8-shader-validation": {
       "scope": "source",
@@ -692,6 +704,27 @@
         "gl-fixed-state"
       ],
       "remaining": "No frontend or host change. WineD3D enabled GL_POINT_SPRITE whenever the render state was set (COORD_REPLACE is on for every unit), and Mesa 26 (radeonsi and llvmpipe, 26.2.6 on the Linux host) then drops those coordinate sets from fixed-function vertex processing for every primitive, so fixed-function triangles and lines sampled one texel; ARB vertex programs are unaffected. The Halo PC trial sets sprites once and copies its vertex-shader-rendered 800x600 scene texture to the back buffer with one pretransformed indexed fan, so every frame was one colour (also with -useff and before Wine 0049). Wine patch 0058 enables GL_POINT_SPRITE only for point lists and for triangles in point fill mode, re-evaluated on primitive changes to or from points and on fill-mode changes; with sprites off nothing new is sent. Source tests drive the prepared handlers through a model of Wine's invalidation and apply loop. The installed D3D8/9 probe (Halo's 28-byte pretransformed indexed fan, a 16-pixel point and an untransformed strip, sprites on and off, every pixel compared; the sprite itself only when dgpugl.dll reports GL_ARB_point_sprite) has not yet run on a guest, and Halo remains to be rerun. Native OpenGL guests that leave GL_POINT_SPRITE enabled across textured fixed-function triangles still see Mesa's result; Win98/XP and macOS CGL remain unverified."
+    },
+    {
+      "id": "d3d.reset-no-client-area",
+      "area": 15,
+      "api": "D3D8/D3D9 (Wine device reset) over WGL (dgpugl.dll)",
+      "operation": "IDirect3DDevice8/9::Reset while the device window is minimized or hidden (no client area), repeated, then rendering after restore with and without another reset; WineD3D backup-window fallback",
+      "format": "X8R8G8B8 back buffer",
+      "resource": "swapchain/GL contexts",
+      "usage": "focus loss and return of a fullscreen game (Warcraft III demo, D3D8)",
+      "pool": "default/managed",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "gl-frontend",
+        "d3d-reset-context-loss",
+        "context",
+        "patches",
+        "guest-device-reset"
+      ],
+      "remaining": "dgpugl.dll refused wglCreateContext on a window without a client area and wglMakeCurrent of a context without a drawable there, or of any context on another such window (ERROR_INVALID_HANDLE for every failure), unlike a native ICD. WineD3D's Reset destroys every GL context before creating the primary one again on the device window, so a Reset while Warcraft III's fullscreen window was still minimized (focus returned without restoring it) failed after the teardown, and its retry dereferenced the NULL context_acquire() result in delete_opengl_contexts (wined3d.dll+0x92BE9 in m41). WineD3D's backup-window fallback (a hidden 10x10 decorated window, empty client area) failed the same way (Halo shutdown logs, last error 0x6). The frontend now accepts any window DC of the process: a context keeps its drawable, whichever window it was made for, while the current window has no client area; a context without one gets a 1x1 placeholder that the first window with a client area (MakeCurrent or SwapBuffers) replaces; nothing is presented meanwhile; presentation capabilities come from the last binding. Wine patch 0059 makes the reset fail cleanly (D3DERR_DEVICELOST, nothing changed) when its context cannot be made current, keeps a device whose primary context could not be created again lost without any context (no bare context is created; the retry creates it, no double free of shader/blitter state or the context array) and lets reset teardown, uninit, end-scene, clear, draw, present and surface/buffer/volume/texture unloads run without a context. Source tests execute the prepared functions and the frontend. The installed D3D8/9 probe (visible, minimized twice, restored without reset, hidden/shown and final resets, 4 exact reference frames) has not yet run on a guest; Warcraft III's focus loss and return remain to be rerun on Win2000. Fullscreen mode handoff during these resets is unchanged (0025); Win98/XP and macOS CGL remain unverified."
     },
     {
       "id": "ddraw.dc",
@@ -1993,6 +2026,26 @@
         "guest-partial-locks"
       ],
       "remaining": "Negotiated by DG_CAP2_GL_RGB565, the second bit of DG_GL_REG_CAPS2; without it RGB565 keeps the local error of any unknown internal format. No extension name and no ARB_ES2_compatibility entry point: WineD3D's GL_RGB565 entry for B5G6R5 needs ARB_ES2_compatibility, so Wine 0057 asks the frontend directly (a 1x1 RGB565 texture, then GetError) and otherwise keeps GL_RGB5, which Mesa stores in 5/5/5 bits (a 6-bit green 13 read back as 12). The host stores RGB565 natively where the native GL has it (GL 4.1 or ARB_ES2_compatibility; Mesa on Linux) and in RGB8 elsewhere (macOS legacy CGL, unverified), exact for every 5/6/5 value in either. Native pixel tests (Linux, Mesa on Radeon) round-trip all 65536 words and check clears, a texture sampled 1:1, DrawPixels, CopyTexImage/CopyTexSubImage and a renderbuffer exactly. X1R5G5B5 (RGB5), A1R5G5B5 (RGB5_A1) and A4R4G4B4 (RGBA4) were already exact on Mesa and are unchanged; color-keyed R5G6B5 textures are still converted to B5G5R5A1 by Wine (five green bits). The installed D3D8/9 probes (rtt-probe's R5G6B5 stage, the partial-lock probe's 64 greens), macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.bulk-read",
+      "area": 7,
+      "api": "OpenGL 1.1 GetTexImage, GetCompressedTexImage and ReadPixels (WineD3D whole-surface locks, GetFrontBuffer and CPU blit fallbacks)",
+      "operation": "second capability word negotiation; one-query level shape; unit-counted texture reads and ReadPixels of up to 4 MiB per QUERY through a kernel-owned page list",
+      "format": "RGBA8/BGRA, RGB565, float RGBA, depth, packed depth-stencil, stencil, S3TC",
+      "resource": "texture level (1D, 2D, rectangle, cube face, 3D), window and framebuffer object",
+      "usage": "large synchronous CPU reads",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-readback",
+        "native-bulk-read",
+        "native",
+        "guest-partial-locks"
+      ],
+      "remaining": "Negotiated by DG_CAP2_GL_BULK_READ, the third bit of DG_GL_REG_CAPS2. A QUERY result above 64 KiB goes through a page list (DG_GL_RESULT_PAGES): NT and Win9x kernels keep a 4 MiB buffer and its frame list in driver memory for the adapter's life; the device checks the list and its pages as writable RAM at submission and before writing and never writes outside them. Shape (one query) plus one 3 MiB read replace 3 GetTexLevelParameteriv and 48 GetTexImage round trips for a 1024x768 RGBA8 level (Warcraft III locks its back buffer read-only every present); a 1024x768 ReadPixels is one query instead of 48. Results are byte-identical to the chunked reads older hosts, kernels and frontends keep. Native tests (Linux, Mesa on Radeon) cover RGBA8, BGRA uploads, RGB565, depth, packed depth-stencil, float, S3TC, window colour/depth/stencil/float reads on both transports and malformed lists. The installed probe's 1024x768 whole-surface stage, Win98/XP/2000 guests, macOS CGL and Warcraft III FPS remain to be run."
     },
     {
       "id": "gl.client-array-draws",

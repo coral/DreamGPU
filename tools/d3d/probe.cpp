@@ -314,6 +314,7 @@ static BOOL Pixels(const D3DLOCKED_RECT *locked) {
 #include "partial-lock-probe.inc"
 #include "point-sprite-probe.inc"
 #include "shader-validation-probe.inc"
+#include "reset-probe.inc"
 static void Run(void) {
     typedef D3D *(WINAPI * CreateD3D)(UINT);
     HMODULE gl, runtime;
@@ -453,6 +454,11 @@ static void Run(void) {
     Pixels(&locked);
     if (!HR(SURFACE(UnlockRect, surface), "FAIL unlock backbuffer"))
         return;
+    if (failed)
+        return;
+    /* Before the other stages create resources: a reset needs every default
+     * pool resource released, and they then run on the reset device. */
+    reset_probe::Run(device, &surface, window, &pp);
     if (failed)
         return;
     stage_probe::Run(device, surface);

@@ -369,12 +369,79 @@ static void StoreReadPixel(BYTE *dest, const ULONG *source, GLenum format, GLenu
     }
     StoreReadWord(dest, word, bytes, swap && bytes > 1);
 }
+/* Row conversions of RGBA8 wire pixels that need no per-pixel dispatch,
+ * byte-identical to StoreReadPixel: WineD3D downloads whole X8R8G8B8 and
+ * A8R8G8B8 surfaces as BGRA/UNSIGNED_INT_8_8_8_8_REV, R5G6B5 as
+ * RGB/UNSIGNED_SHORT_5_6_5 and X1R5G5B5/A1R5G5B5 as BGRA/1_5_5_5_REV. */
+#define FAST_NONE 0UL
+#define FAST_RGBA 1UL
+#define FAST_BGRA 2UL
+#define FAST_565 3UL
+#define FAST_1555 4UL
+static ULONG FastRead(GLenum format, GLenum type, BOOL swap, BOOL wide) {
+    if (wide)
+        return FAST_NONE;
+    if (type == GL_UNSIGNED_BYTE || (type == 0x8367 && !swap)) /* 8_8_8_8_REV */
+        return format == GL_RGBA ? FAST_RGBA : format == 0x80e1 ? FAST_BGRA : FAST_NONE;
+    if (swap)
+        return FAST_NONE;
+    if (type == 0x8363 && format == GL_RGB) /* UNSIGNED_SHORT_5_6_5 */
+        return FAST_565;
+    if (type == 0x8366 && format == 0x80e1) /* UNSIGNED_SHORT_1_5_5_5_REV */
+        return FAST_1555;
+    return FAST_NONE;
+}
+/* `count` pixels of one row: a fast conversion, else StoreReadPixel each. */
+static void StoreReadRow(BYTE *dest, const ULONG *source, ULONG count, ULONG pixel_bytes,
+                         ULONG wire_words, ULONG fast, GLenum format, GLenum type, BOOL swap,
+                         BOOL texture, BOOL wide) {
+    ULONG i;
+    switch (fast) {
+        case FAST_RGBA:
+            CopyMemory(dest, source, count * 4);
+            return;
+        case FAST_BGRA:
+            for (i = 0; i < count; ++i) {
+                const ULONG w = source[i];
+                const ULONG v = (w & 0xff00ff00UL) | ((w >> 16) & 0xff) | ((w & 0xff) << 16);
+                dest[i * 4] = (BYTE)v;
+                dest[i * 4 + 1] = (BYTE)(v >> 8);
+                dest[i * 4 + 2] = (BYTE)(v >> 16);
+                dest[i * 4 + 3] = (BYTE)(v >> 24);
+            }
+            return;
+        case FAST_565:
+            for (i = 0; i < count; ++i) {
+                const ULONG w = source[i];
+                const ULONG v =
+                    ((w & 0xf8) << 8) | ((w >> 5) & 0x7e0) | ((w >> 19) & 0x1f); /* r g b */
+                dest[i * 2] = (BYTE)v;
+                dest[i * 2 + 1] = (BYTE)(v >> 8);
+            }
+            return;
+        case FAST_1555:
+            for (i = 0; i < count; ++i) {
+                const ULONG w = source[i];
+                /* BGRA: blue in the low five bits, then green, red, alpha. */
+                const ULONG v = ((w >> 19) & 0x1f) | ((w >> 6) & 0x3e0) | ((w & 0xf8) << 7) |
+                                ((w >> 16) & 0x8000);
+                dest[i * 2] = (BYTE)v;
+                dest[i * 2 + 1] = (BYTE)(v >> 8);
+            }
+            return;
+        default:
+            for (i = 0; i < count; ++i)
+                StoreReadPixel(dest + i * pixel_bytes, source + i * wire_words, format, type, swap,
+                               texture, wide);
+    }
+}
 void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLenum format,
                            GLenum type, void *pixels) {
     JGL_UNPACK *pack;
     ULONG pixel_bytes, row, column, columns, rows, i, j, args[3], bytes, drawable_width,
-        drawable_height, tile_width;
-    ULONG *rgba, capacity;
+        drawable_height, tile_width, fast;
+    ULONG *rgba = NULL, capacity, bulk;
+    ULONG *depth_copy = NULL;
     ULONG_PTR stride, skip, first, span, end;
     BYTE *output;
     ULONG mode = 0, kind = DG_GL_RESULT_INT, wire_bytes = 4;
@@ -443,10 +510,17 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
         drawable_width = drawable_height = DG_GL_MAX_DIMENSION;
     else
         JglDrawableSize(&drawable_width, &drawable_height);
-    capacity = JglReadbackCapacity();
-    rgba = JglReadbackBuffer();
-    if (!rgba)
-        return;
+    /* Bulk reads (DG_CAP2_GL_BULK_READ): tiles of the negotiated result size,
+     * converted straight from the reply; otherwise contiguous-limit tiles
+     * copied into the readback buffer. */
+    bulk = JglBulkCapacity();
+    capacity = bulk ? bulk : JglReadbackCapacity();
+    if (!bulk) {
+        rgba = JglReadbackBuffer();
+        if (!rgba)
+            return;
+    }
+    fast = bitmap || packed ? FAST_NONE : FastRead(format, type, pack->SwapBytes, wide);
     tile_width = (ULONG)width < capacity / wire_bytes ? (ULONG)width : capacity / wire_bytes;
     for (row = 0; row < (ULONG)height; row += rows) {
         rows = capacity / wire_bytes / tile_width;
@@ -457,6 +531,7 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
             int64_t clipped_left = left < 0 ? 0 : left, clipped_bottom = bottom < 0 ? 0 : bottom;
             int64_t clipped_right, clipped_top;
             ULONG clipped_width = 0, clipped_height = 0;
+            const ULONG *tile = rgba, *stencil = NULL;
             columns = (ULONG)width - column;
             if (columns > tile_width)
                 columns = tile_width;
@@ -473,38 +548,72 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
                 args[0] = (ULONG)clipped_left | mode;
                 args[1] = (ULONG)clipped_bottom;
                 args[2] = clipped_width | (clipped_height << 16);
-                if (!JglQuery(FEnum_glReadPixels, args, kind, rgba, count * reply, &bytes))
+                if (bulk) {
+                    tile = (const ULONG *)JglQueryBulk(FEnum_glReadPixels, args, kind,
+                                                       count * reply, &bytes);
+                    if (!tile)
+                        goto done;
+                } else if (!JglQuery(FEnum_glReadPixels, args, kind, rgba, count * reply, &bytes))
                     return;
                 if (bytes != count * reply) {
                     JglSetError(GL_INVALID_OPERATION);
-                    return;
+                    goto done;
                 }
                 if (packed) {
+                    if (bulk) {
+                        /* The stencil query replaces the reply: keep the depth. */
+                        if (!depth_copy)
+                            depth_copy = (ULONG *)JglAllocate(capacity / 2);
+                        if (!depth_copy) {
+                            JglSetError(GL_OUT_OF_MEMORY);
+                            return;
+                        }
+                        CopyMemory(depth_copy, tile, count * 4);
+                        tile = depth_copy;
+                    }
                     args[0] = (ULONG)clipped_left | DG_GL_READ_STENCIL;
-                    if (!JglQuery(FEnum_glReadPixels, args, DG_GL_RESULT_INT, rgba + count,
-                                  count * 4, &bytes))
-                        return;
+                    if (bulk) {
+                        stencil = (const ULONG *)JglQueryBulk(FEnum_glReadPixels, args,
+                                                              DG_GL_RESULT_INT, count * 4, &bytes);
+                        if (!stencil)
+                            goto done;
+                    } else {
+                        stencil = rgba + count;
+                        if (!JglQuery(FEnum_glReadPixels, args, DG_GL_RESULT_INT, rgba + count,
+                                      count * 4, &bytes))
+                            return;
+                    }
                     if (bytes != count * 4) {
                         JglSetError(GL_INVALID_OPERATION);
-                        return;
+                        goto done;
                     }
                 }
             }
-            for (j = 0; j < rows; ++j)
+            for (j = 0; j < rows; ++j) {
+                BYTE *dest = output + (row + j) * stride;
+                const BOOL inside = clipped_width && clipped_height &&
+                                    bottom + j >= clipped_bottom && bottom + j < clipped_top;
+                /* Columns [lo, hi) of this row lie inside the read rectangle. */
+                const ULONG lo = inside ? (ULONG)(clipped_left - left) : columns;
+                const ULONG hi = inside ? (ULONG)(clipped_right - left) : columns;
                 for (i = 0; i < columns; ++i) {
                     ULONG value[4] = {0, 0, 0, 0};
                     const ULONG *pixel = value;
-                    BYTE *dest = output + (row + j) * stride;
-                    if (clipped_width && clipped_height && left + i >= clipped_left &&
-                        left + i < clipped_right && bottom + j >= clipped_bottom &&
-                        bottom + j < clipped_top) {
+                    if (i >= lo && i < hi) {
                         const ULONG at = (ULONG)(bottom + j - clipped_bottom) * clipped_width +
                                          (ULONG)(left + i - clipped_left);
+                        if (fast != FAST_NONE && i == lo) {
+                            StoreReadRow(dest + (column + i) * pixel_bytes, tile + at, hi - lo,
+                                         pixel_bytes, 1, fast, format, type, pack->SwapBytes, FALSE,
+                                         FALSE);
+                            i = hi - 1;
+                            continue;
+                        }
                         if (packed) {
-                            value[0] = rgba[at];
-                            value[1] = rgba[clipped_width * clipped_height + at];
+                            value[0] = tile[at];
+                            value[1] = stencil[at];
                         } else
-                            pixel = rgba + at * (wire_bytes / 4);
+                            pixel = tile + at * (wire_bytes / 4);
                     }
                     if (bitmap) {
                         ULONG bit = (pack->SkipPixels & 7) + column + i;
@@ -515,8 +624,11 @@ void APIENTRY glReadPixels(GLint x, GLint y, GLsizei width, GLsizei height, GLen
                         StoreReadPixel(dest + (column + i) * pixel_bytes, pixel, format, type,
                                        pack->SwapBytes, FALSE, wide);
                 }
+            }
         }
     }
+done:
+    JglFree(depth_copy);
     return;
 invalid:
     JglSetError(GL_INVALID_VALUE);
@@ -544,8 +656,8 @@ static ULONG DepthTexturePixelBytes(GLenum format, GLenum type) {
     return (ULONG)-1;
 }
 void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum type, void *pixels) {
-    ULONG args[3], bytes, pixel_bytes, row, column, i, at = 0, total;
-    ULONG *rgba, capacity;
+    ULONG args[3], bytes, pixel_bytes, at = 0, total, fast, per_query = 0, shape[5];
+    ULONG *rgba = NULL, capacity, bulk;
     GLint width = 0, height = 1, depth = 1;
     ULONG_PTR stride, skip, first, span, end, image_stride, images;
     /* A 3D level is all of its images (EXT_texture3D). */
@@ -588,17 +700,36 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         goto invalid;
     args[0] = target;
     args[1] = level;
+    /* Bulk reads (DG_CAP2_GL_BULK_READ): one SHAPE query answers the
+     * GetTexLevelParameteriv preamble below from the same native queries. */
+    bulk = JglBulkCapacity();
+    if (bulk) {
+        args[1] = (ULONG)level | DG_GL_TEXTURE_READ_SHAPE;
+        args[2] = 0;
+        if (!JglQuery(FEnum_glGetTexImage, args, DG_GL_RESULT_INT, shape, sizeof(shape), &bytes))
+            return;
+        if (bytes != sizeof(shape)) {
+            JglSetError(GL_INVALID_OPERATION);
+            return;
+        }
+        width = (GLint)shape[0];
+        if (target != GL_TEXTURE_1D)
+            height = (GLint)shape[1];
+        if (volume)
+            depth = (GLint)shape[2];
+        args[1] = level;
+    }
     args[2] = GL_TEXTURE_WIDTH;
-    if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &width, sizeof(width),
-                  &bytes))
+    if (!bulk && !JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &width,
+                           sizeof(width), &bytes))
         return;
-    if (target != GL_TEXTURE_1D) {
+    if (!bulk && target != GL_TEXTURE_1D) {
         args[2] = GL_TEXTURE_HEIGHT;
         if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &height,
                       sizeof(height), &bytes))
             return;
     }
-    if (volume) {
+    if (!bulk && volume) {
         args[2] = 0x8071; /* TEXTURE_DEPTH */
         if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &depth, sizeof(depth),
                       &bytes))
@@ -610,12 +741,14 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
      * colour read a colour level: the host fails the batch on a mismatch,
      * GL reports INVALID_OPERATION (ARB_depth_texture). */
     if (JglDepthTextureAvailable() && depth_target) {
-        GLint depth_size = 0, stencil_size = 0;
+        GLint depth_size = bulk ? (GLint)shape[3] : 0, stencil_size = 0;
         args[2] = 0x884a; /* TEXTURE_DEPTH_SIZE */
-        if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &depth_size,
-                      sizeof(depth_size), &bytes))
+        if (!bulk && !JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &depth_size,
+                               sizeof(depth_size), &bytes))
             return;
-        if (depth_size > 0 && format == JGL_DEPTH_STENCIL) {
+        if (bulk && depth_size > 0 && format == JGL_DEPTH_STENCIL)
+            stencil_size = (GLint)shape[4];
+        else if (depth_size > 0 && format == JGL_DEPTH_STENCIL) {
             args[2] = 0x88f1; /* TEXTURE_STENCIL_SIZE */
             if (!JglQuery(FEnum_glGetTexLevelParameteriv, args, DG_GL_RESULT_INT, &stencil_size,
                           sizeof(stencil_size), &bytes))
@@ -649,42 +782,68 @@ void APIENTRY glGetTexImage(GLenum target, GLint level, GLenum format, GLenum ty
         !Add(span, (ULONG_PTR)width * pixel_bytes, &span) || !Add(end, span, &end) ||
         !Add((ULONG_PTR)pixels, end, &end) || !Add((ULONG_PTR)pixels, first, &first))
         goto invalid;
+    /* Unit-counted reads of the negotiated result size when it holds a unit;
+     * otherwise contiguous-limit chunks copied into the readback buffer. */
+    if (bulk)
+        per_query = bulk / (wire_bytes * DG_GL_TEXTURE_READ_UNIT) * DG_GL_TEXTURE_READ_UNIT;
     capacity = JglReadbackCapacity();
-    rgba = JglReadbackBuffer();
-    if (!rgba)
-        return;
+    if (!per_query) {
+        rgba = JglReadbackBuffer();
+        if (!rgba)
+            return;
+    }
+    fast = depth_read ? FAST_NONE : FastRead(format, type, pack->SwapBytes, wide);
     total = (ULONG)width * height * depth;
     args[2] = 0;
     while (at < total) {
         ULONG count = total - at, requested;
-        if (count > capacity / wire_bytes)
-            count = capacity / wire_bytes;
+        const ULONG *source = rgba;
         args[1] = (ULONG)level | (wide ? DG_GL_TEXTURE_READ_FLOAT : 0) |
                   (depth_read ? DG_GL_TEXTURE_READ_DEPTH : 0) |
                   (depth_read && format == JGL_DEPTH_STENCIL ? DG_GL_TEXTURE_READ_FLOAT : 0);
-        requested = DG_GL_MAX_RESULT_BYTES;
-        if (wide || capacity > DG_GL_MAX_RESULT_BYTES) {
-            args[1] |= count << DG_GL_TEXTURE_READ_COUNT_SHIFT;
-            requested = count * wire_bytes;
-        }
         args[2] = at;
-        if (!JglQuery(FEnum_glGetTexImage, args, kind, rgba, requested, &bytes))
-            return;
+        if (per_query) {
+            /* Whole units; the host zero-fills past the level end. */
+            if (count > per_query)
+                count = per_query;
+            const ULONG unit_count =
+                (count + DG_GL_TEXTURE_READ_UNIT - 1) / DG_GL_TEXTURE_READ_UNIT;
+            args[1] |= DG_GL_TEXTURE_READ_UNITS | unit_count << DG_GL_TEXTURE_READ_COUNT_SHIFT;
+            requested = unit_count * DG_GL_TEXTURE_READ_UNIT * wire_bytes;
+            source =
+                (const ULONG *)JglQueryBulk(FEnum_glGetTexImage, args, kind, requested, &bytes);
+            if (!source)
+                return;
+        } else {
+            if (count > capacity / wire_bytes)
+                count = capacity / wire_bytes;
+            requested = DG_GL_MAX_RESULT_BYTES;
+            if (wide || capacity > DG_GL_MAX_RESULT_BYTES) {
+                args[1] |= count << DG_GL_TEXTURE_READ_COUNT_SHIFT;
+                requested = count * wire_bytes;
+            }
+            if (!JglQuery(FEnum_glGetTexImage, args, kind, rgba, requested, &bytes))
+                return;
+        }
         if (bytes != requested) {
             JglSetError(GL_INVALID_OPERATION);
             return;
         }
-        for (i = 0; i < count; ++i) {
-            BYTE *dest;
-            row = (at + i) / (ULONG)width;
-            column = (at + i) % (ULONG)width;
-            dest = (BYTE *)first + row / (ULONG)height * image_stride +
-                   row % (ULONG)height * stride + column * pixel_bytes;
-            if (depth_read && format == JGL_DEPTH_STENCIL)
-                StoreReadWord(dest, rgba[i], 4, pack->SwapBytes); /* the packed word */
-            else
-                StoreReadPixel(dest, rgba + i * (wire_bytes / 4), format, type, pack->SwapBytes,
-                               TRUE, wide);
+        /* Row runs of the level image (rows of every image for 3D). */
+        for (ULONG done = 0; done < count;) {
+            const ULONG row = (at + done) / (ULONG)width, column = (at + done) % (ULONG)width;
+            ULONG run = (ULONG)width - column, i;
+            BYTE *dest = (BYTE *)first + row / (ULONG)height * image_stride +
+                         row % (ULONG)height * stride + column * pixel_bytes;
+            if (run > count - done)
+                run = count - done;
+            if (depth_read && format == JGL_DEPTH_STENCIL) {
+                for (i = 0; i < run; ++i) /* the packed word */
+                    StoreReadWord(dest + i * 4, source[done + i], 4, pack->SwapBytes);
+            } else
+                StoreReadRow(dest, source + done * (wire_bytes / 4), run, pixel_bytes,
+                             wire_bytes / 4, fast, format, type, pack->SwapBytes, TRUE, wide);
+            done += run;
         }
         at += count;
     }

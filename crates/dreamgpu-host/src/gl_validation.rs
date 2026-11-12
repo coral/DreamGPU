@@ -1217,13 +1217,22 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             let depth = b & DG_GL_TEXTURE_READ_DEPTH != 0;
             let wide = !depth && b & DG_GL_TEXTURE_READ_FLOAT != 0;
             let pixel_words = if wide { 4 } else { 1 };
-            let n = b >> DG_GL_TEXTURE_READ_COUNT_SHIFT;
-            let n = if n != 0 {
-                n
+            // SHAPE and UNITS (DG_CAP2_GL_BULK_READ) are level-word bits that
+            // no level reaches, so older encodings never carry them.
+            let shape = b & DG_GL_TEXTURE_READ_SHAPE != 0;
+            let units = b & DG_GL_TEXTURE_READ_UNITS != 0;
+            let level = b
+                & DG_GL_TEXTURE_READ_LEVEL_MASK
+                & !(DG_GL_TEXTURE_READ_SHAPE | DG_GL_TEXTURE_READ_UNITS);
+            let count = b >> DG_GL_TEXTURE_READ_COUNT_SHIFT;
+            let (n, limit) = if units {
+                (count * DG_GL_TEXTURE_READ_UNIT, DG_GL_MAX_BULK_RESULT_BYTES)
+            } else if count != 0 {
+                (count, DG_GL_MAX_READBACK_BYTES)
             } else {
-                DG_GL_MAX_RESULT_BYTES / 4
+                (DG_GL_MAX_RESULT_BYTES / 4, DG_GL_MAX_READBACK_BYTES)
             };
-            if wide || (depth && b & DG_GL_TEXTURE_READ_FLOAT == 0) {
+            if !shape && (wide || (depth && b & DG_GL_TEXTURE_READ_FLOAT == 0)) {
                 kind = DG_GL_RESULT_FLOAT;
             }
             // A 3D level numbers its pixels through all of its images.
@@ -1232,11 +1241,20 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             } else {
                 (DG_GL_MAX_TEXTURE_DIMENSION + 2) * (DG_GL_MAX_TEXTURE_DIMENSION + 2)
             };
-            if (matches!(a, GL_TEXTURE_1D | GL_TEXTURE_3D) || image_2d_target(a))
+            let target = (matches!(a, GL_TEXTURE_1D | GL_TEXTURE_3D) || image_2d_target(a))
+                && level <= DG_GL_MAX_TEXTURE_LEVEL
+                && (!rectangle(a) || level == 0);
+            if shape {
+                // The level alone: no read flags, count or first pixel.
+                if target && b == level | DG_GL_TEXTURE_READ_SHAPE && d == 0 {
+                    DG_GL_TEXTURE_SHAPE_WORDS
+                } else {
+                    0
+                }
+            } else if target
                 && (!depth || depth_target(a))
-                && b & DG_GL_TEXTURE_READ_LEVEL_MASK <= DG_GL_MAX_TEXTURE_LEVEL
-                && (!rectangle(a) || b & DG_GL_TEXTURE_READ_LEVEL_MASK == 0)
-                && n <= DG_GL_MAX_READBACK_BYTES / (4 * pixel_words)
+                && n != 0
+                && n <= limit / (4 * pixel_words)
                 && d < pixels
             {
                 n * pixel_words
@@ -1245,15 +1263,20 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
             }
         }
         FEnum_glGetCompressedTexImage => {
-            // level, words << 16 (zero keeps 128) and the first word.
-            let n = match b >> DG_GL_TEXTURE_READ_COUNT_SHIFT {
-                0 => DG_GL_MAX_RESULT_BYTES / 4,
-                n => n,
+            // level, words << 16 (zero keeps 128) and the first word; with
+            // UNITS the count is in DG_GL_TEXTURE_READ_UNIT words.
+            let units = b & DG_GL_TEXTURE_READ_UNITS != 0;
+            let count = b >> DG_GL_TEXTURE_READ_COUNT_SHIFT;
+            let (n, limit) = match (units, count) {
+                (true, n) => (n * DG_GL_TEXTURE_READ_UNIT, DG_GL_MAX_BULK_RESULT_BYTES),
+                (false, 0) => (DG_GL_MAX_RESULT_BYTES / 4, DG_GL_MAX_READBACK_BYTES),
+                (false, n) => (n, DG_GL_MAX_READBACK_BYTES),
             };
             if image_2d_target(a)
                 && !rectangle(a)
-                && b & 0xffff <= DG_GL_MAX_TEXTURE_LEVEL
-                && n <= DG_GL_MAX_READBACK_BYTES / 4
+                && b & 0xffff & !DG_GL_TEXTURE_READ_UNITS <= DG_GL_MAX_TEXTURE_LEVEL
+                && n != 0
+                && n <= limit / 4
                 && d < DG_GL_MAX_TEXTURE_DIMENSION * DG_GL_MAX_TEXTURE_DIMENSION
             {
                 n
@@ -1274,7 +1297,10 @@ fn query_shape(function: u32, a: [u32; 3]) -> (u32, u32) {
                 && b < DG_GL_MAX_DIMENSION
                 && w != 0
                 && h != 0
-                && w <= DG_GL_READ_PIXELS_MAX
+                // Bounded by a bulk destination (DG_CAP2_GL_BULK_READ); a
+                // contiguous one still takes at most DG_GL_READ_PIXELS_MAX.
+                && w <= DG_GL_MAX_BULK_RESULT_BYTES
+                    / 4
                     / h
                     / if mode == DG_GL_READ_RGBA_FLOAT { 4 } else { 1 }
             {

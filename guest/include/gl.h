@@ -530,6 +530,48 @@
  * is an invalid internal format, a local GL error in the frontend. */
 #define DG_CAP2_GL_RGB565 0x2
 #define DG_GL_RGB565 0x8d62
+/* Bulk reads (CAPS2): one QUERY returns up to DG_GL_MAX_BULK_RESULT_BYTES
+ * instead of DG_GL_MAX_READBACK_BYTES, and a texture level's shape is one
+ * query. A 1024x768 RGBA8 level took 3 GetTexLevelParameteriv and 48
+ * GetTexImage round trips; with this it takes one shape and one read.
+ * Destination: RESULT_CAPACITY (the register and the queue entry word) with
+ * DG_GL_RESULT_PAGES names a page list. Its low 31 bits are the capacity,
+ * 1..DG_GL_MAX_BULK_RESULT_BYTES. RESULT_ADDR is then a 4 KiB-aligned RAM page
+ * of little-endian 32-bit page frame numbers (guest physical address >> 12),
+ * one per DG_GL_RESULT_PAGE_BYTES of capacity; result byte i is written at
+ * (frame[i / 4096] << 12) + i % 4096. Every frame the capacity needs must be
+ * nonzero writable RAM. The device checks the list and its pages at
+ * submission (otherwise DG_GL_ERROR_DMA and nothing executes) and again, page
+ * by page, before writing a completed result (otherwise DG_GL_ERROR_DMA with
+ * RESULT_BYTES zero). It writes nothing outside the listed pages and no byte
+ * past RESULT_BYTES. Without the flag the destination stays one contiguous
+ * range of at most DG_GL_MAX_READBACK_BYTES. Kernels keep the list and its
+ * pages in driver-owned memory for the adapter's life, never in a caller's
+ * buffer, so a query that times out can only ever DMA into driver memory.
+ * Queries: GetTexImage with level-word bit DG_GL_TEXTURE_READ_SHAPE (only the
+ * level besides it; first pixel zero) returns DG_GL_TEXTURE_SHAPE_WORDS
+ * RESULT_INT: the level's native TEXTURE_WIDTH and TEXTURE_HEIGHT, its
+ * TEXTURE_DEPTH for TEXTURE_3D (else 1), and for TEXTURE_1D, TEXTURE_2D and
+ * TEXTURE_RECTANGLE its TEXTURE_DEPTH_SIZE and, when that is nonzero, its
+ * TEXTURE_STENCIL_SIZE (else zero): the GetTexLevelParameteriv answers a
+ * frontend needs before reading a level, from the same native calls. With
+ * DG_GL_TEXTURE_READ_UNITS, the high 16 bits of a GetTexImage or
+ * GetCompressedTexImage level word count DG_GL_TEXTURE_READ_UNIT pixels
+ * (words) instead of single ones: nonzero, at most DG_GL_MAX_BULK_RESULT_BYTES
+ * of result, zero past the level end as before. ReadPixels rectangles may
+ * return up to DG_GL_MAX_BULK_RESULT_BYTES (older hosts enforce
+ * DG_GL_READ_PIXELS_MAX). Results still never exceed the destination's
+ * capacity. Kernels offer MaxResultBytes above DG_ESCAPE_MAX_RESULT_BYTES
+ * (dg-escape.h) only with this bit and frontends use these encodings only
+ * with it; older hosts, kernels and frontends keep the chunked reads. */
+#define DG_CAP2_GL_BULK_READ 0x4
+#define DG_GL_RESULT_PAGES 0x80000000U
+#define DG_GL_RESULT_PAGE_BYTES 4096
+#define DG_GL_MAX_BULK_RESULT_BYTES 0x400000
+#define DG_GL_TEXTURE_READ_SHAPE 0x1000
+#define DG_GL_TEXTURE_READ_UNITS 0x2000
+#define DG_GL_TEXTURE_READ_UNIT 64
+#define DG_GL_TEXTURE_SHAPE_WORDS 5
 
 /* ADDR_LO/HI, BYTES, RESULT_ADDR_LO/HI, RESULT_CAPACITY and the programmed
  * GENERATION persist across submit and
@@ -790,7 +832,8 @@
  * RGBA_FLOAT framebuffer mode uses four FLOAT words per pixel as well.
  * DEPTH bit14 (DG_CAP2_GL_DEPTH_TEXTURE) reads depth instead: one float32 per
  * pixel, or with FLOAT one UNSIGNED_INT_24_8 word of a DEPTH_STENCIL level.
- * Levels are at most DG_GL_MAX_TEXTURE_LEVEL, so older hosts never saw bit14. */
+ * Levels are at most DG_GL_MAX_TEXTURE_LEVEL, so older hosts never saw bit14,
+ * nor bits 12 and 13 (SHAPE and UNITS, DG_CAP2_GL_BULK_READ). */
 #define DG_GL_TEXTURE_READ_FLOAT 0x8000
 #define DG_GL_TEXTURE_READ_DEPTH 0x4000
 #define DG_GL_TEXTURE_READ_LEVEL_MASK 0x3fff

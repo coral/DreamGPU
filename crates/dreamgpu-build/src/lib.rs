@@ -129,11 +129,7 @@ pub fn build(root: &Path) -> Result<()> {
         native::launch_directory(&output.join("qemu-build")).display()
     );
     if selection == "native" || selection == "all" {
-        for path in [
-            "crates/dreamgpu-host",
-            "include/dreamgpu",
-            "support/native",
-        ] {
+        for path in ["crates/dreamgpu-host", "include/dreamgpu", "support/native"] {
             println!("cargo::rerun-if-changed={}", root.join(path).display());
         }
         native::build(root, &output.join("qemu-build"))?;

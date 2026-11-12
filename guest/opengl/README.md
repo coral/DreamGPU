@@ -256,6 +256,26 @@ the pname word and one or three floats. None of them is legal inside Begin/End.
 (including constant colors), make the cached blend factors unknown.
 `tests/guest/opengl/test_fixed_state.py` covers the frontend contract.
 
+Any window DC of the process takes a context, as with a native ICD, including
+a minimized window or a hidden one without a client area (WineD3D recreates
+its contexts in `IDirect3DDevice8/9::Reset`, also while a fullscreen game is
+still minimized, and falls back to a hidden 10x10 decorated backup window
+when the game window's DC fails). `wglCreateContext` no longer requires a
+client area. While the current window has none, `wglMakeCurrent` keeps the
+context's drawable, whichever window it was made for, and drops its window
+binding; a context without a drawable gets a 1x1 placeholder. The first
+window with a client area, at `wglMakeCurrent` or `wglSwapBuffers`, replaces a
+placeholder or another window's drawable (contents undefined, as after a
+resize) and binds again; returning to the window the drawable was made for
+keeps it. Nothing is presented without a client area. A context first made
+current without a binding takes the presentation capabilities of the last
+binding (they belong to the display driver); before any binding, front-buffer
+selection reports `GL_INVALID_OPERATION` until one succeeds. Previously each
+of these failed with `ERROR_INVALID_HANDLE`, which Wine's reset and backup
+fallback could not survive (Wine patch 0059 handles any remaining failure).
+`tests/guest/opengl/test_frontend.py` covers fresh, shared and backup-window
+contexts and placeholder failure.
+
 Point sprites are forwarded unchanged. Mesa 26 (radeonsi and llvmpipe) does
 not limit `COORD_REPLACE` to points: while `GL_POINT_SPRITE` is enabled, its
 fixed-function vertex processing drops the replaced coordinate sets for every

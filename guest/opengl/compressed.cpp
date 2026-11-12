@@ -222,6 +222,31 @@ static void CompressedRead(GLenum target, GLint level, void *image) {
         return;
     }
     total = (ULONG)size / 4;
+    /* Bulk reads (DG_CAP2_GL_BULK_READ): whole DG_GL_TEXTURE_READ_UNIT words
+     * of the negotiated result size, of which only the image's words are
+     * copied out; the host zero-fills the last unit past the image end. */
+    capacity = JglBulkCapacity() / 4 / DG_GL_TEXTURE_READ_UNIT * DG_GL_TEXTURE_READ_UNIT;
+    if (capacity) {
+        for (at = 0; at < total; at += words) {
+            words = total - at < capacity ? total - at : capacity;
+            const ULONG units = (words + DG_GL_TEXTURE_READ_UNIT - 1) / DG_GL_TEXTURE_READ_UNIT;
+            const ULONG *source;
+            args[1] =
+                (ULONG)level | DG_GL_TEXTURE_READ_UNITS | (units << DG_GL_TEXTURE_READ_COUNT_SHIFT);
+            args[2] = at;
+            source =
+                (const ULONG *)JglQueryBulk(FEnum_glGetCompressedTexImage, args, DG_GL_RESULT_INT,
+                                            units * DG_GL_TEXTURE_READ_UNIT * 4, &bytes);
+            if (!source)
+                return;
+            if (bytes != units * DG_GL_TEXTURE_READ_UNIT * 4) {
+                JglSetError(GL_INVALID_OPERATION);
+                return;
+            }
+            CopyMemory((BYTE *)image + at * 4, source, words * 4);
+        }
+        return;
+    }
     capacity = JglReadbackCapacity() / 4;
     for (at = 0; at < total; at += words) {
         words = total - at < capacity ? total - at : capacity;

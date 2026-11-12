@@ -30,6 +30,13 @@
  * round(v * 63 / 31) that survive 5-, 6- and 8-bit storage and both readback
  * conversions. Every FAIL line names the check; the stage line before it
  * names the target.
+ * Whole-surface reads of 1024x768 targets (a WineD3D back buffer of that size
+ * is what Warcraft III locks after every present): each row and every 64th
+ * column carry their own colour, so a pixel landing in the wrong row, page or
+ * transfer chunk is caught. Each target is painted, locked whole read-only,
+ * repainted and locked whole again, every pixel exact. With bulk reads
+ * (DG_CAP2_GL_BULK_READ) the frontend reads such a surface in one QUERY after
+ * a one-query shape, otherwise in 48 64 KiB chunks; both must be exact.
  */
 #if DG_D3D_VERSION == 8
 typedef D3DVIEWPORT8 LockViewport;
@@ -236,6 +243,54 @@ static BOOL Case(Device *dev, const Target &t) {
     return Unlock(t) && ok;
 }
 
+static constexpr int LargeWide = 1024, LargeHigh = 768;
+/* Rows, then every 64th column from 17, each its own colour. */
+static DWORD LargeColor(int x, int y, int seed, BOOL wide) {
+    if (x % 64 == 17)
+        return Argb(x / 4 + seed * 3, 200 - seed * 20, x / 64 * 17 + seed, wide);
+    return Argb(y & 255, (y >> 8) * 64 + seed * 16 + 5, (y * 7 + seed * 29) & 255, wide);
+}
+static BOOL LargePaint(Device *dev, const Target &t, int seed) {
+    for (int y = 0; y < t.height; ++y) {
+        const D3DRECT rect = {0, y, t.width, y + 1};
+        if (!HR(DEVICE(Clear, dev, 1, &rect, D3DCLEAR_TARGET, LargeColor(0, y, seed, t.wide), 1, 0),
+                "FAIL whole-surface lock row Clear"))
+            return FALSE;
+    }
+    for (int x = 17; x < t.width; x += 64) {
+        const D3DRECT rect = {x, 0, x + 1, t.height};
+        if (!HR(DEVICE(Clear, dev, 1, &rect, D3DCLEAR_TARGET, LargeColor(x, 0, seed, t.wide), 1, 0),
+                "FAIL whole-surface lock column Clear"))
+            return FALSE;
+    }
+    return TRUE;
+}
+/* Two whole-surface read-only locks of a large target, each after a paint. */
+static BOOL Large(Device *dev, const Target &t) {
+    Log(t.name);
+    if (!rtt_probe::Target(dev, t.surface, NULL, t.width, t.height))
+        return FALSE;
+    for (int seed = 1; seed <= 2; ++seed) {
+        D3DLOCKED_RECT locked;
+        if (!LargePaint(dev, t, seed) || !Lock(t, NULL, D3DLOCK_READONLY, &locked))
+            return FALSE;
+        BOOL ok = Check(locked.Pitch >= t.width * (t.wide ? 4 : 2),
+                        "FAIL whole-surface lock pitch too small", (DWORD)locked.Pitch);
+        for (int y = 0; ok && y < t.height; ++y)
+            for (int x = 0; ok && x < t.width; ++x) {
+                const DWORD expected = Stored(LargeColor(x, y, seed, t.wide), t.wide);
+                const DWORD actual = Read(locked, x, y, t.wide);
+                if (actual != expected)
+                    ok = Mismatch(seed == 1 ? "FAIL whole-surface lock pixel"
+                                            : "FAIL whole-surface lock pixel after repainting",
+                                  x, y, actual, expected);
+            }
+        if (!Unlock(t) || !ok)
+            return FALSE;
+    }
+    return TRUE;
+}
+
 static void Run(D3D *d3d, Device *dev, Surface *backbuffer) {
     Surface *wide = NULL, *narrow = NULL;
     Log("STAGE rectangle locks of render targets");
@@ -292,6 +347,33 @@ static void Run(D3D *d3d, Device *dev, Surface *backbuffer) {
         Log("PASS rectangle locks: read-only 1x1/16x16/last-pixel and writable 8x8 locks of "
             "render targets exact, same pitch as a whole lock, fresh after each Clear, written box "
             "kept by rendering");
+    if (!ok)
+        return;
+    /* Whole-surface reads of 1024x768 targets (bulk reads when negotiated). */
+    Log("STAGE whole-surface locks of 1024x768 render targets");
+    if (!framebuffer_objects) {
+        Log("SKIP whole-surface locks: offscreen targets render through the backbuffer (no "
+            "framebuffer objects)");
+        return;
+    }
+    Surface *large = NULL, *large16 = NULL;
+    ok = HR(LOCK_TARGET(dev, LargeWide, LargeHigh, D3DFMT_X8R8G8B8, &large),
+            "FAIL whole-surface lock X8R8G8B8 render target creation") &&
+         Large(dev, {large, LargeWide, LargeHigh, TRUE,
+                     "STAGE whole-surface lock: lockable X8R8G8B8 render target 1024x768"});
+    if (ok && rgb565)
+        ok = HR(LOCK_TARGET(dev, LargeWide, LargeHigh, D3DFMT_R5G6B5, &large16),
+                "FAIL whole-surface lock R5G6B5 render target creation") &&
+             Large(dev, {large16, LargeWide, LargeHigh, FALSE,
+                         "STAGE whole-surface lock: lockable R5G6B5 render target 1024x768"});
+    rtt_probe::Target(dev, backbuffer, NULL, rtt_probe::ScreenWidth, rtt_probe::ScreenHeight);
+    if (large16)
+        SURFACE(Release, large16);
+    if (large)
+        SURFACE(Release, large);
+    if (ok)
+        Log("PASS whole-surface locks: 1024x768 render targets exact in every row and column, "
+            "twice");
 }
 
 } // namespace partial_lock_probe

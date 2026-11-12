@@ -27,7 +27,7 @@ struct wined3d_gl_info { struct { struct { int (*p_wglGetPixelFormat)(HDC); } wg
 struct texture { struct wined3d_swapchain *swapchain; void *surface; };
 struct wined3d_surface { struct texture *container; int id; };
 struct wined3d_swapchain { struct wined3d_device *device; unsigned num_contexts;struct wined3d_context **context;struct texture **back_buffers,*front_buffer; };
-struct wined3d_device { struct wined3d_swapchain **swapchains;unsigned context_count;struct wined3d_context **contexts; };
+struct wined3d_device { struct wined3d_swapchain **swapchains;unsigned context_count,contexts_lost;struct wined3d_context **contexts; };
 struct wined3d_context { struct wined3d_gl_info *gl_info;struct wined3d_swapchain *swapchain;struct wined3d_surface *current_rt;unsigned level,tid,current,valid,destroyed,needs_set,hdc_is_private,hdc_has_format;int pixel_format;HGLRC glCtx,restore_ctx;HDC hdc,restore_dc;struct wined3d_context *restore_wined3d; };
 static unsigned thread=1,binds,flushes,setup_calls,creates,fail_bind,fail_unbind;
 static struct wined3d_context *tls;
@@ -142,7 +142,14 @@ int main(void) {
  tls=NULL;c1.destroyed=0;
  before=flushes;context_release(&c1);context_release(NULL);assert(!c1.level&&flushes==before);
  struct wined3d_swapchain empty={0};assert(!swapchain_get_context(&empty)&&creates==1);
- puts("PASS prepared native Wine migration: same drawable across threads, target-copy activation order, nested levels, multiple swapchains/devices, foreign restoration, failed-bind retry, stale TLS recovery and destroyed-context rejection");
+ // 0059: after a failed reset the device has no context and none is created,
+ // neither for the current one, a target nor the primary swapchain.
+ d1.contexts_lost=1;before=binds;
+ assert(!context_acquire(&d1,NULL)&&!context_acquire(&d1,&f1)&&!context_acquire(&d1,&t1));
+ assert(creates==1&&binds==before&&!tls&&!current_gl&&!c1.level);
+ tls=&c1;assert(!context_acquire(&d1,&t1)&&!c1.level&&binds==before);tls=NULL;
+ d1.contexts_lost=0;assert(context_acquire(&d1,&t1)==&c1&&c1.valid);context_release(&c1);
+ puts("PASS prepared native Wine migration: same drawable across threads, target-copy activation order, nested levels, multiple swapchains/devices, foreign restoration, failed-bind retry, stale TLS recovery and destroyed-context rejection and no context after a failed reset");
 }
 '''
 with tempfile.TemporaryDirectory(prefix='dreamgpu-context-migration-') as directory:

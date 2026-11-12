@@ -39,11 +39,13 @@ ULONG APIENTRY DrvEscape(SURFOBJ *surface, ULONG escape, ULONG input_bytes, PVOI
         input_bytes < sizeof(DG_ESCAPE_REQUEST) ||
         input_bytes > sizeof(DG_ESCAPE_REQUEST) + DG_ESCAPE_QUEUE_MAX_BYTES ||
         output_bytes < sizeof(DG_ESCAPE_REPLY) ||
-        output_bytes > sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_MAX_RESULT_BYTES)
+        output_bytes > sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_BULK_RESULT_BYTES)
         return 0;
+    /* Bulk results (dg-escape.h) are bounded by the miniport's negotiated
+     * MaxResultBytes; this only bounds the buffers GDI handed us. */
     request = (DG_ESCAPE_REQUEST *)input;
     capacity = request->ResultCapacity;
-    if (capacity > DG_ESCAPE_MAX_RESULT_BYTES || capacity > output_bytes - sizeof(DG_ESCAPE_REPLY))
+    if (capacity > DG_ESCAPE_BULK_RESULT_BYTES || capacity > output_bytes - sizeof(DG_ESCAPE_REPLY))
         return 0;
     device = (PPDEV)surface->dhpdev;
     /* GDI supplies kernel buffers for DrvEscape. EngDeviceIoControl preserves

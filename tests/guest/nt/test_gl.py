@@ -10,9 +10,10 @@ ROOT = Path(__file__).resolve().parents[3]
 SOURCE = Path(__file__).resolve().parent
 
 with tempfile.TemporaryDirectory(prefix="dreamgpu-nt-gl-") as directory:
-    for name in ("gl-validate", "gl-signature", "gl-limits", "gl-registers", "gl-queue", "window"):
+    for name in ("gl-validate", "gl-signature", "gl-limits", "gl-registers", "gl-queue", "gl-bulk",
+                 "window", "escape"):
         binary = Path(directory) / name
-        cpp = name == "window"
+        cpp = name in ("window", "escape")
         source = SOURCE / (name + (".cpp" if cpp else ".c"))
         language = ["-std=c++23", "-fno-exceptions", "-fno-rtti"] if cpp else ["-std=c11"]
         analysis = os.environ.get("DREAMGPU_STATIC_ANALYSIS") == "1"

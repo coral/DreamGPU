@@ -151,7 +151,7 @@ fn bulk_results_move_on_success_free_on_error_and_bound_ring() {
             let r = request(&m, seq);
             assert_eq!(dreamgpu_submission_submit(&mut s, &m, &r, 0), 1);
             let b = dreamgpu_submission_take(&mut s);
-            assert!(dreamgpu_submission_query(b, &m, DG_GL_MAX_READBACK_BYTES + 1).is_null());
+            assert!(dreamgpu_submission_query(b, &m, DG_GL_MAX_BULK_RESULT_BYTES + 1).is_null());
             let p = dreamgpu_submission_query(b, &m, 65536);
             assert!(!p.is_null());
             p.write_bytes(seq as u8, 65536);

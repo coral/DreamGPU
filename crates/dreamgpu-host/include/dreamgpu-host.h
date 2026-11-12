@@ -385,6 +385,12 @@ uint32_t dreamgpu_device_restore(const DreamGpuDeviceRestore *, const uint8_t *,
                                  uint64_t *);
 uint32_t dreamgpu_device_gl_submit(const DreamGpuDeviceGlCallbacks *,
                                    const DreamGpuDeviceGlRequest *, DreamGpuDeviceGlResult *);
+/* Write a completed QUERY result to the destination its submission accepted:
+ * a contiguous range, or a page list with DG_GL_RESULT_PAGES in the capacity
+ * word (gl.h). Rechecked as writable RAM; nonzero on success. */
+uint32_t dreamgpu_device_result_write(const DreamGpuDeviceMemory *,
+                                      uint32_t (*)(void *, uint64_t, const uint8_t *, uint32_t),
+                                      uint64_t, uint32_t, const uint8_t *, uint32_t);
 /* Worker-owned bounded output queue, CPU mappings, and reply descriptors.
  * All queue/lease/reply transitions require the engine mutex. */
 typedef struct DreamGpuOutput {

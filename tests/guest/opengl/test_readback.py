@@ -8,8 +8,12 @@ with tempfile.TemporaryDirectory(prefix='dg-readback-') as name:
     shim=(HERE/'texture-internal.h').read_text()+'''\ntypedef unsigned char BYTE;
 #define GL_TEXTURE_WIDTH 0x1000
 #define GL_TEXTURE_HEIGHT 0x1001
-static inline BOOL JglDepthStencilReadbackAvailable(void) { return FALSE; }
+BOOL JglDepthStencilReadbackAvailable(void);
 ULONG JglReadbackCapacity(void);
+ULONG JglBulkCapacity(void);
+const void *JglQueryBulk(ULONG,const ULONG[3],ULONG,ULONG,ULONG *);
+void *JglAllocate(ULONG);
+void JglFree(void *);
 ULONG *JglReadbackBuffer(void);
 void JglDrawableSize(ULONG *,ULONG *);
 BOOL JglReadFramebufferBound(void);

@@ -214,13 +214,26 @@ static BOOL Answer(const ULONG *r, DG_ESCAPE_REPLY *reply, ULONG capacity) {
         }
         case FEnum_glGetTexImage: {
             const ULONG word = r[10], first = r[11];
-            const ULONG count = word >> DG_GL_TEXTURE_READ_COUNT_SHIFT ? word >> 16 : 128;
+            if (word & DG_GL_TEXTURE_READ_SHAPE) {
+                /* DG_CAP2_GL_BULK_READ: the level's native answers. */
+                const BOOL depth_images = r[9] == TEX_1D || r[9] == TEX_2D || r[9] == TEX_RECT;
+                const GLint shape[5] = {LevelWidth, LevelHeight, 1, depth_images ? LevelDepth : 0,
+                                        depth_images && LevelDepth ? LevelStencil : 0};
+                assert(capacity == 20 && !first && !(word & ~0xfffU & ~DG_GL_TEXTURE_READ_SHAPE));
+                return put(DG_GL_RESULT_INT, shape, 20);
+            }
+            const ULONG count = word & DG_GL_TEXTURE_READ_UNITS
+                                    ? (word >> 16) * DG_GL_TEXTURE_READ_UNIT
+                                : word >> DG_GL_TEXTURE_READ_COUNT_SHIFT ? word >> 16
+                                                                         : 128;
             assert(capacity == count * 4);
             std::vector<ULONG> out(count);
             if (word & DG_GL_TEXTURE_READ_DEPTH) {
                 const BOOL packed = (word & DG_GL_TEXTURE_READ_FLOAT) != 0;
                 for (ULONG i = 0; i < count; ++i)
-                    out[i] = packed ? 0x00123400U | (first + i) : Bits((first + i) / 8.0f);
+                    out[i] = first + i >= (ULONG)(LevelWidth * LevelHeight) ? 0
+                             : packed ? 0x00123400U | (first + i)
+                                      : Bits((first + i) / 8.0f);
                 return put(packed ? DG_GL_RESULT_INT : DG_GL_RESULT_FLOAT, out.data(), count * 4);
             }
             for (ULONG i = 0; i < count; ++i)
@@ -615,6 +628,48 @@ static void Readback(void) {
     Close(c);
 }
 
+/* DG_CAP2_GL_BULK_READ: one SHAPE query decides the depth checks exactly as
+ * the level-parameter queries did, then one unit-counted read. */
+static void BulkReadback(void) {
+    JGL_CONTEXT *c = Open(OTHERS, DEPTH_TEXTURE | DG_CAP2_GL_BULK_READ);
+    float floats[7];
+    ULONG words[7];
+    memset(floats, 0xa5, sizeof(floats));
+    glGetTexImage(TEX_2D, 0, DEPTH, GL_FLOAT, floats);
+    assert(!c->Error && Queries.size() == 2);
+    for (ULONG i = 0; i < 6; ++i)
+        assert(floats[i] == i / 8.0f);
+    assert(Bits(floats[6]) == 0xa5a5a5a5U);
+    assert(Queries[0][0] == FEnum_glGetTexImage && Queries[0][2] == DG_GL_TEXTURE_READ_SHAPE);
+    assert(Queries[1][2] == (DG_GL_TEXTURE_READ_DEPTH | DG_GL_TEXTURE_READ_UNITS | (1U << 16)));
+    LevelStencil = 8;
+    memset(words, 0xa5, sizeof(words));
+    Queries.clear();
+    glGetTexImage(TEX_RECT, 0, DEPTH_STENCIL, UINT_24_8, words);
+    assert(!c->Error && Queries.size() == 2 && words[6] == 0xa5a5a5a5U);
+    for (ULONG i = 0; i < 6; ++i)
+        assert(words[i] == (0x00123400U | i));
+    /* The other kind of level: INVALID_OPERATION after the one SHAPE query. */
+    LevelDepth = 0;
+    Queries.clear();
+    glGetTexImage(TEX_2D, 0, DEPTH, GL_FLOAT, floats);
+    assert(c->Error == GL_INVALID_OPERATION && Queries.size() == 1);
+    c->Error = 0;
+    LevelDepth = 24;
+    LevelStencil = 0;
+    glGetTexImage(TEX_2D, 0, DEPTH_STENCIL, UINT_24_8, words);
+    assert(c->Error == GL_INVALID_OPERATION && Queries.size() == 2);
+    c->Error = 0;
+    glGetTexImage(TEX_1D, 0, GL_RGBA, GL_UNSIGNED_BYTE, words);
+    assert(c->Error == GL_INVALID_OPERATION && Queries.size() == 3);
+    c->Error = 0;
+    /* Colour reads of cube faces never see depth bits. */
+    glGetTexImage(CUBE_X, 0, GL_RGBA, GL_UNSIGNED_BYTE, words);
+    assert(!c->Error && Queries.size() == 5);
+    Log.clear();
+    Close(c);
+}
+
 /* Display lists capture the parameters; invalid values are deferred errors. */
 static void Lists(void) {
     JGL_CONTEXT *c = Open(OTHERS, DEPTH_TEXTURE);
@@ -641,6 +696,7 @@ int main() {
     Parameters();
     Images();
     Readback();
+    BulkReadback();
     Lists();
     puts("PASS depth texture frontend");
     return 0;
