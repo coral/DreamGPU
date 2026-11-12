@@ -245,11 +245,28 @@ pub unsafe extern "C" fn dreamgpu_device_gl_submit(
     let c = unsafe { *callbacks };
     let r = unsafe { *request };
     let mut out = GlResult::default();
-    let error = unsafe { gl_submit(c, r, &mut out) };
+    let error = unsafe { gl_submit(c, r, &mut out, &mut false) };
     unsafe { output.write(out) };
     error
 }
-pub(crate) unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult) -> u32 {
+/// True when the batch is one QUERY record and nothing else (gl.h: QUERY is the
+/// sole record of its batch), judged from its framing alone so that a rejected
+/// batch is classified too. Every QUERY is synchronous (DG_ESCAPE_SUBMIT_ASYNC
+/// never carries a result), so its submitter receives its outcome directly.
+fn sole_query(bytes: &[u8]) -> bool {
+    bytes.len() == DG_GL_QUERY_BYTES as usize
+        && word(bytes, DG_GL_OFF_OP as usize) == DG_GL_QUERY
+        && word(bytes, DG_GL_OFF_SIZE as usize) == DG_GL_QUERY_BYTES
+}
+/// `query` reports a sole-QUERY batch (see `sole_query`) whenever its bytes
+/// were captured, whether or not it is then rejected.
+pub(crate) unsafe fn gl_submit(
+    c: GlCallbacks,
+    r: GlRequest,
+    out: &mut GlResult,
+    query: &mut bool,
+) -> u32 {
+    *query = false;
     if r.bytes == 0 || r.bytes > DG_GL_MAX_BYTES || r.bytes & 3 != 0 {
         return DG_GL_ERROR_BATCH;
     }
@@ -262,6 +279,7 @@ pub(crate) unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult)
     // Recognize invalid coherence operations before the full record validator.
     {
         let bytes = unsafe { slice::from_raw_parts(snapshot.data, r.bytes as usize) };
+        *query = sole_query(bytes);
         let mut offset = 0;
         while offset + DG_GL_HEADER_BYTES as usize <= bytes.len() {
             let record = &bytes[offset..];
@@ -283,13 +301,8 @@ pub(crate) unsafe fn gl_submit(c: GlCallbacks, r: GlRequest, out: &mut GlResult)
     if error != 0 {
         return error;
     }
-    let query = unsafe {
-        word(
-            slice::from_raw_parts(snapshot.data, r.bytes as usize),
-            DG_GL_OFF_OP as usize,
-        )
-    } == DG_GL_QUERY;
-    if query {
+    // Validation admits a QUERY record only as the sole record of its batch.
+    if *query {
         let function = unsafe { word(slice::from_raw_parts(snapshot.data, r.bytes as usize), 32) };
         let required = unsafe {
             crate::gl_validation::dreamgpu_gl_query_result_bytes(function, snapshot.data.add(36))

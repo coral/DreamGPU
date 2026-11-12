@@ -422,12 +422,51 @@ int main() {
         assert(JglListMode(0));
         assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
     }
+
+    /* Jedi Academy's extension setup asks glGetIntegerv for
+     * GL_MAX_GENERAL_COMBINERS_NV whatever the extensions. The host rejects
+     * the enum before execution (HOST, DG_GL_ERROR_UNSUPPORTED, completion
+     * known): the output is untouched, the error is GL_INVALID_ENUM, and the
+     * context keeps submitting on its stream. */
+    {
+        Reset();
+        HostFeatures = DG_ESCAPE_FEATURE_QUEUE;
+        HostMaxBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+        HGLRC context = Create();
+        JGL_CONTEXT *c = Lookup(context);
+        FailOperation = DG_GL_QUERY;
+        FailStatus = DG_ESCAPE_HOST;
+        FailError = DG_GL_ERROR_UNSUPPORTED;
+        GLint combiners = 7;
+        glGetIntegerv(0x854d, &combiners);
+        assert(!FailOperation && LastStream == c->Id);
+        assert(combiners == 7 && !c->Failed && !c->Uncertain && !c->DeferredFault);
+        assert(glGetError() == GL_INVALID_ENUM);
+        const ULONG sync = SyncStreamSubmits;
+        Logged = 0;
+        SubmittedRecord = LogRecord;
+        glBegin(GL_TRIANGLES);
+        glVertex3f(0, 0, 0);
+        glVertex3f(1, 0, 0);
+        glVertex3f(0, 1, 0);
+        glEnd();
+        glFinish();
+        assert(SyncStreamSubmits == sync + 1 && LastStream == c->Id);
+        assert(Logged >= 5 && !c->Failed && !c->Error);
+        // The next query also reaches the host, on the same stream.
+        HostInteger = 4;
+        glGetIntegerv(0x0d33, &combiners); /* MAX_TEXTURE_SIZE */
+        assert(combiners == 4 && LastQueryFunction == FEnum_glGetIntegerv);
+        assert(LastQueryArgument == 0x0d33 && glGetError() == GL_NO_ERROR);
+        assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
+    }
     BindCapabilities = 0;
     Reset();
     assert(!Allocations);
     puts("PASS fixed state actual frontend: exact negotiated extension strings and stable "
          "pointers; unnegotiated hosts unchanged; exact records/bits, ATI expansion, point "
          "vectors, new pnames; Begin rejection; blend cache; lists; host queries; name-sized "
-         "scalar pre-validation and texture-control negotiation");
+         "scalar pre-validation and texture-control negotiation; a host-rejected enum keeps "
+         "its context and stream");
     return 0;
 }

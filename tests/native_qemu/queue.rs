@@ -2,6 +2,7 @@
 //! pipelined batches published without waiting, a later synchronous query, a
 //! present whose identity arrives in the queue page, faults inside pipelined
 //! batches (validation and execution) that skip only their own fault domain,
+//! a rejected query that fails no domain,
 //! interrupts only while a wait is armed, a legacy SUBMIT refused while the
 //! queue owns ordering, and an engine reset with batches in flight followed by
 //! re-enabling and by the unchanged register protocol. MMIO accesses are
@@ -48,6 +49,9 @@ const ERROR_BATCH: u32 = 1;
 const ERROR_SKIPPED: u32 = 12;
 
 const GET_ERROR: u32 = 764;
+const GET_INTEGERV: u32 = 809;
+/// GL_MAX_GENERAL_COMBINERS_NV: NV_register_combiners is never advertised.
+const MAX_GENERAL_COMBINERS_NV: u32 = 0x854d;
 const CLEAR_COLOR: u32 = 0xa3;
 const CLEAR: u32 = 0x9a;
 const BEGIN: u32 = 0x01a;
@@ -321,18 +325,43 @@ fn qemu_queue_pipelines_batches_queries_presents_and_contains_faults() {
     // function), then a valid batch of the same stream is skipped. Stream 3:
     // fails at execution (no such context), its follower is skipped too.
     // Stream 1 work between and after still executes in order.
+    // A QUERY rejected before execution is the exception: stream 1's
+    // glGetIntegerv of an unanswered enum (Jedi Academy's extension setup)
+    // fails alone and stream 1 keeps executing.
     let rejected = d.publish(1, 2, &[call(0xffff, &[])], 0);
     let skipped = d.publish(1, 2, &[(5, vec![])], 0);
     let mid = d.publish(1, 1, &[call(CLEAR, &[0x4000])], 0);
+    let unanswered = d.publish(
+        1,
+        1,
+        &[(11, vec![GET_INTEGERV, MAX_GENERAL_COMBINERS_NV, 0, 0])],
+        64,
+    );
     let failed = d.publish(1, 3, &[(5, vec![])], 0);
     let skipped2 = d.publish(1, 3, &[call(CLEAR, &[0x4000])], 0);
+    let after = d.publish(1, 1, &[call(CLEAR, &[0x4000])], 0);
     let last = d.publish(1, 1, &[(11, vec![GET_ERROR, 0, 0, 0])], 64);
     assert_eq!(d.wait(last), (DONE, 0));
     assert_eq!(d.outcome(rejected), (FAILED, ERROR_UNSUPPORTED));
     assert_eq!(d.outcome(skipped), (FAILED, ERROR_SKIPPED));
     assert_eq!(d.outcome(mid), (DONE, 0));
+    assert_eq!(d.outcome(unanswered), (FAILED, ERROR_UNSUPPORTED));
     assert_eq!(d.outcome(failed), (FAILED, ERROR_CONTEXT));
     assert_eq!(d.outcome(skipped2), (FAILED, ERROR_SKIPPED));
+    assert_eq!(d.outcome(after), (DONE, 0));
+    // The same rejection with nothing in flight, then the stream's next
+    // query: it executes, and the rejection left no host GL error behind.
+    let unanswered = d.publish(
+        1,
+        1,
+        &[(11, vec![GET_INTEGERV, MAX_GENERAL_COMBINERS_NV, 0, 0])],
+        64,
+    );
+    assert_eq!(d.wait(unanswered), (FAILED, ERROR_UNSUPPORTED));
+    d.qemu.command(&format!("memset {RESULT:#x} 4 0xcc"));
+    let next = d.publish(1, 1, &[(11, vec![GET_ERROR, 0, 0, 0])], 64);
+    assert_eq!(d.wait(next), (DONE, 0));
+    assert_eq!(words(&d.bytes(RESULT, 4))[0], 0);
 
     // Interrupts: none while unarmed, one once an armed wait holds.
     d.mmio_write(IRQ_STATUS, IRQ_GL);

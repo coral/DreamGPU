@@ -113,13 +113,16 @@ unsafe extern "C" fn validate(
     if bytes < 32 || word(1) != bytes {
         return DG_GL_ERROR_BATCH;
     }
-    // Opcode 99 models any record the host validator rejects.
-    if word(0) == 99 {
+    // Opcode 99 models any record the host validator rejects, and a QUERY of
+    // UNANSWERED one asking for an enum the host does not answer.
+    if word(0) == 99 || (word(0) == DG_GL_QUERY && bytes >= 36 && word(8) == UNANSWERED) {
         DG_GL_ERROR_UNSUPPORTED
     } else {
         0
     }
 }
+/// The query function word the model validator rejects as UNSUPPORTED.
+const UNANSWERED: u32 = 0xffff;
 unsafe extern "C" fn begin(_: *mut c_void, _: u32) {}
 unsafe extern "C" fn record(_: *mut c_void, _: *const u8) {}
 fn memory(o: *mut c_void) -> sub::Memory {
@@ -586,6 +589,63 @@ fn validation_failures_complete_in_order_and_fault_their_domain() {
     assert_eq!(d.step().map(|s| s.0), Some(9));
     assert_eq!(d.page(DG_GL_QUEUE_COMPLETED), 11);
     assert_eq!(d.status(10), (FAILED, DG_GL_ERROR_UNSUPPORTED));
+}
+
+#[test]
+fn rejected_queries_leave_their_stream_running() {
+    // A QUERY of `bytes` (48: the sole record) asking for `function`.
+    let query = |d: &mut Device, seq: u32, function: u32, bytes: u32| {
+        let buffer = BUFFERS + u64::from(d.produced % 8) * 0x8000;
+        d.publish(seq, DG_GL_QUERY, bytes, (7, 1), 8);
+        d.host.set(buffer + 32, function);
+    };
+    let mut d = Device::new();
+    // Jedi Academy: glGetIntegerv(GL_MAX_GENERAL_COMBINERS_NV) is rejected
+    // before execution. Its synchronous submitter gets UNSUPPORTED (reported
+    // as GL_INVALID_ENUM) and the context's next batch on the same stream
+    // still executes. With nothing ahead it completes at consumption.
+    query(&mut d, 1, UNANSWERED, DG_GL_QUERY_BYTES);
+    d.publish(2, 6, 32, (7, 1), 0);
+    d.doorbell();
+    assert_eq!(d.status(0), (FAILED, DG_GL_ERROR_UNSUPPORTED));
+    assert_eq!(d.drain(), vec![2]);
+    assert_eq!(d.status(1), (OK, 0));
+    // Behind executing work of its stream its completion waits its turn
+    // through the engine, which does not fail the stream either.
+    d.publish(3, 6, 32, (7, 1), 0);
+    query(&mut d, 4, UNANSWERED, DG_GL_QUERY_BYTES);
+    d.publish(5, 6, 32, (7, 1), 0);
+    query(&mut d, 6, FEnum_glGetError, DG_GL_QUERY_BYTES);
+    d.host.results.insert(6, vec![0; 4]);
+    d.doorbell();
+    assert_eq!(d.drain(), vec![3, 4, 5, 6]);
+    assert_eq!(d.host.executed, vec![2, 3, 5, 6]);
+    assert_eq!(d.status(3), (FAILED, DG_GL_ERROR_UNSUPPORTED));
+    assert_eq!(d.status(4), (OK, 0));
+    assert_eq!(d.status(5), (OK, 0));
+    assert_eq!(d.queue.faulted, [Domain::default(); FAULTED]);
+    assert_eq!(d.host.engine.faulted, [Domain::default(); FAULTED]);
+    // A rejected batch that is more than one QUERY record still fails its
+    // stream: nothing of it ran, and its other records are lost.
+    query(&mut d, 7, UNANSWERED, 64);
+    d.publish(8, 6, 32, (7, 1), 0);
+    d.doorbell();
+    assert_eq!(d.drain(), vec![]);
+    assert_eq!(d.status(6), (FAILED, DG_GL_ERROR_UNSUPPORTED));
+    assert_eq!(d.status(7), (FAILED, DG_GL_ERROR_SKIPPED));
+
+    // A query that fails while executing still fails its stream, as any
+    // executed batch does.
+    let mut d = Device::new();
+    d.host.errors.insert(2, DG_GL_ERROR_HOST);
+    d.publish(1, 6, 32, (7, 1), 0);
+    query(&mut d, 2, FEnum_glGetError, DG_GL_QUERY_BYTES);
+    d.publish(3, 6, 32, (7, 1), 0);
+    d.doorbell();
+    assert_eq!(d.drain(), vec![1, 2, 3]);
+    assert_eq!(d.host.executed, vec![1, 2]);
+    assert_eq!(d.status(1), (FAILED, DG_GL_ERROR_HOST));
+    assert_eq!(d.status(2), (FAILED, DG_GL_ERROR_SKIPPED));
 }
 
 #[test]

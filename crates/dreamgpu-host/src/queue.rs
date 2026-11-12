@@ -389,13 +389,14 @@ pub unsafe extern "C" fn dreamgpu_queue_consume(
             ..QueueEntry::default()
         };
         let mut out = GlResult::default();
+        let mut query = false;
         e.error =
             if word(&raw, DG_GL_ENTRY_RESERVED0) != 0 || word(&raw, DG_GL_ENTRY_RESERVED1) != 0 {
                 DG_GL_ERROR_BATCH
             } else if faulted(&q.faulted, Queue::domain(&e)) {
                 DG_GL_ERROR_SKIPPED
             } else {
-                unsafe { gl_submit(cb.gl, request, &mut out) }
+                unsafe { gl_submit(cb.gl, request, &mut out, &mut query) }
             };
         e.sensitive = out.sensitive;
         if e.error == 0 {
@@ -408,6 +409,16 @@ pub unsafe extern "C" fn dreamgpu_queue_consume(
         // Not executed. Its completion still follows every earlier entry, and
         // the engine must learn the failed domain in that same order.
         e.bytes = 0;
+        if query {
+            // A rejected QUERY (an enum the host does not answer is
+            // DG_GL_ERROR_UNSUPPORTED) changed nothing, and its synchronous
+            // submitter receives this error itself: the frontend reports a GL
+            // error and keeps the context. Its stream continues, so neither
+            // this queue nor the engine records a failure of its domain.
+            // Batches that fail while executing still fail theirs.
+            e.client = 0;
+            e.stream = 0;
+        }
         if q.len == 0 {
             unsafe { q.finish(cb, &e, None) };
             continue;

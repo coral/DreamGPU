@@ -422,8 +422,11 @@
  * WAIT_CONSUMED >= 0. A waiter arms, fences, then rechecks before sleeping.
  * CLIENT/STREAM name an optional fault domain (zero: none). Once a batch of a
  * domain fails, its later batches complete with DG_GL_ERROR_SKIPPED without
- * executing, until engine reset. Records, admission and ordering are those of
- * SUBMIT; only the transport differs. */
+ * executing, until engine reset. A QUERY batch rejected before execution (an
+ * unanswered enum is DG_GL_ERROR_UNSUPPORTED) is the exception: it ran nothing
+ * and its synchronous submitter receives the error, so its domain continues.
+ * Records, admission and ordering are those of SUBMIT; only the transport
+ * differs. */
 #define DG_GL_REG_QUEUE_VERSION 0x1180
 #define DG_GL_REG_QUEUE_ADDR_LO 0x1184
 #define DG_GL_REG_QUEUE_ADDR_HI 0x1188

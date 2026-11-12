@@ -207,6 +207,13 @@ fn query_types_sizes_padding_and_large_readback_caps_are_exact() {
         query_validate(FEnum_glGetString, [GL_VERSION, 0, 0]),
         DG_GL_ERROR_UNSUPPORTED
     );
+    // GL_MAX_GENERAL_COMBINERS_NV, asked unconditionally by Jedi Academy's
+    // extension setup: NV_register_combiners is never advertised, so the
+    // host answers it as drivers without the extension did (INVALID_ENUM).
+    assert_eq!(
+        query_validate(FEnum_glGetIntegerv, [0x854d, 0, 0]),
+        DG_GL_ERROR_UNSUPPORTED
+    );
     assert_eq!(
         query_validate(FEnum_glGetError, [1, 0, 0]),
         DG_GL_ERROR_BATCH

@@ -5,9 +5,10 @@
 //! buffers of every index type at aligned offsets (one also holding the
 //! vertices); client sections mixed with buffer attributes in array and
 //! indexed draws; BufferSubData updates and whole-buffer "unmap" uploads;
-//! zero-size and zero-defined storage; every bounds failure, missing or
-//! deleted name and budget exhaustion as a GL error after which the context
-//! keeps drawing; sharing and isolation between contexts; and display lists,
+//! zero-size and zero-defined storage; arrays whose buffer is too short left
+//! unread while the rest draws without error; element ranges past their
+//! buffer, indices outside client vertices, missing or deleted names and
+//! budget exhaustion as GL errors after which the context keeps drawing; sharing and isolation between contexts; and display lists,
 //! which never compile buffer commands and record a buffer draw as
 //! INVALID_OPERATION. Every GL error stays a GL error: no batch in this file
 //! may fail.
@@ -80,6 +81,10 @@ const RIGHT: [f32; 8] = [0., -1., 1., -1., 1., 1., 0., 1.];
 const PASS: &[u8] = b"!!ARBvp1.0\nMOV result.position, vertex.attrib[0];\n\
 MOV result.color, vertex.attrib[1];\nEND";
 
+/// The current colour (Color4f) an unread colour array leaves in effect.
+fn current(rgba: [u8; 4]) -> (u32, Vec<u32>) {
+    call(COLOR4F, &rgba.map(|c| f(f32::from(c) / 255.)))
+}
 fn f(v: f32) -> u32 {
     v.to_bits()
 }
@@ -865,13 +870,25 @@ fn qemu_buffer_draws_mix_client_sections_and_follow_buffer_updates() {
     );
 
     // Zero-size storage: an object no attribute fits, which an empty
-    // BufferSubData at offset zero accepts.
+    // BufferSubData at offset zero accepts. Its arrays are never read
+    // (9c93d17): as positions nothing draws, as colours the positions draw
+    // in the current colour; neither is a GL error.
     d.submit(&[storage(4, 0, STATIC_DRAW), sub_data(4, 0, &[])]);
     assert_eq!(d.error(), 0);
-    d.fails(
+    d.draws(
         vec![draw(QUADS, 0, 4, Indices::None, &[positions(4), colors(2)])],
-        INVALID_OPERATION,
-        "a zero-size buffer",
+        BLACK,
+        BLACK,
+        "a zero-size position buffer draws nothing",
+    );
+    d.draws(
+        vec![
+            current(MAGENTA),
+            draw(QUADS, 0, 4, Indices::None, &[positions(1), colors(4)]),
+        ],
+        MAGENTA,
+        BLACK,
+        "a zero-size colour buffer: positions drawn in the current colour",
     );
     d.submit(&[sub_data(4, 0, &[1])]);
     assert_eq!(d.error(), INVALID_VALUE);
@@ -899,7 +916,7 @@ fn qemu_buffer_failures_stay_gl_errors_and_the_context_survives() {
     assert_eq!(d.error(), 0);
     let full = |p: Slot| draw(QUADS, 0, 4, Indices::None, &[p, colors(3)]);
 
-    // Attribute reads exactly to the end of the buffer draw; one beyond fails.
+    // Attribute reads exactly to the end of the buffer draw; one beyond is unread.
     d.draws(
         vec![full(buffered(0, descriptor(FLOAT, 2), 1, 0, 8))],
         SLATE,
@@ -917,61 +934,75 @@ fn qemu_buffer_failures_stay_gl_errors_and_the_context_survives() {
         SLATE,
         "offset 8 to the end",
     );
-    d.fails(
-        vec![full(buffered(0, descriptor(FLOAT, 2), 1, 8, 0))],
-        INVALID_OPERATION,
-        "offset beyond the buffer",
+    // Since 9c93d17 a buffered array whose buffer does not hold every drawn
+    // vertex is never read: it stays disabled and the draw proceeds without
+    // a GL error. Without positions nothing draws; an unread colour array
+    // leaves the current colour.
+    for (records, label) in [
+        (
+            vec![full(buffered(0, descriptor(FLOAT, 2), 1, 8, 0))],
+            "offset beyond the buffer",
+        ),
+        (
+            vec![full(buffered(0, descriptor(FLOAT, 2), 1, 0, 12))],
+            "stride beyond the buffer",
+        ),
+        (
+            vec![full(buffered(0, descriptor(FLOAT, 2), 1, 40, 0))],
+            "offset past the end",
+        ),
+        (
+            vec![draw(QUADS, 1, 4, Indices::None, &[positions(1), colors(3)])],
+            "first vertex beyond the buffer",
+        ),
+        (
+            vec![draw(
+                QUADS,
+                0,
+                4,
+                Indices::Element(UNSIGNED_SHORT, 5, 0),
+                &[positions(1), colors(3)],
+            )],
+            "element-buffer index beyond the attribute buffer",
+        ),
+        (
+            vec![draw(
+                QUADS,
+                0,
+                4,
+                Indices::Inline(UNSIGNED_SHORT, vec![0, 1, 2, 7]),
+                &[positions(1), colors(3)],
+            )],
+            "inline index beyond the attribute buffer",
+        ),
+    ] {
+        d.draws(records, BLACK, BLACK, &format!("{label}: positions unread"));
+    }
+    d.draws(
+        vec![
+            current(MAGENTA),
+            draw(
+                QUADS,
+                0,
+                4,
+                Indices::None,
+                &[
+                    positions(1),
+                    buffered(1, descriptor(UNSIGNED_BYTE, 4), 3, 4, 0),
+                ],
+            ),
+        ],
+        MAGENTA,
+        MAGENTA,
+        "colour offset beyond the buffer: positions drawn in the current colour",
     );
-    d.fails(
-        vec![full(buffered(0, descriptor(FLOAT, 2), 1, 0, 12))],
-        INVALID_OPERATION,
-        "stride beyond the buffer",
-    );
-    d.fails(
-        vec![full(buffered(0, descriptor(FLOAT, 2), 1, 40, 0))],
-        INVALID_OPERATION,
-        "offset past the end",
-    );
-    d.fails(
-        vec![draw(QUADS, 1, 4, Indices::None, &[positions(1), colors(3)])],
-        INVALID_OPERATION,
-        "first vertex beyond the buffer",
-    );
-    d.fails(
-        vec![draw(
-            QUADS,
-            0,
-            4,
-            Indices::None,
-            &[
-                positions(1),
-                buffered(1, descriptor(UNSIGNED_BYTE, 4), 3, 4, 0),
-            ],
-        )],
-        INVALID_OPERATION,
-        "colour offset beyond the buffer",
-    );
-    d.fails(
-        vec![draw(
-            QUADS,
-            0,
-            4,
-            Indices::Element(UNSIGNED_SHORT, 5, 0),
-            &[positions(1), colors(3)],
-        )],
-        INVALID_OPERATION,
-        "element-buffer index beyond the attribute buffer",
-    );
-    d.fails(
-        vec![draw(
-            QUADS,
-            0,
-            4,
-            Indices::Inline(UNSIGNED_SHORT, vec![0, 1, 2, 7]),
-            &[positions(1), colors(3)],
-        )],
-        INVALID_OPERATION,
-        "inline index beyond the attribute buffer",
+    // Unread slots are disabled for their draw only: the same buffers that
+    // fit draw again.
+    d.draws(
+        vec![full(positions(1))],
+        SLATE,
+        SLATE,
+        "fitting buffers after unread ones",
     );
 
     // An element range beyond its buffer: exactly to the end draws.
@@ -1143,9 +1174,11 @@ fn qemu_buffer_failures_stay_gl_errors_and_the_context_survives() {
     d.submit(&[storage(61, MAX_BUFFER_BYTES, STATIC_DRAW)]);
     assert_eq!(d.error(), OUT_OF_MEMORY);
     assert_eq!(d.error(), 0);
-    d.fails(
+    // An empty object still exists: its positions are unread, nothing draws.
+    d.draws(
         vec![full(positions(61))],
-        INVALID_OPERATION,
+        BLACK,
+        BLACK,
         "an exhausted buffer is empty",
     );
     d.submit(&[sub_data(61, 0, &[0; 4])]);
@@ -1153,9 +1186,10 @@ fn qemu_buffer_failures_stay_gl_errors_and_the_context_survives() {
     // Re-specifying an existing buffer beyond the budget empties it.
     d.submit(&[storage(1, MAX_BUFFER_BYTES, STATIC_DRAW)]);
     assert_eq!(d.error(), OUT_OF_MEMORY);
-    d.fails(
+    d.draws(
         vec![full(positions(1))],
-        INVALID_OPERATION,
+        BLACK,
+        BLACK,
         "a failed replacement leaves no store",
     );
     // Deleting the large buffer returns its budget.

@@ -5,8 +5,9 @@
 //! and inline indices, beside RGBA buffer slots and RGBA client sections;
 //! the forms the frontend sends for BGRA client memory (reordered RGBA
 //! sections) and ArrayElement (scalar colours) drawing the same pixels; reads
-//! beyond a buffer and missing buffers as GL errors after which the context
-//! keeps drawing; and display lists, which record the BGRA buffer draw as
+//! beyond a buffer left unread (the rest drawing, no error) and missing
+//! buffers as GL errors after which the context keeps drawing; and display
+//! lists, which record the BGRA buffer draw as
 //! INVALID_OPERATION while compiling the frontend's client forms. Every colour
 //! has different red and blue, so a byte-order error shows. No batch in this
 //! file may fail.
@@ -526,19 +527,26 @@ fn qemu_bgra_buffer_draw_errors_lists_and_frontend_client_forms() {
     elements.extend(element_quad(RIGHT, TEAL));
     d.draws(elements, AMBER, TEAL, "ArrayElement colours");
 
-    // A BGRA read one byte beyond its buffer, a missing buffer and a deleted
-    // name are GL errors; the context keeps drawing.
+    // A BGRA colour buffer too short for the drawn vertices is never read
+    // (9c93d17): its array stays disabled, the positions still draw in the
+    // current colour, and there is no GL error. A missing buffer is still
+    // INVALID_OPERATION; the context keeps drawing.
+    let current = |rgba: [u8; 4]| call(COLOR4F, &rgba.map(|c| f(f32::from(c) / 255.)));
     d.submit(&[buffer(8, &bgra_halves(AMBER, TEAL)[..31])]);
-    d.fails(
-        vec![draw(
-            BGRA_DRAW,
-            0,
-            8,
-            Indices::None,
-            &[positions(1), bgra_slot(1, 8, 0, 0)],
-        )],
-        INVALID_OPERATION,
-        "one byte short",
+    d.draws(
+        vec![
+            current(PLUM),
+            draw(
+                BGRA_DRAW,
+                0,
+                8,
+                Indices::None,
+                &[positions(1), bgra_slot(1, 8, 0, 0)],
+            ),
+        ],
+        PLUM,
+        PLUM,
+        "one byte short: colours unread",
     );
     d.draws(
         vec![draw(
@@ -563,16 +571,20 @@ fn qemu_bgra_buffer_draw_errors_lists_and_frontend_client_forms() {
         INVALID_OPERATION,
         "missing buffer",
     );
-    d.fails(
-        vec![draw(
-            BGRA_DRAW,
-            0,
-            8,
-            Indices::None,
-            &[positions(1), bgra_slot(1, 2, 4, 4)],
-        )],
-        INVALID_OPERATION,
-        "offset and stride beyond",
+    d.draws(
+        vec![
+            current(SLATE),
+            draw(
+                BGRA_DRAW,
+                0,
+                8,
+                Indices::None,
+                &[positions(1), bgra_slot(1, 2, 4, 4)],
+            ),
+        ],
+        SLATE,
+        SLATE,
+        "offset and stride beyond: colours unread",
     );
     d.draws(
         vec![tight()],
