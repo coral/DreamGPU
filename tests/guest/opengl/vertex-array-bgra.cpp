@@ -490,8 +490,37 @@ static void Buffers(void) {
     a = {GL_POINTS, 0, 6, pcs, 0, 0x13, 0, 0, 0, 0};
     ExpectBufferDraw(Log[1], FEnum_glDrawRangeElementsEXT, a, BufferPayload(a, refs, {}, 1));
     Log.clear();
-    glDrawArrays(GL_POINTS, 1, 6); /* one vertex beyond: a local error */
-    Rejected(c, GL_INVALID_OPERATION);
+    /* One vertex beyond the buffer: no slot is read, nothing provokes a
+     * vertex, nothing is drawn and there is no error. */
+    glDrawArrays(GL_POINTS, 1, 6);
+    Quiet(c);
+    /* A BGRA colour buffer one byte short of vertex 5's colour is never read
+     * (its current value applies); the BGRA secondary colour keeps the BGRA
+     * buffer draw. Both short, no BGRA slot is left: the plain buffer draw. */
+    Upload(c, ARRAY_BUFFER, 3, Vertices, 5 * 20 + 11);
+    glColorPointer(JGL_BGRA, GL_UNSIGNED_BYTE, 20, Offset(8));
+    glDrawArrays(GL_TRIANGLES, 1, 5);
+    glSecondaryColorPointerEXT(JGL_BGRA, GL_UNSIGNED_BYTE, 20, Offset(12));
+    glDrawArrays(GL_TRIANGLES, 1, 5);
+    glDrawArrays(GL_TRIANGLES, 1, 3); /* both colours read */
+    Submit(c);
+    assert(!c->Error && Log.size() == 3);
+    a = {GL_TRIANGLES, 1, 5, pcs & ~DG_GL_ARRAY_COLOR, 0, 0x11, 0, 0, 0, 0};
+    ExpectBufferDraw(Log[0], FEnum_glDrawRangeElementsEXT, a,
+                     BufferPayload(a, {{0, float2, 1, 0, 20}, {4, bgra, 1, 12, 20}}, {}, 1));
+    a = {GL_TRIANGLES, 1, 5, DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION, 0, 0x1, 0, 0, 0, 0};
+    ExpectBufferDraw(Log[1], FEnum_glDrawRangeElements, a,
+                     BufferPayload(a, {{0, float2, 1, 0, 20}}, {}, 0));
+    a = {GL_TRIANGLES, 1, 3, pcs, 0, 0x13, 0, 0, 0, 0};
+    ExpectBufferDraw(
+        Log[2], FEnum_glDrawRangeElementsEXT, a,
+        BufferPayload(a, {{0, float2, 1, 0, 20}, {1, bgra, 3, 8, 20}, {4, bgra, 3, 12, 20}}, {},
+                      1));
+    Log.clear();
+    glBindBufferARB(ARRAY_BUFFER, 1);
+    glColorPointer(JGL_BGRA, GL_UNSIGNED_BYTE, 20, Offset(8));
+    glSecondaryColorPointerEXT(JGL_BGRA, GL_UNSIGNED_BYTE, 20, Offset(12));
+    glBindBufferARB(ARRAY_BUFFER, 0);
     /* An element buffer, indices beyond the buffer bounded by the host. */
     const GLushort elements[4] = {0xeeee, 5, 0, 2};
     Upload(c, ELEMENT_BUFFER, 2, elements, sizeof(elements));
@@ -675,6 +704,25 @@ static void Elements(void) {
     AliasArrayElement(5);
     glEnd();
     expect(5);
+    /* A BGRA colour copy one byte short of element 3's colour is never read
+     * for it (its current colour applies); element 2's is. */
+    Upload(c, ARRAY_BUFFER, 2, Vertices, 3 * 20 + 11);
+    glColorPointer(JGL_BGRA, GL_UNSIGNED_BYTE, 20, Offset(8));
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    glBegin(GL_POINTS);
+    AliasArrayElement(3);
+    AliasArrayElement(2);
+    glEnd();
+    Submit(c);
+    assert(!c->Error && Log.size() == 9);
+    const GLubyte *rgb = RGBA.specular[3], *rgba = RGBA.color[2];
+    ExpectCall(Log[1], FEnum_glSecondaryColor3f,
+               {Bits(rgb[0] / 255.0f), Bits(rgb[1] / 255.0f), Bits(rgb[2] / 255.0f)});
+    assert(Log[2][8] == FEnum_glVertexAttrib4fARB && Log[3][8] == FEnum_glVertex4f);
+    ExpectCall(Log[4], FEnum_glColor4f,
+               {Bits(rgba[0] / 255.0f), Bits(rgba[1] / 255.0f), Bits(rgba[2] / 255.0f),
+                Bits(rgba[3] / 255.0f)});
+    Log.clear();
     glDisableVertexAttribArrayARB(3);
     Quiet(c);
     Close(c);

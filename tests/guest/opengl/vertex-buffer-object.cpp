@@ -6,8 +6,10 @@
  * malformed may leave the frontend), the mapping shadow, the buffer draw for
  * array, element and mixed client/buffer draws, its client-draw fallbacks
  * (display list compilation, offsets, strides and sizes the record cannot
- * express), ArrayElement, buffer bindings as client state and the share
- * group's table. Every DATA record is admitted by the NT validator. */
+ * express), ArrayElement, buffer arrays too short for what is drawn left
+ * unread in every path the frontend bounds (as the host does), buffer
+ * bindings as client state and the share group's table. Every DATA record is
+ * admitted by the NT validator. */
 #include <array>
 #include <string>
 #include <utility>
@@ -997,13 +999,53 @@ static void Draws(void) {
     a = {GL_POINTS, 0, 8, pc, 0, 3, 0, 0, 0, 0};
     ExpectBufferDraw(Log[1], a, BufferPayload(a, refs, {}));
     Log.clear();
-    /* One vertex beyond either buffer is a local error. */
+    /* A buffer array not holding every drawn vertex is never read, as by the
+     * host: it is left out of the draw (its current value applies) without
+     * an error. One vertex beyond both buffers leaves nothing to provoke a
+     * vertex: nothing is drawn. */
     glDrawArrays(GL_POINTS, 1, 8);
-    Rejected(c, GL_INVALID_OPERATION);
+    Quiet(c);
     glDisableClientState(GL_VERTEX_ARRAY);
     glDrawArrays(GL_POINTS, 0, 1); /* nothing provokes a vertex */
     Quiet(c);
     glEnableClientState(GL_VERTEX_ARRAY);
+    /* Colours from a stale buffer: too short (one colour), empty, or at an
+     * offset beyond it. The positions draw alone. */
+    const std::vector<Reference> positions = {{0, float3, 1, 16, 0}};
+    const ULONG p = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION;
+    Upload(c, ARRAY_BUFFER, 13, {});
+    Upload(c, ARRAY_BUFFER, 12, std::vector<BYTE>(4, 0x11));
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, Offset(0));
+    glDrawArrays(GL_TRIANGLES, 2, 3);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, Offset(8));
+    glDrawArrays(GL_POINTS, 0, 1);
+    glBindBufferARB(ARRAY_BUFFER, 13);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, Offset(0));
+    glDrawArrays(GL_POINTS, 0, 1);
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    Submit(c);
+    assert(!c->Error && Log.size() == 3);
+    a = {GL_TRIANGLES, 2, 3, p, 0, 1, 0, 0, 0, 0};
+    ExpectBufferDraw(Log[0], a, BufferPayload(a, positions, {}));
+    a = {GL_POINTS, 0, 1, p, 0, 1, 0, 0, 0, 0};
+    ExpectBufferDraw(Log[1], a, BufferPayload(a, positions, {}));
+    ExpectBufferDraw(Log[2], a, BufferPayload(a, positions, {}));
+    Log.clear();
+    /* The one colour the short buffer holds is read. */
+    glBindBufferARB(ARRAY_BUFFER, 12);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, Offset(0));
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    glDrawArrays(GL_POINTS, 0, 1);
+    Submit(c);
+    assert(Log.size() == 1);
+    a = {GL_POINTS, 0, 1, pc, 0, 3, 0, 0, 0, 0};
+    ExpectBufferDraw(Log[0], a,
+                     BufferPayload(a, {{0, float3, 1, 16, 0}, {1, ubyte4, 12, 0, 0}}, {}));
+    Log.clear();
+    glBindBufferARB(ARRAY_BUFFER, 2);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 8, Offset(4));
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    Quiet(c);
 
     /* The element buffer at an offset, each index type. The host bounds the
      * indices of buffer-only draws (200 lies beyond the vertex buffers). */
@@ -1094,17 +1136,34 @@ static void Draws(void) {
         BufferPayload(a, position,
                       {{1, ubyte4, Range(Colors, 2, 5)}, {2, D(GL_FLOAT, 3), NormalFloats(2, 5)}}));
     Log.clear();
-    /* With client arrays the indices are scanned: one beyond a buffer is a
-     * local error, inline or in the element buffer. */
+    /* With client arrays the indices are scanned: an index beyond the
+     * position buffer leaves it unread, inline or in the element buffer, and
+     * nothing else provokes a vertex: nothing is drawn (no client vertex is
+     * read) and there is no error. */
     const GLubyte beyond[2] = {1, 8};
     glBindBufferARB(ELEMENT_BUFFER, 0);
     glDrawElements(GL_LINES, 2, GL_UNSIGNED_BYTE, beyond);
-    Rejected(c, GL_INVALID_OPERATION);
+    Quiet(c);
     shorts[6] = 8;
     Upload(c, ELEMENT_BUFFER, 4, shorts);
     glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, Offset(2));
-    Rejected(c, GL_INVALID_OPERATION);
+    Quiet(c);
     glBindBufferARB(ELEMENT_BUFFER, 0);
+    /* A short buffer colour beside client normals: positions and normals
+     * draw, the colour is left out. */
+    glBindBufferARB(ARRAY_BUFFER, 12);
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, Offset(0));
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    const GLubyte pair[2] = {3, 1};
+    glDrawElements(GL_LINES, 2, GL_UNSIGNED_BYTE, pair);
+    Submit(c);
+    assert(!c->Error && Log.size() == 1);
+    a = {GL_LINES, 1, 2, p | DG_GL_ARRAY_NORMAL, 0, 1, 3, GL_UNSIGNED_BYTE, 0, 0};
+    ExpectBufferDraw(
+        Log[0], a,
+        BufferPayload(a, position, {{2, D(GL_FLOAT, 3), NormalFloats(1, 3)}}, Bytes(pair)));
+    Log.clear();
+    glColorPointer(4, GL_UNSIGNED_BYTE, 0, Colors);
     /* Mixed array draw: sections of first..first+count-1. */
     glDisableClientState(GL_NORMAL_ARRAY);
     glDrawArrays(GL_POINTS, 5, 3);
@@ -1226,7 +1285,9 @@ static void Fallbacks(void) {
         glVertexPointer(3, GL_FLOAT, stride, vertex.data() + offset);
         glColorPointer(4, GL_UNSIGNED_BYTE, 8, color.data() + 4);
     };
-    /* Display list compilation dereferences every buffer. */
+    /* Display list compilation dereferences every buffer. Index 200 lies
+     * beyond both buffers: neither is read, nothing provokes a vertex and
+     * nothing is compiled (no error either). */
     for (ULONG mode : {GL_COMPILE, GL_COMPILE_AND_EXECUTE}) {
         assert(JglListMode(mode));
         Clear(c);
@@ -1236,16 +1297,88 @@ static void Fallbacks(void) {
             glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, Offset(8));
             glDrawElements(GL_POINTS, 3, GL_UNSIGNED_INT, Offset(16)); /* 200: beyond */
         });
-        assert(compiled.size() == 3);
-        ExpectCall(compiled[2], DG_GL_RECORD_ERROR, {GL_INVALID_OPERATION});
+        assert(compiled.size() == 2);
         clients(16, 0);
         const Records reference = Recorded(c, [&] {
             glDrawArrays(GL_TRIANGLES, 2, 3);
             glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, element.data() + 8);
         });
-        SameClientDraws(Records(compiled.begin(), compiled.begin() + 2), reference);
+        SameClientDraws(compiled, reference);
         assert(JglListMode(0));
     }
+    /* Doom 3's stale array: texture coordinates left enabled on a buffer
+     * holding one coordinate pair. A buffer-only indexed draw sends it as is
+     * (the host, which bounds those indices, leaves it unread); every draw
+     * the frontend bounds leaves it out: the array draw, display lists and
+     * ArrayElement draw exactly as with the array disabled. */
+    Upload(c, ARRAY_BUFFER, 12, std::vector<BYTE>(8, 0x22));
+    glTexCoordPointer(2, GL_FLOAT, 0, Offset(0));
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    buffers(16, 0);
+    Records stale = Recorded(c, [&] {
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, Offset(8));
+        glDrawArrays(GL_TRIANGLES, 2, 3);
+    });
+    {
+        const ULONG pc = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR;
+        const ULONG float3 = D(GL_FLOAT, 3), ubyte4 = D(GL_UNSIGNED_BYTE, 4);
+        assert(stale.size() == 2);
+        Words a = {GL_TRIANGLES,      0, 3, pc | DG_GL_ARRAY_TEXCOORD, 0, 0xb, 0,
+                   GL_UNSIGNED_SHORT, 3, 8};
+        ExpectBufferDraw(
+            stale[0], a,
+            BufferPayload(
+                a, {{0, float3, 1, 16, 0}, {1, ubyte4, 2, 4, 8}, {3, D(GL_FLOAT, 2), 12, 0, 0}},
+                {}));
+        a = {GL_TRIANGLES, 2, 3, pc, 0, 3, 0, 0, 0, 0};
+        ExpectBufferDraw(stale[1], a,
+                         BufferPayload(a, {{0, float3, 1, 16, 0}, {1, ubyte4, 2, 4, 8}}, {}));
+    }
+    auto unread = [&] {
+        glDrawArrays(GL_TRIANGLES, 2, 3);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, Offset(8));
+        glBegin(GL_POINTS);
+        AliasArrayElement(6);
+        glEnd();
+    };
+    auto disabled = [&] {
+        glDrawArrays(GL_TRIANGLES, 2, 3);
+        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, element.data() + 8);
+        glBegin(GL_POINTS);
+        AliasArrayElement(6);
+        glEnd();
+    };
+    for (ULONG mode : {GL_COMPILE, GL_COMPILE_AND_EXECUTE}) {
+        assert(JglListMode(mode));
+        Clear(c);
+        buffers(16, 0);
+        const Records compiled = Recorded(c, unread);
+        clients(16, 0);
+        glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+        const Records reference = Recorded(c, disabled);
+        glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+        assert(compiled.size() == 6 && compiled == reference);
+        SameClientDraws(Records(compiled.begin(), compiled.begin() + 2),
+                        Records(reference.begin(), reference.begin() + 2));
+        ExpectCall(compiled[3], FEnum_glColor4f,
+                   {Bits(Colors[6][0] / 255.0f), Bits(Colors[6][1] / 255.0f),
+                    Bits(Colors[6][2] / 255.0f), Bits(Colors[6][3] / 255.0f)});
+        ExpectCall(
+            compiled[4], FEnum_glVertex4f,
+            {Bits(Positions[6][0]), Bits(Positions[6][1]), Bits(Positions[6][2]), Bits(1.0f)});
+        assert(JglListMode(0));
+    }
+    /* The one pair the buffer holds is still read. */
+    buffers(16, 0);
+    stale = Recorded(c, [&] {
+        glBegin(GL_POINTS);
+        AliasArrayElement(0);
+        glEnd();
+    });
+    assert(stale.size() == 5 && stale[2][8] == FEnum_glTexCoord4f && stale[2][9] == 0x22222222 &&
+           stale[2][10] == 0x22222222);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    Clear(c);
     /* Offsets and strides that are not component multiples, and strides
      * beyond DG_GL_MAX_BUFFER_STRIDE. */
     const std::pair<ULONG_PTR, GLsizei> layouts[] = {{18, 0}, {16, 14}, {17, 12}};
@@ -1362,6 +1495,25 @@ static void Fallbacks(void) {
     SameClientDraws(got, Recorded(c, [&] { glDrawArrays(GL_POINTS, 0, 74); }));
     assert(got.size() > 1);
     Close(c);
+
+    /* A buffer-only indexed draw whose record (three references) exceeds the
+     * packet resolves locally: its scanned indices leave the stale texture
+     * coordinates out, as if disabled. */
+    c = Open(DRAWS, 240, TRUE);
+    assert(JglMaxDataBytes(10) == 160);
+    BufferArrays(c);
+    Upload(c, ARRAY_BUFFER, 12, std::vector<BYTE>(8, 0x22));
+    glTexCoordPointer(2, GL_FLOAT, 0, Offset(0));
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    got = Recorded(c, [&] { glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, Offset(8)); });
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    clients(16, 0);
+    SameClientDraws(got, Recorded(c, [&] {
+                        glDrawElements(GL_TRIANGLES, 3, GL_UNSIGNED_SHORT, element.data() + 8);
+                    }));
+    assert(got.size() == 1 && got[0][8] == FEnum_glDrawArrays);
+    Close(c);
 }
 
 /* Objects a latch no longer finds, ranges, mapping and ArrayElement. */
@@ -1408,16 +1560,53 @@ static void Elements(void) {
         glEnd();
         Clear(c);
     };
-    element(8, GL_INVALID_OPERATION); /* beyond buffer 1 */
+    /* An element beyond every buffer reads none of them: nothing at all, and
+     * no error. A mapped buffer is still an error. */
+    element(8, 0);
     glBindBufferARB(ARRAY_BUFFER, 5);
     assert(glMapBufferARB(ARRAY_BUFFER, READ_ONLY));
     element(0, GL_INVALID_OPERATION);
+    element(8, GL_INVALID_OPERATION);
     assert(glUnmapBufferARB(ARRAY_BUFFER));
-    /* An offset is never added before it is known to be in the object. */
+    /* An offset is never added before it is known to be in the object; one
+     * beyond it leaves generic attribute 2 unread (its current value
+     * applies) while the colour and position are still read, by
+     * ArrayElement and by draws, which then reference the other buffers
+     * only. */
     glVertexAttribPointerARB(2, 2, GL_SHORT, GL_TRUE, 0, Offset(~(ULONG_PTR)3));
-    element(0, GL_INVALID_OPERATION);
+    glBegin(GL_POINTS);
+    AliasArrayElement(3);
+    glEnd();
     glDrawArrays(GL_POINTS, 0, 1);
-    Rejected(c, GL_INVALID_OPERATION);
+    Submit(c);
+    assert(!c->Error && Log.size() == 5);
+    ExpectCall(Log[1], FEnum_glColor4f,
+               {Bits(Colors[3][0] / 255.0f), Bits(Colors[3][1] / 255.0f),
+                Bits(Colors[3][2] / 255.0f), Bits(Colors[3][3] / 255.0f)});
+    ExpectCall(Log[2], FEnum_glVertex4f,
+               {Bits(Positions[3][0]), Bits(Positions[3][1]), Bits(Positions[3][2]), Bits(1.0f)});
+    {
+        const Words a = {
+            GL_POINTS, 0, 1, DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR, 0, 3, 0,
+            0,         0, 0};
+        ExpectBufferDraw(
+            Log[4], a,
+            BufferPayload(a, {{0, D(GL_FLOAT, 3), 1, 16, 0}, {1, D(GL_UNSIGNED_BYTE, 4), 2, 4, 8}},
+                          {}));
+    }
+    Log.clear();
+    /* Generic attribute 0 unread with the vertex array enabled: the vertex
+     * array provokes the vertices instead. */
+    glVertexAttribPointerARB(0, 3, GL_FLOAT, GL_FALSE, 0, Offset(64));
+    glEnableVertexAttribArrayARB(0);
+    glBegin(GL_POINTS);
+    AliasArrayElement(1);
+    glEnd();
+    Submit(c);
+    assert(!c->Error && Log.size() == 4 && Log[2][8] == FEnum_glVertex4f &&
+           Log[2][9] == Bits(Positions[1][0]));
+    Log.clear();
+    glDisableVertexAttribArrayARB(0);
     glVertexAttribPointerARB(2, 2, GL_SHORT, GL_TRUE, 0, Offset(2));
     glBindBufferARB(ARRAY_BUFFER, 0);
     /* Compiled into a list, the values come from the copy. */
@@ -1449,13 +1638,14 @@ static void Elements(void) {
         Upload(c, ARRAY_BUFFER, 1, VertexBytes()); /* a new object named 1 */
         glBindBufferARB(ARRAY_BUFFER, 0);
     }
-    /* An object without contents: local for array draws, the host's for
-     * indexed buffer-only draws. */
+    /* An object without contents is never read: left out locally for array
+     * draws (here the position, so nothing is drawn and there is no error),
+     * by the host for indexed buffer-only draws. */
     glBindBufferARB(ARRAY_BUFFER, 11);
     glVertexPointer(3, GL_FLOAT, 0, Offset(0));
     glBindBufferARB(ARRAY_BUFFER, 0);
     glDrawArrays(GL_POINTS, 0, 1);
-    Rejected(c, GL_INVALID_OPERATION);
+    Quiet(c);
     glDrawElements(GL_POINTS, 3, GL_UNSIGNED_BYTE, Offset(1));
     Submit(c);
     assert(Log.size() == 1 && Log[0][8] == FEnum_glDrawRangeElements);

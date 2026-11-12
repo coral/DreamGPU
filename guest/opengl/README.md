@@ -408,8 +408,15 @@ buffer-sourced array or an element buffer uses the buffer draw record
 their indices reach (scanned locally), buffer-only indexed draws are sent
 without a scan and bounded by the host. Inside a display list, and for what
 the record cannot express, the arrays resolve into the buffer copies and draw
-as ordinary client arrays, as does ArrayElement. Missing, deleted, mapped or
-overrun buffers are local `GL_INVALID_OPERATION` where the frontend checks.
+as ordinary client arrays, as does ArrayElement. Missing, deleted or mapped
+buffers and element ranges beyond their buffer are local
+`GL_INVALID_OPERATION` where the frontend checks. An array whose buffer does
+not hold every vertex read (empty, or offset, stride or index beyond its end)
+is never read, as by the host's buffer draw: wherever the frontend bounds the
+vertices (array draws, scanned indices, display lists, ArrayElement) it leaves
+that array out, so its current value applies, and without a position or
+generic attribute 0 left nothing is drawn, without an error (Doom 3's ARB2
+path keeps a texture coordinate array enabled on a small, stale buffer).
 Without the capability the exports fail locally with `GL_INVALID_OPERATION`,
 are hidden from `wglGetProcAddress`, and the binding queries stay host queries.
 `tests/guest/opengl/test_vertex_buffer_object.py` covers the contract.
