@@ -301,7 +301,8 @@ static BOOL InternalFormat(GLint format) {
     return (format >= 1 && format <= 4) || format == GL_ALPHA || format == GL_LUMINANCE ||
            format == GL_LUMINANCE_ALPHA || format == 0x8049 /* INTENSITY */ || format == GL_RGB ||
            format == GL_RGBA || format == 0x2a10 || (format >= 0x803b && format <= 0x8048) ||
-           (format >= 0x804a && format <= 0x804d) || (format >= 0x804f && format <= 0x805b);
+           (format >= 0x804a && format <= 0x804d) || (format >= 0x804f && format <= 0x805b) ||
+           JglRgb565Format(format);
 }
 
 /* COMPRESSED_RGB/RGBA_S3TC_DXT1, COMPRESSED_RGBA_S3TC_DXT3/DXT5 */

@@ -315,8 +315,9 @@ fn qemu_depth_textures_compare_copy_attach_program_and_read_exactly() {
     let qemu = Qemu::start(&directory, &socket);
     let mut gl = Device { qemu, sequence: 0 };
     assert_ne!(gl.qemu.read(CAPS) & 0x100, 0);
-    // CAPS2 holds DG_CAP2_GL_DEPTH_TEXTURE only; the next register is unused.
-    assert_eq!(gl.qemu.read(CAPS2), 1);
+    // CAPS2 holds DG_CAP2_GL_DEPTH_TEXTURE and DG_CAP2_GL_RGB565 (rgb565.rs);
+    // the next register is unused.
+    assert_eq!(gl.qemu.read(CAPS2), 1 | 2);
     assert_eq!(gl.qemu.read(CAPS2 + 4), 0);
     gl.submit(&[
         (1, vec![0]),

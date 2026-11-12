@@ -9,7 +9,7 @@ use crate::{
     state::{dreamgpu_context_select_buffers, ContextState},
     texture::{
         cube_face, dreamgpu_texture_wait, dreamgpu_texture_written, image_levels, names::Memory,
-        owns, set_image_levels, Texture,
+        native_internal_format, owns, set_image_levels, Texture,
     },
 };
 use core::ptr::{addr_of_mut, null_mut};
@@ -460,7 +460,7 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
             dg_glCopyTexImage1D(
                 words[0],
                 level as i32,
-                words[2],
+                unsafe { native_internal_format(a, words[2]) },
                 x,
                 y,
                 w as i32,
@@ -478,7 +478,7 @@ pub unsafe extern "C" fn dreamgpu_texture_copy(
             dg_glCopyTexImage2D(
                 words[0],
                 level as i32,
-                words[2],
+                unsafe { native_internal_format(a, words[2]) },
                 x,
                 y,
                 w as i32,

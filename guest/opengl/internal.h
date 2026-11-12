@@ -330,6 +330,13 @@ GLubyte *JglProgramErrorBuffer(void);
  * texture mode parameters and the depth level sizes. Without it every name
  * below stays the local GL_INVALID_ENUM it was. */
 BOOL JglDepthTextureAvailable(void);
+/* Exact R5G6B5 storage (gl.h DG_CAP2_GL_RGB565): the internal format RGB565
+ * in the existing image, copy and renderbuffer records, without an extension
+ * name. Without it RGB565 stays an invalid internal format. */
+BOOL JglRgb565Available(void);
+static inline BOOL JglRgb565Format(GLint format) {
+    return format == DG_GL_RGB565 && JglRgb565Available();
+}
 #define JGL_TEXTURE_DEPTH_SIZE 0x884a
 #define JGL_DEPTH_TEXTURE_MODE 0x884b
 #define JGL_TEXTURE_COMPARE_MODE 0x884c

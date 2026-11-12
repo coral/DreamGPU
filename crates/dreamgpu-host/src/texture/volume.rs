@@ -233,7 +233,7 @@ pub(crate) unsafe fn proxy(api: &DreamGpuGlApi, mask: &mut u32, a: &[u32; 10]) -
         image(
             GL_PROXY_TEXTURE_3D,
             level as i32,
-            internal as i32,
+            native_internal_format(api, internal) as i32,
             w as i32,
             h as i32,
             d as i32,
@@ -357,7 +357,7 @@ pub(crate) unsafe fn upload(
         image(
             GL_TEXTURE_3D,
             level as i32,
-            internal as i32,
+            native_internal_format(api, internal) as i32,
             w as i32,
             h as i32,
             d as i32,

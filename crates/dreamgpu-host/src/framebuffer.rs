@@ -28,7 +28,7 @@ use crate::{
     texture::{
         cube_face, dreamgpu_texture_wait, dreamgpu_texture_written, image_levels,
         names::{dreamgpu_texture_lookup, dreamgpu_texture_unref, Memory},
-        set_image_levels, Texture,
+        native_internal_format, set_image_levels, Texture,
     },
 };
 use core::{
@@ -281,11 +281,11 @@ pub(crate) fn color_attachment(buffer: u32) -> bool {
 pub(crate) fn renderbuffer_bytes(format: u32) -> u64 {
     match format {
         GL_RGB10 | GL_RGB12 | GL_RGB16 | GL_RGBA12 | GL_RGBA16 => 8,
-        GL_RGB | GL_RGBA | GL_R3_G3_B2 | GL_RGB4 | GL_RGB5 | GL_RGB8 | GL_RGBA2 | GL_RGBA4
-        | GL_RGB5_A1 | GL_RGBA8 | GL_RGB10_A2 | GL_DEPTH_COMPONENT | GL_DEPTH_COMPONENT16
-        | GL_DEPTH_COMPONENT24 | GL_DEPTH_COMPONENT32 | GL_STENCIL_INDEX | GL_STENCIL_INDEX1
-        | GL_STENCIL_INDEX4 | GL_STENCIL_INDEX8 | GL_STENCIL_INDEX16 | GL_DEPTH_STENCIL
-        | GL_DEPTH24_STENCIL8 => 4,
+        GL_RGB | GL_RGBA | GL_R3_G3_B2 | GL_RGB4 | GL_RGB5 | DG_GL_RGB565 | GL_RGB8 | GL_RGBA2
+        | GL_RGBA4 | GL_RGB5_A1 | GL_RGBA8 | GL_RGB10_A2 | GL_DEPTH_COMPONENT
+        | GL_DEPTH_COMPONENT16 | GL_DEPTH_COMPONENT24 | GL_DEPTH_COMPONENT32 | GL_STENCIL_INDEX
+        | GL_STENCIL_INDEX1 | GL_STENCIL_INDEX4 | GL_STENCIL_INDEX8 | GL_STENCIL_INDEX16
+        | GL_DEPTH_STENCIL | GL_DEPTH24_STENCIL8 => 4,
         _ => 0,
     }
 }
@@ -1178,7 +1178,12 @@ unsafe fn storage(
         rb_wait(api, rb, serial);
         gl!(
             api,
-            dg_glRenderbufferStorage(GL_RENDERBUFFER, format, width as i32, height as i32)
+            dg_glRenderbufferStorage(
+                GL_RENDERBUFFER,
+                native_internal_format(api, format),
+                width as i32,
+                height as i32
+            )
         );
         let code = gl!(api, dg_glGetError());
         if code != GL_NO_ERROR {

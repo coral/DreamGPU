@@ -513,6 +513,23 @@
  * itself. Residency charges a depth texel like a colour one. Without the
  * capability every rule above is DG_CAP_GL_FRAMEBUFFER_OBJECT's. */
 #define DG_CAP2_GL_DEPTH_TEXTURE 0x1
+/* Exact R5G6B5 storage (CAPS2): the internal format RGB565 (DG_GL_RGB565,
+ * core in GL 4.1 from ARB_ES2_compatibility) in the existing TexImage1D/2D/3D
+ * records and their proxies, CopyTexImage1D/2D and RenderbufferStorage, on
+ * every target that takes a colour format, without any extension name: no
+ * other ARB_ES2_compatibility entry point or token exists. A GeForce FX kept
+ * 16-bit RGB textures and targets in 5, 6 and 5 bits; WineD3D stores
+ * Direct3D's R5G6B5 as RGB565 when the frontend accepts it (patch 0057). RGB5
+ * stays what the native GL makes of it (5/5/5 on Mesa). The host keeps an
+ * RGB565 image in native RGB565 where the native GL has it (4.1 or later, or
+ * ARB_ES2_compatibility), otherwise in RGB8: either way an image uploaded,
+ * cleared, drawn, copied or rendered with 5/6/5-bit component values reads
+ * back with exactly those values, as the high bits of each RGBA8 wire
+ * component. Level and renderbuffer queries answer the native storage
+ * (RGB565 and 5/6/5 bits, or RGB8 and 8/8/8). Without the capability RGB565
+ * is an invalid internal format, a local GL error in the frontend. */
+#define DG_CAP2_GL_RGB565 0x2
+#define DG_GL_RGB565 0x8d62
 
 /* ADDR_LO/HI, BYTES, RESULT_ADDR_LO/HI, RESULT_CAPACITY and the programmed
  * GENERATION persist across submit and

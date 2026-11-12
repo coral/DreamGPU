@@ -9,7 +9,7 @@ static bool CopyFormat(GLenum format) {
            format == GL_INTENSITY || format == GL_RGB || format == GL_RGBA ||
            format == GL_R3_G3_B2 || (format >= GL_ALPHA4 && format <= GL_LUMINANCE16_ALPHA16) ||
            (format >= GL_INTENSITY4 && format <= GL_INTENSITY16) ||
-           (format >= GL_RGB4 && format <= GL_RGBA16);
+           (format >= GL_RGB4 && format <= GL_RGBA16) || JglRgb565Format((GLint)format);
 }
 /* DEPTH_COMPONENT(16/24/32), DEPTH_STENCIL and DEPTH24_STENCIL8. */
 static bool DepthFormat(GLenum format) {

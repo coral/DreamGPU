@@ -30,6 +30,7 @@ static std::vector<ULONG> last;static std::vector<BYTE> packed;
 static bool JglCompiling(){return false;}
 static bool JglTextureBordersAvailable(){return true;}
 static bool DepthTexture;static bool JglDepthTextureAvailable(){return DepthTexture;}
+static bool Rgb565;static bool JglRgb565Format(GLint f){return f==DG_GL_RGB565&&Rgb565;}
 static bool JglReady(){if(!ready)error=GL_INVALID_OPERATION;return ready;}
 static void JglSetError(ULONG e){error=e;}
 static GLboolean glIsTexture(GLuint n){return n>0&&n<100;}
@@ -54,7 +55,7 @@ static bool JglQuery(ULONG f,const ULONG*a,ULONG kind,void*out,ULONG cap,ULONG*b
  memcpy(out,result,5);*bytes=5;return true;
 }
 #include "icd-textures.inc"
-static void Reset(){error=calls=queries=fail=malformed=fn=0;capacity=65536;extent=10;border=1;ready=all=valid=true;DepthTexture=false;last.clear();packed.clear();}
+static void Reset(){error=calls=queries=fail=malformed=fn=0;capacity=65536;extent=10;border=1;ready=all=valid=true;DepthTexture=Rgb565=false;last.clear();packed.clear();}
 int main(){
  Reset();GLuint names[]={1,2,3,4};BYTE output[]={9,9,9,9};
  assert(AliasAreTexturesResident(4,names,output)&&queries==2&&output[0]==9&&output[3]==9);
@@ -93,6 +94,10 @@ int main(){
   Reset();DepthTexture=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,f,1,2,8,0);assert(calls==1&&!error&&fn==FEnum_glCopyTexImage1D&&scalars[2]==f&&scalars[5]==8&&!scalars[6]);
   Reset();DepthTexture=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,f,0,0,10,1);assert(!calls&&error==GL_INVALID_VALUE);}
  Reset();DepthTexture=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,0x81a8,0,0,4,0);assert(!calls&&error==GL_INVALID_VALUE);
+ // RGB565 (DG_CAP2_GL_RGB565) copies once negotiated; an invalid format before.
+ Reset();AliasCopyTexImage1D(GL_TEXTURE_1D,0,DG_GL_RGB565,0,0,4,0);assert(!calls&&error==GL_INVALID_VALUE);
+ Reset();Rgb565=true;AliasCopyTexImage1D(GL_TEXTURE_1D,1,DG_GL_RGB565,2,3,8,0);assert(calls==1&&!error&&fn==FEnum_glCopyTexImage1D&&scalars[1]==1&&scalars[2]==DG_GL_RGB565&&scalars[5]==8);
+ Reset();Rgb565=true;AliasCopyTexImage1D(GL_TEXTURE_1D,0,DG_GL_RGB565+1,0,0,4,0);assert(!calls&&error==GL_INVALID_VALUE);
  Reset();ready=false;AliasPrioritizeTextures(4,(GLuint*)1,(float*)1);assert(!calls&&error==GL_INVALID_OPERATION);
  assert(!AliasAreTexturesResident(4,(GLuint*)1,(BYTE*)1)&&!queries);
  puts("PASS texture aliases: real residency replies, atomic output, priority typed chunks, 1D copy bounds/arguments, depth copies");

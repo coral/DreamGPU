@@ -452,6 +452,18 @@
       "scope": "installed-api",
       "path": "tools/d3d/depth-texture-probe.inc"
     },
+    "gl-rgb565": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_rgb565.py"
+    },
+    "native-rgb565": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/rgb565.rs"
+    },
+    "d3d-rgb565-storage": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_rgb565_storage.py"
+    },
     "d3d-vertex-blend": {
       "scope": "source",
       "path": "tests/guest/d3d/test_vertex_blend.py"
@@ -652,7 +664,7 @@
         "map",
         "guest-partial-locks"
       ],
-      "remaining": "No frontend or host change. WineD3D downloaded the whole surface (GetTexImage of every texel, 30 synchronous 64 KiB DreamGPU QUERY round trips for 800x600) for any lock that found system memory stale; UT2003's ReduceMouseLag locks one backbuffer pixel read-only after every present (75 FPS with it, 669 without on a Win2000 guest). Wine patch 0056 reads only the locked rectangle with one ReadPixels from a read framebuffer holding the target's texture, into the system-memory copy at the rectangle's offset (pointer and pitch exactly as before), and keeps the texture authoritative: system memory is not marked current, a read-only unlock transfers nothing and a writable unlock uploads only the rectangle (TexSubImage). Full and DISCARD locks, NO_DIRTY_UPDATE writes, a current system-memory copy, depth/stencil, block, converted, color-keyed and other formats, multisampling, the front buffer, targets drawn other than into their texture (ORM_BACKBUFFER, onscreen drawables), DIB/user-memory/PBO/client storage, mipmap levels and cube faces keep the full transfer; an unusable context falls back to it without a transfer. Source tests run the prepared map/unmap state machine against a pixel-tracking GL. The installed D3D8/9 probe (read-only 1x1, 16x16 and last-pixel and writable 8x8 locks of the backbuffer and of lockable X8R8G8B8 and R5G6B5 400x300 render targets, each exact with the whole-lock pitch; only pixels inside each locked rectangle are read) has not yet passed on a guest. Transfer size is measured with transport counters: with 0056's wined3d.dll app-local in UT2003 on Win2000, DM-Antalus with ReduceMouseLag=True ran about 269 FPS (before 67-75) with one ReadPixels QUERY per frame instead of 3 GetTexLevelParameteriv and 30 GetTexImage QUERYs. R5G6B5 targets are stored as GL_RGB5 (no ARB_ES2_compatibility), so their green keeps 5 bits, unlike a GeForce FX. Win98/XP game runs and macOS CGL remain unverified."
+      "remaining": "No frontend or host change. WineD3D downloaded the whole surface (GetTexImage of every texel, 30 synchronous 64 KiB DreamGPU QUERY round trips for 800x600) for any lock that found system memory stale; UT2003's ReduceMouseLag locks one backbuffer pixel read-only after every present (75 FPS with it, 669 without on a Win2000 guest). Wine patch 0056 reads only the locked rectangle with one ReadPixels from a read framebuffer holding the target's texture, into the system-memory copy at the rectangle's offset (pointer and pitch exactly as before), and keeps the texture authoritative: system memory is not marked current, a read-only unlock transfers nothing and a writable unlock uploads only the rectangle (TexSubImage). Full and DISCARD locks, NO_DIRTY_UPDATE writes, a current system-memory copy, depth/stencil, block, converted, color-keyed and other formats, multisampling, the front buffer, targets drawn other than into their texture (ORM_BACKBUFFER, onscreen drawables), DIB/user-memory/PBO/client storage, mipmap levels and cube faces keep the full transfer; an unusable context falls back to it without a transfer. Source tests run the prepared map/unmap state machine against a pixel-tracking GL. The installed D3D8/9 probe (read-only 1x1, 16x16 and last-pixel and writable 8x8 locks of the backbuffer and of lockable X8R8G8B8 and R5G6B5 400x300 render targets, each exact with the whole-lock pitch; only pixels inside each locked rectangle are read) has not yet passed on a guest. Transfer size is measured with transport counters: with 0056's wined3d.dll app-local in UT2003 on Win2000, DM-Antalus with ReduceMouseLag=True ran about 269 FPS (before 67-75) with one ReadPixels QUERY per frame instead of 3 GetTexLevelParameteriv and 30 GetTexImage QUERYs. R5G6B5 targets keep all six green bits with exact RGB565 storage (gl.rgb565-storage, Wine 0057), and the probe then uses all 64 greens; without it Wine stores GL_RGB5 and the probe uses only greens that survive five bits. Win98/XP game runs and macOS CGL remain unverified."
     },
     {
       "id": "ddraw.dc",
@@ -1932,6 +1944,28 @@
         "guest-depth-texture"
       ],
       "remaining": "Negotiated by DG_CAP2_GL_DEPTH_TEXTURE, the first bit of the second capability word DG_GL_REG_CAPS2 (0x1194), which older hosts read as zero and kernels report in the CAPABILITIES reply's DeviceError (zero from older kernels); without it every new name keeps its GL_INVALID_ENUM and depth images stay EXT_packed_depth_stencil's TEXTURE_2D ones. No new records: depth images of 1D, 2D and rectangle targets use the existing records, cube and 3D depth images are local GL_INVALID_OPERATION, compare/mode values beyond ARB_shadow and ARB_depth_texture (no EXT_shadow_funcs) local GL_INVALID_ENUM, and GetTexImage level-word bit DG_GL_TEXTURE_READ_DEPTH reads float depth or, with READ_FLOAT, packed words after the frontend checked the level's depth and stencil sizes. Native pixel tests (Linux, private Mesa on Radeon) pass; Mesa's fixed-function 1D lookups compare t instead of r. WineD3D then accepts D16, D24X8 and D24S8 as depth textures (D3DERR_NOTAVAILABLE before); Wine 0050 refuses D16_LOCKABLE, D32, INTZ and depth cube/volume textures as a GeForce FX did, and makes NPOT D16/D24X8/D24S8 depth-stencil surfaces exact-size rectangles; Wine 0051 names SHADOW targets in the arbfp fixed-function replacement and ARB pixel shaders. The installed D3D8/9 depth texture probe, macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.rgb565-storage",
+      "area": 8,
+      "api": "OpenGL 1.1 internal format RGB565 without an extension name (D3D8/D3D9 R5G6B5 textures, render targets and 16-bit back buffers through Wine)",
+      "operation": "second capability word negotiation; RGB565 image definition/subimage/proxy/copy from the framebuffer/readback, framebuffer attachment and renderbuffer storage, display lists",
+      "format": "RGB565 (0x8D62) internal format; every pixel format and type of the colour images",
+      "resource": "1D, 2D, rectangle, cube face and 3D colour texture; renderbuffer",
+      "usage": "16-bit colour textures and render targets with six green bits",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-rgb565",
+        "native-rgb565",
+        "native",
+        "d3d-rgb565-storage",
+        "guest-rtt",
+        "guest-partial-locks"
+      ],
+      "remaining": "Negotiated by DG_CAP2_GL_RGB565, the second bit of DG_GL_REG_CAPS2; without it RGB565 keeps the local error of any unknown internal format. No extension name and no ARB_ES2_compatibility entry point: WineD3D's GL_RGB565 entry for B5G6R5 needs ARB_ES2_compatibility, so Wine 0057 asks the frontend directly (a 1x1 RGB565 texture, then GetError) and otherwise keeps GL_RGB5, which Mesa stores in 5/5/5 bits (a 6-bit green 13 read back as 12). The host stores RGB565 natively where the native GL has it (GL 4.1 or ARB_ES2_compatibility; Mesa on Linux) and in RGB8 elsewhere (macOS legacy CGL, unverified), exact for every 5/6/5 value in either. Native pixel tests (Linux, Mesa on Radeon) round-trip all 65536 words and check clears, a texture sampled 1:1, DrawPixels, CopyTexImage/CopyTexSubImage and a renderbuffer exactly. X1R5G5B5 (RGB5), A1R5G5B5 (RGB5_A1) and A4R4G4B4 (RGBA4) were already exact on Mesa and are unchanged; color-keyed R5G6B5 textures are still converted to B5G5R5A1 by Wine (five green bits). The installed D3D8/9 probes (rtt-probe's R5G6B5 stage, the partial-lock probe's 64 greens), macOS CGL, Win98/XP guests and games remain to be run."
     },
     {
       "id": "gl.client-array-draws",

@@ -535,6 +535,27 @@ batch, and reports a mismatch, including a colour read of a depth level, as
 `EXT_packed_depth_stencil`'s `TEXTURE_2D` ones. `tests/guest/opengl/test_depth_texture.py`
 covers the contract, `test_icd_textures.py` the ICD's 1D depth copies.
 
+### RGB565 internal format, without an extension name
+
+The second feature of the second capability word: with `DG_CAP2_GL_RGB565`
+the internal format `RGB565` (0x8D62, `DG_GL_RGB565`) is a colour format of
+`TexImage1D/2D/3D` and their proxies, `CopyTexImage1D/2D` (the ICD's 1D copy
+too) and `RenderbufferStorage`, on every target that takes one, through the
+existing records. Nothing is added to the extension string, whose bytes stay
+those of the other bits: the format's extension, `GL_ARB_ES2_compatibility`,
+also claims shader precision queries, `FIXED` arrays and float depth-range
+entry points that a GeForce FX never had and DreamGPU does not provide.
+WineD3D asks for the format directly (patch 0057: a 1x1 texture, then
+`glGetError`) so that Direct3D's R5G6B5 keeps six green bits; `RGB5` stays
+what native GL makes of it (five green bits on Mesa). The host stores the
+format natively or, without native `RGB565`, as `RGB8`; readback of either
+gives back every 5/6/5 value from the high bits of the RGBA8 wire bytes.
+Without the capability `RGB565` is an unknown internal format: the local
+`GL_INVALID_VALUE` of `TexImage` and `CopyTexImage` (also for `TEXTURE_2D`,
+whose copy record the host would otherwise refuse) and `GL_INVALID_ENUM` of
+`RenderbufferStorage`. `tests/guest/opengl/test_rgb565.py` covers the
+contract, `test_icd_textures.py` the ICD's 1D copies.
+
 ### No ARB_vertex_blend
 
 Neither provider offers `GL_ARB_vertex_blend` (or `GL_ARB_matrix_palette`):

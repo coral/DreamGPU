@@ -133,7 +133,7 @@ fn base_format(format: i32) -> i32 {
         2 | GL_LUMINANCE_ALPHA | GL_LUMINANCE4_ALPHA4..=GL_LUMINANCE16_ALPHA16 => {
             GL_LUMINANCE_ALPHA
         }
-        3 | GL_RGB | GL_R3_G3_B2 | GL_RGB4..=GL_RGB16 => GL_RGB,
+        3 | GL_RGB | GL_R3_G3_B2 | GL_RGB4..=GL_RGB16 | DG_GL_RGB565 => GL_RGB,
         GL_ALPHA | GL_ALPHA4..=GL_ALPHA16 => GL_ALPHA,
         GL_INTENSITY | GL_INTENSITY4..=GL_INTENSITY16 => GL_INTENSITY,
         _ => GL_RGBA,

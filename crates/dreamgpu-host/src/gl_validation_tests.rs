@@ -1546,3 +1546,96 @@ fn depth_texture_records_take_1d_2d_and_rectangle_images_and_compare_parameters(
     );
     assert_eq!(read(GL_TEXTURE_2D, 0x2000).0, 0);
 }
+
+#[test]
+fn rgb565_is_a_colour_internal_format_of_the_existing_records() {
+    // DG_CAP2_GL_RGB565: images, proxies and copies of every colour target.
+    let (rgb, short, ubyte) = (GL_RGB, GL_UNSIGNED_SHORT_5_6_5, GL_UNSIGNED_BYTE);
+    let image1 = |a: [u32; 8], n: usize| data_validate(FEnum_glTexImage1D, &a, &vec![0; n]);
+    let image2 = |a: [u32; 8], n: usize| data_validate(FEnum_glTexImage2D, &a, &vec![0; n]);
+    let rgb565 = DG_GL_RGB565;
+    assert_eq!(
+        image1([GL_TEXTURE_1D, 0, rgb565, 8, 1, 0, rgb, short], 16),
+        0
+    );
+    assert_eq!(
+        image1([GL_PROXY_TEXTURE_1D, 0, rgb565, 8, 1, 0, rgb, short], 0),
+        0
+    );
+    for target in [
+        GL_TEXTURE_2D,
+        GL_PROXY_TEXTURE_2D,
+        GL_TEXTURE_CUBE_MAP_NEGATIVE_Z,
+        GL_PROXY_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_RECTANGLE_ARB,
+        GL_PROXY_TEXTURE_RECTANGLE_ARB,
+    ] {
+        let proxy = matches!(
+            target,
+            GL_PROXY_TEXTURE_2D | GL_PROXY_TEXTURE_CUBE_MAP | GL_PROXY_TEXTURE_RECTANGLE_ARB
+        );
+        let n = if proxy { 0 } else { 4 * 4 * 2 };
+        assert_eq!(
+            image2([target, 0, rgb565, 4, 4, 0, rgb, short], n),
+            0,
+            "{target:#x}"
+        );
+        assert_eq!(
+            image2([target, 0, rgb565, 4, 4, 0, GL_RGBA, ubyte], 0),
+            0,
+            "{target:#x}"
+        );
+    }
+    assert_eq!(
+        call_validate(
+            FEnum_glCopyTexImage1D,
+            &[GL_TEXTURE_1D, 0, rgb565, 0, 0, 16, 0, 0]
+        ),
+        0
+    );
+    for target in [
+        GL_TEXTURE_2D,
+        GL_TEXTURE_RECTANGLE_ARB,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+    ] {
+        assert_eq!(
+            call_validate(FEnum_glCopyTexImage2D, &[target, 0, rgb565, 0, 0, 8, 8, 0]),
+            0,
+            "{target:#x}"
+        );
+    }
+    // The neighbouring ES formats stay unknown: RGB565 is the only one.
+    for format in [rgb565 - 1, rgb565 + 1] {
+        assert_eq!(
+            image2([GL_TEXTURE_2D, 0, format, 4, 4, 0, GL_RGBA, ubyte], 0),
+            DG_GL_ERROR_TEXTURE
+        );
+        assert_eq!(
+            call_validate(
+                FEnum_glCopyTexImage2D,
+                &[GL_TEXTURE_2D, 0, format, 0, 0, 8, 8, 0]
+            ),
+            DG_GL_ERROR_TEXTURE
+        );
+    }
+    let mut volume = [0u32; 10];
+    volume[..9].copy_from_slice(&[GL_TEXTURE_3D, 0, rgb565, 2, 2, 2, 0, rgb, short]);
+    assert_eq!(
+        crate::texture::volume::validate(FEnum_glTexImage3D, &volume, &[0; 16]),
+        0
+    );
+    volume[2] = rgb565 + 1;
+    assert_eq!(
+        crate::texture::volume::validate(FEnum_glTexImage3D, &volume, &[0; 16]),
+        DG_GL_ERROR_TEXTURE
+    );
+    // A renderbuffer is charged like the other colour formats.
+    assert_eq!(crate::framebuffer::renderbuffer_bytes(rgb565), 4);
+    assert_eq!(crate::framebuffer::renderbuffer_bytes(rgb565 + 1), 0);
+    let mut storage = [0u32; 10];
+    storage[..4].copy_from_slice(&[GL_RENDERBUFFER, rgb565, 16, 16]);
+    assert!(crate::framebuffer::call_shape(
+        FEnum_glRenderbufferStorage,
+        &storage
+    ));
+}

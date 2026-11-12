@@ -530,8 +530,9 @@ pub(crate) fn function_words(function: u32) -> u32 {
     }
 }
 
+/// Colour internal formats: GL 1.1's, and RGB565 (DG_CAP2_GL_RGB565).
 fn copy_1d_internal_format(format: u32) -> bool {
-    matches!(format,GL_ALPHA|GL_LUMINANCE|GL_LUMINANCE_ALPHA|GL_INTENSITY|GL_RGB|GL_RGBA|GL_R3_G3_B2|0x803b..=0x8048|0x804a..=0x804d|0x804f..=0x805b)
+    matches!(format,GL_ALPHA|GL_LUMINANCE|GL_LUMINANCE_ALPHA|GL_INTENSITY|GL_RGB|GL_RGBA|GL_R3_G3_B2|0x803b..=0x8048|0x804a..=0x804d|0x804f..=0x805b|DG_GL_RGB565)
 }
 pub(crate) fn texture_internal_format(format: u32) -> bool {
     (1..=4).contains(&format) || copy_1d_internal_format(format)

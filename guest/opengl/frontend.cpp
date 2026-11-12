@@ -148,6 +148,9 @@ BOOL JglTextureRectangleAvailable(void) {
 BOOL JglDepthTextureAvailable(void) {
     return Client && (HostCapabilities2 & DG_CAP2_GL_DEPTH_TEXTURE);
 }
+BOOL JglRgb565Available(void) {
+    return Client && (HostCapabilities2 & DG_CAP2_GL_RGB565);
+}
 /* Extension names of negotiated host contracts only. Built once per client
  * open, under Lock and before any context exists, into one static buffer:
  * every returned pointer stays valid. Each name keeps its contract's gate; the
@@ -463,12 +466,12 @@ JGL_INLINE BOOL DrawsWindowFront(const JGL_CONTEXT *c) {
             c->DrawBuffer == GL_LEFT || c->DrawBuffer == GL_FRONT_AND_BACK);
 }
 /* A base or sized internal format of a copied face or rectangle (the component
- * counts 1-4 are not copy formats). */
+ * counts 1-4 are not copy formats), with RGB565 once negotiated. */
 static BOOL CopyInternalFormat(ULONG format) {
     return (format >= 0x1906 && format <= 0x190a) /* ALPHA, RGB, RGBA, LUMINANCE(_ALPHA) */ ||
            format == 0x8049 /* INTENSITY */ || format == 0x2a10 /* R3_G3_B2 */ ||
            (format >= 0x803b && format <= 0x8048) || (format >= 0x804a && format <= 0x804d) ||
-           (format >= 0x804f && format <= 0x805b);
+           (format >= 0x804f && format <= 0x805b) || JglRgb565Format(format);
 }
 /* CopyTexImage2D/CopyTexSubImage2D target the 2D image or, once negotiated, a
  * cube map face or a rectangle. A face or rectangle record is checked here
@@ -492,10 +495,12 @@ static GLenum CopyTexture2DError(ULONG function, const ULONG *a) {
     if (!JglImage2DTarget(a[0]))
         return GL_INVALID_ENUM;
     /* TEXTURE_2D: native GL judges the copy, but depth textures
-     * (EXT_packed_depth_stencil) are borderless. */
+     * (EXT_packed_depth_stencil) are borderless, and RGB565 is no internal
+     * format without its capability (the host would refuse the record). */
     if (!JglCubeFace(a[0]))
-        return image && a[7] && (JglFramebufferObjectAvailable() || JglDepthTextureAvailable()) &&
-                       JglDepthInternalFormat(a[2])
+        return image && ((a[7] && (JglFramebufferObjectAvailable() || JglDepthTextureAvailable()) &&
+                          JglDepthInternalFormat(a[2])) ||
+                         (a[2] == DG_GL_RGB565 && !JglRgb565Available()))
                    ? GL_INVALID_VALUE
                    : 0;
     if (depth)

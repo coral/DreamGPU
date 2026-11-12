@@ -9,6 +9,58 @@ pub(crate) mod volume;
 // Linux uses provider border storage; CGL uses the private fragment sampler.
 pub(crate) const BORDER_IMAGES: bool = true;
 
+/// The native internal format of a guest image or renderbuffer format. Guest
+/// RGB565 (DG_CAP2_GL_RGB565) is native RGB565 where the native GL has it
+/// (core in 4.1, or ARB_ES2_compatibility), else RGB8, which holds every
+/// 5/6/5 value exactly; every other format is native GL's to store.
+///
+/// # Safety
+/// Native GL current.
+pub(crate) unsafe fn native_internal_format(api: &DreamGpuGlApi, format: u32) -> u32 {
+    if format != DG_GL_RGB565 {
+        return format;
+    }
+    if unsafe { native_rgb565(api) } {
+        DG_GL_RGB565
+    } else {
+        GL_RGB8
+    }
+}
+/// Whether the current native context takes the RGB565 internal format:
+/// GL 4.1 or later, or ARB_ES2_compatibility in a compatibility context's
+/// extension string. Asked only for RGB565 images, which are rare.
+unsafe fn native_rgb565(api: &DreamGpuGlApi) -> bool {
+    let Some(string) = api.dg_glGetString else {
+        return false;
+    };
+    let text = |name: u32| {
+        let p = unsafe { string(name) };
+        (!p.is_null()).then(|| unsafe { core::ffi::CStr::from_ptr(p.cast()) }.to_bytes())
+    };
+    text(GL_VERSION).is_some_and(version_has_rgb565)
+        || text(GL_EXTENSIONS).is_some_and(|names| {
+            names
+                .split(|&c| c == b' ')
+                .any(|name| name == b"GL_ARB_ES2_compatibility")
+        })
+}
+/// A GL_VERSION string (`major.minor` first) of 4.1 or later.
+pub(crate) fn version_has_rgb565(version: &[u8]) -> bool {
+    let number = |s: &[u8]| -> Option<(u32, usize)> {
+        let digits = s.iter().take_while(|c| c.is_ascii_digit()).count();
+        let text = core::str::from_utf8(&s[..digits]).ok()?;
+        Some((text.parse().ok()?, digits))
+    };
+    let Some((major, n)) = number(version) else {
+        return false;
+    };
+    let minor = (version.get(n) == Some(&b'.'))
+        .then(|| number(&version[n + 1..]))
+        .flatten()
+        .map_or(0, |(minor, _)| minor);
+    (major, minor) >= (4, 1)
+}
+
 #[repr(C)]
 pub struct Texture {
     pub name: u32,
@@ -231,7 +283,7 @@ pub(crate) unsafe fn proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 {
             api.dg_glTexImage1D.expect("complete API")(
                 a[0],
                 a[1] as i32,
-                a[2] as i32,
+                native_internal_format(api, a[2]) as i32,
                 a[3] as i32,
                 a[5] as i32,
                 a[6],
@@ -242,7 +294,7 @@ pub(crate) unsafe fn proxy(api: &DreamGpuGlApi, a: &[u32; 8]) -> u32 {
             api.dg_glTexImage2D.expect("complete API")(
                 a[0],
                 a[1] as i32,
-                a[2] as i32,
+                native_internal_format(api, a[2]) as i32,
                 a[3] as i32,
                 a[4] as i32,
                 a[5] as i32,
@@ -475,7 +527,7 @@ unsafe fn upload(
             api.dg_glTexImage1D.unwrap()(
                 a[0],
                 level as i32,
-                a[2] as i32,
+                native_internal_format(api, a[2]) as i32,
                 w as i32,
                 a[5] as i32,
                 a[6],
@@ -496,7 +548,7 @@ unsafe fn upload(
             api.dg_glTexImage2D.unwrap()(
                 a[0],
                 level as i32,
-                a[2] as i32,
+                native_internal_format(api, a[2]) as i32,
                 w as i32,
                 h as i32,
                 a[5] as i32,

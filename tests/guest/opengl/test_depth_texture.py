@@ -42,7 +42,7 @@ for line in ("pub const DG_GL_REG_CAPS2: u32 = 4500;", "pub const DG_CAP2_GL_DEP
              "pub const DG_GL_TEXTURE_READ_LEVEL_MASK: u32 = 16383;"):
     assert line in bindings, line
 qemu = (ROOT / "vendor/qemu/hw/display/dreamgpu.c").read_text()
-assert re.search(r"case DG_GL_REG_CAPS2:\s*\n(?:\s*/\*.*\*/\n)?\s*return s->gpu_socket && \*s->gpu_socket \? DG_CAP2_GL_DEPTH_TEXTURE : 0;", qemu)
+assert re.search(r"case DG_GL_REG_CAPS2:\s*\n(?:\s*/\*.*\*/\n)?\s*return s->gpu_socket && \*s->gpu_socket\s*\?\s*DG_CAP2_GL_DEPTH_TEXTURE\b[^;]*:\s*0;", qemu)
 assert "reply.DeviceError = t->GlRegisters.Caps2;" in (ROOT / "guest/nt/miniport/transport.cpp").read_text()
 assert "reply.DeviceError = dg_gl_caps2;" in (ROOT / "guest/win9x/channel32.cpp").read_text()
 # Every second-word bit stays distinct; no first-word bit moved.

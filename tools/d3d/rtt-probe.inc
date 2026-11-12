@@ -30,6 +30,14 @@
  *   CopyRects) whole, as a sub-rectangle and across the window corner, and a
  *   second gradient (D3D9 DEFAULT pool and StretchRect) into a target texture
  *   and the backbuffer.
+ * - rgb565: with exact R5G6B5 storage (probe.cpp's rgb565_storage,
+ *   DG_CAP2_GL_RGB565) a Lock-filled 64x32 R5G6B5 texture holding every 6-bit
+ *   green, 5-bit red and 5-bit blue is point-sampled 1:1 into the top half of a
+ *   lockable 64x64 R5G6B5 render target, whose bottom half is 64 column clears
+ *   with the bit-replicated D3DCOLOR of every 6-bit green; a whole lock of the
+ *   target must hold exactly those 4096 words. Skipped without the capability
+ *   (Wine then stores R5G6B5 with five green bits) or an R5G6B5 texture or
+ *   render target claim.
  * Returning to the backbuffer restores its own depth-stencil surface (this
  * device has none). Target textures of both formats, 1024-texel textures and
  * D24S8 or D16 depth are required; unclaimed plain surfaces are recorded and
@@ -48,6 +56,10 @@ typedef D3DVIEWPORT8 TargetViewport;
 #define RTT_ADDRESS(device, mode)                                                                  \
     (DEVICE(SetTextureStageState, device, 0, D3DTSS_ADDRESSU, mode) |                              \
      DEVICE(SetTextureStageState, device, 0, D3DTSS_ADDRESSV, mode))
+#define RTT_LOCKABLE(device, width, height, format, out)                                           \
+    DEVICE(CreateRenderTarget, device, width, height, format, D3DMULTISAMPLE_NONE, TRUE, out)
+#define RTT_MANAGED(device, width, height, format, out)                                            \
+    DEVICE(CreateTexture, device, width, height, 1, 0, format, D3DPOOL_MANAGED, out)
 #define RTT_COPY "CopyRects"
 #define RTT_UPLOAD "CopyRects"
 #else
@@ -63,6 +75,11 @@ typedef D3DVIEWPORT9 TargetViewport;
 #define RTT_ADDRESS(device, mode)                                                                  \
     (DEVICE(SetSamplerState, device, 0, D3DSAMP_ADDRESSU, mode) |                                  \
      DEVICE(SetSamplerState, device, 0, D3DSAMP_ADDRESSV, mode))
+#define RTT_LOCKABLE(device, width, height, format, out)                                           \
+    DEVICE(CreateRenderTarget, device, width, height, format, D3DMULTISAMPLE_NONE, 0, TRUE, out,   \
+           NULL)
+#define RTT_MANAGED(device, width, height, format, out)                                            \
+    DEVICE(CreateTexture, device, width, height, 1, 0, format, D3DPOOL_MANAGED, out, NULL)
 #define RTT_COPY "StretchRect"
 #define RTT_UPLOAD "UpdateSurface"
 #endif
@@ -793,6 +810,119 @@ static void OffscreenCase(D3D *d3d, Device *dev) {
     Release(texture, level);
 }
 
+/* R5G6B5: the source texture is 64x32, the target 64x64. */
+static constexpr int Narrow = 64, NarrowSource = 32;
+static WORD Word565(int r, int g, int b) {
+    return (WORD)((r & 31) << 11 | (g & 63) << 5 | (b & 31));
+}
+/* Source texel (x, y): green x, red y, blue x + 3y; every 6-bit green and
+ * every 5-bit red and blue. */
+static WORD Source565(int x, int y) {
+    return Word565(y, x, x + 3 * y);
+}
+/* Cleared column x of the target's bottom half: green x; red and blue take
+ * every 5-bit value too. */
+static WORD Column565(int x) {
+    return Word565(x * 7 + 3, x, x * 13 + 5);
+}
+/* What the top half is cleared to before the view replaces it. */
+static constexpr WORD Background565 = 9 << 11 | 41 << 5 | 22;
+/* The D3DCOLOR of a 565 word: each component bit-replicated to 8 bits, which
+ * a 565 target stores as exactly that word. */
+static DWORD Expand565(WORD word) {
+    const DWORD r = word >> 11 & 31, g = word >> 5 & 63, b = word & 31;
+    return 0xff000000u | (r << 3 | r >> 2) << 16 | (g << 2 | g >> 4) << 8 | (b << 3 | b >> 2);
+}
+static constexpr Layer rgb565_view_layers[] = {View(0, 0, Narrow, NarrowSource, ramp, 0, 0)};
+static constexpr Image rgb565_view = Make(0, rgb565_view_layers);
+
+static BOOL Fill565(StageTexture *texture) {
+    D3DLOCKED_RECT locked;
+    if (!HR(STAGE_TEXTURE(LockRect, texture, 0, &locked, NULL, 0), "FAIL R5G6B5 texture lock"))
+        return FALSE;
+    const BOOL mapped = Check(locked.pBits && locked.Pitch >= Narrow * 2,
+                              "FAIL R5G6B5 texture layout", (DWORD)locked.Pitch);
+    if (mapped)
+        for (int y = 0; y < NarrowSource; ++y)
+            for (int x = 0; x < Narrow; ++x)
+                ((WORD *)((BYTE *)locked.pBits + y * locked.Pitch))[x] = Source565(x, y);
+    return HR(STAGE_TEXTURE(UnlockRect, texture, 0), "FAIL R5G6B5 texture unlock") && mapped;
+}
+/* The whole target: the view's texels above, the columns below. */
+static BOOL Verify565(Surface *target) {
+    D3DLOCKED_RECT locked;
+    UINT wrong = 0;
+    int first_x = 0, first_y = 0;
+    DWORD first_actual = 0, first_expected = 0;
+    if (!HR(SURFACE(LockRect, target, &locked, NULL, D3DLOCK_READONLY),
+            "FAIL R5G6B5 render target lock"))
+        return FALSE;
+    if (!locked.pBits || locked.Pitch < Narrow * 2) {
+        SURFACE(UnlockRect, target);
+        return Check(FALSE, "FAIL R5G6B5 render target layout", (DWORD)locked.Pitch);
+    }
+    for (int y = 0; y < Narrow; ++y)
+        for (int x = 0; x < Narrow; ++x) {
+            const DWORD expected = y < NarrowSource ? Source565(x, y) : Column565(x);
+            const DWORD actual = ((const WORD *)((const BYTE *)locked.pBits + y * locked.Pitch))[x];
+            if (actual != expected && !wrong++) {
+                first_x = x;
+                first_y = y;
+                first_actual = actual;
+                first_expected = expected;
+            }
+        }
+    const BOOL unlocked = HR(SURFACE(UnlockRect, target), "FAIL R5G6B5 render target unlock");
+    if (wrong) {
+        Log("FAIL R5G6B5 render target words");
+        Number("R5G6B5 word actual", first_actual);
+        Number("R5G6B5 word expected", first_expected);
+        Number("R5G6B5 word x", (DWORD)first_x);
+        Number("R5G6B5 word y", (DWORD)first_y);
+        Number("R5G6B5 wrong words", wrong);
+        failed = TRUE;
+    }
+    return unlocked && !wrong;
+}
+static void Rgb565Case(D3D *d3d, Device *dev) {
+    StageTexture *texture = NULL;
+    Surface *target = NULL;
+    Log("STAGE render target R5G6B5 64 greens: texture sampled 1:1 into a target, clears");
+    if (!rgb565_storage) {
+        Log("SKIP R5G6B5 64 greens: no exact R5G6B5 storage (older host or frontend, "
+            "Wine stores five green bits)");
+        return;
+    }
+    if (!Claimed(d3d, 0, D3DRTYPE_TEXTURE, D3DFMT_R5G6B5, "R5G6B5 texture CheckDeviceFormat") ||
+        !Claimed(d3d, D3DUSAGE_RENDERTARGET, D3DRTYPE_SURFACE, D3DFMT_R5G6B5,
+                 "R5G6B5 render target CheckDeviceFormat")) {
+        Log("SKIP R5G6B5 64 greens: R5G6B5 texture or render target not claimed");
+        return;
+    }
+    BOOL ok = HR(RTT_MANAGED(dev, Narrow, NarrowSource, D3DFMT_R5G6B5, &texture),
+                 "FAIL R5G6B5 texture creation") &&
+              Fill565(texture) &&
+              HR(RTT_LOCKABLE(dev, Narrow, Narrow, D3DFMT_R5G6B5, &target),
+                 "FAIL R5G6B5 render target creation") &&
+              Target(dev, target, NULL, Narrow, Narrow) && Clear(dev, Expand565(Background565)) &&
+              Layers(dev, rgb565_view, 0, 1, texture, Narrow, NarrowSource);
+    for (int x = 0; ok && x < Narrow; ++x) {
+        const D3DRECT column = {x, NarrowSource, x + 1, Narrow};
+        ok = HR(DEVICE(Clear, dev, 1, &column, D3DCLEAR_TARGET, Expand565(Column565(x)), 1, 0),
+                "FAIL R5G6B5 column clear");
+    }
+    ok = ok && Back(dev) && Verify565(target);
+    if (ok)
+        Log("PASS render target R5G6B5 64 greens: every 6-bit green and 5-bit red and blue "
+            "sampled 1:1 from a texture and cleared, 4096 exact words");
+    STAGE_SET_TEXTURE(dev, 0, NULL);
+    Back(dev);
+    if (target)
+        SURFACE(Release, target);
+    if (texture)
+        STAGE_TEXTURE(Release, texture);
+}
+
 /* Every case runs and logs its own result; any failure fails the probe. */
 static void Run(D3D *d3d, Device *dev, Surface *target) {
     StageCaps caps = {};
@@ -849,6 +979,7 @@ static void Run(D3D *d3d, Device *dev, Surface *target) {
         ReturnCase(dev);
         CopyCase(dev);
         OffscreenCase(d3d, dev);
+        Rgb565Case(d3d, dev);
     }
     STAGE_SET_TEXTURE(dev, 0, NULL);
     (void)RTT_ADDRESS(dev, D3DTADDRESS_WRAP);

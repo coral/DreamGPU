@@ -227,6 +227,10 @@
     {
       "file": "0056-partial-render-target-maps.patch",
       "sha256": "fa5b6daf58a6411cbd79129947d23029d5a6b12ed48f783c9856672d4f063f15"
+    },
+    {
+      "file": "0057-rgb565-storage.patch",
+      "sha256": "517511ce25f01ba3c127a5ca807333ac3d2b6b41fd0f83cce98063b4af2a3be0"
     }
   ],
   "files": {
@@ -252,7 +256,7 @@
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
-      "after_sha256": "3acd33354fb3437c742508a4e581db314e7413b45de237e73072ef8cf30cd1fa"
+      "after_sha256": "305c1b8fffb679ae460f92ebcb44dad237bb3abeb2dca6817595cb6c4a047450"
     },
     "switcher/switcher.c": {
       "before_sha256": "a820f660bdc88a06aa27b8c31b2b2871fbb84baa5ad93a5b6c4bcc767be0e123",

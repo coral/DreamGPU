@@ -45,6 +45,9 @@ BOOL JglFramebufferObjectAvailable(void) {
 BOOL JglDepthTextureAvailable(void) {
     return FALSE; /* 1D and rectangle depth: tests/guest/opengl/depth-texture.cpp. */
 }
+BOOL JglRgb565Available(void) {
+    return FALSE; /* RGB565 images: tests/guest/opengl/rgb565.cpp. */
+}
 BOOL JglCompiling(void) {
     return Compiling;
 }

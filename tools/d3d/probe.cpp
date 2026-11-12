@@ -142,6 +142,123 @@ static BOOL HR(HRESULT result, const char *stage) {
 static LRESULT CALLBACK WindowProc(HWND w, UINT message, WPARAM key, LPARAM detail) {
     return DefWindowProcA(w, message, key, detail);
 }
+/* Exact R5G6B5 storage (gl.h DG_CAP2_GL_RGB565): the frontend accepts the
+ * internal format RGB565 only when the host stores it exactly, and WineD3D
+ * (patch 0057) then keeps Direct3D's R5G6B5 in it with all six green bits.
+ * Older hosts and frontends reject RGB565 and Wine stores RGB5 (five green
+ * bits), so the 64-green checks are skipped there. Asked once, as Wine asks:
+ * a 1x1 RGB565 texture in a context of dgpugl.dll's own on a hidden 32x32
+ * popup, then GetError. Nothing is left current or alive; any failure on the
+ * way means absent, with the reason logged. */
+static BOOL rgb565_storage;
+static void DetectRgb565Storage(HMODULE gl) {
+    typedef int(WINAPI * ChooseFormat)(HDC, const PIXELFORMATDESCRIPTOR *);
+    typedef BOOL(WINAPI * SetFormat)(HDC, int, const PIXELFORMATDESCRIPTOR *);
+    typedef HGLRC(WINAPI * CreateContext)(HDC);
+    typedef BOOL(WINAPI * MakeCurrent)(HDC, HGLRC);
+    typedef BOOL(WINAPI * DeleteContext)(HGLRC);
+    typedef HGLRC(WINAPI * CurrentContext)(void);
+    typedef HDC(WINAPI * CurrentDC)(void);
+    typedef void(WINAPI * GenTextures)(int, DWORD *);
+    typedef void(WINAPI * BindTexture)(DWORD, DWORD);
+    typedef void(WINAPI * TexImage2D)(DWORD, int, int, int, int, int, DWORD, DWORD, const void *);
+    typedef DWORD(WINAPI * GetError)(void);
+    typedef void(WINAPI * DeleteTextures)(int, const DWORD *);
+    static const char *const absent = "STAGE RGB565 storage: absent";
+    rgb565_storage = FALSE;
+    if (!gl) {
+        Log(absent);
+        Log("reason: dgpugl.dll not loaded");
+        return;
+    }
+    const auto choose = Entry<ChooseFormat>(gl, "wglChoosePixelFormat");
+    const auto set = Entry<SetFormat>(gl, "wglSetPixelFormat");
+    const auto create = Entry<CreateContext>(gl, "wglCreateContext");
+    const auto make_current = Entry<MakeCurrent>(gl, "wglMakeCurrent");
+    const auto destroy = Entry<DeleteContext>(gl, "wglDeleteContext");
+    const auto current_context = Entry<CurrentContext>(gl, "wglGetCurrentContext");
+    const auto current_dc = Entry<CurrentDC>(gl, "wglGetCurrentDC");
+    const auto gen = Entry<GenTextures>(gl, "glGenTextures");
+    const auto bind = Entry<BindTexture>(gl, "glBindTexture");
+    const auto image = Entry<TexImage2D>(gl, "glTexImage2D");
+    const auto error = Entry<GetError>(gl, "glGetError");
+    const auto remove = Entry<DeleteTextures>(gl, "glDeleteTextures");
+    if (!choose || !set || !create || !make_current || !destroy || !current_context ||
+        !current_dc || !gen || !bind || !image || !error || !remove) {
+        Log(absent);
+        Log("reason: dgpugl.dll export missing");
+        return;
+    }
+    /* Wine releases its context after every call; restore one if not. */
+    const HGLRC previous = current_context();
+    const HDC previous_dc = previous ? current_dc() : NULL;
+    WNDCLASSA klass = {};
+    klass.lpfnWndProc = WindowProc;
+    klass.hInstance = GetModuleHandleA(NULL);
+    klass.lpszClassName = "DreamGPURgb565Probe";
+    const BOOL registered = RegisterClassA(&klass) != 0;
+    const HWND hidden = registered
+                            ? CreateWindowA(klass.lpszClassName, "DreamGPU RGB565 probe", WS_POPUP,
+                                            0, 0, 32, 32, NULL, NULL, klass.hInstance, NULL)
+                            : NULL;
+    const HDC dc = hidden ? GetDC(hidden) : NULL;
+    PIXELFORMATDESCRIPTOR pfd = {};
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 32;
+    pfd.cDepthBits = 24;
+    pfd.cStencilBits = 8;
+    pfd.iLayerType = PFD_MAIN_PLANE;
+    const int format = dc ? choose(dc, &pfd) : 0;
+    const HGLRC context = format && set(dc, format, &pfd) ? create(dc) : NULL;
+    const char *reason = !registered ? "reason: window class registration failed"
+                         : !hidden   ? "reason: hidden window creation failed"
+                         : !dc       ? "reason: window DC unavailable"
+                         : !format   ? "reason: no pixel format"
+                         : !context  ? "reason: no context on the pixel format"
+                                     : NULL;
+    if (context && !make_current(dc, context))
+        reason = "reason: context not made current";
+    if (!reason) {
+        DWORD texture = 0, result;
+        /* Errors this fresh context already holds, bounded. */
+        for (int i = 0; i < 16 && error() != 0; ++i)
+            continue;
+        gen(1, &texture);
+        bind(0x0de1 /* TEXTURE_2D */, texture);
+        image(0x0de1, 0, 0x8d62 /* RGB565 */, 1, 1, 0, 0x1907 /* RGB */,
+              0x8363 /* UNSIGNED_SHORT_5_6_5 */, NULL);
+        result = error();
+        bind(0x0de1, 0);
+        if (texture)
+            remove(1, &texture);
+        Number("RGB565 internal format GL error", result);
+        rgb565_storage = texture != 0 && result == 0;
+        if (!texture)
+            reason = "reason: no texture name";
+        else if (result)
+            reason = "reason: RGB565 rejected (older host or frontend)";
+        make_current(NULL, NULL);
+    }
+    if (context)
+        destroy(context);
+    if (dc)
+        ReleaseDC(hidden, dc);
+    if (hidden)
+        DestroyWindow(hidden);
+    if (registered)
+        UnregisterClassA(klass.lpszClassName, klass.hInstance);
+    if (previous)
+        make_current(previous_dc, previous);
+    if (rgb565_storage) {
+        Log("STAGE RGB565 storage: exact (DG_CAP2_GL_RGB565)");
+    } else {
+        Log(absent);
+        Log(reason);
+    }
+}
 static BOOL Pixels(const D3DLOCKED_RECT *locked) {
     UINT region, x, y;
     if (!locked->pBits || locked->Pitch < 320 * 4) {
@@ -259,6 +376,8 @@ static void Run(void) {
     gl = GetModuleHandleA("dgpugl.dll");
     gl_module = gl;
 #endif
+    /* Wine's adapter (and its own RGB565 question) is initialized by now. */
+    DetectRgb565Storage(gl);
     klass.lpfnWndProc = WindowProc;
     klass.hInstance = GetModuleHandleA(NULL);
     klass.lpszClassName = "DreamGPUD3DProbe";

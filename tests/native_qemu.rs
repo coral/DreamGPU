@@ -42,6 +42,8 @@ mod primary16;
 mod queue;
 #[path = "native_qemu/raster.rs"]
 mod raster;
+#[path = "native_qemu/rgb565.rs"]
+mod rgb565;
 #[path = "native_qemu/secondary.rs"]
 mod secondary;
 #[path = "native_qemu/texture_3d.rs"]

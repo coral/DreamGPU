@@ -455,6 +455,33 @@ and disposable-VM acceptance cycle:
   sampled with projected comparisons through fixed function, ps_1_1 and, on
   D3D9, ps_2_0 `texldp`, and a LINEAR boundary) has not yet run on a guest;
   macOS CGL, Win98/XP guests and games remain unverified.
+- Exact R5G6B5 storage (`DG_CAP2_GL_RGB565`, the second bit of the second
+  capability word) admits the internal format `RGB565` (0x8D62) in the
+  existing 1D, 2D, rectangle, cube face and 3D image, proxy, CopyTexImage and
+  RenderbufferStorage records, with no extension name: ARB_ES2_compatibility
+  (2010) would also claim shader precision queries, `FIXED` arrays and float
+  depth-range entry points no GeForce FX had. WineD3D maps Direct3D's R5G6B5 to
+  `GL_RGB565` only under that extension; otherwise to `GL_RGB5`, which Mesa
+  stores in 5/5/5 bits, so a 6-bit green 13 read back as 12 in every R5G6B5
+  texture, render target and 16-bit back buffer (a GeForce FX kept all six
+  bits). Wine 0057 asks the frontend instead (a 1x1 `RGB565` texture, then
+  `glGetError`) and keeps `GL_RGB5` on older frontends and hosts. The host
+  stores `RGB565` natively where the native GL has it (GL 4.1 or
+  ARB_ES2_compatibility: Mesa on Linux) and otherwise in `RGB8` (macOS legacy
+  CGL, unverified); both hold every 5/6/5 value exactly, and level and
+  renderbuffer queries answer the native storage. `RGB5` itself is unchanged.
+  X1R5G5B5 (`GL_RGB5`), A1R5G5B5 (`GL_RGB5_A1`) and A4R4G4B4 (`GL_RGBA4`)
+  were already exact on Mesa (every 16-bit word round-trips, clears exact).
+  Colour-keyed R5G6B5 textures are still converted to B5G5R5A1 by Wine and
+  keep five green bits. Native pixel tests (Linux, Mesa on Radeon) round-trip
+  all 65536 words as RGBA8 and float, render column clears (exact and 8-bit
+  colours), a texture sampled 1:1 and DrawPixels into an `RGB565` texture
+  attachment and renderbuffer, copy from it and from the RGBA8 window with
+  CopyTexImage/CopyTexSubImage and define an image through a display list.
+  The installed D3D8/9 probes check a Lock-filled R5G6B5 texture sampled 1:1
+  into a lockable R5G6B5 target plus clears of all 64 greens (rtt-probe) and
+  lock all 64 greens (partial-lock probe), skipping both without the
+  capability; they have not yet run on a guest.
 - Direct3D fixed-function vertex blending (skinning: `D3DRS_VERTEXBLEND` 1-3
   weights over `D3DTS_WORLD`..`WORLD3`) needs no capability bit and no frontend
   or host change. WineD3D's fixed-function pipeline blended only through
@@ -570,10 +597,10 @@ and disposable-VM acceptance cycle:
   Win2000 guest, DM-Antalus with `ReduceMouseLag=True` ran 806 presents in
   3 s (about 269 FPS, before 67-75) with one `ReadPixels` QUERY per frame
   instead of 3 `GetTexLevelParameteriv` and 30 `GetTexImage` QUERYs, and 14
-  batches per frame instead of 46. Wine stores R5G6B5 targets as `GL_RGB5`
-  (`ARB_ES2_compatibility`, which selects `GL_RGB565`, is not advertised), so
-  their green keeps 5 bits, unlike a GeForce FX; the probe's R5G6B5 colours
-  use only greens that survive that. The probe has not yet passed on a
+  batches per frame instead of 46. With exact R5G6B5 storage
+  (below, Wine 0057) R5G6B5 targets keep all six green bits and the probe's
+  R5G6B5 colours use all 64 greens; without it Wine stores `GL_RGB5` (five
+  green bits on Mesa) and the probe uses only greens that survive that. The probe has not yet passed on a
   guest; Win98/XP game runs and macOS CGL remain unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,

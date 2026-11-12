@@ -1091,3 +1091,44 @@ DM-Antalus with `ReduceMouseLag=True` went from 67-75 to about 269 FPS on a
 Win2000 guest, one 1-pixel `ReadPixels` per frame instead of 33 queries).
 Its R5G6B5 colours use greens that survive Wine's `GL_RGB5` storage of that
 format (5-bit green without `ARB_ES2_compatibility`).
+
+`0057-rgb565-storage.patch` stores Direct3D's R5G6B5 with a six-bit green, as
+a GeForce FX 5800 did. WineD3D's format table maps `WINED3DFMT_B5G6R5_UNORM`
+to `GL_RGB5`, and only to `GL_RGB565` with `ARB_ES2_compatibility`, an OpenGL
+ES 2.0 compatibility extension DreamGPU does not report (its other entry
+points, the `FIXED` type and the shader precision queries have no GeForce FX
+counterpart). Mesa keeps `GL_RGB5` in 5/5/5 bits, so every R5G6B5 texture,
+render target and 16-bit back buffer lost green's low bit: a clear or upload
+of six-bit green 13 read back as 12 on Win2000, XP and Win98 guests.
+
+DreamGPU's frontend accepts `GL_RGB565` (0x8D62) as an internal format, with
+no extension name, exactly when the host stores it with all 5/6/5 bits
+(`DG_CAP2_GL_RGB565`); older frontends and hosts report a GL error for it.
+`dg_rgb565_storage` asks that once, in `init_format_texture_info` with the
+capability context current: it drains pending errors, saves
+`GL_TEXTURE_BINDING_2D`, defines a 1x1 `GL_RGB565` image (`GL_RGB`,
+`GL_UNSIGNED_SHORT_5_6_5`, no pixels) in a new 2D texture, takes "no error"
+as the answer, restores the binding, deletes the texture and drains errors
+again. With `ARB_ES2_compatibility` it is not called. Table assignment then
+takes B5G6R5's existing `GL_RGB565` entry also when the probe succeeded;
+`supported[ARB_ES2_COMPATIBILITY]` is unchanged, so nothing else in WineD3D
+changes. The entry keeps `GL_RGB`/`GL_UNSIGNED_SHORT_5_6_5` and its
+`GL_RGB8` render-target fallback, which `check_fbo_compat` replaces with
+`GL_RGB565` once the format attaches to a framebuffer object; offscreen
+render targets and the `ORM_FBO` back buffer therefore use `GL_RGB565` too.
+On an older host or frontend, B5G6R5 stays `GL_RGB5` exactly as before.
+
+X1R5G5B5 (`GL_RGB5`), A1R5G5B5 (`GL_RGB5_A1`) and A4R4G4B4 (`GL_RGBA4`) are
+unchanged: on Mesa they keep 5/5/5, 5/5/5/1 and 4/4/4/4 bits, and all 65536
+words of each round-trip through upload, readback and framebuffer clears.
+Colour-keyed textures are still converted by `color_key_info`: a keyed
+B5G6R5 texture becomes B5G5R5A1, so its green keeps five bits (the key
+comparison itself is on the original 16-bit words).
+
+`test_rgb565_storage.py` runs the prepared `dg_rgb565_storage` and
+`init_format_texture_info` table assignment under ASan/UBSan against a fake
+GL that accepts or rejects `GL_RGB565`, and with `ARB_ES2_compatibility`
+(where the probe makes no GL call). It checks B5G6R5's internal, render-target,
+format and type fields, that the 16-bit formats above keep their entries, and
+that the probe restores the 2D binding, deletes its texture and leaves no GL
+error; it fails without the patch.

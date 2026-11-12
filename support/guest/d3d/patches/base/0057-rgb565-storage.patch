@@ -1,0 +1,67 @@
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -2132,17 +2132,49 @@
+         gl_info->fbo_ops.glDeleteFramebuffers(1, &fbo);
+ }
+ 
++/* DreamGPU: a GeForce FX keeps R5G6B5 in five, six and five bits, but
++ * WineD3D's GL_RGB565 entry for it requires ARB_ES2_compatibility, which
++ * DreamGPU does not report (it is an OpenGL ES 2.0 compatibility extension of
++ * 2010, not a GeForce FX one). Without it B5G6R5 is GL_RGB5, which Mesa keeps
++ * in 5/5/5 bits, so a six-bit green lost its low bit in every texture, render
++ * target and 16-bit back buffer. DreamGPU's frontend accepts GL_RGB565 as an
++ * internal format exactly when the host stores it with all 5/6/5 bits
++ * (DG_CAP2_GL_RGB565), and reports a GL error otherwise: older frontends and
++ * hosts keep GL_RGB5 as before. Context activation is done by the caller. */
++static BOOL dg_rgb565_storage(const struct wined3d_gl_info *gl_info)
++{
++    GLint binding = 0;
++    GLuint texture = 0;
++    unsigned int i;
++    BOOL ok;
++
++    for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i);
++    gl_info->gl_ops.gl.p_glGetIntegerv(GL_TEXTURE_BINDING_2D, &binding);
++    gl_info->gl_ops.gl.p_glGenTextures(1, &texture);
++    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, texture);
++    gl_info->gl_ops.gl.p_glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB565, 1, 1, 0,
++            GL_RGB, GL_UNSIGNED_SHORT_5_6_5, NULL);
++    ok = texture && gl_info->gl_ops.gl.p_glGetError() == GL_NO_ERROR;
++    gl_info->gl_ops.gl.p_glBindTexture(GL_TEXTURE_2D, binding);
++    if (texture)
++        gl_info->gl_ops.gl.p_glDeleteTextures(1, &texture);
++    for (i = 0; i < 16 && gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR; ++i);
++    TRACE("GL_RGB565 storage %s.\n", ok ? "accepted" : "rejected");
++    return ok;
++}
++
+ static BOOL init_format_texture_info(struct wined3d_adapter *adapter, struct wined3d_gl_info *gl_info)
+ {
+     struct fragment_caps fragment_caps;
+     struct shader_caps shader_caps;
+-    BOOL srgb_write;
++    BOOL srgb_write, rgb565;
+     unsigned int i;
+ 
+     adapter->fragment_pipe->get_caps(gl_info, &fragment_caps);
+     adapter->shader_backend->shader_get_caps(gl_info, &shader_caps);
+     srgb_write = (fragment_caps.wined3d_caps & WINED3D_FRAGMENT_CAP_SRGB_WRITE)
+             && (shader_caps.wined3d_caps & WINED3D_SHADER_CAP_SRGB_WRITE);
++    rgb565 = gl_info->supported[ARB_ES2_COMPATIBILITY] || dg_rgb565_storage(gl_info);
+ 
+     for (i = 0; i < sizeof(format_texture_info) / sizeof(*format_texture_info); ++i)
+     {
+@@ -2156,7 +2188,12 @@
+             return FALSE;
+         }
+ 
+-        if (!gl_info->supported[format_texture_info[i].extension]) continue;
++        /* DreamGPU: B5G6R5's GL_RGB565 entry also with DreamGPU's exact
++         * RGB565 storage (dg_rgb565_storage). */
++        if (!gl_info->supported[format_texture_info[i].extension]
++                && !(format_texture_info[i].id == WINED3DFMT_B5G6R5_UNORM
++                && format_texture_info[i].gl_internal == GL_RGB565 && rgb565))
++            continue;
+ 
+         format = &gl_info->formats[fmt_idx];
+ 

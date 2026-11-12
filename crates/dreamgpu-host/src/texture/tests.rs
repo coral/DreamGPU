@@ -22,6 +22,13 @@ struct Mock {
     targets: Vec<u32>,
     zero_targets: Vec<u32>,
     parameter_targets: Vec<u32>,
+    /// Native internal formats of images and proxies.
+    internals: Vec<i32>,
+    /// NUL-terminated GL_VERSION and GL_EXTENSIONS answers, and how often
+    /// either was asked.
+    version: &'static [u8],
+    extensions: &'static [u8],
+    strings: u32,
 }
 thread_local! { static MOCK: RefCell<Mock> = RefCell::new(Mock::default()); }
 fn index(key: u32) -> usize {
@@ -53,7 +60,7 @@ fn image(kind: u32, pixels: *const c_void) {
 unsafe extern "C" fn image1(
     _: u32,
     _: i32,
-    _: i32,
+    internal: i32,
     width: i32,
     border: i32,
     _: u32,
@@ -62,6 +69,7 @@ unsafe extern "C" fn image1(
 ) {
     MOCK.with(|v| {
         let mut v = v.borrow_mut();
+        v.internals.push(internal);
         v.width = width - if v.strip_border { 2 * border } else { 0 };
         v.border = if v.strip_border { 0 } else { border };
     });
@@ -70,7 +78,7 @@ unsafe extern "C" fn image1(
 unsafe extern "C" fn image2(
     target: u32,
     _: i32,
-    _: i32,
+    internal: i32,
     width: i32,
     height: i32,
     border: i32,
@@ -81,6 +89,7 @@ unsafe extern "C" fn image2(
     MOCK.with(|v| {
         let mut v = v.borrow_mut();
         v.targets.push(target);
+        v.internals.push(internal);
         v.width = width;
         v.height = height;
         v.border = border;
@@ -171,6 +180,17 @@ unsafe extern "C" fn parameter(target: u32, key: u32, out: *mut i32) {
         v.error = v.generate_error;
     });
 }
+unsafe extern "C" fn string(name: u32) -> *const u8 {
+    MOCK.with(|v| {
+        let mut v = v.borrow_mut();
+        v.strings += 1;
+        match name {
+            GL_VERSION => v.version.as_ptr(),
+            GL_EXTENSIONS => v.extensions.as_ptr(),
+            _ => core::ptr::null(),
+        }
+    })
+}
 fn api() -> DreamGpuGlApi {
     let mut api: DreamGpuGlApi = unsafe { core::mem::zeroed() };
     api.dg_glGetIntegerv = Some(get);
@@ -184,6 +204,7 @@ fn api() -> DreamGpuGlApi {
     api.dg_glWaitSync = Some(wait_sync);
     api.dg_glDeleteSync = Some(delete);
     api.dg_glFenceSync = Some(fence);
+    api.dg_glGetString = Some(string);
     api
 }
 fn run(
@@ -832,4 +853,96 @@ fn texture_and_face_layouts_match_the_c_mirror() {
     );
     assert_eq!(cube_face(GL_TEXTURE_CUBE_MAP), None);
     assert_eq!(cube_face(GL_TEXTURE_CUBE_MAP_POSITIVE_Y), Some(2));
+}
+
+#[test]
+fn rgb565_images_use_native_rgb565_or_exact_rgb8_storage() {
+    for (version, extensions, native) in [
+        (
+            &b"4.6 (Compatibility Profile) Mesa 26.2.6\0"[..],
+            &b"\0"[..],
+            DG_GL_RGB565,
+        ),
+        (b"4.1 Metal - 89.3\0", b"\0", DG_GL_RGB565),
+        (
+            b"2.1 Metal - 89.3\0",
+            b"GL_ARB_vertex_program GL_ARB_ES2_compatibility\0",
+            DG_GL_RGB565,
+        ),
+        (b"2.1 Metal - 89.3\0", b"GL_ARB_vertex_program\0", GL_RGB8),
+        (
+            b"3.3 Mesa\0",
+            b"GL_ARB_ES2_compatibility_x GL_x_GL_ARB_ES2_compatibility\0",
+            GL_RGB8,
+        ),
+    ] {
+        MOCK.with(|v| {
+            let mut v = v.borrow_mut();
+            *v = Mock::default();
+            v.version = version;
+            v.extensions = extensions;
+        });
+        let api = api();
+        let mut t = Texture {
+            target: GL_TEXTURE_2D,
+            ..Texture::default()
+        };
+        let mut total = 0;
+        let (rgb, short) = (GL_RGB, GL_UNSIGNED_SHORT_5_6_5);
+        let image = [GL_TEXTURE_2D, 0, DG_GL_RGB565, 4, 4, 0, rgb, short];
+        assert_eq!(
+            run(&api, &mut t, &mut total, FEnum_glTexImage2D, image, 32),
+            (Ok(()), 0)
+        );
+        // Proxies judge the same native storage.
+        let square = [GL_PROXY_TEXTURE_2D, 0, DG_GL_RGB565, 4, 4, 0, rgb, short];
+        assert_eq!(unsafe { proxy(&api, &square) }, 0);
+        let line = [GL_PROXY_TEXTURE_1D, 0, DG_GL_RGB565, 4, 1, 0, rgb, short];
+        assert_eq!(unsafe { proxy(&api, &line) }, 0);
+        assert_eq!(
+            MOCK.with(|v| v.borrow().internals.clone()),
+            [native as i32; 3],
+            "{:?}",
+            core::str::from_utf8(version)
+        );
+        // Every other format is native GL's, without asking its strings.
+        MOCK.with(|v| {
+            let mut v = v.borrow_mut();
+            v.internals.clear();
+            v.strings = 0;
+        });
+        let other = [GL_TEXTURE_2D, 0, GL_RGB5, 4, 4, 0, rgb, short];
+        assert_eq!(
+            run(&api, &mut t, &mut total, FEnum_glTexImage2D, other, 32),
+            (Ok(()), 0)
+        );
+        assert_eq!(unsafe { native_internal_format(&api, GL_RGB8) }, GL_RGB8);
+        assert_eq!(
+            MOCK.with(|v| v.borrow().internals.clone()),
+            [GL_RGB5 as i32]
+        );
+        assert_eq!(MOCK.with(|v| v.borrow().strings), 0);
+    }
+    // Without the string query the host keeps RGB8 storage.
+    let mut api = api();
+    api.dg_glGetString = None;
+    assert_eq!(
+        unsafe { native_internal_format(&api, DG_GL_RGB565) },
+        GL_RGB8
+    );
+    for (version, rgb565) in [
+        (&b"4.1"[..], true),
+        (b"4.10.2 vendor", true),
+        (b"10.0", true),
+        (b"5", true),
+        (b"4.0.30319", false),
+        (b"4", false),
+        (b"3.3 (Core Profile)", false),
+        (b"2.1 ATI-4.14", false),
+        (b"", false),
+        (b"OpenGL 4.6", false),
+        (b"99999999999999999999.1", false),
+    ] {
+        assert_eq!(version_has_rgb565(version), rgb565, "{version:?}");
+    }
 }

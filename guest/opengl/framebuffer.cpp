@@ -182,12 +182,12 @@ static BOOL AttachmentPoint(GLenum attachment) {
     return JglColorAttachment(attachment) || attachment == JGL_DEPTH_ATTACHMENT ||
            attachment == JGL_STENCIL_ATTACHMENT;
 }
-/* RenderbufferStorage formats: RGB, RGBA, R3_G3_B2, RGB4..RGBA16, the depth
- * and stencil formats and the packed DEPTH_STENCIL ones. */
+/* RenderbufferStorage formats: RGB, RGBA, R3_G3_B2, RGB4..RGBA16, RGB565 once
+ * negotiated, the depth and stencil formats and the packed DEPTH_STENCIL ones. */
 static BOOL RenderbufferFormat(GLenum format) {
     return format == 0x1907 || format == 0x1908 || format == 0x2a10 ||
-           (format >= 0x804f && format <= 0x805b) || format == 0x1902 ||
-           (format >= 0x81a5 && format <= 0x81a7) || format == 0x1901 ||
+           (format >= 0x804f && format <= 0x805b) || JglRgb565Format((GLint)format) ||
+           format == 0x1902 || (format >= 0x81a5 && format <= 0x81a7) || format == 0x1901 ||
            (format >= 0x8d46 && format <= 0x8d49) || format == JGL_DEPTH_STENCIL ||
            format == 0x88f0;
 }

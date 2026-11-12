@@ -22,11 +22,14 @@
  * here (UT2003's own transport counters show that). Targets: the X8R8G8B8
  * backbuffer, a lockable 400x300 X8R8G8B8 render target (beyond the 320x240
  * window) and, with framebuffer objects (as rtt-probe.inc decides) and when
- * claimed, a 400x300 R5G6B5 one. Wine stores R5G6B5 targets as GL_RGB5
- * without ARB_ES2_compatibility, so green keeps 5 bits: its colours use only
- * the 32 six-bit greens round(v * 63 / 31) that survive 5-, 6- and 8-bit
- * storage and both readback conversions. Every FAIL line names the check;
- * the stage line before it names the target.
+ * claimed, a 400x300 R5G6B5 one. With exact R5G6B5 storage (probe.cpp's
+ * rgb565_storage, DG_CAP2_GL_RGB565) Wine keeps R5G6B5 targets in GL_RGB565:
+ * their 20x20 region then holds every 6-bit green and every 5-bit red and
+ * blue. Without it (older hosts and frontends) Wine stores them as GL_RGB5,
+ * green keeps 5 bits, and the colours use only the 32 six-bit greens
+ * round(v * 63 / 31) that survive 5-, 6- and 8-bit storage and both readback
+ * conversions. Every FAIL line names the check; the stage line before it
+ * names the target.
  */
 #if DG_D3D_VERSION == 8
 typedef D3DVIEWPORT8 LockViewport;
@@ -56,11 +59,11 @@ struct Target {
 };
 
 /* Colour components exactly representable in the target: 8 bits, or 5-bit
- * red and blue and a 5-bit-safe 6-bit green (see above), as their 8-bit
- * expansions. */
+ * red and blue and a 6-bit green (5-bit-safe without exact R5G6B5 storage,
+ * see above), as their bit-replicated 8-bit expansions. */
 static DWORD Argb(DWORD r, DWORD g, DWORD b, BOOL wide) {
     if (!wide) {
-        r &= 31, g = ((g & 31) * 126 + 31) / 62, b &= 31;
+        r &= 31, g = rgb565_storage ? g & 63 : ((g & 31) * 126 + 31) / 62, b &= 31;
         r = r << 3 | r >> 2, g = g << 2 | g >> 4, b = b << 3 | b >> 2;
     }
     return 0xff000000u | (r & 255) << 16 | (g & 255) << 8 | (b & 255);
@@ -74,8 +77,11 @@ static DWORD Stored(DWORD argb, BOOL wide) {
 static DWORD Background(int seed, BOOL wide) {
     return Argb(16 + seed * 9, 32 + seed * 5, 48 + seed * 3, wide);
 }
+/* Over the 20x20 region of either seed: all 64 low six green bits and all 32
+ * low five red and blue bits. */
 static DWORD Color(int x, int y, int seed, BOOL wide) {
-    return Argb(x * 11 + seed * 37 + 1, y * 13 + seed * 5 + 2, x * 7 + y * 3 + seed + 3, wide);
+    return Argb(x * 11 + y * 7 + seed * 37 + 1, y * 13 + x * 3 + seed * 5 + 2,
+                x * 7 + y * 3 + seed + 3, wide);
 }
 static BOOL Inside(const RECT &r, int x, int y) {
     return x >= r.left && x < r.right && y >= r.top && y < r.bottom;
@@ -266,7 +272,11 @@ static void Run(D3D *d3d, Device *dev, Surface *backbuffer) {
             ok = HR(LOCK_TARGET(dev, Wide, High, D3DFMT_R5G6B5, &narrow),
                     "FAIL rectangle lock R5G6B5 render target creation") &&
                  Case(dev, {narrow, Wide, High, FALSE,
-                            "STAGE rectangle lock: lockable R5G6B5 render target 400x300"});
+                            rgb565_storage
+                                ? "STAGE rectangle lock: lockable R5G6B5 render target 400x300, "
+                                  "all 64 greens"
+                                : "STAGE rectangle lock: lockable R5G6B5 render target 400x300, "
+                                  "5-bit-safe greens (no exact R5G6B5 storage)"});
         else if (ok)
             Log("SKIP rectangle lock R5G6B5 render target: not claimed");
     } else if (ok) {

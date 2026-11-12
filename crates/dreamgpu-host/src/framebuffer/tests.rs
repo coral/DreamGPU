@@ -70,6 +70,8 @@ struct Native {
     clear_color: [f32; 4],
     clear_depth: f64,
     color_mask: [u8; 4],
+    /// The NUL-terminated GL_VERSION answer; none for a null string.
+    version: Option<&'static [u8]>,
 }
 std::thread_local! {static N: RefCell<Native> = RefCell::new(Native::default());}
 fn native<R>(f: impl FnOnce(&mut Native) -> R) -> R {
@@ -216,6 +218,12 @@ unsafe extern "C" fn renderbuffer_storage(_: u32, format: u32, w: i32, h: i32) {
         }
         let rb = n.renderbuffer;
         n.renderbuffers.insert(rb, (format, w, h));
+    })
+}
+unsafe extern "C" fn string(name: u32) -> *const u8 {
+    native(|n| match (name, n.version) {
+        (GL_VERSION, Some(version)) => version.as_ptr(),
+        _ => core::ptr::null(),
     })
 }
 unsafe extern "C" fn renderbuffer_parameter(_: u32, pname: u32, out: *mut i32) {
@@ -443,6 +451,7 @@ fn api() -> DreamGpuGlApi {
     a.dg_glBindRenderbuffer = Some(bind_renderbuffer);
     a.dg_glRenderbufferStorage = Some(renderbuffer_storage);
     a.dg_glGetRenderbufferParameteriv = Some(renderbuffer_parameter);
+    a.dg_glGetString = Some(string);
     a.dg_glBlitFramebuffer = Some(blit);
     a.dg_glGenerateMipmap = Some(generate);
     a.dg_glGetIntegerv = Some(integer);
@@ -2079,4 +2088,55 @@ fn table_and_budget_exhaustion_are_out_of_memory() {
     release(m, c);
     assert_eq!(*f.bytes, 0);
     assert!(f.allocator.live.is_empty());
+}
+
+#[test]
+fn rgb565_renderbuffers_are_native_rgb565_or_exact_rgb8_storage() {
+    let f = fixture();
+    let m = &f.memory;
+    let mut a = context(m, null_mut());
+    assert_eq!(
+        call(m, &mut a, FEnum_glBindRenderbuffer, &[GL_RENDERBUFFER, 4]),
+        0
+    );
+    let start = *f.bytes;
+    for (version, native_format) in [
+        (
+            Some(&b"4.6 (Compatibility Profile) Mesa\0"[..]),
+            DG_GL_RGB565,
+        ),
+        (Some(b"2.1 Metal - 89.3\0"), GL_RGB8),
+        (None, GL_RGB8),
+    ] {
+        native(|n| n.version = version);
+        assert_eq!(
+            call(
+                m,
+                &mut a,
+                FEnum_glRenderbufferStorage,
+                &[GL_RENDERBUFFER, DG_GL_RGB565, 16, 8]
+            ),
+            0
+        );
+        assert_eq!(errors(&mut a), 0);
+        assert_eq!(
+            native(|n| n.renderbuffers[&n.renderbuffer]),
+            (native_format, 16, 8)
+        );
+        // Charged like every other colour format, replacing the old storage.
+        assert_eq!(*f.bytes - start, 16 * 8 * 4);
+    }
+    // Other formats never ask for strings.
+    native(|n| n.version = Some(b"4.6\0"));
+    assert_eq!(
+        call(
+            m,
+            &mut a,
+            FEnum_glRenderbufferStorage,
+            &[GL_RENDERBUFFER, GL_RGB5, 16, 8]
+        ),
+        0
+    );
+    assert_eq!(native(|n| n.renderbuffers[&n.renderbuffer].0), GL_RGB5);
+    release(m, a);
 }

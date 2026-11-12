@@ -89,6 +89,11 @@ static inline BOOL JglDepthInternalFormat(GLint format) {
 }
 /* ARB_depth_texture (the second capability word), as in guest/opengl/internal.h. */
 BOOL JglDepthTextureAvailable(void);
+/* Exact R5G6B5 storage (the second capability word), as in guest/opengl/internal.h. */
+BOOL JglRgb565Available(void);
+static inline BOOL JglRgb565Format(GLint format) {
+    return format == DG_GL_RGB565 && JglRgb565Available();
+}
 ULONG JglMaxDataBytes(ULONG);
 JGL_UNPACK *JglUnpack(void);
 JGL_UNPACK *JglPack(void);
