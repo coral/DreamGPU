@@ -72,7 +72,8 @@ static BOOL EnumDisplaySettingsA95(const char *name,UINT which,DEVMODEA *out){as
 static LONG ChangeDisplaySettingsExA95(const char *name,DEVMODEA *mode,void *window,UINT flags,void *extra){assert(!strcmp(name,"screen")&&!window&&!extra&&flags==CDS_FULLSCREEN);if(!native_calls)first_fields=mode->dmFields;++native_calls;last_fields=mode->dmFields;if(fail_changes){--fail_changes;return -1;}current=*mode;return DISP_CHANGE_SUCCESSFUL;}
 static void SetRect(RECT *r,int x,int y,int w,int h){*r=(RECT){x,y,w,h};}
 static void ClipCursor(const RECT *r){assert(r->right==(int)current.dmPelsWidth&&r->bottom==(int)current.dmPelsHeight);++clips;}
-static unsigned VirtualQuery(void *p,MEMORY_BASIC_INFORMATION *info,unsigned size){assert(p&&size==sizeof(struct wined3d_device));info->State=MEM_COMMIT;info->Protect=0;return 1;}
+/* Windows XP/98 validate the whole buffer length: a length beyond the buffer runs past a shallow stack and fails. */
+static unsigned VirtualQuery(void *p,MEMORY_BASIC_INFORMATION *info,unsigned size){assert(p);if(size!=sizeof(*info))return 0;info->State=MEM_COMMIT;info->Protect=0;return 1;}
 static void SetWindowPos(void *w,void *after,int x,int y,UINT width,UINT height,UINT flags){assert(w&&!after&&!x&&!y&&width==800&&height==600&&flags==(SWP_NOACTIVATE|SWP_NOZORDER));++positions;}
 static BOOL IsWindowVisible(void *w){assert(w);return TRUE;}
 /* Without WINED3D_HANDLE_RESTORE (the DirectDraw flags here) activation never restores; test_fullscreen_window_keep.py covers 0060. */
@@ -148,6 +149,7 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-fullscreen-activation-') as di
         'fixed': mode + activate,
         'windowed-defect': mode + activate.replace(guard, ''),
         'ownership-defect': mode.replace(same_mode, 'else if (current_mode.dmPelsWidth') + activate,
+        'query-length-defect': mode + activate.replace('sizeof(meminfo))', 'sizeof(struct wined3d_device))'),
     }
     for name, code in cases.items():
         source = work / (name + '.c')
@@ -161,4 +163,4 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-fullscreen-activation-') as di
             result.check_returncode()
         else:
             assert result.returncode != 0 and b'Assertion' in result.stderr, (name, result)
-    print('PASS both historical defect controls are rejected by the runtime assertions')
+    print('PASS all three historical defect controls are rejected by the runtime assertions')

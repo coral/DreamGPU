@@ -691,10 +691,15 @@ and disposable-VM acceptance cycle:
   had no effect on Windows 2000 (the installed probe's window stayed
   320x240): Windows gives hooks a copy. The procedure is removed when keeping
   stops, or left as a pass-through when another module subclassed later.
-  The installed D3D8/9 probe (`tools/d3d/reset-probe.inc`, `Fullscreen`, run
-  last: a 640x480 device on a 320x240 window that shrinks itself, application
-  resizes, Reset, focus loss and activation) remains to be rerun with the
-  subclass. Source tests execute the prepared functions against a user32
+  On Windows XP and 98 the probe then showed focus loss ignored altogether:
+  WineD3D's activation hack passed `sizeof(struct wined3d_device)` (about 50
+  KiB) as `VirtualQuery`'s buffer length, which Windows validates and which
+  ran past a shallow stack's base, so the query failed; 0060 passes the
+  buffer's size (Windows 2000 had passed). The installed D3D8/9 probe
+  (`tools/d3d/reset-probe.inc`, `Fullscreen`, run last: a 640x480 device on
+  a 320x240 window that shrinks itself, application resizes, Reset, focus
+  loss and activation) passes on Windows 2000 and remains to be rerun on XP
+  and 98. Source tests execute the prepared functions against a user32
   model that discards hook-time edits; Splinter Cell remains to be rerun.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,

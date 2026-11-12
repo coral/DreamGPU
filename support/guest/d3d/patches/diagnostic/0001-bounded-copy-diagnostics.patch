@@ -38,12 +38,12 @@
              else
                  wined3d_surface_prepare(rt, context, rt->container->resource.draw_binding);
          }
-@@ -4355,7 +4355,7 @@
+@@ -4360,7 +4360,7 @@
              && src_rect.bottom == sub_resource->height)
          wined3d_texture_prepare_texture(texture, context, FALSE);
      else
 -        surface_load_location(surface, context, WINED3D_LOCATION_TEXTURE_RGB);
-+        dg_surface_load_location(6, 4358, surface, context, WINED3D_LOCATION_TEXTURE_RGB);
++        dg_surface_load_location(6, 4363, surface, context, WINED3D_LOCATION_TEXTURE_RGB);
      wined3d_texture_bind_and_dirtify(texture, context, FALSE);
  
      wined3d_surface_upload_data(surface, gl_info, resource->format,

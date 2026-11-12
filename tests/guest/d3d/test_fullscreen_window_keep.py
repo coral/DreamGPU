@@ -149,7 +149,7 @@ static WNDPROC app;
 static unsigned depth, deepest, sizes, last_size_cx, last_size_cy, shows, last_show, mode_sets, fail_modes;
 static unsigned displaychanges, shrinks, activations, deactivations, wrong_variant, hook_edits;
 static struct wined3d_display_mode last_mode;
-static BOOL mode_is_desktop;
+static BOOL mode_is_desktop, minimizing;
 
 LRESULT device_process_message(struct wined3d_device *device, HWND window, BOOL unicode,
         UINT message, WPARAM wparam, LPARAM lparam, WNDPROC proc);
@@ -206,6 +206,7 @@ static BOOL SetWindowPos(HWND w, HWND after, int x, int y, int cx, int cy, UINT 
     if (++depth > deepest) deepest = depth;
     assert(depth < 64); /* An unbounded SetWindowPos/WM_SIZE loop. */
     if (!(flags & SWP_NOSENDCHANGING)) send(WM_WINDOWPOSCHANGING, 0, (LPARAM)&pos);
+    if (minimizing) { minimizing = FALSE; win.iconic = TRUE; }
     nx = pos.flags & SWP_NOMOVE ? win.x : pos.x; ny = pos.flags & SWP_NOMOVE ? win.y : pos.y;
     ncx = pos.flags & SWP_NOSIZE ? win.cx : pos.cx; ncy = pos.flags & SWP_NOSIZE ? win.cy : pos.cy;
     changed = pos; changed.x = nx; changed.y = ny; changed.cx = ncx; changed.cy = ncy;
@@ -224,16 +225,38 @@ static BOOL MoveWindow(HWND w, int x, int y, int cx, int cy, BOOL repaint) {
 }
 /* Minimizing marks the window iconic before positioning it, restoring clears
  * it first; both are state changes. */
+/* Platform variants (compiled separately):
+ * - Windows 2000/XP: SWP_STATECHANGED, minimized windows parked at -32000;
+ * - MODEL_WIN98: no SWP_STATECHANGED, minimized on screen (no hidden
+ *   arrangement), iconic before WM_WINDOWPOSCHANGING;
+ * - MODEL_LATE_ICONIC: no SWP_STATECHANGED, parked at -32000, iconic only
+ *   after WM_WINDOWPOSCHANGING. */
+#if defined(MODEL_WIN98) || defined(MODEL_LATE_ICONIC)
+#define STATE_FLAG 0
+#else
+#define STATE_FLAG SWP_STATECHANGED
+#endif
+#ifdef MODEL_WIN98
+#define PARK_X 0
+#define PARK_Y 744
+#else
+#define PARK_X (-32000)
+#define PARK_Y (-32000)
+#endif
 static BOOL ShowWindow(HWND w, int command) {
     BOOL was_visible = win.visible;
     assert(w == hwnd); ++shows; last_show = command;
     if (command == SW_MINIMIZE && !win.iconic) {
+#ifdef MODEL_LATE_ICONIC
+        minimizing = TRUE;
+#else
         win.iconic = TRUE;
-        SetWindowPos(w, NULL, -32000, -32000, 160, 24, SWP_STATECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW);
+#endif
+        SetWindowPos(w, NULL, PARK_X, PARK_Y, 160, 24, STATE_FLAG | SWP_NOZORDER | SWP_SHOWWINDOW);
     } else if ((command == SW_RESTORE || command == SW_SHOWNOACTIVATE) && win.iconic) {
         win.iconic = FALSE;
         SetWindowPos(w, NULL, win.nx, win.ny, win.ncx, win.ncy,
-                SWP_STATECHANGED | SWP_NOZORDER | SWP_SHOWWINDOW | (command == SW_SHOWNOACTIVATE ? SWP_NOACTIVATE : 0));
+                STATE_FLAG | SWP_NOZORDER | SWP_SHOWWINDOW | (command == SW_SHOWNOACTIVATE ? SWP_NOACTIVATE : 0));
     } else if (command == SW_HIDE) {
         win.visible = FALSE;
     }
@@ -263,8 +286,11 @@ static LONG SetWindowLongA(HWND w, int index, LONG value) {
     if (index == GWL_STYLE) win.style = value & ~(LONG)WS_VISIBLE; else win.exstyle = value;
     return old;
 }
+/* Windows XP and 98 validate the whole buffer length: a length beyond the
+ * buffer runs past the base of a shallow stack and the query fails. */
 static unsigned VirtualQuery(void *p, MEMORY_BASIC_INFORMATION *info, unsigned size) {
-    (void)size; assert(p); info->State = MEM_COMMIT; info->Protect = 0; return 1;
+    assert(p); if (size != sizeof(*info)) return 0;
+    info->State = MEM_COMMIT; info->Protect = 0; return 1;
 }
 static BOOL wined3d_register_window(HWND w, struct wined3d_device *d) { assert(w == hwnd); registered = d; return TRUE; }
 static void wined3d_unregister_window(HWND w) { assert(w == hwnd); registered = NULL; }
@@ -451,7 +477,7 @@ int main(void) {
     /* Activation of a window that is not iconic does not show it again. */
     before = shows; activate(TRUE); assert(shows == before && covers(1024, 768));
     /* The game's own minimize while active passes (a state change). */
-    ShowWindow(hwnd, SW_MINIMIZE); assert(win.iconic && win.x == -32000 && win.cx == 160);
+    ShowWindow(hwnd, SW_MINIMIZE); assert(win.iconic && win.x == PARK_X && win.y == PARK_Y && win.cx == 160);
     activate(TRUE); assert(covers(1024, 768));
 
     /* Reset with reapply_mode after focus returns: the mode again, window kept. */
@@ -587,6 +613,12 @@ MUTATIONS = {
         '            if (entry->device && entry->device->kept_window == window)\n                entry->device->kept_window = NULL;\n'
         '            memset(entry, 0, sizeof(*entry));\n', '')],
     'clamp-while-inactive': [('|| device->kept_inactive\n', '\n')],
+    # Before this, VirtualQuery was given sizeof(struct wined3d_device) (about
+    # 50 KiB): on XP and 98 focus changes did nothing.
+    'virtualquery-device-length': [('VirtualQuery(device, &meminfo, sizeof(meminfo))',
+                                    'VirtualQuery(device, &meminfo, sizeof(struct wined3d_device))')],
+    'no-parked-minimize-guard': [(
+        '    if (!(pos->flags & SWP_NOMOVE) && (pos->x <= -32000 || pos->y <= -32000))\n        return;\n', '')],
     'clamp-state-changes': [('(pos->flags & (SWP_NOSIZE | SWP_STATECHANGED)) || IsIconic(window)', '(pos->flags & SWP_NOSIZE)')],
     'clamp-pure-moves': [('(pos->flags & (SWP_NOSIZE | SWP_STATECHANGED))', '(pos->flags & SWP_STATECHANGED)')],
     'unbounded-clamps': [('#define DEVICE_KEPT_CLAMPS_MAX 8', '#define DEVICE_KEPT_CLAMPS_MAX 100000')],
@@ -617,18 +649,27 @@ def between(source, first, last):
     return source[start:source.index(last, start)]
 
 
+VARIANTS = {'nt': [], 'win98': ['-DMODEL_WIN98'], 'late-iconic': ['-DMODEL_LATE_ICONIC']}
+
+
 def build(work, name, text, expect_pass):
+    """The fixed code passes every platform variant; a mutation fails one."""
     path = work / (name + '.c')
     path.write_text(text)
-    subprocess.run([os.environ.get('CC', 'cc'), '-std=c99', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
-                    '-Wno-unused-parameter', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
-                    '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-g',
-                    str(path), '-o', str(work / name)], check=True)
-    result = subprocess.run([str(work / name)], capture_output=not expect_pass)
-    if expect_pass:
-        result.check_returncode()
-    else:
-        assert result.returncode != 0, (name, result.stdout)
+    failures = []
+    for variant, flags in VARIANTS.items():
+        executable = work / (name + '-' + variant)
+        subprocess.run([os.environ.get('CC', 'cc'), '-std=c99', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
+                        '-Wno-unused-parameter', '-Wno-unused-variable', '-Wno-unused-but-set-variable',
+                        '-fsanitize=address,undefined', '-fno-sanitize-recover=all', '-fno-omit-frame-pointer', '-g',
+                        *flags, str(path), '-o', str(executable)], check=True)
+        result = subprocess.run([str(executable)], capture_output=not expect_pass)
+        if expect_pass:
+            result.check_returncode()
+        elif result.returncode:
+            failures.append(variant)
+    assert expect_pass or failures, (name, 'not rejected')
+    return failures
 
 
 with tempfile.TemporaryDirectory(prefix='dreamgpu-fullscreen-window-') as directory:
@@ -682,5 +723,5 @@ with tempfile.TemporaryDirectory(prefix='dreamgpu-fullscreen-window-') as direct
         for old, new in replacements:
             assert (mutated_device + mutated_swapchain).count(old) == 1, name
             mutated_device, mutated_swapchain = mutated_device.replace(old, new), mutated_swapchain.replace(old, new)
-        build(work, name, program(mutated_device, mutated_swapchain), False)
-    print(f'PASS all {len(MUTATIONS)} mutations of the patch are rejected')
+        print(name, 'rejected on', ', '.join(build(work, name, program(mutated_device, mutated_swapchain), False)))
+    print(f'PASS all {len(MUTATIONS)} mutations of the patch are rejected (models: {", ".join(VARIANTS)})')

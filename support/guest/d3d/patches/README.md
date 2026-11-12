@@ -1309,6 +1309,19 @@ the mode change fails); a reset from windowed is kept by the setup.
 `reapply_mode` is unchanged: it stays set after the first focus loss, so
 later resets take the mode-change path, which keeps the new size as well.
 
+WineD3D's activation handling first checks that the device is still mapped
+(a Wine9x hack): `VirtualQuery(device, &meminfo, sizeof(struct
+wined3d_device))`. The length is the buffer's, and Windows validates all of
+it as writable, so the query covered about 50 KiB from a stack local and
+failed whenever that ran past the base of a shallow stack. Focus loss and
+activation were then ignored entirely (no desktop mode, no minimize, no
+restore), while D3D8/9 still marked the device lost. The installed probe
+showed it on Windows XP and 98 (Windows 2000 passed): the window was not
+minimized on focus loss. 0060 passes `sizeof(meminfo)`. Because Windows 98
+has no `SWP_STATECHANGED`, the clamp also leaves alone requests to the
+parked minimized position (-32000), in case a window is not yet iconic
+while it is being minimized.
+
 A pass-through procedure left in a chain refers to wined3d.dll, which must
 then stay loaded while the window exists (as WineD3D's own window procedure
 does in builds without `USE_HOOKS`).
@@ -1319,7 +1332,11 @@ hook, activation and present functions and the window part of the prepared
 Windows, gives the hook a copy of a `WINDOWPOS` (edits are discarded), then
 calls the procedure installed last, tracks `SetWindowLongPtr`/`CallWindowProc`
 character sets and sends `WM_SIZE` from DefWindowProc only for a changed
-client size: Splinter Cell's
+client size, in three platform variants (Windows 2000/XP with
+`SWP_STATECHANGED` and windows minimized to -32000; Windows 98 without it,
+minimized on screen; and without it, iconic only after
+`WM_WINDOWPOSCHANGING`), and with `VirtualQuery` failing for a length
+beyond its buffer, as on XP and 98: Splinter Cell's
 WM_SIZE handler at device creation, application `SetWindowPos`/`MoveWindow`,
 same-mode, smaller, larger, failed and windowed resets, focus loss with a
 `WM_DISPLAYCHANGE` resize, activation, the application's own minimize, an
@@ -1327,9 +1344,10 @@ application answering every `WM_WINDOWPOSCHANGED`, one editing its own
 `WM_WINDOWPOSCHANGING`, a Unicode window, a module subclassing after WineD3D
 (pass-through, keeping again, destruction), NOWINDOWCHANGES and DirectDraw
 devices. It checks the order of the steps in the prepared
-`wined3d_device_reset` and the subclass procedure, and each of twenty
-mutations of the patch fails it, among them the first 0060's hook-time
-clamp. `test_fullscreen_activation.py` models the new device fields.
+`wined3d_device_reset` and the subclass procedure, and each of twenty-two
+mutations of the patch fails it in at least one variant, among them the
+first 0060's hook-time clamp and the old `VirtualQuery` length. `test_fullscreen_activation.py` models the new device fields and the
+`VirtualQuery` length (a third defect control).
 The installed D3D8/9 probe (`tools/d3d/reset-probe.inc`, `Fullscreen`, run
 last on its own device and window) creates a fullscreen 640x480 device on a
 320x240 window whose procedure shrinks it back from WM_SIZE, and requires the

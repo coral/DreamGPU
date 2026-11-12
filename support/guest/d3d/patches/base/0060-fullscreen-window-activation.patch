@@ -1,6 +1,6 @@
 --- a/wined3d/device.c
 +++ b/wined3d/device.c
-@@ -830,6 +830,246 @@
+@@ -830,6 +830,251 @@
      return exstyle;
  }
  
@@ -84,6 +84,11 @@
 +    if (!pos || !device->kept_window || window != device->kept_window || device->kept_inactive
 +            || (pos->flags & (SWP_NOSIZE | SWP_STATECHANGED)) || IsIconic(window)
 +            || (GetWindowLongA(window, GWL_STYLE) & WS_CHILD))
++        return;
++
++    /* Windows parks minimized windows at -32000,-32000; Windows 98 has no
++     * SWP_STATECHANGED. */
++    if (!(pos->flags & SWP_NOMOVE) && (pos->x <= -32000 || pos->y <= -32000))
 +        return;
 +
 +    x = pos->x;
@@ -247,7 +252,7 @@
  void CDECL wined3d_device_setup_fullscreen_window(struct wined3d_device *device, HWND window, UINT w, UINT h)
  {
      BOOL filter_messages;
-@@ -837,6 +1077,8 @@
+@@ -837,6 +1082,8 @@
  
      TRACE("Setting up window %p for fullscreen mode.\n", window);
  
@@ -256,7 +261,7 @@
      if (device->style || device->exStyle)
      {
          ERR("Changing the window style for window %p, but another style (%08x, %08x) is already stored.\n",
-@@ -867,6 +1109,9 @@
+@@ -867,6 +1114,9 @@
      BOOL filter_messages;
      LONG style, exstyle;
  
@@ -266,7 +271,7 @@
      if (!device->style && !device->exStyle) return;
  
      style = GetWindowLongA(window, GWL_STYLE);
-@@ -927,6 +1172,8 @@
+@@ -927,6 +1177,8 @@
  
      if (device->focus_window) wined3d_unregister_window(device->focus_window);
      InterlockedExchangePointer((void **)&device->focus_window, NULL);
@@ -275,7 +280,7 @@
  }
  
  static void device_init_swapchain_state(struct wined3d_device *device, struct wined3d_swapchain *swapchain)
-@@ -4759,9 +5006,27 @@
+@@ -4759,9 +5011,27 @@
      if (!swapchain_desc->windowed != !swapchain->desc.windowed
              || DisplayModeChanged)
      {
@@ -315,7 +320,22 @@
      return WINED3D_OK;
  }
  
-@@ -1231,6 +1234,10 @@
+@@ -1219,7 +1222,13 @@
+     
+     /* HACK */
+     MEMORY_BASIC_INFORMATION meminfo;
+-    if(VirtualQuery(device, &meminfo, sizeof(struct wined3d_device)) == 0) return;
++    /* DreamGPU: the length is that of the buffer. Windows validates the
++     * whole length as writable; sizeof(struct wined3d_device) (about 50 KiB)
++     * from a local reaches past the base of a shallow thread stack, the query
++     * fails and the focus change is ignored (no desktop mode, no minimize,
++     * no restore). The 0060 probe, sending WM_ACTIVATEAPP from its main
++     * thread, saw this on Windows XP and 98; it passed on Windows 2000. */
++    if(VirtualQuery(device, &meminfo, sizeof(meminfo)) == 0) return;
+     if (meminfo.State != MEM_COMMIT || meminfo.Protect == PAGE_NOACCESS) return;
+     /* JH: this HACK check accessibility of memory page with "device" struct...
+      *     BUT this is very BAD idea, how solve race condition!
+@@ -1231,6 +1240,10 @@
  
      if (activate)
      {
@@ -326,7 +346,7 @@
          if (!(device->create_parms.flags & WINED3DCREATE_NOWINDOWCHANGES))
          {
              /* The d3d versions do not agree on the exact messages here. D3d8 restores
-@@ -1240,6 +1247,16 @@
+@@ -1240,6 +1253,16 @@
               *
               * Guild Wars 1 wants a WINDOWPOSCHANGED message on the device window to
               * resume drawing after a focus loss. */
@@ -343,7 +363,7 @@
              SetWindowPos(swapchain->device_window, NULL, 0, 0,
                      swapchain->desc.backbuffer_width, swapchain->desc.backbuffer_height,
                      SWP_NOACTIVATE | SWP_NOZORDER);
-@@ -1254,6 +1271,10 @@
+@@ -1254,6 +1277,10 @@
      }
      else
      {

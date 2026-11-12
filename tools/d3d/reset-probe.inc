@@ -337,6 +337,10 @@ static BOOL FullscreenStages(D3D *d3d, D3DFORMAT format, HWND window, Device **d
     }
     SendMessageA(window, WM_ACTIVATEAPP, FALSE, 0);
     Pump();
+    /* Which half ran: D3D8/9 lose the device from WineD3D's hook whether or
+     * not WineD3D's own handling (desktop mode, minimize) ran. */
+    Number("cooperative level after focus loss", (DWORD)DEVICE(TestCooperativeLevel, *device));
+    Number("screen width after focus loss", (DWORD)GetSystemMetrics(SM_CXSCREEN));
     if (!Check(IsIconic(window), "FAIL fullscreen reset: focus loss did not minimize", 0) ||
         !CooperativeLevel(*device, D3DERR_DEVICELOST,
                           "FAIL fullscreen reset: device not lost after focus loss"))
