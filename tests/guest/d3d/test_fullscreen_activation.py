@@ -45,19 +45,21 @@ typedef int BOOL,HRESULT,LONG;typedef unsigned UINT,DWORD;
 #define WINED3D_SCANLINE_ORDERING_INTERLACED 1
 #define WINED3D_FOCUS_MESSAGES 1
 #define WINED3D_RESTORE_MODE_ON_ACTIVATE 2
+#define WINED3D_HANDLE_RESTORE 8
 #define WINED3DCREATE_NOWINDOWCHANGES 4
 #define MEM_COMMIT 1
 #define PAGE_NOACCESS 2
 #define SWP_NOACTIVATE 1
 #define SWP_NOZORDER 2
 #define SW_MINIMIZE 3
+#define SW_SHOWNOACTIVATE 4
 struct {BOOL force32bit;} wined3d_settings;
 enum wined3d_format_id {FMT_16=16,FMT_32=32};
 struct wined3d_format {unsigned byte_count;};
 struct wined3d_display_mode {UINT width,height,refresh_rate;enum wined3d_format_id format_id;UINT scanline_ordering;};
 struct wined3d_adapter {char DeviceName[8];int gl_info;UINT ordinal;enum wined3d_format_id screen_format;};
 struct wined3d {UINT adapter_count,flags;struct wined3d_adapter *adapters;};
-struct wined3d_device {struct wined3d *wined3d;struct wined3d_adapter *adapter;BOOL filter_messages;struct {UINT flags;} create_parms;};
+struct wined3d_device {struct wined3d *wined3d;struct wined3d_adapter *adapter;BOOL filter_messages;struct {UINT flags;} create_parms;UINT kept_clamps;BOOL kept_inactive;};
 struct wined3d_swapchain {struct wined3d_device *device;struct {BOOL windowed;UINT backbuffer_width,backbuffer_height;} desc;void *device_window;struct wined3d_display_mode d3d_mode;BOOL reapply_mode;};
 typedef struct {UINT dmSize,dmFields,dmBitsPerPel,dmPelsWidth,dmPelsHeight,dmDisplayFrequency,dmDisplayFlags;} DEVMODEA;
 typedef struct {int left,top,right,bottom;} RECT;
@@ -73,6 +75,8 @@ static void ClipCursor(const RECT *r){assert(r->right==(int)current.dmPelsWidth&
 static unsigned VirtualQuery(void *p,MEMORY_BASIC_INFORMATION *info,unsigned size){assert(p&&size==sizeof(struct wined3d_device));info->State=MEM_COMMIT;info->Protect=0;return 1;}
 static void SetWindowPos(void *w,void *after,int x,int y,UINT width,UINT height,UINT flags){assert(w&&!after&&!x&&!y&&width==800&&height==600&&flags==(SWP_NOACTIVATE|SWP_NOZORDER));++positions;}
 static BOOL IsWindowVisible(void *w){assert(w);return TRUE;}
+/* Without WINED3D_HANDLE_RESTORE (the DirectDraw flags here) activation never restores; test_fullscreen_window_keep.py covers 0060. */
+static BOOL IsIconic(void *w){assert(w);return FALSE;}
 static void ShowWindow(void *w,int how){assert(w&&how==SW_MINIMIZE);++shows;}
 static void clear_counts(void){native_calls=clips=positions=shows=queries=fail_changes=fail_registry=fail_current=first_fields=last_fields=0;}
 '''
@@ -80,7 +84,7 @@ TEST = r'''
 int main(void){
  struct wined3d_adapter adapter={"screen",0,0,FMT_32};
  struct wined3d api={1,WINED3D_RESTORE_MODE_ON_ACTIVATE,&adapter};
- struct wined3d_device device={&api,&adapter,FALSE,{0}};
+ struct wined3d_device device={&api,&adapter,FALSE,{0},0,FALSE};
  struct wined3d_swapchain chain={&device,{TRUE,800,600},&device,{800,600,0,FMT_16,0},FALSE};
  registry=(DEVMODEA){sizeof(DEVMODEA),DM_BITSPERPEL|DM_PELSWIDTH|DM_PELSHEIGHT,32,1280,1024,60,0};
  current=(DEVMODEA){sizeof(DEVMODEA),DM_BITSPERPEL|DM_PELSWIDTH|DM_PELSHEIGHT,16,800,600,60,0};

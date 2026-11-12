@@ -1240,3 +1240,103 @@ probe stages create resources, resets its windowed device with the window
 visible, hidden, minimized (twice, with a scene and Present between) and
 visible again, and renders after restoring without a reset; four reference
 frames must match exactly, and the later stages then run on the reset device.
+
+`0060-fullscreen-window-activation.patch` keeps the device window of a
+fullscreen D3D8/9 swapchain usable after focus changes and covering its mode.
+Native fullscreen flips cover the screen whatever the device window's size;
+DreamGPU presents into the window's client area (WineD3D's `GetClientRect`
+destination, composited at the display driver's WNDOBJ client rectangle).
+Splinter Cell (D3D8) creates its window at 640x480, renders fullscreen at
+1024x768 and answers every WM_SIZE with its creation size, synchronously and
+nested in WineD3D's own `SetWindowPos` (device creation, Reset, activation),
+so it showed as a 640x480 image in a corner of the mode with the desktop
+around it. On focus loss `wined3d_swapchain_activate` restores the desktop
+mode and minimizes the window; on activation it only called `SetWindowPos`,
+which leaves an iconic window iconic. Native D3D8 restores the window there,
+and native D3D9 restores it through its `SC_RESTORE` handling, but this tree
+is built with `USE_HOOKS`: WineD3D sees only sent messages through a
+`WH_CALLWNDPROC` hook, and the taskbar's `SC_RESTORE` is posted. The game,
+which resets only once its window is restored, waited in
+`D3DERR_DEVICENOTRESET` forever.
+
+Activation now restores an iconic device window first, with
+`SW_SHOWNOACTIVATE` (the application is already being activated; the device
+window may differ from the focus window), for devices with
+`WINED3D_HANDLE_RESTORE` (D3D8 and D3D9, never DirectDraw) and without
+`WINED3DCREATE_NOWINDOWCHANGES`. WineD3D minimized the window itself, so
+both D3D versions restore it.
+
+While such a device's swapchain is fullscreen and the application is active,
+the device keeps its window covering the mode (`kept_window`,
+`kept_width`/`kept_height`): `wined3d_device_setup_fullscreen_window` starts
+keeping, `wined3d_device_restore_fullscreen_window` and
+`wined3d_device_release_focus_window` stop it, focus loss suspends it before
+the desktop mode returns and activation resumes it. While it is kept, the
+window is subclassed, and that procedure clamps `WM_WINDOWPOSCHANGING` to 0,0
+and the mode size when a request changes the size and would leave part of
+the mode uncovered. The device's `WH_CALLWNDPROC` hook cannot do it: Windows
+gives a hook a copy, and the first 0060, which edited the hook's `WINDOWPOS`,
+left the probe's window at 320x240 on Windows 2000. The procedure does not
+depend on `filter_messages`, which under `USE_HOOKS` only stops WineD3D's own
+handling: the application still receives (and answers) the messages of
+WineD3D's `SetWindowPos`, which is exactly when Splinter Cell shrinks the
+window. For a sent message Windows calls the hook first, then the procedure
+installed last: a module that subclassed after WineD3D sees the request
+unclamped, WineD3D's procedure clamps it, the application's original
+procedure sees the clamped request, and WineD3D clamps again after that
+procedure returns, in case its own handler changed the request. The
+procedure is installed and called with the `SetWindowLongPtrA`/`W` and
+`CallWindowProcA`/`W` functions matching `IsWindowUnicode` (`SetWindowLongPtrA`
+would make a Unicode window ANSI on NT; Windows 98 windows are ANSI). When
+keeping stops, the original procedure is installed again if WineD3D's is
+still the window's; otherwise unlinking would cut the later module's chain,
+so WineD3D's stays as a pass-through without a device and is taken over again
+if keeping restarts. `WM_NCDESTROY` ends either. A table of up to 16 windows
+holds the original procedures, under a spin lock never held while a message
+is sent. A clamped request changes nothing, so Windows sends no further WM_SIZE
+and an application resizing from WM_SIZE does not loop. Minimizing, restoring
+and maximizing (`SWP_STATECHANGED` or an iconic window), pure moves, larger
+windows that still cover the mode, child windows, DirectDraw and
+NOWINDOWCHANGES devices pass unchanged. At most eight requests are clamped
+between two presents (and after each of WineD3D's own window changes); an
+application that answers every `WM_WINDOWPOSCHANGED` with another request then
+gets its size instead of recursing without end. `wined3d_device_reset` sets
+`swapchain->desc.windowed` and the back buffer size only after it has moved
+the window, so it sets the kept size itself before its mode change (the
+application may resize from `WM_DISPLAYCHANGE`): the new mode's size for a
+fullscreen-to-fullscreen reset, none for a reset to windowed (restored when
+the mode change fails); a reset from windowed is kept by the setup.
+`reapply_mode` is unchanged: it stays set after the first focus loss, so
+later resets take the mode-change path, which keeps the new size as well.
+
+A pass-through procedure left in a chain refers to wined3d.dll, which must
+then stay loaded while the window exists (as WineD3D's own window procedure
+does in builds without `USE_HOOKS`).
+
+`test_fullscreen_window_keep.py` runs the prepared setup, restore, focus,
+hook, activation and present functions and the window part of the prepared
+`wined3d_device_reset` under ASan/UBSan against a user32 model that, as
+Windows, gives the hook a copy of a `WINDOWPOS` (edits are discarded), then
+calls the procedure installed last, tracks `SetWindowLongPtr`/`CallWindowProc`
+character sets and sends `WM_SIZE` from DefWindowProc only for a changed
+client size: Splinter Cell's
+WM_SIZE handler at device creation, application `SetWindowPos`/`MoveWindow`,
+same-mode, smaller, larger, failed and windowed resets, focus loss with a
+`WM_DISPLAYCHANGE` resize, activation, the application's own minimize, an
+application answering every `WM_WINDOWPOSCHANGED`, one editing its own
+`WM_WINDOWPOSCHANGING`, a Unicode window, a module subclassing after WineD3D
+(pass-through, keeping again, destruction), NOWINDOWCHANGES and DirectDraw
+devices. It checks the order of the steps in the prepared
+`wined3d_device_reset` and the subclass procedure, and each of twenty
+mutations of the patch fails it, among them the first 0060's hook-time
+clamp. `test_fullscreen_activation.py` models the new device fields.
+The installed D3D8/9 probe (`tools/d3d/reset-probe.inc`, `Fullscreen`, run
+last on its own device and window) creates a fullscreen 640x480 device on a
+320x240 window whose procedure shrinks it back from WM_SIZE, and requires the
+window to cover the mode after creation, the application's own resizes and a
+Reset, to be minimized and the device lost after focus loss (the
+`WM_ACTIVATEAPP` Windows sends, sent directly so that foreground rules do not
+matter), restored and covering the mode after activation, Reset to succeed
+and render (exact frames with X8R8G8B8), and the shrink requests never to
+nest. The diagnostic stack is rebased onto 0060 with its call-site line
+numbers renumbered.

@@ -38,12 +38,12 @@
              else
                  wined3d_surface_prepare(rt, context, rt->container->resource.draw_binding);
          }
-@@ -4108,7 +4108,7 @@
+@@ -4355,7 +4355,7 @@
              && src_rect.bottom == sub_resource->height)
          wined3d_texture_prepare_texture(texture, context, FALSE);
      else
 -        surface_load_location(surface, context, WINED3D_LOCATION_TEXTURE_RGB);
-+        dg_surface_load_location(6, 4111, surface, context, WINED3D_LOCATION_TEXTURE_RGB);
++        dg_surface_load_location(6, 4358, surface, context, WINED3D_LOCATION_TEXTURE_RGB);
      wined3d_texture_bind_and_dirtify(texture, context, FALSE);
  
      wined3d_surface_upload_data(surface, gl_info, resource->format,
@@ -285,21 +285,21 @@
      wined3d_cs_emit_present(swapchain->device->cs, swapchain, src_rect,
              dst_rect, dst_window_override, dirty_region, flags);
  
-@@ -318,7 +319,7 @@
+@@ -321,7 +322,7 @@
          if (backbuffer->resource.multisample_type)
          {
              location = WINED3D_LOCATION_RB_RESOLVED;
 -            surface_load_location(backbuffer, context, location);
-+            dg_surface_load_location(22, 321, backbuffer, context, location);
++            dg_surface_load_location(22, 324, backbuffer, context, location);
          }
  
          context_apply_fbo_state_blit(context, GL_READ_FRAMEBUFFER, backbuffer, NULL, location);
-@@ -523,14 +524,14 @@
+@@ -526,14 +527,14 @@
       */
      if (!swapchain->render_to_fbo && render_to_fbo && wined3d_settings.offscreen_rendering_mode == ORM_FBO)
      {
 -        surface_load_location(back_buffer, context, WINED3D_LOCATION_TEXTURE_RGB);
-+        dg_surface_load_location(22, 526, back_buffer, context, WINED3D_LOCATION_TEXTURE_RGB);
++        dg_surface_load_location(22, 529, back_buffer, context, WINED3D_LOCATION_TEXTURE_RGB);
          surface_invalidate_location(back_buffer, WINED3D_LOCATION_DRAWABLE);
          swapchain->render_to_fbo = TRUE;
          swapchain_update_draw_bindings(swapchain);
@@ -307,16 +307,16 @@
      else
      {
 -        surface_load_location(back_buffer, context, back_buffer->container->resource.draw_binding);
-+        dg_surface_load_location(22, 533, back_buffer, context, back_buffer->container->resource.draw_binding);
++        dg_surface_load_location(22, 536, back_buffer, context, back_buffer->container->resource.draw_binding);
      }
  
      if (swapchain->render_to_fbo)
-@@ -623,7 +624,7 @@
+@@ -626,7 +627,7 @@
  
      TRACE("Copying surface %p to screen.\n", front);
  
 -    surface_load_location(front, NULL, WINED3D_LOCATION_DIB);
-+    dg_surface_load_location(22, 626, front, NULL, WINED3D_LOCATION_DIB);
++    dg_surface_load_location(22, 629, front, NULL, WINED3D_LOCATION_DIB);
  
      src_dc = front->hDC;
      window = swapchain->win_handle;
@@ -333,7 +333,7 @@
  }
 --- a/wined3d/wined3d_private.h
 +++ b/wined3d/wined3d_private.h
-@@ -3450,3 +3450,6 @@
+@@ -3460,3 +3460,6 @@
  BOOL EnumDisplaySettingsA95(LPCSTR lpszDeviceName, DWORD iModeNum, DEVMODEA *lpDevMode);
  
  #endif

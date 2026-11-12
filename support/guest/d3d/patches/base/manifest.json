@@ -239,6 +239,10 @@
     {
       "file": "0059-reset-without-context.patch",
       "sha256": "cd0e19cd4cae0f2c7d1352d1cf3550c98aa0a35215c48dc79f9a3ba15e72d26f"
+    },
+    {
+      "file": "0060-fullscreen-window-activation.patch",
+      "sha256": "d321f25b7eea3e02a6e159b145c08bffb69e32f214d635c161667a07599a81ea"
     }
   ],
   "files": {
@@ -328,7 +332,7 @@
     },
     "wined3d/device.c": {
       "before_sha256": "0a5880a762561579c5a93c36bc32ab51f5f441e4f290f1dbbe83b8064cebf3c4",
-      "after_sha256": "2ee5ca86cabdb07cc883d684d48add07d4c6f09955a1b0dd685ed35a60261ecd"
+      "after_sha256": "93b47a40cffade5cbf9cefe1d79c5efe7d158e4d911cfae1f86deb96a4252454"
     },
     "wined3d/context.c": {
       "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
@@ -336,11 +340,11 @@
     },
     "wined3d/swapchain.c": {
       "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
-      "after_sha256": "eb4cf98dcaa1345a58b2a80c5f822b5f183b832725ebe38d0b1b2bf23e9f26d1"
+      "after_sha256": "69dc16cbe93daf9dbbbc5667386de41ebb21b6800e0c9b72c8570dd9e028f630"
     },
     "wined3d/wined3d_private.h": {
       "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
-      "after_sha256": "73b6d193d1f64d1c727be285e39c914d8fddb476f7ad5c296424f7272a567712"
+      "after_sha256": "50646316bbd1be5d19f1d23a696bd384ce7c9b0d2eac97b7400d40917df7331f"
     },
     "wined3d/texture.c": {
       "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",

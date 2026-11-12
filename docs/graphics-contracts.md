@@ -674,6 +674,28 @@ and disposable-VM acceptance cycle:
   (`tools/d3d/reset-probe.inc`: visible, minimized twice, restored without a
   reset, hidden/shown and final resets, four exact frames) has not yet run on
   a guest, and Warcraft III remains to be rerun.
+- Fullscreen device window after focus changes (Wine patch 0060). Splinter
+  Cell (D3D8, 1024x768 on a window created at 640x480) stayed minimized after
+  returning to it, waiting for a restore before its Reset: WineD3D minimizes
+  the fullscreen window on focus loss but did not restore it on activation,
+  and it sees only sent messages (the taskbar's `SC_RESTORE` is posted). Once
+  restored, the game sized its window back to 640x480 from WM_SIZE, nested in
+  WineD3D's own `SetWindowPos`; DreamGPU presents into the client area, so the
+  game showed in a corner of the mode. 0060 restores the iconic window on
+  activation (`SW_SHOWNOACTIVATE`) and, while a D3D8/9 swapchain is
+  fullscreen and the application active, subclasses the device window and
+  clamps its `WM_WINDOWPOSCHANGING` to 0,0 and the mode size when a request
+  would leave part of the mode uncovered (bounded per present; resets update
+  the size before their mode change; DirectDraw and NOWINDOWCHANGES devices
+  unchanged). A clamp in WineD3D's `WH_CALLWNDPROC` hook, as first written,
+  had no effect on Windows 2000 (the installed probe's window stayed
+  320x240): Windows gives hooks a copy. The procedure is removed when keeping
+  stops, or left as a pass-through when another module subclassed later.
+  The installed D3D8/9 probe (`tools/d3d/reset-probe.inc`, `Fullscreen`, run
+  last: a 640x480 device on a 320x240 window that shrinks itself, application
+  resizes, Reset, focus loss and activation) remains to be rerun with the
+  subclass. Source tests execute the prepared functions against a user32
+  model that discards hook-time edits; Splinter Cell remains to be rerun.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

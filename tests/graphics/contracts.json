@@ -512,6 +512,10 @@
       "scope": "installed-api",
       "path": "tools/d3d/reset-probe.inc"
     },
+    "d3d-fullscreen-window-keep": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_fullscreen_window_keep.py"
+    },
     "d3d8-shader-validation": {
       "scope": "source",
       "path": "tests/guest/d3d/test_shader_validation.py"
@@ -725,6 +729,26 @@
         "guest-device-reset"
       ],
       "remaining": "dgpugl.dll refused wglCreateContext on a window without a client area and wglMakeCurrent of a context without a drawable there, or of any context on another such window (ERROR_INVALID_HANDLE for every failure), unlike a native ICD. WineD3D's Reset destroys every GL context before creating the primary one again on the device window, so a Reset while Warcraft III's fullscreen window was still minimized (focus returned without restoring it) failed after the teardown, and its retry dereferenced the NULL context_acquire() result in delete_opengl_contexts (wined3d.dll+0x92BE9 in m41). WineD3D's backup-window fallback (a hidden 10x10 decorated window, empty client area) failed the same way (Halo shutdown logs, last error 0x6). The frontend now accepts any window DC of the process: a context keeps its drawable, whichever window it was made for, while the current window has no client area; a context without one gets a 1x1 placeholder that the first window with a client area (MakeCurrent or SwapBuffers) replaces; nothing is presented meanwhile; presentation capabilities come from the last binding. Wine patch 0059 makes the reset fail cleanly (D3DERR_DEVICELOST, nothing changed) when its context cannot be made current, keeps a device whose primary context could not be created again lost without any context (no bare context is created; the retry creates it, no double free of shader/blitter state or the context array) and lets reset teardown, uninit, end-scene, clear, draw, present and surface/buffer/volume/texture unloads run without a context. Source tests execute the prepared functions and the frontend. The installed D3D8/9 probe (visible, minimized twice, restored without reset, hidden/shown and final resets, 4 exact reference frames) has not yet run on a guest; Warcraft III's focus loss and return remain to be rerun on Win2000. Fullscreen mode handoff during these resets is unchanged (0025); Win98/XP and macOS CGL remain unverified."
+    },
+    {
+      "id": "d3d.fullscreen-window-activation",
+      "area": 17,
+      "api": "D3D8/D3D9 fullscreen swapchain (WineD3D device window) over WGL (dgpugl.dll)",
+      "operation": "focus loss and activation of a fullscreen device (WM_ACTIVATEAPP) with the device window minimized by WineD3D; the application's own SetWindowPos/MoveWindow of the fullscreen device window, including nested in WineD3D's SetWindowPos from WM_SIZE; Reset to the same mode, another mode and windowed",
+      "format": "X8R8G8B8 or R5G6B5 back buffer",
+      "resource": "swapchain device window",
+      "usage": "fullscreen game whose window was created smaller than its mode and that sizes it back (Splinter Cell, D3D8, 1024x768 on a 640x480 window)",
+      "pool": "default",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-fullscreen-window-keep",
+        "fullscreen-activation",
+        "patches",
+        "guest-device-reset"
+      ],
+      "remaining": "Native fullscreen flips cover the screen whatever the device window's size; DreamGPU presents into the window's client area (WineD3D's GetClientRect destination, the display drivers' WNDOBJ client rectangle). Splinter Cell sizes its fullscreen window back to its 640x480 creation size from WM_SIZE, nested in WineD3D's own SetWindowPos, so it showed in a corner of the 1024x768 mode; after a focus change WineD3D's activation kept the window it had minimized iconic (wined3d sees only sent messages, and the taskbar's SC_RESTORE is posted), and the game never reset. Wine patch 0060 restores the iconic device window on activation (SW_SHOWNOACTIVATE) and, while a D3D8/9 swapchain is fullscreen and the application active, subclasses the device window (A/W functions matching IsWindowUnicode) and clamps its WM_WINDOWPOSCHANGING to 0,0 and the mode size when a request would leave part of the mode uncovered, before and after the application's procedure (at most 8 clamps between presents); minimizing, restoring, pure moves, DirectDraw and NOWINDOWCHANGES devices are unchanged, and Reset updates the kept size before its mode change. The first 0060 clamped in WineD3D's WH_CALLWNDPROC hook; on Windows 2000 (m43 installer probe) the window stayed 320x240, since hooks get a copy. The subclass is removed when keeping stops, left as a pass-through when another module subclassed later, and forgotten on WM_NCDESTROY. Source tests run the prepared functions against a user32 model that discards hook-time edits and models the procedure chain. The installed D3D8/9 probe (reset-probe.inc Fullscreen, run last: 640x480 device on a 320x240 window that shrinks itself, application resizes, Reset, focus loss and activation, Reset) remains to be rerun with the subclass on Win2000/XP/98, and Splinter Cell remains to be run."
     },
     {
       "id": "ddraw.dc",

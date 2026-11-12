@@ -1,0 +1,375 @@
+--- a/wined3d/device.c
++++ b/wined3d/device.c
+@@ -830,6 +830,246 @@
+     return exstyle;
+ }
+ 
++#ifndef SWP_STATECHANGED
++#define SWP_STATECHANGED 0x8000
++#endif
++#define DEVICE_KEPT_CLAMPS_MAX 8
++#define DEVICE_KEPT_WINDOWS_MAX 16
++
++/* DreamGPU: native D3D8/9 fullscreen flips cover the screen whatever the
++ * device window's size. DreamGPU presents into the window's client area, so
++ * a game that sizes its fullscreen window back to its creation size (Splinter
++ * Cell does so from WM_SIZE, nested in wined3d's own SetWindowPos) showed a
++ * small image in the corner of the mode. While a D3D8/9 swapchain is
++ * fullscreen (setup to restore, including a reset's new size) and the
++ * application is active, wined3d keeps that window covering the mode.
++ * DirectDraw (no WINED3D_HANDLE_RESTORE) and NOWINDOWCHANGES devices are
++ * left alone.
++ *
++ * The clamp needs a window procedure: this build sees messages through a
++ * WH_CALLWNDPROC hook (USE_HOOKS), and Windows ignores what a hook writes to
++ * the WINDOWPOS (Windows 2000 kept the application's size). The kept window
++ * is subclassed while it is kept, with the A or W procedure functions that
++ * match IsWindowUnicode(). For a sent message Windows calls the hook first,
++ * then the procedure installed last: an application subclassing after
++ * wined3d sees the request first, then wined3d's procedure clamps it, then
++ * the application's original procedure sees the clamped request; wined3d
++ * clamps again after that procedure returns, in case it changed the request.
++ * When keeping stops, the original procedure is installed again if
++ * wined3d's is still the window's; otherwise wined3d's stays in the chain as
++ * a pass-through without a device. WM_NCDESTROY ends either. The table is
++ * guarded by a spin lock that is never held while a message is sent. */
++struct device_kept_window
++{
++    HWND window;
++    WNDPROC proc;
++    BOOL unicode;
++    struct wined3d_device *device;
++};
++
++static struct device_kept_window device_kept_windows[DEVICE_KEPT_WINDOWS_MAX];
++static LONG device_kept_windows_lock;
++
++static void device_kept_windows_acquire(void)
++{
++    while (InterlockedCompareExchange(&device_kept_windows_lock, 1, 0))
++        Sleep(0);
++}
++
++static void device_kept_windows_release(void)
++{
++    InterlockedExchange(&device_kept_windows_lock, 0);
++}
++
++static struct device_kept_window *device_find_kept_window(HWND window)
++{
++    unsigned int i;
++
++    for (i = 0; i < DEVICE_KEPT_WINDOWS_MAX; ++i)
++    {
++        if (device_kept_windows[i].window == window)
++            return &device_kept_windows[i];
++    }
++    return NULL;
++}
++
++/* DreamGPU: WM_WINDOWPOSCHANGING of the kept window. A request that changes
++ * the size and would leave part of the mode uncovered is turned into 0,0 and
++ * the mode size; the window then keeps its size, so no WM_SIZE follows and
++ * an application resizing from WM_SIZE does not loop. Minimizing, restoring
++ * and maximizing (state changes), iconic windows, pure moves, child windows
++ * and inactive applications pass unchanged. A bounded number of clamps
++ * between two presents stops an application that answers every
++ * WM_WINDOWPOSCHANGED with another request. */
++static void device_clamp_fullscreen_window(struct wined3d_device *device, HWND window, WINDOWPOS *pos)
++{
++    UINT w = device->kept_width, h = device->kept_height;
++    RECT rect;
++    int x, y;
++
++    if (!pos || !device->kept_window || window != device->kept_window || device->kept_inactive
++            || (pos->flags & (SWP_NOSIZE | SWP_STATECHANGED)) || IsIconic(window)
++            || (GetWindowLongA(window, GWL_STYLE) & WS_CHILD))
++        return;
++
++    x = pos->x;
++    y = pos->y;
++    if (pos->flags & SWP_NOMOVE)
++    {
++        if (!GetWindowRect(window, &rect))
++            return;
++        x = rect.left;
++        y = rect.top;
++    }
++    if (x <= 0 && y <= 0 && x + pos->cx >= (int)w && y + pos->cy >= (int)h)
++        return;
++
++    if (device->kept_clamps >= DEVICE_KEPT_CLAMPS_MAX)
++    {
++        WARN("Window %p keeps resizing to %d,%d %dx%d, not clamped.\n", window, x, y, pos->cx, pos->cy);
++        return;
++    }
++    ++device->kept_clamps;
++
++    TRACE("Keeping window %p at 0,0 %ux%u instead of %d,%d %dx%d.\n", window, w, h, x, y, pos->cx, pos->cy);
++    pos->x = 0;
++    pos->y = 0;
++    pos->cx = w;
++    pos->cy = h;
++    pos->flags &= ~SWP_NOMOVE;
++}
++
++/* Clamps under the lock (no message is sent) when the window still belongs
++ * to a device. Returns the next procedure, or NULL for an unknown window. */
++static WNDPROC device_kept_window_message(HWND window, UINT message, LPARAM lparam, BOOL *unicode)
++{
++    struct device_kept_window *entry;
++    WNDPROC proc = NULL;
++
++    device_kept_windows_acquire();
++    if ((entry = device_find_kept_window(window)))
++    {
++        proc = entry->proc;
++        *unicode = entry->unicode;
++        if (message == WM_WINDOWPOSCHANGING && entry->device)
++            device_clamp_fullscreen_window(entry->device, window, (WINDOWPOS *)lparam);
++        if (message == WM_NCDESTROY)
++        {
++            /* The window is gone: nothing calls this procedure again. */
++            if (entry->device && entry->device->kept_window == window)
++                entry->device->kept_window = NULL;
++            memset(entry, 0, sizeof(*entry));
++        }
++    }
++    device_kept_windows_release();
++    return proc;
++}
++
++static LRESULT CALLBACK device_kept_window_proc(HWND window, UINT message, WPARAM wparam, LPARAM lparam)
++{
++    BOOL unicode = FALSE;
++    WNDPROC proc;
++    LRESULT result;
++
++    if (!(proc = device_kept_window_message(window, message, lparam, &unicode)))
++        return DefWindowProcA(window, message, wparam, lparam);
++
++    result = unicode ? CallWindowProcW(proc, window, message, wparam, lparam)
++            : CallWindowProcA(proc, window, message, wparam, lparam);
++
++    if (message == WM_WINDOWPOSCHANGING)
++        device_kept_window_message(window, message, lparam, &unicode);
++    return result;
++}
++
++/* DreamGPU: subclasses the kept window, or takes over wined3d's procedure
++ * left in its chain as a pass-through. */
++static void device_subclass_kept_window(struct wined3d_device *device, HWND window)
++{
++    struct device_kept_window *entry;
++
++    device_kept_windows_acquire();
++    if ((entry = device_find_kept_window(window)))
++    {
++        entry->device = device;
++    }
++    else if (!(entry = device_find_kept_window(NULL)))
++    {
++        WARN("Too many kept windows, not keeping window %p.\n", window);
++        device->kept_window = NULL;
++    }
++    else
++    {
++        entry->unicode = IsWindowUnicode(window);
++        if (entry->unicode)
++            entry->proc = (WNDPROC)SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)device_kept_window_proc);
++        else
++            entry->proc = (WNDPROC)SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)device_kept_window_proc);
++        if (entry->proc)
++        {
++            entry->window = window;
++            entry->device = device;
++        }
++        else
++        {
++            WARN("Failed to subclass window %p.\n", window);
++            memset(entry, 0, sizeof(*entry));
++            device->kept_window = NULL;
++        }
++    }
++    device_kept_windows_release();
++}
++
++/* DreamGPU: the window takes any size again. */
++static void device_unkeep_fullscreen_window(struct wined3d_device *device)
++{
++    struct device_kept_window *entry;
++    HWND window = device->kept_window;
++    LONG_PTR proc;
++
++    device->kept_window = NULL;
++    if (!window)
++        return;
++
++    device_kept_windows_acquire();
++    if ((entry = device_find_kept_window(window)) && entry->device == device)
++    {
++        proc = entry->unicode ? GetWindowLongPtrW(window, GWLP_WNDPROC) : GetWindowLongPtrA(window, GWLP_WNDPROC);
++        if (proc == (LONG_PTR)device_kept_window_proc)
++        {
++            if (entry->unicode)
++                SetWindowLongPtrW(window, GWLP_WNDPROC, (LONG_PTR)entry->proc);
++            else
++                SetWindowLongPtrA(window, GWLP_WNDPROC, (LONG_PTR)entry->proc);
++            memset(entry, 0, sizeof(*entry));
++        }
++        else
++        {
++            /* Subclassed after wined3d: unlinking would cut the chain. */
++            WARN("Window %p was subclassed again, leaving a pass-through procedure.\n", window);
++            entry->device = NULL;
++        }
++    }
++    device_kept_windows_release();
++}
++
++static void device_keep_fullscreen_window(struct wined3d_device *device, HWND window, UINT w, UINT h)
++{
++    if (!(device->wined3d->flags & WINED3D_HANDLE_RESTORE)
++            || (device->create_parms.flags & WINED3DCREATE_NOWINDOWCHANGES))
++        return;
++
++    if (device->kept_window != window)
++    {
++        device_unkeep_fullscreen_window(device);
++        device->kept_window = window;
++        device_subclass_kept_window(device, window);
++    }
++    device->kept_width = w;
++    device->kept_height = h;
++    device->kept_clamps = 0;
++}
++
+ void CDECL wined3d_device_setup_fullscreen_window(struct wined3d_device *device, HWND window, UINT w, UINT h)
+ {
+     BOOL filter_messages;
+@@ -837,6 +1077,8 @@
+ 
+     TRACE("Setting up window %p for fullscreen mode.\n", window);
+ 
++    device_keep_fullscreen_window(device, window, w, h);
++
+     if (device->style || device->exStyle)
+     {
+         ERR("Changing the window style for window %p, but another style (%08x, %08x) is already stored.\n",
+@@ -867,6 +1109,9 @@
+     BOOL filter_messages;
+     LONG style, exstyle;
+ 
++    /* DreamGPU: the window leaves fullscreen and takes any size. */
++    device_unkeep_fullscreen_window(device);
++
+     if (!device->style && !device->exStyle) return;
+ 
+     style = GetWindowLongA(window, GWL_STYLE);
+@@ -927,6 +1172,8 @@
+ 
+     if (device->focus_window) wined3d_unregister_window(device->focus_window);
+     InterlockedExchangePointer((void **)&device->focus_window, NULL);
++    /* DreamGPU: the device no longer owns a fullscreen window. */
++    device_unkeep_fullscreen_window(device);
+ }
+ 
+ static void device_init_swapchain_state(struct wined3d_device *device, struct wined3d_swapchain *swapchain)
+@@ -4759,9 +5006,27 @@
+     if (!swapchain_desc->windowed != !swapchain->desc.windowed
+             || DisplayModeChanged)
+     {
++        HWND kept_window = device->kept_window;
++        UINT kept_width = device->kept_width, kept_height = device->kept_height;
++
++        /* DreamGPU: swapchain->desc changes only after the window has been
++         * set up, but the window takes the reset's size (leaving fullscreen,
++         * any size) from the mode change on, including the application's
++         * own requests from WM_DISPLAYCHANGE and WM_SIZE. A window going
++         * fullscreen is kept by wined3d_device_setup_fullscreen_window(). */
++        if (swapchain_desc->windowed)
++            device_unkeep_fullscreen_window(device);
++        else if (!swapchain->desc.windowed)
++            device_keep_fullscreen_window(device, swapchain->device_window,
++                    swapchain_desc->backbuffer_width, swapchain_desc->backbuffer_height);
++
+         if (FAILED(hr = wined3d_set_adapter_display_mode(device->wined3d, device->adapter->ordinal, &m)))
+         {
+             WARN("Failed to set display mode, hr %#x.\n", hr);
++            if (kept_window)
++                device_keep_fullscreen_window(device, kept_window, kept_width, kept_height);
++            else
++                device_unkeep_fullscreen_window(device);
+             return WINED3DERR_INVALIDCALL;
+         }
+ 
+--- a/wined3d/swapchain.c
++++ b/wined3d/swapchain.c
+@@ -152,6 +152,9 @@
+     wined3d_cs_emit_present(swapchain->device->cs, swapchain, src_rect,
+             dst_rect, dst_window_override, dirty_region, flags);
+ 
++    /* DreamGPU: a new budget of fullscreen window clamps (0060). */
++    swapchain->device->kept_clamps = 0;
++
+     return WINED3D_OK;
+ }
+ 
+@@ -1231,6 +1234,10 @@
+ 
+     if (activate)
+     {
++        /* DreamGPU: the fullscreen window covers the mode again (0060). */
++        device->kept_inactive = FALSE;
++        device->kept_clamps = 0;
++
+         if (!(device->create_parms.flags & WINED3DCREATE_NOWINDOWCHANGES))
+         {
+             /* The d3d versions do not agree on the exact messages here. D3d8 restores
+@@ -1240,6 +1247,16 @@
+              *
+              * Guild Wars 1 wants a WINDOWPOSCHANGED message on the device window to
+              * resume drawing after a focus loss. */
++            /* DreamGPU: wined3d minimized the window when the application lost
++             * focus. Native D3D8 restores it here and native D3D9's SC_RESTORE
++             * handling restores it when the taskbar or Alt+Tab returns, but
++             * wined3d sees only sent messages (USE_HOOKS) and the taskbar's
++             * SC_RESTORE is posted. A D3D8/9 game that resets only once its
++             * window is restored (Splinter Cell) otherwise kept an iconic
++             * window and never reset. The application is already being
++             * activated: restore without activating the device window. */
++            if ((device->wined3d->flags & WINED3D_HANDLE_RESTORE) && IsIconic(swapchain->device_window))
++                ShowWindow(swapchain->device_window, SW_SHOWNOACTIVATE);
+             SetWindowPos(swapchain->device_window, NULL, 0, 0,
+                     swapchain->desc.backbuffer_width, swapchain->desc.backbuffer_height,
+                     SWP_NOACTIVATE | SWP_NOZORDER);
+@@ -1254,6 +1271,10 @@
+     }
+     else
+     {
++        /* DreamGPU: the desktop mode returns and the window is minimized;
++         * nothing keeps its size until the application is active again. */
++        device->kept_inactive = TRUE;
++
+         if (FAILED(wined3d_set_adapter_display_mode(device->wined3d,
+                 device->adapter->ordinal, NULL)))
+             ERR("Failed to set display mode.\n");
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -2122,6 +2122,16 @@
+     struct wined3d_device_creation_parameters create_parms;
+     HWND focus_window;
+ 
++    /* DreamGPU: the fullscreen device window of a D3D8/9 device covers its
++     * mode (kept_width x kept_height at 0,0) while the application is
++     * active: DreamGPU presents into the window's client area. Requests that
++     * would shrink or move it are clamped by a subclass procedure while it is
++     * kept, a bounded number of times between two presents (device.c). */
++    HWND kept_window;
++    UINT kept_width, kept_height;
++    UINT kept_clamps;
++    BOOL kept_inactive;
++
+     struct wined3d_rendertarget_view *back_buffer_view;
+     struct wined3d_swapchain **swapchains;
+     UINT swapchain_count;

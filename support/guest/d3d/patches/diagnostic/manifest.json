@@ -6,7 +6,7 @@
   "patches": [
     {
       "file": "0001-bounded-copy-diagnostics.patch",
-      "sha256": "02fdc4686a4cc31c52a57eed39ad55361a1c2d3330cef99a22ab35312ddb555e"
+      "sha256": "2334890946e98ca092bf88ea86818127fc21c71f5f7802140cd848c3750f7b8e"
     }
   ],
   "files": {
@@ -15,8 +15,8 @@
       "after_sha256": "a3f846ab478aa7a13f2d2addb08bab146a033c0c9db1bcf0633c36c9d2feebbd"
     },
     "wined3d/device.c": {
-      "before_sha256": "2ee5ca86cabdb07cc883d684d48add07d4c6f09955a1b0dd685ed35a60261ecd",
-      "after_sha256": "fb07d70c8c836887de56ae93005d48f50a2b068584abf9e928b1e543d40e6db9"
+      "before_sha256": "93b47a40cffade5cbf9cefe1d79c5efe7d158e4d911cfae1f86deb96a4252454",
+      "after_sha256": "70c810434c48e00220ee746c71943ce143de160fe1df816c2b2eed624955a2c4"
     },
     "wined3d/drawprim.c": {
       "before_sha256": "2d432fa7b036db063a5b12f9c85cf53304e1803347f687f6b10e34c544345522",
@@ -27,16 +27,16 @@
       "after_sha256": "feebb086b4f4bbbbcf001e96a37589c3a296fd80b7552f999c901a7cfc633173"
     },
     "wined3d/swapchain.c": {
-      "before_sha256": "eb4cf98dcaa1345a58b2a80c5f822b5f183b832725ebe38d0b1b2bf23e9f26d1",
-      "after_sha256": "7e5015ebdf10bccf7d75a283f513b8efc516c3fb72ecf84526ee9beef1577fbe"
+      "before_sha256": "69dc16cbe93daf9dbbbc5667386de41ebb21b6800e0c9b72c8570dd9e028f630",
+      "after_sha256": "ea4fc5a422a1867d5a7646dbcc93c1fed35a4ac38c5fdb4d967aaa81c23a87dc"
     },
     "wined3d/texture.c": {
       "before_sha256": "7570e4774f308ccdcd46ca3f6f10d7507bbe404bfdbef51f4fd459f3eae125ad",
       "after_sha256": "7532acc45023c79c31ea58da7457534052ac67ebd975bf151822194fc8ab1e1b"
     },
     "wined3d/wined3d_private.h": {
-      "before_sha256": "73b6d193d1f64d1c727be285e39c914d8fddb476f7ad5c296424f7272a567712",
-      "after_sha256": "f88a745fc32e313037ee23d7c0e78c3e025f8d720cc11ece9da38cb64687e29b"
+      "before_sha256": "50646316bbd1be5d19f1d23a696bd384ce7c9b0d2eac97b7400d40917df7331f",
+      "after_sha256": "24c075c5acdc1fab4270c565a3cc210011032480b272b593891b0dc130804457"
     }
   },
   "source_ids": {

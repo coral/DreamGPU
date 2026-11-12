@@ -23,6 +23,25 @@
  * The back buffer surface is released for each reset (an outstanding
  * reference blocks it) and left acquired, with probe.cpp's state set again,
  * for the stages that follow.
+ *
+ * Fullscreen() (Wine 0060) runs last, after probe.cpp has released its
+ * windowed device, on a fullscreen 640x480 device and window of its own. Splinter Cell (D3D8)
+ * creates its window at 640x480, renders fullscreen at 1024x768 and sizes the
+ * window back from WM_SIZE, nested in WineD3D's own SetWindowPos; DreamGPU
+ * presents into the window's client area, so the game showed in a corner of
+ * the mode. After a focus change WineD3D left the window it had minimized
+ * iconic on activation, and the game never reset. Here the window is created
+ * at 320x240 and its procedure shrinks it back to 320x240 on every other
+ * WM_SIZE, synchronously, as the game does:
+ * - after CreateDevice, the application's own SetWindowPos and MoveWindow,
+ *   and a Reset, the window covers the mode (0,0, 640x480 client area);
+ * - focus loss (the WM_ACTIVATEAPP Windows sends, sent here directly so that
+ *   foreground rules do not matter) minimizes the window and loses the
+ *   device; activation restores it, covering the mode, the device needs a
+ *   reset, and Reset succeeds and renders;
+ * - the clamped shrink requests never nest (no WM_SIZE loop).
+ * With an X8R8G8B8 mode the frames are compared exactly (probe.cpp's
+ * reference), with R5G6B5 only rendered and presented.
  */
 namespace reset_probe {
 
@@ -179,6 +198,207 @@ static void Run(Device *device, Surface **surface, HWND window,
     else if (!IsWindowVisible(window))
         ShowWindow(window, SW_SHOWNA);
     Pump();
+}
+
+enum : LONG { kModeWidth = 640, kModeHeight = 480, kSmallWidth = 320, kSmallHeight = 240 };
+static BOOL shrinking;
+static UINT shrink_requests, shrink_depth, shrink_deepest;
+
+/* The game's window procedure: any other size is answered at once, nested in
+ * the SetWindowPos that sent WM_SIZE. The depth limit keeps a clamp loop from
+ * overflowing the stack; it is reported as a failure. */
+static LRESULT CALLBACK ShrinkingWindowProc(HWND window, UINT message, WPARAM wparam,
+                                            LPARAM lparam) {
+    if (message == WM_SIZE && shrinking && wparam != SIZE_MINIMIZED &&
+        (LOWORD(lparam) != kSmallWidth || HIWORD(lparam) != kSmallHeight)) {
+        ++shrink_requests;
+        if (shrink_depth < 32) {
+            if (++shrink_depth > shrink_deepest)
+                shrink_deepest = shrink_depth;
+            SetWindowPos(window, NULL, 0, 0, kSmallWidth, kSmallHeight,
+                         SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+            --shrink_depth;
+        }
+    }
+    return DefWindowProcA(window, message, wparam, lparam);
+}
+
+/* A 640x480 HAL mode, X8R8G8B8 preferred. */
+static BOOL FullscreenFormat(D3D *d3d, D3DFORMAT *format) {
+    static const D3DFORMAT formats[] = {D3DFMT_X8R8G8B8, D3DFMT_R5G6B5};
+    for (UINT f = 0; f < sizeof(formats) / sizeof(formats[0]); ++f) {
+#if DG_D3D_VERSION == 8
+        const UINT count = D3D_CALL(GetAdapterModeCount, d3d, D3DADAPTER_DEFAULT);
+#else
+        const UINT count = D3D_CALL(GetAdapterModeCount, d3d, D3DADAPTER_DEFAULT, formats[f]);
+#endif
+        for (UINT i = 0; i < count && i < 4096; ++i) {
+            D3DDISPLAYMODE mode = {};
+#if DG_D3D_VERSION == 8
+            if (FAILED(D3D_CALL(EnumAdapterModes, d3d, D3DADAPTER_DEFAULT, i, &mode)))
+                continue;
+#else
+            if (FAILED(D3D_CALL(EnumAdapterModes, d3d, D3DADAPTER_DEFAULT, formats[f], i, &mode)))
+                continue;
+#endif
+            if (mode.Width == (UINT)kModeWidth && mode.Height == (UINT)kModeHeight &&
+                mode.Format == formats[f] &&
+                SUCCEEDED(D3D_CALL(CheckDeviceType, d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL,
+                                   formats[f], formats[f], FALSE))) {
+                *format = formats[f];
+                return TRUE;
+            }
+        }
+    }
+    return FALSE;
+}
+
+/* At 0,0, not iconic, with a client area of the mode's size. */
+static BOOL CoversMode(HWND window, const char *stage) {
+    RECT bounds = {}, client = {};
+    const BOOL iconic = IsIconic(window);
+    if (!GetWindowRect(window, &bounds) || !GetClientRect(window, &client))
+        return Check(FALSE, stage, GetLastError());
+    if (!iconic && bounds.left == 0 && bounds.top == 0 && client.right == kModeWidth &&
+        client.bottom == kModeHeight)
+        return TRUE;
+    Number("iconic", (DWORD)iconic);
+    Number("window left", (DWORD)bounds.left);
+    Number("window top", (DWORD)bounds.top);
+    Number("client width", (DWORD)client.right);
+    Number("client height", (DWORD)client.bottom);
+    Number("shrink requests", shrink_requests);
+    return Check(FALSE, stage, 0);
+}
+
+static BOOL FullscreenFrame(Device *device, Surface **surface, BOOL exact, const char *stage) {
+    if (exact)
+        return Frame(device, surface, stage);
+    Log(stage);
+    return Scene(device, "FAIL fullscreen reset: scene") &&
+           HR(DEVICE(Present, device, NULL, NULL, NULL, NULL), "FAIL fullscreen reset: present");
+}
+
+static BOOL CooperativeLevel(Device *device, HRESULT expected, const char *stage) {
+    const HRESULT result = DEVICE(TestCooperativeLevel, device);
+    return Check(result == expected, stage, (DWORD)result);
+}
+
+static BOOL FullscreenStages(D3D *d3d, D3DFORMAT format, HWND window, Device **device,
+                             Surface **surface) {
+    D3DPRESENT_PARAMETERS parameters = {};
+    const BOOL exact = format == D3DFMT_X8R8G8B8;
+    parameters.BackBufferWidth = kModeWidth;
+    parameters.BackBufferHeight = kModeHeight;
+    parameters.BackBufferFormat = format;
+    parameters.BackBufferCount = 1;
+    parameters.SwapEffect = D3DSWAPEFFECT_DISCARD;
+    parameters.hDeviceWindow = window;
+    parameters.Windowed = FALSE;
+    parameters.Flags = D3DPRESENTFLAG_LOCKABLE_BACKBUFFER;
+#if DG_D3D_VERSION == 8
+    parameters.FullScreen_PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+#else
+    parameters.PresentationInterval = D3DPRESENT_INTERVAL_IMMEDIATE;
+#endif
+    if (!exact)
+        Log("STAGE fullscreen reset: R5G6B5 mode, frames rendered without exact comparison");
+    {
+        D3DPRESENT_PARAMETERS copy = parameters;
+        if (!HR(D3D_CALL(CreateDevice, d3d, D3DADAPTER_DEFAULT, D3DDEVTYPE_HAL, window,
+                         D3DCREATE_SOFTWARE_VERTEXPROCESSING, &copy, device),
+                "FAIL fullscreen reset: fullscreen device creation"))
+            return FALSE;
+    }
+    Pump();
+    if (!CoversMode(window, "FAIL fullscreen reset: window after CreateDevice") ||
+        !Check(shrink_requests != 0, "FAIL fullscreen reset: the window never asked to shrink",
+               0) ||
+        !Setup(*device) ||
+        !FullscreenFrame(*device, surface, exact,
+                         "STAGE fullscreen reset: created device covers the mode"))
+        return FALSE;
+
+    Log("STAGE fullscreen reset: application SetWindowPos and MoveWindow while active");
+    SetWindowPos(window, NULL, 0, 0, kSmallWidth, kSmallHeight,
+                 SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    MoveWindow(window, 32, 32, kSmallWidth, kSmallHeight, TRUE);
+    Pump();
+    if (!CoversMode(window, "FAIL fullscreen reset: application resize while active") ||
+        !Reset(*device, surface, &parameters, "FAIL fullscreen reset: Reset") ||
+        !CoversMode(window, "FAIL fullscreen reset: window after Reset") ||
+        !FullscreenFrame(*device, surface, exact, "STAGE fullscreen reset: frame after Reset"))
+        return FALSE;
+
+    Log("STAGE fullscreen reset: focus loss minimizes, activation restores");
+    if (*surface) {
+        SURFACE(Release, *surface);
+        *surface = NULL;
+    }
+    SendMessageA(window, WM_ACTIVATEAPP, FALSE, 0);
+    Pump();
+    if (!Check(IsIconic(window), "FAIL fullscreen reset: focus loss did not minimize", 0) ||
+        !CooperativeLevel(*device, D3DERR_DEVICELOST,
+                          "FAIL fullscreen reset: device not lost after focus loss"))
+        return FALSE;
+    SendMessageA(window, WM_ACTIVATEAPP, TRUE, 0);
+    Pump();
+    if (!Check(!IsIconic(window), "FAIL fullscreen reset: window still minimized after activation",
+               0) ||
+        !CoversMode(window, "FAIL fullscreen reset: window after activation") ||
+        !CooperativeLevel(*device, D3DERR_DEVICENOTRESET,
+                          "FAIL fullscreen reset: device not ready for reset after activation") ||
+        !Reset(*device, surface, &parameters, "FAIL fullscreen reset: Reset after activation") ||
+        !CoversMode(window, "FAIL fullscreen reset: window after Reset after activation") ||
+        !FullscreenFrame(*device, surface, exact,
+                         "STAGE fullscreen reset: frame after activation and Reset"))
+        return FALSE;
+
+    Number("shrink requests", shrink_requests);
+    Number("deepest nested shrink", shrink_deepest);
+    return Check(shrink_deepest == 1, "FAIL fullscreen reset: nested shrink requests",
+                 shrink_deepest);
+}
+
+static void Fullscreen(D3D *d3d) {
+    WNDCLASSA klass = {};
+    D3DFORMAT format = D3DFMT_UNKNOWN;
+    Device *device = NULL;
+    Surface *surface = NULL;
+    HWND window = NULL;
+    BOOL passed = FALSE;
+
+    Log("STAGE fullscreen reset: 640x480 device on a 320x240 window that shrinks itself from "
+        "WM_SIZE");
+    if (!Check(FullscreenFormat(d3d, &format), "FAIL fullscreen reset: no 640x480 HAL mode", 0))
+        return;
+    klass.lpfnWndProc = ShrinkingWindowProc;
+    klass.hInstance = GetModuleHandleA(NULL);
+    klass.lpszClassName = "DreamGPUFullscreenResetProbe";
+    if (!Check(RegisterClassA(&klass) != 0, "FAIL fullscreen reset: window registration",
+               GetLastError()))
+        return;
+    window = CreateWindowA(klass.lpszClassName, "DreamGPU fullscreen reset probe",
+                           WS_POPUP | WS_VISIBLE, 32, 32, kSmallWidth, kSmallHeight, NULL, NULL,
+                           klass.hInstance, NULL);
+    if (Check(window != NULL, "FAIL fullscreen reset: window creation", GetLastError())) {
+        shrinking = TRUE;
+        shrink_requests = shrink_depth = shrink_deepest = 0;
+        passed = FullscreenStages(d3d, format, window, &device, &surface);
+        shrinking = FALSE;
+    }
+    if (surface)
+        SURFACE(Release, surface);
+    if (device)
+        DEVICE(Release, device);
+    if (window)
+        DestroyWindow(window);
+    UnregisterClassA(klass.lpszClassName, klass.hInstance);
+    Pump();
+    if (passed)
+        Log("PASS fullscreen reset: covers the 640x480 mode after creation, application resizes "
+            "and resets; focus loss minimizes, activation restores, Reset renders; no nested "
+            "shrink");
 }
 
 } // namespace reset_probe

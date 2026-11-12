@@ -518,7 +518,16 @@ static void Run(void) {
     if (failed)
         return;
     Log("STAGE present");
-    HR(DEVICE(Present, device, NULL, NULL, NULL, NULL), "FAIL present");
+    if (!HR(DEVICE(Present, device, NULL, NULL, NULL, NULL), "FAIL present"))
+        return;
+    /* Last, on its own fullscreen device and window once the windowed device
+     * is released, so that its result never hides the other stages'. */
+    if (surface)
+        SURFACE(Release, surface);
+    surface = NULL;
+    DEVICE(Release, device);
+    device = NULL;
+    reset_probe::Fullscreen(d3d);
 }
 extern "C" void WINAPI WinMainCRTStartup(void) {
     SetErrorMode(SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX | SEM_NOOPENFILEERRORBOX);
