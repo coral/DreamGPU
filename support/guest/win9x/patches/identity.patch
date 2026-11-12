@@ -43,7 +43,7 @@
          height && (DWORD)dx + width <= dst->deWidth && (DWORD)dy + height <= dst->deHeight) {
 --- a/dg-vxd.c
 +++ b/dg-vxd.c
-@@ -199,6 +199,7 @@
+@@ -208,6 +208,7 @@
  
  extern void Dg9PrimaryAccess(void);
  extern void Dg9PrimaryFault(void);
@@ -51,7 +51,7 @@
  WORD DgVxdBlt(PCRS_32 state) {
      DWORD op = state->Client_EDX >> 16, timer, sequence, status;
      DG9_SURFACE surface;
-@@ -213,6 +214,10 @@
+@@ -223,6 +224,10 @@
      }
      if (op >= 1 && op <= 3)
          Dg9PrimaryAccess();
@@ -59,9 +59,9 @@
 +        DgAccessTrace(op, state->Client_EBX, state->Client_ECX, state->Client_ESI);
 +        return 0;
 +    }
-     /* No command has been submitted on any decline path. A critical VM must
-      * stay on the DIB engine instead of spinning or blocking the scheduler. */
-     if (!dg_registers || dg_failed)
+     /* No command has been submitted on any decline path. A thread that may
+      * not sleep (it owns the VMM critical section, or the VMM is reentered)
+      * or that runs boosted for interrupt simulation stays on the DIB engine
 --- a/enable.c
 +++ b/enable.c
 @@ -145,8 +145,10 @@

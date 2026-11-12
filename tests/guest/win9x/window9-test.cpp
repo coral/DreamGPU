@@ -49,6 +49,9 @@ static unsigned desktop_flags = kVram, live, set_bits, bitblts, fallbacks, nt_es
 static DWORD ioctl_log[8], next_token = 0x100;
 static unsigned ioctl_count;
 static bool is9x = true;
+/* VxD refusals before execution: the next `refusals` calls of operation
+ * `refuse_op` fail with `refusal_error` and are not logged as executed. */
+static DWORD refusals, refuse_op, refusal_error, last_error, refused_calls, yields, sleeps, tick;
 
 extern "C" {
 BOOL JglTransportIs9x(void) {
@@ -56,6 +59,20 @@ BOOL JglTransportIs9x(void) {
 }
 HANDLE JglTransportDevice(void) {
     return (HANDLE)(uintptr_t)0x77;
+}
+DWORD GetLastError(void) {
+    return last_error;
+}
+void Sleep(DWORD ms) {
+    assert(ms <= 1);
+    if (ms) {
+        ++sleeps;
+        ++tick;
+    } else
+        ++yields;
+}
+DWORD GetTickCount(void) {
+    return tick;
 }
 int ExtEscape(HDC, int escape, int, LPCSTR, int, LPSTR) {
     assert(!is9x && escape == WNDOBJ_SETUP);
@@ -74,6 +91,12 @@ BOOL DeviceIoControl(HANDLE device, DWORD code, void *input, DWORD in_bytes, voi
     assert(in_bytes == sizeof(request) && out_bytes == sizeof(DG9_WINDOW_REPLY));
     std::memcpy(&request, input, sizeof(request));
     assert(request.Version == DG9_WINDOW_VERSION && request.Client == 7);
+    if (refusals && request.Operation == refuse_op) {
+        --refusals;
+        ++refused_calls;
+        last_error = refusal_error;
+        return FALSE;
+    }
     DG9_WINDOW_REPLY reply{DG9_WINDOW_VERSION, DG_ESCAPE_OK, request.Binding, 0};
     if (request.Operation == DG9_WINDOW_BIND) {
         assert(request.Context == 8 && request.Drawable == 9 && !request.Binding &&
@@ -276,6 +299,46 @@ static void set_desktop(int depth, unsigned flags) {
     desktop_depth = depth;
     desktop_flags = flags;
 }
+static void refuse(DWORD op, DWORD count, DWORD error) {
+    refuse_op = op;
+    refusals = count;
+    refusal_error = error;
+    refused_calls = yields = sleeps = 0;
+    tick = 5000;
+}
+/* Only DG9_ERROR_BUSY is resent, bounded (dg-refusal9.h): a transient
+ * refusal of PREPARE or FINISH still presents once; a persistent one fails
+ * the present near 1.5 s; a validation refusal fails at once. */
+static void refusal(HDC dc) {
+    set_desktop(32, kVram);
+    app.client = {0, 0, 64, 48};
+    reset();
+    const ULONG binding = bind(dc);
+    assert(binding && ioctl_count == 1);
+    for (DWORD op : {DG9_WINDOW_PREPARE, DG9_WINDOW_FINISH}) {
+        reset();
+        refuse(op, 20, DG9_ERROR_BUSY);
+        assert(present(dc, binding) == 1 && refused_calls == 20 && bitblts == 1);
+        assert(yields == JGL9_REFUSAL_YIELDS && sleeps == 20 - JGL9_REFUSAL_YIELDS);
+        assert(ioctl_count == 2 && ioctl_log[0] == DG9_WINDOW_PREPARE &&
+               ioctl_log[1] == DG9_WINDOW_FINISH);
+    }
+    reset();
+    refuse(DG9_WINDOW_PREPARE, ~0u, DG9_ERROR_BUSY);
+    assert(!present(dc, binding) && !ioctl_count && !bitblts && live == 2);
+    assert(tick - 5000 >= JGL9_REFUSAL_LIMIT_MS && tick - 5000 < JGL9_REFUSAL_LIMIT_MS + 2);
+    reset();
+    refuse(DG9_WINDOW_PREPARE, 1, DG9_ERROR_INVALID);
+    assert(!present(dc, binding) && refused_calls == 1 && !yields && !sleeps && !ioctl_count);
+    refusals = 0;
+    reset();
+    refuse(DG9_WINDOW_BIND, 3, DG9_ERROR_BUSY);
+    const ULONG second = bind(dc);
+    assert(second && refused_calls == 3 && ioctl_count == 1);
+    JglTransportUnbind(second);
+    JglTransportUnbind(binding);
+    assert(!live && !Bindings[0].Token && !Bindings[1].Token);
+}
 int main() {
     MockDc window_dc{&app, false, nullptr};
     HDC dc = &window_dc;
@@ -336,6 +399,7 @@ int main() {
         JglTransportUnbind(fresh);
         assert(!live && !Bindings[0].Token && !Bindings[1].Token);
     }
+    refusal(dc);
     /* Unknown bindings are refused; NT keeps its WNDOBJ/DrawEscape path. */
     set_desktop(32, kVram);
     reset();
@@ -348,5 +412,6 @@ int main() {
     assert(!ioctl_count && !live);
     std::puts("PASS actual Win98 GL window frontend: 16/32-bpp bind, tag round trip through the "
               "actual 16-bit classifier at widths 1..640, RGB565/non-565/mixed depths, "
-              "1/4/8/15/24-bpp refusal and one rebind after a depth change");
+              "1/4/8/15/24-bpp refusal, one rebind after a depth change and bounded "
+              "ERROR_BUSY-only resend");
 }

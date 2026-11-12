@@ -6,7 +6,7 @@
   "patches": [
     {
       "file": "identity.patch",
-      "sha256": "a70299a8b9fba841fa0f39b984886c38256f8cb21f5074b07f71b045cb0ce64c"
+      "sha256": "a42ee86bd9131403866d7ebcfa42b4ee5e732cf0041362cc913ab83aade6ed4c"
     }
   ],
   "files": {
@@ -20,8 +20,8 @@
       "after_sha256": "4b1691284903130bfc362af0485b474a84e6b58ba760140e7f05b5ad1ab410a3"
     },
     "dg-vxd.c": {
-      "before_sha256": "1e270c0b16e4090b21b7e0435a255a820fbffc104491edcb0640a09d7aa7b052",
-      "after_sha256": "505fcd23b0ff69baba87225f11f2abb216876c5aa4411805ad462f25f2409647"
+      "before_sha256": "5fbb0753ec7879c6a54c455a093d3fbb6d0cf739c2c29cf21d113d3d4434f1e2",
+      "after_sha256": "ca1cd4f22f8d600762dadcd89e09aeed0b9fe4ee5df644cef4a0b0a9ba66ea4b"
     },
     "enable.c": {
       "before_sha256": "79daf9ce580aab89a257b4cc7a9a0d752b5453497041c62753414efbfb67d563",

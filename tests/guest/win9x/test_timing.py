@@ -23,6 +23,7 @@ typedef uint32_t DWORD; typedef int BOOL;
 #define FALSE 0
 #define DG_TIMING_U32 DWORD
 #include "display-timing.h"
+#include "dg-refusal9.h"
 typedef struct { DWORD Alias,Pages; void *Address; } DG9_USER_LOCK;
 struct DIOCParams { DWORD dwIoControlCode,lpOverlapped,cbInBuffer,cbOutBuffer,lpInBuffer,lpOutBuffer,lpcbBytesReturned; };
 static unsigned locks, unlocks, waits, commands, mode;
@@ -71,12 +72,13 @@ int main(void){
  reset(1);p.cbOutBuffer=31;assert(Dg9TimingControl(&p,&result)&&result==87&&!waits&&!locks);p.cbOutBuffer=32;
  reset(1);p.lpOutBuffer=99;assert(Dg9TimingControl(&p,&result)&&result==87&&!commands&&locks==unlocks);p.lpOutBuffer=2;
  reset(1);input[8]=1;assert(Dg9TimingControl(&p,&result)&&result==87&&!commands&&locks==unlocks);
- reset(1);mode=3;assert(Dg9TimingControl(&p,&result)&&result==87&&!locks);
+ reset(1);mode=3;assert(Dg9TimingControl(&p,&result)&&result==DG9_ERROR_BUSY&&!locks&&!commands&&!waits);
+ reset(1);mode=3;p.cbOutBuffer=31;assert(Dg9TimingControl(&p,&result)&&result==DG9_ERROR_INVALID&&!locks);p.cbOutBuffer=32;
  reset(1);assert(Dg9TimingSetRate(120)&&!Dg9TimingSetRate(144));Dg9TimingShutdown();
- puts("PASS Win98 actual timing transaction: pinned bounds, malformed/critical refusal, one wait, timeout/cancel and balanced cleanup");
+ puts("PASS Win98 actual timing transaction: pinned bounds, malformed refusal (87), own-critical-section refusal (170, before any pin), one wait, timeout/cancel and balanced cleanup");
 }
 ''')
     subprocess.run([os.environ.get('CC','cc'),'-std=c11','-Wall','-Wextra','-Werror','-O1',
-                    '-fsanitize=address,undefined','-I'+str(ROOT/'guest/include'),'-I'+str(p),
+                    '-fsanitize=address,undefined','-I'+str(ROOT/'guest/include'),'-I'+str(ROOT/'guest/win9x'),'-I'+str(p),
                     str(p/'test.c'),'-o',str(p/'test')],check=True)
     subprocess.run([str(p/'test')],check=True)

@@ -18,6 +18,7 @@ typedef int BOOL;
 #include "gl.h"
 #include "channel32.h"
 #include "dg-owner.h"
+#include "dg-refusal9.h"
 #include "dg-function-cache.h"
 #include "packet32.h"
 #include "dg-gl-queue.h"
@@ -43,6 +44,9 @@ static void *fill_bytes(void *out, int value, size_t bytes) {
 #define memcpy copy_bytes
 #define memset fill_bytes
 #define DgVxdRegisters() api->Registers()
+/* Nonzero only when the calling thread itself owns the VMM critical section
+ * or the VMM is reentered (dg-critical9.h): it must not sleep on dg_gl_mutex
+ * or a completion. Another thread's claim is plain contention and blocks. */
 #define Dg9GlCritical() api->Critical()
 #define Dg9GlDisableInterrupts() api->DisableInterrupts()
 #define Dg9GlRestoreInterrupts(flags) api->RestoreInterrupts(flags)
@@ -448,16 +452,25 @@ extern "C" int DREAMGPU_CDECL DreamGpuGlControl(const DG9_CHANNEL_CONTROL *param
     }
     if (params->dwIoControlCode != DG_ESCAPE)
         return FALSE;
-    *result = 87;
+    *result = DG9_ERROR_INVALID;
     memset(&input, 0, sizeof(input));
     memset(&output, 0, sizeof(output));
     memset(&returned, 0, sizeof(returned));
     memset(&reply, 0, sizeof(reply));
-    if (!DgVxdRegisters() || Dg9GlCritical() || params->lpOverlapped ||
-        params->cbInBuffer < sizeof(request) || params->cbOutBuffer < sizeof(reply) ||
+    if (!DgVxdRegisters() || params->lpOverlapped || params->cbInBuffer < sizeof(request) ||
+        params->cbOutBuffer < sizeof(reply) ||
         params->cbOutBuffer > sizeof(reply) + DG_ESCAPE_BULK_RESULT_BYTES || !params->tagProcess ||
         !params->hDevice)
         return TRUE;
+    /* Retryable refusal (dg-refusal9.h): this thread owns the VMM critical
+     * section or the VMM is reentered, so it may not sleep on the GL mutex or
+     * a completion. Nothing is pinned, locked or read yet: the request did
+     * not execute, and the frontend resends it. Another thread's claim does
+     * not refuse (dg-critical9.h). */
+    if (Dg9GlCritical()) {
+        *result = DG9_ERROR_BUSY;
+        return TRUE;
+    }
     /* A bulk reply is longer than one pin may be: pin the window holding the
      * reply header now and the rest only to copy a result into it. */
     pinned =
@@ -782,6 +795,10 @@ static void Dg9CohereLocked(void) {
 extern "C" void DREAMGPU_CDECL DreamGpuPrimaryAccess(void) {
     if (!dg_desktop_active)
         return;
+    /* A CPU access that cannot wait for READBACK/RETURN cannot fall through
+     * to stale VRAM either. Only this thread's own critical section or VMM
+     * reentry stops it now; a claim by another thread blocks instead of
+     * halting the guest. */
     if (Dg9GlCritical() || !dg_gl_mutex)
         Dg9DesktopFault(DG_ESCAPE_STOPPED);
     Wait_Semaphore(dg_gl_mutex, 0);
@@ -847,7 +864,7 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
     ULONG status = DG_ESCAPE_INVALID;
     if (params->dwIoControlCode != DG9_WINDOW_IOCTL)
         return FALSE;
-    *result = 87;
+    *result = DG9_ERROR_INVALID;
     critical = Dg9GlCritical();
     if (api->TraceText) {
         flags = Dg9GlDisableInterrupts();
@@ -862,10 +879,15 @@ extern "C" int DREAMGPU_CDECL DreamGpuWindowControl(const DG9_CHANNEL_CONTROL *p
     memset(&output, 0, sizeof(output));
     memset(&returned, 0, sizeof(returned));
     memset(&reply, 0, sizeof(reply));
-    if (!dg_gl_initialized || !dg_gl_mutex || !DgVxdRegisters() || critical ||
-        params->lpOverlapped || params->cbInBuffer != sizeof(request) ||
-        params->cbOutBuffer != sizeof(reply))
+    if (!dg_gl_initialized || !dg_gl_mutex || !DgVxdRegisters() || params->lpOverlapped ||
+        params->cbInBuffer != sizeof(request) || params->cbOutBuffer != sizeof(reply))
         return TRUE;
+    /* Same retryable refusal as DreamGpuGlControl: before any pin, mutex,
+     * owner or window state, so the request provably did not execute. */
+    if (critical) {
+        *result = DG9_ERROR_BUSY;
+        return TRUE;
+    }
     if (!Dg9LockUser(params->lpInBuffer, sizeof(request), FALSE, &input) ||
         !Dg9LockUser(params->lpOutBuffer, sizeof(reply), TRUE, &output) ||
         !Dg9LockUser(params->lpcbBytesReturned, sizeof(DWORD), TRUE, &returned))
@@ -1013,6 +1035,9 @@ extern "C" unsigned short DREAMGPU_CDECL DreamGpuWindowBlt(const DG9_CHANNEL_BLT
     client_reference client_lease;
     if (!dg_gl_initialized || !dg_gl_mutex || !w || !h)
         return 0;
+    /* Declining leaves the DIB engine to copy the tag bitmap, which is only
+     * legal while the CPU owns the primary. As in DreamGpuPrimaryAccess, only
+     * this thread's own critical section or VMM reentry declines here. */
     if (Dg9GlCritical()) {
         if (dg_desktop_active)
             Dg9DesktopFault(DG_ESCAPE_STOPPED);

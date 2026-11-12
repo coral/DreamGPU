@@ -9,6 +9,7 @@
 #include "dg-window.h"
 #include "../win9x/dg-window9.h"
 #include "transport.h"
+#include "transport9-retry.h"
 
 extern "C" {
 extern BOOL JglTransportIs9x(void);
@@ -30,8 +31,11 @@ static BOOL WindowRequest(DG9_WINDOW_REQUEST *request, DG9_WINDOW_REPLY *reply) 
         return FALSE;
     request->Version = DG9_WINDOW_VERSION;
     ZeroMemory(reply, sizeof(*reply));
-    return DeviceIoControl(device, DG9_WINDOW_IOCTL, request, sizeof(*request), reply,
-                           sizeof(*reply), &returned, NULL) &&
+    /* Only a DG9_ERROR_BUSY refusal is resent, bounded: the VxD refused it
+     * before any pin, mutex, owner or window state, so the operation did not
+     * execute (dg-refusal9.h) and wrote no reply. */
+    return Jgl9DeviceControl(device, DG9_WINDOW_IOCTL, request, sizeof(*request), reply,
+                             sizeof(*reply), &returned) &&
            returned == sizeof(*reply) && reply->Version == DG9_WINDOW_VERSION &&
            reply->Status == DG_ESCAPE_OK;
 }

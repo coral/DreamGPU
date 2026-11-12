@@ -241,8 +241,17 @@ far pointers. The build now rejects Watcom W112 truncation warnings. The fixed
 package enables native cursor ownership and completes window binds/presents.
 Retained-image cleanup now works without an active desktop through IPC version
 2 detached DISCARD. Diskless native and actual Win98 empty-clip tests pass.
-The scheduler guard rejects held critical claims or real VMM reentry; CF alone
-is a VM priority boost and is no longer treated as a held critical section.
+The scheduler guard (`dg-critical9.h`) refuses only when the calling thread
+itself owns the VMM critical section (`Get_Crit_Status_Thread` owner equals
+`Get_Cur_Thread_Handle`) or the VMM is really reentered. A claim held by
+another thread is ordinary contention and the request blocks, as a native
+driver would: every Win32 thread is in the System VM, so the old VM-level
+claim count refused GL work whenever any thread of the game (Hitman 2's
+streaming thread) was preempted inside file I/O. CF alone is a VM priority
+boost and is not treated as a held critical section. A guarded GL or window
+request returns `ERROR_BUSY` before any pin, mutex or state change and the
+frontend resends it for at most about 1.5 s (`dg-refusal9.h`); malformed
+requests stay `ERROR_INVALID_PARAMETER` and are never resent.
 The v8 public pixel oracle passed once and its evidence is retained.
 
 The accepted public window result above is on macOS. A transferred independent

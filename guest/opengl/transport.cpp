@@ -5,6 +5,7 @@
 #include <windows.h>
 #include "dg-escape.h"
 #include "transport.h"
+#include "transport9-retry.h"
 
 extern "C" {
 static BOOL Windows9x;
@@ -34,8 +35,12 @@ int JglTransportRequest(HDC display, int input_bytes, LPCSTR input, int output_b
     }
     if (Device == INVALID_HANDLE_VALUE)
         return 0;
-    ok = DeviceIoControl(Device, DG_ESCAPE, (void *)input, input_bytes, output, output_bytes,
-                         &returned, NULL);
+    /* A DG9_ERROR_BUSY refusal is resent on this same handle: the VxD
+     * guarantees the refused request did not execute (dg-refusal9.h), so a
+     * resend cannot repeat a SUBMIT. Any other failure, or a request that may
+     * have executed, is never resent and never reconnected. */
+    ok = Jgl9DeviceControl(Device, DG_ESCAPE, (void *)input, input_bytes, output, output_bytes,
+                           &returned);
     if (!ok || returned < sizeof(DG_ESCAPE_REPLY) || returned > (DWORD)output_bytes)
         return 0;
     CopyMemory(&reply, output, sizeof(reply));

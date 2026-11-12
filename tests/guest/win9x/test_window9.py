@@ -69,6 +69,9 @@ int GetMapMode(HDC);
 BOOL GetViewportOrgEx(HDC, POINT *);
 BOOL GetWindowOrgEx(HDC, POINT *);
 BOOL BitBlt(HDC, int, int, int, int, HDC, int, int, DWORD);
+DWORD GetLastError(void);
+void Sleep(DWORD);
+DWORD GetTickCount(void);
 #ifdef __cplusplus
 }
 #endif

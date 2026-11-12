@@ -6,6 +6,7 @@
 #define DG_TIMING_U32 DWORD
 #include "display-timing.h"
 #undef DG_TIMING_U32
+#include "dg-refusal9.h"
 static volatile DWORD dg_timing_wait, dg_timing_pending;
 static DWORD dg_timing_sequence;
 
@@ -56,10 +57,16 @@ static BOOL Dg9TimingControl(struct DIOCParams *params, DWORD *result) {
     DWORD timer = 0, serial, phase, count, i, flags;
     if (params->dwIoControlCode != DG_TIMING_ESCAPE)
         return FALSE;
-    *result = 87;
+    *result = DG9_ERROR_INVALID;
     if (params->lpOverlapped || params->cbInBuffer != sizeof(request) ||
-        params->cbOutBuffer != sizeof(reply) || Dg9GlCritical())
+        params->cbOutBuffer != sizeof(reply))
         return TRUE;
+    /* Only this thread's own critical section or VMM reentry refuses the
+     * sleep, before any pin or device access (dg-refusal9.h contract). */
+    if (Dg9GlCritical()) {
+        *result = DG9_ERROR_BUSY;
+        return TRUE;
+    }
     if (!DreamGpuLockUser(&dg_memory_services, NULL, params->lpInBuffer, sizeof(request), 0,
                           &input) ||
         !DreamGpuLockUser(&dg_memory_services, NULL, params->lpOutBuffer, sizeof(reply), 1,
@@ -79,7 +86,7 @@ static BOOL Dg9TimingControl(struct DIOCParams *params, DWORD *result) {
     flags = Dg9GlDisableInterrupts();
     if (dg_timing_wait) {
         Dg9GlRestoreInterrupts(flags);
-        *result = 170;
+        *result = DG9_ERROR_BUSY;
         goto cleanup;
     }
     dg_timing_wait = 1; /* Reserved before any yielding VMM allocation. */

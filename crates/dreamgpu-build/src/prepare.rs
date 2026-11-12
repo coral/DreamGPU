@@ -272,6 +272,8 @@ pub fn guest_sources(root: &Path, work: &Path, prefix: &str) -> Result<Prepared>
         "dg-memory-vxd.c",
         "dg-gl-vxd.c",
         "dg-timing-vxd.c",
+        "dg-critical9.h",
+        "dg-refusal9.h",
         "dg-function-cache.h",
         "dg-owner.h",
         "dg-window9.h",

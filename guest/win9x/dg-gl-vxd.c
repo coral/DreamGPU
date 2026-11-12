@@ -5,6 +5,7 @@
 #include "gpu.h"
 #include "gl.h"
 #include "channel32.h"
+#include "dg-critical9.h"
 extern volatile DWORD *DgVxdRegisters(void);
 extern BOOL Dg9CursorTakeoverSafe(void);
 extern BOOL Dg9Primary(DWORD *, DWORD *, DWORD *, DWORD *);
@@ -32,28 +33,28 @@ static void Dg9BootProcessExit(void) {
     for (i = 0; i < sizeof(event) - 1; ++i)
         Dg9BootChar(event[i]);
 }
+/* Nonzero only when this thread may not sleep: it owns the VMM critical
+ * section or the VMM is reentered (dg-critical9.h). Another thread's claim,
+ * such as a preempted streaming thread inside file I/O, no longer refuses or
+ * faults GL work; the request blocks like any native driver call. */
 static BOOL Dg9GlCritical(void) {
-    DWORD owner = 0, claims = 0, reentered = 0;
-    BOOL boosted = FALSE;
-    VMMCall(Get_VMM_Reenter_Count);
-    // clang-format off: Watcom assembly uses newline instruction boundaries.
-    _asm mov [reentered], ecx
-                       // clang-format on
-                       if (!reentered) boosted = Get_Crit_Section_Status(&owner, &claims);
+    DG9_CRITICAL_STATE state;
+    Dg9CriticalRead(&state);
 #ifdef DG_IDENTITY_H
-    if (boosted || claims || reentered) {
+    if (state.Boost || state.Claims || state.Reentered) {
         DgIdentityText("DGCRITICAL");
-        DgIdentityField("owner", owner);
-        DgIdentityField("claims", claims);
-        DgIdentityField("current", Get_Cur_VM_Handle());
+        DgIdentityField("owner", state.Owner);
+        DgIdentityField("claims", state.Claims);
+        DgIdentityField("current", state.Current);
+        DgIdentityField("refuse", Dg9CriticalCannotBlock(&state));
         DgIdentityChar('\n');
         DgIdentityText("DGSCHEDULE");
-        DgIdentityField("boost", boosted);
-        DgIdentityField("reentered", reentered);
+        DgIdentityField("boost", state.Boost);
+        DgIdentityField("reentered", state.Reentered);
         DgIdentityChar('\n');
     }
 #endif
-    return claims != 0 || reentered != 0;
+    return Dg9CriticalCannotBlock(&state);
 }
 
 static DWORD Dg9GlDisableInterrupts(void) {

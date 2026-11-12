@@ -11,6 +11,7 @@ extern void Dg9TimingShutdown(void);
 extern void Dg9GlShutdown(void);
 
 #include "blt32.h"
+#include "dg-critical9.h"
 
 static volatile DWORD *dg_registers;
 static DG9_COMMAND *dg_command;
@@ -210,6 +211,7 @@ extern void Dg9PrimaryFault(void);
 WORD DgVxdBlt(PCRS_32 state) {
     DWORD op = state->Client_EDX >> 16, timer, sequence, status;
     DG9_SURFACE surface;
+    DG9_CRITICAL_STATE critical;
     BOOL success;
     if (op == 0x201) {
         Dg9PrimaryFault();
@@ -221,13 +223,18 @@ WORD DgVxdBlt(PCRS_32 state) {
     }
     if (op >= 1 && op <= 3)
         Dg9PrimaryAccess();
-    /* No command has been submitted on any decline path. A critical VM must
-     * stay on the DIB engine instead of spinning or blocking the scheduler. */
+    /* No command has been submitted on any decline path. A thread that may
+     * not sleep (it owns the VMM critical section, or the VMM is reentered)
+     * or that runs boosted for interrupt simulation stays on the DIB engine
+     * instead of spinning or blocking the scheduler. A claim held by another
+     * thread is ordinary contention: blocking here is legal and the native
+     * copy proceeds (dg-critical9.h). */
     if (!dg_registers || dg_failed)
         return 0;
     if (dg_semaphore || (DgRead(DG_REG_STATUS) & DG_STATUS_BUSY))
         return 2;
-    if (Get_Crit_Section_Status(NULL, NULL))
+    Dg9CriticalRead(&critical);
+    if (Dg9CriticalCannotBlock(&critical) || critical.Boost)
         return 0;
     if (!hda)
         return 0;

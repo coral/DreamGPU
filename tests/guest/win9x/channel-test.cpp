@@ -9,6 +9,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 #include "../../../guest/win9x/channel32.cpp"
+#include "../../../guest/win9x/dg-critical9.h"
 #undef memcpy
 #undef memset
 struct Model {
@@ -17,7 +18,9 @@ struct Model {
     unsigned pins{}, unpins{}, allocations{}, frees{}, sem_created{}, sem_destroyed{}, waits{},
         signals{}, submits{};
     unsigned pin_fail{}, alloc_fail{}, bad_alignment{};
-    bool held{}, critical{}, cursor_safe{true}, primary_owned{}, pending{}, signaled{};
+    bool held{}, cursor_safe{true}, primary_owned{}, pending{}, signaled{};
+    /* VMM scheduler snapshot; the adapter's actual policy decides (dg-critical9.h). */
+    DG9_CRITICAL_STATE crit{};
     DWORD context{22}, submit_status{}, fail_opcode{}, last_opcode{}, last_operation{},
         query_sequence{}, retire_on_submit{};
     /* Live FBHDA primary as validated by the VxD adapter. */
@@ -194,7 +197,7 @@ static void DREAMGPU_CDECL write_reg(DWORD reg, DWORD value) {
     m.registers[reg / 4] = value;
 }
 static int DREAMGPU_CDECL critical() {
-    return m.critical;
+    return Dg9CriticalCannotBlock(&m.crit);
 }
 static DWORD DREAMGPU_CDECL disable_irq() {
     return 17;
@@ -806,7 +809,109 @@ static void bulk() {
     assert(m.allocations == m.frees && m.user_allocations == m.user_frees);
     m.queue = false;
 }
+/* VMM critical section through the actual policy and channel. Another
+ * thread's claim (even boosted) is contention: GL, window, blit and CPU access
+ * all proceed. This thread's own claim, or VMM reentry, refuses GL/window
+ * requests with DG9_ERROR_BUSY before any pin, mutex, owner, output or
+ * submission, so the identical resend runs exactly once. Malformed envelopes
+ * stay DG9_ERROR_INVALID even then. */
+static constexpr DG9_CRITICAL_STATE kNoClaim{0, 0, 0xc200, 0xc200, 0};
+static constexpr DG9_CRITICAL_STATE kOtherThread{0, 2, 0xc100, 0xc200, 1};
+static constexpr DG9_CRITICAL_STATE kOwnThread{0, 1, 0xc200, 0xc200, 0};
+static constexpr DG9_CRITICAL_STATE kReentered{1, 0, 0, 0, 0};
+static void critical_section() {
+    assert(!Dg9CriticalCannotBlock(&kNoClaim) && !Dg9CriticalCannotBlock(&kOtherThread));
+    assert(Dg9CriticalCannotBlock(&kOwnThread) && Dg9CriticalCannotBlock(&kReentered));
+    initialize();
+    m.crit = kOtherThread;
+    const DWORD client = request(DG_ESCAPE_OPEN).Client;
+    assert(client);
+    const DWORD command[9] = {DG_GL_CALL, 36, 999, 0, 0, 0, 0, 999, 0};
+    const auto submit_io = [&] {
+        DG_ESCAPE_REQUEST input{DG_ESCAPE_VERSION, DG_ESCAPE_SUBMIT, client, 36, 0, 0, 0, 0};
+        std::memcpy(m.input, &input, sizeof(input));
+        std::memcpy(m.input + sizeof(input), command, sizeof(command));
+        return control(DG_ESCAPE, sizeof(input) + 36, sizeof(DG_ESCAPE_REPLY));
+    };
+    const auto window_io = [&](DWORD op, DWORD binding) {
+        DG9_WINDOW_REQUEST input{DG9_WINDOW_VERSION, op, client, binding, 0, 0, 0, 0, 0};
+        std::memcpy(m.input, &input, sizeof(input));
+        return control(DG9_WINDOW_IOCTL, sizeof(input), sizeof(DG9_WINDOW_REPLY));
+    };
+    unsigned before = m.submits;
+    {
+        auto io = submit_io();
+        DWORD result = 999;
+        assert(DreamGpuGlControl(&io, &result) && result == 0 && m.submits == before + 1);
+        cleaned();
+    }
+    const auto bound = window(DG9_WINDOW_BIND, client);
+    assert(bound.Status == DG_ESCAPE_OK && bound.Binding);
+    assert(window(DG9_WINDOW_PREPARE, client, bound.Binding).Status == DG_ESCAPE_OK);
+    DG9_CHANNEL_BLT blt{bound.Binding, 0, 10 | (20u << 16), 32 | (32u << 16)};
+    assert(DreamGpuWindowBlt(&blt) == 1 && dg_desktop_active && m.primary_owned);
+    cleaned();
+    DreamGpuPrimaryAccess(); /* blocks for READBACK/RETURN instead of halting */
+    assert(!dg_desktop_active && !m.primary_owned && !dg_gl_faulted);
+    cleaned();
+    for (const auto &state : {kOwnThread, kReentered}) {
+        m.crit = state;
+        const unsigned pins = m.pins, waits = m.waits, sems = m.sem_created;
+        before = m.submits;
+        std::memset(m.output, 0xa5, sizeof(m.output));
+        std::memset(m.returned, 0xa5, sizeof(m.returned));
+        auto io = submit_io();
+        DWORD result = 0;
+        assert(DreamGpuGlControl(&io, &result) && result == DG9_ERROR_BUSY);
+        io = window_io(DG9_WINDOW_FINISH, bound.Binding);
+        result = 0;
+        assert(DreamGpuWindowControl(&io, &result) && result == DG9_ERROR_BUSY);
+        /* Validation outranks the refusal: never retried. */
+        io = submit_io();
+        io.cbOutBuffer = sizeof(DG_ESCAPE_REPLY) - 1;
+        assert(DreamGpuGlControl(&io, &result) && result == DG9_ERROR_INVALID);
+        io = window_io(DG9_WINDOW_FINISH, bound.Binding);
+        io.cbInBuffer = sizeof(DG9_WINDOW_REQUEST) - 4;
+        assert(DreamGpuWindowControl(&io, &result) && result == DG9_ERROR_INVALID);
+        assert(m.pins == pins && m.waits == waits && m.sem_created == sems && m.submits == before &&
+               !m.held && m.output[0] == 0xa5 && m.returned[0] == 0xa5);
+        /* The 16-bit blit declines to the DIB engine while the CPU owns the
+         * primary, still before any submission. */
+        assert(!DreamGpuWindowBlt(&blt) && m.submits == before && !dg_desktop_active);
+        /* The identical resend runs exactly once when the claim is gone. */
+        m.crit = kNoClaim;
+        io = submit_io();
+        result = 999;
+        assert(DreamGpuGlControl(&io, &result) && result == 0 && m.submits == before + 1);
+        cleaned();
+        DG_ESCAPE_REPLY reply;
+        std::memcpy(&reply, m.output, sizeof(reply));
+        assert(reply.Status == DG_ESCAPE_OK && reply.Client == client);
+    }
+    /* With the GPU owning the primary, a CPU access by the critical-section
+     * owner can neither wait nor touch stale VRAM: it stops the device. */
+    m.crit = kOtherThread;
+    assert(DreamGpuWindowBlt(&blt) == 1 && dg_desktop_active);
+    cleaned();
+    std::fflush(nullptr);
+    const pid_t child = fork();
+    assert(child >= 0);
+    if (!child) {
+        m.crit = kOwnThread;
+        m.expect_fatal = true;
+        m.fatal_submits = m.submits;
+        DreamGpuPrimaryAccess();
+        _exit(1);
+    }
+    int status = 0;
+    assert(waitpid(child, &status, 0) == child && WIFEXITED(status) && WEXITSTATUS(status) == 42);
+    DreamGpuPrimaryAccess();
+    assert(!dg_desktop_active && !dg_gl_faulted);
+    cleaned();
+    DreamGpuGlShutdown();
+}
 int main() {
+    critical_section();
     for (unsigned mode = 1; mode <= 4; ++mode) {
         initialize();
         if (mode <= 2)
@@ -946,5 +1051,6 @@ int main() {
               "retained-frame lifecycle, GDI clips/coherence, timeout and waiter-safe teardown, "
               "XRGB8888/RGB565 format word on SEED/BLIT/READBACK/RETURN/DISCARD, "
               "format-change fault, queued transport doorbells and deferred failures, bulk results "
-              "through scattered frames and pinned output windows");
+              "through scattered frames and pinned output windows, VMM critical section "
+              "(other thread proceeds; own thread or reentry refuses BUSY before execution)");
 }
