@@ -1433,3 +1433,58 @@ diffuse for oFog 0.25 (depth fog would give half or full fog), half fog for
 oFog 2 with end 4, and with vertex fog the diffuse colour for oFog 1 and the
 fog colour for oFog 0; the table cases also run after a ps_1_1. The
 diagnostic stack does not touch `arb_program_shader.c` and needs no rebase.
+
+`0063-window-dc-pixel-format.patch` removes the per-operation pixel-format
+query. WineD3D re-activates its context on every first-level acquisition
+(this build releases the native context owner after each operation so that
+other threads can take it; that is unchanged), and `context_set_pixel_format`
+asked `wglGetPixelFormat` for the context's DC each time unless the DC was a
+private backup-window DC with `hdc_has_format`; `context_enter` did the same
+when the context was still current. DreamGPU's frontend must find the DC's
+window with `WindowFromDC`, a system call on NT, for every such query, and
+Far Cry, guest-CPU-bound at about 200 FPS, spends about 17% of guest time in
+the NT kernel. `hdc_has_format` now also covers the context's own window DC:
+it is set when `context_set_pixel_format` verified (`current == format`) or
+set the context's `pixel_format` on `context->hdc`, the DC WineD3D obtained
+with GetDC for `context->win_handle` and holds for the context's lifetime.
+While held, that DC stays with its window, and WGL sets a window's pixel
+format once, so neither the application nor another device can change it.
+Exceptions keep the check on every acquisition, as before: a class DC
+(`CS_CLASSDC`, which any GetDC for a window of its class moves; the class
+style is read once, at verification), and `WGL_WINE_pixel_format_passthrough`,
+with which another device or the application may replace the format and with
+which WineD3D itself replaces an existing format and restores it at release
+(`restore_pf`); `restore_pf` is only ever recorded with that extension, so a
+kept format never coexists with a pending restore. A window that already had
+another format (WGL refuses the change, WineD3D renders with it) never reaches
+the kept state either. The flag is cleared, so the format is verified again,
+when `context_update_window` moves the context to the swapchain's new window
+(Present's override window, a new device window), when `wglMakeCurrent` on the
+DC fails and the backup window is used, and a new context (as after a reset)
+starts with it only for a private DC; `context_create`'s earlier check runs
+before `context->hdc` is assigned, so the first activation verifies once. In
+steady state an acquisition makes no `wglGetPixelFormat` call; previously one.
+The legacy `WIN32_NATIVE` helper is not built and never sets the flag for a
+window DC.
+
+`test_window_dc_pixel_format.py` runs the prepared `context_acquire`,
+`context_enter`, `context_update_window`, `context_set_current`,
+`context_set_gl_context`, `context_set_pixel_format`,
+`context_restore_pixel_format`, `context_release` and context_create's DC
+initialisation under ASan/UBSan against a model of windows, cache, own, class
+and private DCs and WGL's set-once format, in which every successful
+`wglMakeCurrent` must find the context's format on the DC's window. A context
+on a new window queries twice at creation and then not at all in 100
+operations, nor when still current at acquisition; a window change, a failed
+binding (with the DC's window replaced) and a reset verify it once again; a
+window with another format, passthrough with `restore_pf` (the application's
+format back after every operation) or a change by another device, and a class
+DC moved to another window keep checking; a private DC is never queried after
+creation. Each of nine mutations (the old private-only skip, keep or
+`context_enter` check, keeping another format, ignoring passthrough or class
+DCs, keeping the flag across a window change or failed binding, and setting
+it at creation) fails it. `test_thread_pixel_format.py` gains the fields and
+`GetClassLongA` the prepared helper now names. No probe stage is added: the
+change is not observable in rendered pixels, and the probe cannot count
+system calls. The diagnostic stack is rebased onto 0063 with its
+`context.c` call-site line number renumbered.

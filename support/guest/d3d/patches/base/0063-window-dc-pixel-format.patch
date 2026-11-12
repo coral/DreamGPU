@@ -1,0 +1,84 @@
+--- a/wined3d/context.c
++++ b/wined3d/context.c
+@@ -823,7 +823,7 @@
+     const struct wined3d_gl_info *gl_info = context->gl_info;
+     int current;
+ 
+-    if (dc == context->hdc && context->hdc_is_private && context->hdc_has_format)
++    if (dc == context->hdc && context->hdc_has_format)
+         return TRUE;
+ 
+     current = gl_info->gl_ops.wgl.p_wglGetPixelFormat(dc);
+@@ -880,7 +880,19 @@
+     return TRUE;
+ 
+ success:
+-    if (dc == context->hdc && context->hdc_is_private)
++    /* DreamGPU: a window DC keeps the format it was verified or set with, as
++     * a private DC does. WineD3D obtained context->hdc with GetDC for
++     * context->win_handle and holds it for the context's lifetime, so no
++     * other window takes it, except with a class DC (CS_CLASSDC), which
++     * every GetDC for a window of its class moves. WGL sets a window's pixel
++     * format once; only WGL_WINE_pixel_format_passthrough changes it again
++     * (and is what records restore_pf), so with that extension it is checked
++     * on every acquisition as before. Otherwise no wglGetPixelFormat (on NT a
++     * WindowFromDC system call) is repeated for every D3D operation. */
++    if (dc == context->hdc && (context->hdc_is_private
++            || (format == context->pixel_format
++            && !gl_info->supported[WGL_WINE_PIXEL_FORMAT_PASSTHROUGH]
++            && !(GetClassLongA(context->win_handle, GCL_STYLE) & CS_CLASSDC))))
+         context->hdc_has_format = TRUE;
+     return TRUE;
+ }
+@@ -961,6 +973,10 @@
+         WARN("Failed to make GL context %p current on device context %p, last error %#x.\n",
+                 ctx->glCtx, ctx->hdc, GetLastError());
+         ctx->valid = 0;
++        /* DreamGPU: verify the window DC's format again, as before 0063,
++         * when the window can be bound again. */
++        if (!ctx->hdc_is_private)
++            ctx->hdc_has_format = FALSE;
+         WARN("Trying fallback to the backup window.\n");
+ 
+         /* FIXME: If the context is destroyed it's no longer associated with
+@@ -1062,7 +1078,8 @@
+     context->win_handle = context->swapchain->win_handle;
+     
+     //context->hdc_is_private = FALSE;
+-    //context->hdc_has_format = FALSE;
++    /* DreamGPU: the format is verified on the new window's DC. */
++    context->hdc_has_format = FALSE;
+     //context->needs_set = 1;
+     //context->valid = 1;
+ 
+@@ -1384,7 +1401,7 @@
+             context->restore_dc = wglGetCurrentDC();
+             context->needs_set = 1;
+         }
+-        else if (!context->needs_set && !(context->hdc_is_private && context->hdc_has_format)
++        else if (!context->needs_set && !context->hdc_has_format
+                     && context->pixel_format != context->gl_info->gl_ops.wgl.p_wglGetPixelFormat(context->hdc))
+             context->needs_set = 1;
+     }
+@@ -1858,7 +1875,9 @@
+     ret->win_handle = swapchain->win_handle;
+     ret->hdc = hdc;
+     ret->hdc_is_private = hdc_is_private;
+-    ret->hdc_has_format = TRUE;
++    /* DreamGPU: a window DC's format is verified at the context's first
++     * activation below (context_set_pixel_format), which also keeps it. */
++    ret->hdc_has_format = hdc_is_private;
+     ret->pixel_format = pixel_format;
+     ret->needs_set = 1;
+ 
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1205,7 +1205,7 @@
+     DWORD rebind_fbo : 1;
+     DWORD needs_set : 1;
+     DWORD hdc_is_private : 1;
+-    DWORD hdc_has_format : 1;           /* only meaningful if hdc_is_private */
++    DWORD hdc_has_format : 1;           /* hdc keeps pixel_format (context_set_pixel_format) */
+     DWORD update_shader_resource_bindings : 1;
+     DWORD padding : 15;
+     DWORD shader_update_mask;

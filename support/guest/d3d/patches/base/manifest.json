@@ -251,6 +251,10 @@
     {
       "file": "0062-table-fog-shader-fog-coordinate.patch",
       "sha256": "81f2022864a0713ca1f07b67407229d953f4411515d3b5ffa7aa15079c8c9dd9"
+    },
+    {
+      "file": "0063-window-dc-pixel-format.patch",
+      "sha256": "b44830ac1d44e0cb4e7042fdbae9d340c2997e62bceb654d8342d6d8d41e08d1"
     }
   ],
   "files": {
@@ -344,7 +348,7 @@
     },
     "wined3d/context.c": {
       "before_sha256": "a6ca7f43c06b2d526d4c6c755a925c1a099a183c5863bb185b1f60de20cfc1b5",
-      "after_sha256": "a0432e542c85d6d7f4cb22b9a05e1158bb34ef3db5aef23c3e55c32ad978d5f6"
+      "after_sha256": "fe4b71d7f21337df2869564fdade75347cd77f9a022f627246613079b223bd0d"
     },
     "wined3d/swapchain.c": {
       "before_sha256": "0da148658bb384c223575445bdd1cee6fa5ab5f436c3f1c1132eb74e588ddb28",
@@ -352,7 +356,7 @@
     },
     "wined3d/wined3d_private.h": {
       "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
-      "after_sha256": "50646316bbd1be5d19f1d23a696bd384ce7c9b0d2eac97b7400d40917df7331f"
+      "after_sha256": "200a6c72d34f0d5b5bfb736c2e9fad2d0f728304962104278aa0530d75d038e1"
     },
     "wined3d/texture.c": {
       "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",

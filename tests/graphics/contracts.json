@@ -252,6 +252,10 @@
       "scope": "source",
       "path": "tests/guest/d3d/test_table_fog_shader_coordinate.py"
     },
+    "d3d-window-dc-pixel-format": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_window_dc_pixel_format.py"
+    },
     "guest-d3d-table-fog": {
       "scope": "installed-api",
       "path": "tools/d3d/table-fog-probe.inc"
@@ -2124,6 +2128,25 @@
         "guest-partial-locks"
       ],
       "remaining": "Negotiated by DG_CAP2_GL_BULK_READ, the third bit of DG_GL_REG_CAPS2. A QUERY result above 64 KiB goes through a page list (DG_GL_RESULT_PAGES): NT and Win9x kernels keep a 4 MiB buffer and its frame list in driver memory for the adapter's life; the device checks the list and its pages as writable RAM at submission and before writing and never writes outside them. Shape (one query) plus one 3 MiB read replace 3 GetTexLevelParameteriv and 48 GetTexImage round trips for a 1024x768 RGBA8 level (Warcraft III locks its back buffer read-only every present); a 1024x768 ReadPixels is one query instead of 48. Results are byte-identical to the chunked reads older hosts, kernels and frontends keep. Native tests (Linux, Mesa on Radeon) cover RGBA8, BGRA uploads, RGB565, depth, packed depth-stencil, float, S3TC, window colour/depth/stencil/float reads on both transports and malformed lists. The installed probe's 1024x768 whole-surface stage, Win98/XP/2000 guests, macOS CGL and Warcraft III FPS remain to be run."
+    },
+    {
+      "id": "d3d.context-acquire-pixel-format",
+      "area": 21,
+      "api": "D3D8/D3D9/DirectDraw (WineD3D, USE_WIN32_OPENGL) over the DreamGPU WGL frontend",
+      "operation": "per-operation context acquisition: the pixel format of WineD3D's own GetDC window DC verified or set once per context and window, not queried (wglGetPixelFormat, a WindowFromDC system call on NT) on every first-level acquire",
+      "format": "WGL pixel format 1",
+      "resource": "context/window DC",
+      "usage": "every D3D operation",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": false,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-window-dc-pixel-format",
+        "context",
+        "patches"
+      ],
+      "remaining": "Far Cry (D3D9, about 200 FPS) is guest-CPU-bound with about 17% of guest time in the NT kernel, much of it system calls on WineD3D's per-operation path. The native context owner is released after every operation (deliberately, for cross-thread handoff), so every acquisition re-activated the context and asked the frontend for the window's pixel format. Wine patch 0063 keeps hdc_has_format for a window DC, as Wine did for private DCs, once the context's format was verified or set on it: steady state makes no wglGetPixelFormat call. It is verified again after the swapchain's window changes, after a failed binding, and on a new context (reset); a window with another format, a class DC (CS_CLASSDC) or WGL_WINE_pixel_format_passthrough (restore_pf) is checked on every acquisition as before. Source test: the prepared acquire/release/activation/pixel-format functions against a window/DC model (9 mutations rejected). The guest CPU profile of Far Cry remains to be measured; wglMakeCurrent itself still looks the window up (WindowFromDC, GetClientRect) on every acquisition."
     },
     {
       "id": "gl.client-array-draws",

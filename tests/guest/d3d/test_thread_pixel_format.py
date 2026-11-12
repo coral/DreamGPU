@@ -36,7 +36,7 @@ static void log_warn(const char *fmt,...) { (void)fmt; }
 #define GL_EXTCALL(call) call
 typedef struct { unsigned short nSize,nVersion; unsigned dwFlags; unsigned char iPixelType,cColorBits,cRedBits,cRedShift,cGreenBits,cGreenShift,cBlueBits,cBlueShift,cAlphaBits,cAlphaShift,cAccumBits,cAccumRedBits,cAccumGreenBits,cAccumBlueBits,cAccumAlphaBits,cDepthBits,cStencilBits,cAuxBuffers,iLayerType,bReserved; unsigned dwLayerMask,dwVisibleMask,dwDamageMask; } PIXELFORMATDESCRIPTOR;
 struct wined3d_gl_info { BOOL supported[1]; struct { struct { int (*p_wglGetPixelFormat)(HDC); } wgl; struct { void (*p_glFlush)(void); } gl; } gl_ops; };
-struct wined3d_context { struct wined3d_gl_info *gl_info; void *glCtx; unsigned level, valid, needs_set; void *restore_ctx, *restore_dc; HDC hdc; BOOL hdc_is_private,hdc_has_format; int restore_pf; HWND restore_pf_win; };
+struct wined3d_context { struct wined3d_gl_info *gl_info; void *glCtx; unsigned level, valid, needs_set; void *restore_ctx, *restore_dc; HDC hdc; BOOL hdc_is_private,hdc_has_format; int pixel_format, restore_pf; HWND restore_pf_win, win_handle; };
 struct device { unsigned context_count; struct wined3d_context **contexts; };
 static int share_result=1,share_calls,deletes;
 static BOOL wglShareLists(void *src,void *dst) { assert(src&&dst&&src!=dst);++share_calls;return share_result; }
@@ -45,6 +45,10 @@ static BOOL wglDeleteContext(void *c) { assert(c);++deletes;return TRUE; }
 static int current_format, choose_result, set_calls, choose_calls, release_calls;
 static unsigned GetLastError(void) { return 6; }
 static HWND WindowFromDC(HDC dc) { return dc; }
+// 0063 keeps a window DC's format (test_window_dc_pixel_format.py); none is the context's DC here.
+#define GCL_STYLE (-26)
+#define CS_CLASSDC 0x0040
+static unsigned GetClassLongA(HWND window,int index) { (void)window;(void)index;assert(0);return 0; }
 static BOOL context_restore_pixel_format(struct wined3d_context *c) { c->restore_pf=0;return TRUE; }
 static BOOL wglSetPixelFormatWINE(HDC dc,int format) { assert(dc);current_format=format;return TRUE; }
 static int get_format(HDC dc) { assert(dc);return current_format; }

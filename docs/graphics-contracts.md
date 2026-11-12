@@ -736,6 +736,21 @@ and disposable-VM acceptance cycle:
   vertex shader stage) requires oFog 0 clear, 1 fogged, 0.25 three quarters
   clear and 2 of 4 half fogged under table fog, and oFog 1 clear and 0 fogged
   under vertex fog; it has not run on a guest.
+- WineD3D context acquisition cost. Every D3D operation acquires and releases
+  WineD3D's context, and with the native context owner released after each
+  one (for cross-thread handoff), every acquisition activated the context
+  again and asked `wglGetPixelFormat` for its window DC; DreamGPU's frontend
+  answers that with `WindowFromDC`, an NT system call (Far Cry spends about
+  17% of guest time in the NT kernel). Wine patch 0063 keeps the format of
+  WineD3D's own GetDC window DC once it was verified or set, as Wine already
+  did for private DCs: WGL sets a window's format once and the held DC stays
+  with its window. It is verified again after a window change, a failed
+  binding or a reset; a class DC, another format already on the window or
+  `WGL_WINE_pixel_format_passthrough` (which restores the application's format
+  after each operation) keep the per-acquisition check. Source test: the
+  prepared acquire/release path against a window/DC model makes no query in
+  100 operations (9 mutations rejected); the guest profile remains to be
+  measured.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
