@@ -28,6 +28,8 @@ mod fixed_state;
 mod fog_coord;
 #[path = "native_qemu/fragment_program.rs"]
 mod fragment_program;
+#[path = "native_qemu/frame_trace.rs"]
+mod frame_trace;
 #[path = "native_qemu/framebuffer_object.rs"]
 mod framebuffer_object;
 #[path = "native_qemu/multitexture.rs"]
@@ -85,6 +87,7 @@ struct Qemu {
     child: Child,
     commands: UnixStream,
     replies: BufReader<UnixStream>,
+    qmp_path: PathBuf,
 }
 impl Qemu {
     fn start(directory: &Path, gpu_socket: &Path) -> Self {
@@ -130,6 +133,7 @@ impl Qemu {
             firmware.display()
         );
         let qtest_path = directory.join("qtest.sock");
+        let qmp_path = directory.join("qmp.sock");
         let child = Command::new(binary)
             .arg("-L")
             .arg(&firmware)
@@ -151,6 +155,8 @@ impl Qemu {
                 "/dev/null",
                 "-display",
                 &display,
+                "-qmp",
+                &format!("unix:{},server=on,wait=off", qmp_path.display()),
                 "-monitor",
                 "none",
                 "-serial",
@@ -185,6 +191,7 @@ impl Qemu {
             child,
             commands,
             replies,
+            qmp_path,
         };
         // Device at 00:04.0, BAR0 VRAM and BAR2 registers. No firmware/guest disks.
         for (offset, value) in [(0x10, 0xe0000000u32), (0x18, 0xf0000000), (0x04, 0x0007)] {
@@ -209,6 +216,34 @@ impl Qemu {
             assert!(reply.starts_with("OK"), "{command}: {reply}");
             return reply.trim().to_owned();
         }
+    }
+    /// One QMP command on a fresh connection; returns its reply line, which
+    /// holds either "return" or "error".
+    fn qmp(&self, execute: &str, arguments: &str) -> String {
+        let stream = UnixStream::connect(&self.qmp_path).unwrap();
+        stream
+            .set_read_timeout(Some(Duration::from_secs(10)))
+            .unwrap();
+        let mut writer = stream.try_clone().unwrap();
+        let mut reader = BufReader::new(stream);
+        let reply = |reader: &mut BufReader<UnixStream>| loop {
+            let mut line = String::new();
+            assert_ne!(reader.read_line(&mut line).unwrap(), 0, "QMP EOF");
+            if line.contains("\"return\"") || line.contains("\"error\"") {
+                return line;
+            }
+        };
+        let mut greeting = String::new();
+        reader.read_line(&mut greeting).unwrap();
+        assert!(greeting.contains("QMP"), "{greeting}");
+        writeln!(writer, "{{\"execute\":\"qmp_capabilities\"}}").unwrap();
+        assert!(reply(&mut reader).contains("\"return\""));
+        writeln!(
+            writer,
+            "{{\"execute\":\"{execute}\",\"arguments\":{arguments}}}"
+        )
+        .unwrap();
+        reply(&mut reader)
     }
     fn read(&mut self, register: u32) -> u32 {
         let response = self.command(&format!("readl {:#x}", 0xf0000000u32 + register));

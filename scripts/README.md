@@ -9,7 +9,7 @@ They are not build dependencies.
 | `automation/` | Shared QMP, host input and compositor control | `vm.py`; supporting `host_input.py`, `kwin.py` |
 | `fixtures/` | Disposable fixtures, offline disk updates and installation media | `fixture.py`, `adopt.py`, `app-install.py`, `nt-install.py`, `tool-media.py`, `ut-media.py`, `win9x-stage.py` |
 | `benchmarks/` | Timed game runs, frame measurements and process sampling | `bench.py`, `game.py`, `halflife.py`, `sample.py` |
-| `diagnostics/` | Graphics traces, counters, lifecycle and Win98 prerequisite checks | `gl-trace.py`, `trace.py`, `lifecycle.py`, `dual.py`, `cursor-check.py`, `win98-probe.py` |
+| `diagnostics/` | Graphics traces, counters, lifecycle and Win98 prerequisite checks | `frame-trace.py`, `gl-trace.py`, `trace.py`, `lifecycle.py`, `dual.py`, `cursor-check.py`, `win98-probe.py` |
 | `quality/` | Source formatting, static analysis and native numerical checks | `check-cpp.py`, `test-softfloat-f32-x80.py` |
 | `tests/` | Host automation unit tests and the native numerical test source | `test_*.py`, `softfloat-f32-x80.c` |
 

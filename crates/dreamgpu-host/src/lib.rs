@@ -68,6 +68,7 @@ mod state;
 mod stipple;
 mod submission;
 mod texture;
+mod trace;
 mod vector;
 mod worker;
 

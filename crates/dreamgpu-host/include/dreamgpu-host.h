@@ -552,4 +552,33 @@ uint32_t dreamgpu_queue_consume(DreamGpuQueue *, const DreamGpuQueueCallbacks *,
                                 uint32_t);
 DreamGpuQueueOutcome dreamgpu_queue_complete(DreamGpuQueue *, const DreamGpuQueueCallbacks *,
                                              const DreamGpuCompletion *);
+/* Opt-in diagnostic frame trace (trace.rs). Zero-initialized means idle. An
+ * armed trace starts at the next PRESENT record and formats each executed
+ * record of the following `frames` presentations as text through `write`
+ * (nonzero return: failed write), within `limit` bytes plus one end line. */
+#define DREAMGPU_TRACE_IDLE 0
+#define DREAMGPU_TRACE_ARMED 1
+#define DREAMGPU_TRACE_ACTIVE 2
+#define DREAMGPU_TRACE_DONE 3
+#define DREAMGPU_TRACE_VERTICES 1
+#define DREAMGPU_TRACE_END_FRAMES 1
+#define DREAMGPU_TRACE_END_LIMIT 2
+#define DREAMGPU_TRACE_END_WRITE 3
+#define DREAMGPU_TRACE_END_CANCELLED 4
+#define DREAMGPU_TRACE_MAX_FRAMES 1000
+#define DREAMGPU_TRACE_MIN_LIMIT 4096ULL
+#define DREAMGPU_TRACE_DEFAULT_LIMIT (64ULL << 20)
+#define DREAMGPU_TRACE_MAX_LIMIT (1ULL << 30)
+typedef struct DreamGpuTrace {
+    uint32_t state, flags, frames, completed, reason, reserved;
+    uint64_t limit, bytes, records;
+    void *opaque;
+    uint32_t (*write)(void *, const uint8_t *, size_t);
+} DreamGpuTrace;
+/* Zero limit selects the default. Nonzero: 1 invalid or running, 2 write failed. */
+uint32_t dreamgpu_trace_begin(DreamGpuTrace *, uint32_t frames, uint32_t flags, uint64_t limit);
+/* After each executed record; returns the trace state. */
+uint32_t dreamgpu_trace_record(DreamGpuTrace *, const uint8_t *record, uint32_t bytes,
+                               uint32_t sequence, uint32_t stream, uint32_t error);
+void dreamgpu_trace_end(DreamGpuTrace *, uint32_t reason);
 #endif
