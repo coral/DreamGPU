@@ -556,6 +556,7 @@ fn buffer_draws_bind_each_slot_point_at_offsets_and_unbind() {
     let mut resolved = crate::buffer::Resolved {
         slots: [0; 32],
         element: 0,
+        unread: 0,
     };
     resolved.slots[0] = 77;
     SEEN.with(|v| v.borrow_mut().clear());
@@ -672,6 +673,109 @@ fn buffer_draws_bind_each_slot_point_at_offsets_and_unbind() {
     );
     assert!(SEEN.with(|v| v.borrow().is_empty()));
 }
+/// Doom 3's ARB2 interaction draw: position, colour and texture coordinates
+/// (slots 0, 1, 3) and generic attributes 8 and 9 (slots 24, 25), every one
+/// from a buffer, with three inline UNSIGNED_INT indices.
+fn interaction_packet() -> ([u32; 10], Vec<u8>) {
+    let mut data = vec![0u8; 128];
+    let slots = [
+        (0, GL_FLOAT | (3 << 16), 0),
+        (1, GL_UNSIGNED_BYTE | (4 << 16), 56),
+        (3, GL_FLOAT | (2 << 16), 12),
+        (24, GL_FLOAT | (2 << 16), 12),
+        (25, GL_FLOAT | (3 << 16), 32),
+    ];
+    for (slot, descriptor, _) in slots {
+        data[slot * 4..slot * 4 + 4].copy_from_slice(&descriptor.to_le_bytes());
+    }
+    for (slot, _, offset) in slots {
+        // Texture coordinates name another (stale) buffer.
+        let name: u32 = if slot == 3 { 6 } else { 5 };
+        for word in [name, offset, 60] {
+            data.extend_from_slice(&word.to_le_bytes());
+        }
+    }
+    for index in [0u32, 4, 9] {
+        data.extend_from_slice(&index.to_le_bytes());
+    }
+    let mask = DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION | DG_GL_ARRAY_COLOR | DG_GL_ARRAY_TEXCOORD;
+    let generic = 1 << 8 | 1 << 9;
+    let buffered = 1 | 1 << 1 | 1 << 3 | 1 << 24 | 1 << 25;
+    let a = [
+        GL_TRIANGLES,
+        0,
+        3,
+        mask,
+        generic,
+        buffered,
+        0,
+        GL_UNSIGNED_INT,
+        0,
+        0,
+    ];
+    (a, data)
+}
+#[test]
+fn unread_buffer_slots_stay_disabled_and_the_rest_still_draws() {
+    let mut api = attrib_api();
+    api.dg_glBindBuffer = Some(bind_buffer);
+    let (a, data) = interaction_packet();
+    let layout = raw::layout_buffer(&a, &data, true).unwrap();
+    let mut resolved = crate::buffer::Resolved {
+        slots: [0; 32],
+        element: 0,
+        unread: 1 << 3,
+    };
+    for slot in [0, 1, 24, 25] {
+        resolved.slots[slot] = 50;
+    }
+    resolved.slots[3] = 60;
+    SEEN.with(|v| v.borrow_mut().clear());
+    ERROR.with(|v| *v.borrow_mut() = 0);
+    assert_eq!(
+        unsafe { buffer_draw(&api, &a, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let ops = |op: u32| {
+        seen.iter()
+            .filter(|v| v.0 == op)
+            .map(|v| v.1)
+            .collect::<Vec<_>>()
+    };
+    // The texture coordinate array is disabled under the push and its stale
+    // buffer never bound; its current coordinates are neither saved nor
+    // restored. Everything else draws from buffer 50.
+    assert!(!seen.contains(&(3, GL_TEXTURE_COORD_ARRAY as usize)));
+    assert!(seen.contains(&(4, GL_TEXTURE_COORD_ARRAY as usize)));
+    assert!(!ops(28).contains(&60));
+    assert!(ops(19).is_empty());
+    assert_eq!(ops(3), [GL_VERTEX_ARRAY as usize, GL_COLOR_ARRAY as usize]);
+    assert_eq!(ops(23), [8, 9]);
+    assert_eq!(ops(24), [8, 9]);
+    assert_eq!(ops(7), [GL_TRIANGLES as usize]);
+    assert_eq!(ops(9), [3]);
+    // Without the position (and no generic attribute 0) nothing provokes a
+    // vertex: no native call at all, and no error.
+    resolved.unread = 1;
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe { buffer_draw(&api, &a, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    assert!(SEEN.with(|v| v.borrow().is_empty()));
+    // Unread generic attributes stay disabled too.
+    resolved.unread = 1 << 25;
+    SEEN.with(|v| v.borrow_mut().clear());
+    assert_eq!(
+        unsafe { buffer_draw(&api, &a, &data, &layout, &resolved) },
+        Ok(0)
+    );
+    let seen = SEEN.with(|v| core::mem::take(&mut *v.borrow_mut()));
+    let enabled: Vec<_> = seen.iter().filter(|v| v.0 == 23).map(|v| v.1).collect();
+    assert_eq!(enabled, [8]);
+    assert!(seen.contains(&(3, GL_TEXTURE_COORD_ARRAY as usize)));
+}
 #[test]
 fn bgra_buffer_slots_read_their_buffers_with_size_bgra() {
     let mut api = attrib_api();
@@ -681,6 +785,7 @@ fn bgra_buffer_slots_read_their_buffers_with_size_bgra() {
     let mut resolved = crate::buffer::Resolved {
         slots: [0; 32],
         element: 0,
+        unread: 0,
     };
     for (slot, native) in [(0, 70), (1, 71), (4, 71), (17, 72)] {
         resolved.slots[slot] = native;

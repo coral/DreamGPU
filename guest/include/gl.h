@@ -167,12 +167,15 @@
  * base..base+vertices-1, without one base and vertices are zero. Count is at
  * most DG_GL_MAX_BUFFER_ELEMENTS, and DG_GL_MAX_INDICES for inline indices;
  * base+count-1 and base+vertices-1 fit 32 bits. A missing buffer, an element
- * range beyond its buffer, an attribute read beyond its buffer or an
- * element-buffer index outside the client vertices is GL_INVALID_OPERATION
- * and draws nothing, as is a buffer draw received while compiling a display
- * list: the frontend dereferences buffers into client draws there, as the
- * extension requires. Native GL converts buffer attributes of every
- * descriptor type.
+ * range beyond its buffer or an element-buffer index outside the client
+ * vertices is GL_INVALID_OPERATION and draws nothing, as is a buffer draw
+ * received while compiling a display list: the frontend dereferences buffers
+ * into client draws there, as the extension requires. A buffer slot whose
+ * buffer does not hold every drawn vertex is not read: the draw leaves that
+ * array disabled (its current value applies) without an error, as GL leaves
+ * such reads undefined and fetches only what the vertex stage consumes;
+ * without a position or generic attribute 0 left it draws nothing. Native GL
+ * converts buffer attributes of every descriptor type.
  * With this capability the frontend also sends indexed draws of client arrays
  * alone as buffer draws with a zero buffer mask: client sections of the
  * indexed range base..base+vertices-1 (each array once, at its wire type) and

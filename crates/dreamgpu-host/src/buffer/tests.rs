@@ -425,15 +425,21 @@ fn draws_resolve_natives_and_bound_every_buffer_read() {
         let layout = crate::arrays::raw::layout_buffer(a, data, true).expect("admitted");
         unsafe { super::resolve(c.as_ptr(), a, &layout, data) }
     };
-    // An array draw of vertices 0-3 fits; from vertex 1 it does not.
+    // An array draw of vertices 0-3 fits; from vertex 1 the position slot is
+    // unread (no error: the draw leaves its array disabled).
     let (a, data) = record(0, 0, 0, 0, &[0; 4]);
     let r = resolve(&c, &a, &data).unwrap();
-    assert_eq!((r.slots[0], r.slots[1], r.element), (natives(&c, 1), 0, 0));
+    assert_eq!(
+        (r.slots[0], r.slots[1], r.element, r.unread),
+        (natives(&c, 1), 0, 0, 0)
+    );
     let (a, data) = record(0, 0, 0, 1, &[0; 4]);
-    assert_eq!(resolve(&c, &a, &data).err(), Some(GL_INVALID_OPERATION));
+    assert_eq!(resolve(&c, &a, &data).map(|r| r.unread), Ok(1));
     // Inline indices: the largest index bounds the buffer read.
     let (a, data) = record(GL_UNSIGNED_SHORT, 0, 0, 0, &[0, 3, 2]);
-    assert!(resolve(&c, &a, &data).is_ok());
+    assert_eq!(resolve(&c, &a, &data).map(|r| r.unread), Ok(0));
+    let (a, data) = record(GL_UNSIGNED_SHORT, 0, 0, 0, &[0, 4, 2]);
+    assert_eq!(resolve(&c, &a, &data).map(|r| r.unread), Ok(1));
     // Element buffer indices (0, 3, 1) with `vertices` client vertices from `base`.
     let element = |offset: u32, vertices: u32, base: u32| {
         let (mut a, mut data) = record(GL_UNSIGNED_SHORT, 2, offset, 0, &[0, 0, 0]);
@@ -468,7 +474,7 @@ fn draws_resolve_natives_and_bound_every_buffer_read() {
     // A shrunken attribute buffer is checked against its current size.
     put(m, &mut c, 1, 63, &[]);
     let (a, data) = record(0, 0, 0, 0, &[0; 4]);
-    assert_eq!(resolve(&c, &a, &data).err(), Some(GL_INVALID_OPERATION));
+    assert_eq!(resolve(&c, &a, &data).map(|r| r.unread), Ok(1));
     assert_eq!(errors(&mut c), 0);
     release(m, c);
 }
@@ -516,9 +522,9 @@ fn index_bounds_only_rise_and_let_fitting_buffer_only_draws_skip_the_scan() {
         unsafe { super::resolve(c.as_ptr(), &a, &layout, &data) }
     };
     // The bound (9) does not fit four vertices, so the first three indices
-    // are scanned and fit; the fourth is beyond.
-    assert!(resolve(&c, 3, 0).is_ok());
-    assert_eq!(resolve(&c, 1, 6).err(), Some(GL_INVALID_OPERATION));
+    // are scanned and fit; the fourth is beyond, leaving position unread.
+    assert_eq!(resolve(&c, 3, 0).map(|r| r.unread), Ok(0));
+    assert_eq!(resolve(&c, 1, 6).map(|r| r.unread), Ok(1));
     // With room for ten vertices the bound fits and no scan is needed.
     put(m, &mut c, 1, 80, &[]);
     assert_eq!(
@@ -559,14 +565,16 @@ fn bgra_buffer_slots_are_bounded_as_four_byte_elements() {
             natives(&c, 6)
         ]
     );
-    // One byte short of the last BGRA element in either buffer is an error.
+    // One byte short of the last BGRA element leaves that slot unread: in
+    // buffer 5 the secondary colour (at 16) ends last, the colour fits.
+    assert_eq!(resolve(&c).map(|r| r.unread), Ok(0));
     put(m, &mut c, 5, 159, &[]);
-    assert_eq!(resolve(&c).err(), Some(GL_INVALID_OPERATION));
+    assert_eq!(resolve(&c).map(|r| r.unread), Ok(1 << 4));
     put(m, &mut c, 5, 160, &[]);
     put(m, &mut c, 6, 31, &[]);
-    assert_eq!(resolve(&c).err(), Some(GL_INVALID_OPERATION));
+    assert_eq!(resolve(&c).map(|r| r.unread), Ok(1 << 17));
     put(m, &mut c, 6, 32, &[]);
-    assert!(resolve(&c).is_ok());
+    assert_eq!(resolve(&c).map(|r| r.unread), Ok(0));
     assert_eq!(errors(&mut c), 0);
     release(m, c);
 }

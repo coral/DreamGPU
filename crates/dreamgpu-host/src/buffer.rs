@@ -451,17 +451,26 @@ pub(crate) unsafe fn delete(m: &Memory, c: *mut ContextState, data: &[u8]) -> Re
 }
 
 /// Native buffers of a buffer draw: each buffer slot's and the element
-/// buffer's (zero for client data).
+/// buffer's (zero for client data), and the buffer slots whose buffer does
+/// not hold every drawn vertex (`unread`), which the draw leaves disabled.
 #[derive(Clone, Copy)]
 pub(crate) struct Resolved {
     pub slots: [u32; 32],
     pub element: u32,
+    pub unread: u32,
 }
 
 /// Resolve and bound every buffer read of an admitted buffer draw with a
 /// nonzero count. Any state-dependent failure (a missing buffer, an element
-/// range beyond its buffer, an element index outside the client vertices or
-/// an attribute read beyond its buffer) is the GL error returned instead.
+/// range beyond its buffer or an element index outside the client vertices)
+/// is the GL error returned instead.
+///
+/// A buffer slot whose buffer does not hold every drawn vertex is never read:
+/// it is `unread` and the draw treats its array as disabled. GL raises no
+/// error for such reads (they are undefined, and only arrays the vertex
+/// stage consumes are fetched), and applications rely on it: Doom 3's ARB2
+/// path leaves the texture coordinate array enabled on a small, stale buffer
+/// while its vertex program reads generic attributes only.
 ///
 /// # Safety
 /// Read-only render-owned context; `layout` is `data`'s admitted layout.
@@ -475,6 +484,7 @@ pub(crate) unsafe fn resolve(
     let mut resolved = Resolved {
         slots: [0; 32],
         element: 0,
+        unread: 0,
     };
     let mut sizes = [0u32; 32];
     for slot in 0..32 {
@@ -490,11 +500,12 @@ pub(crate) unsafe fn resolve(
             sizes[slot] = (*b).size;
         }
     }
-    // Every buffer read fits when its last element at `high` does.
-    let fits = |high: u32| {
+    // The buffer slots whose read of vertex `high` (their last) would end
+    // beyond their buffer.
+    let beyond = |high: u32| {
         (0..32)
             .filter(|slot| buffered & (1 << slot) != 0)
-            .all(|slot| {
+            .filter(|&slot| {
                 let attribute = layout.slots[slot];
                 let r = layout.references[slot];
                 let element_bytes = u64::from(attribute.size) * attribute.unit as u64;
@@ -504,8 +515,9 @@ pub(crate) unsafe fn resolve(
                     u64::from(r.stride)
                 };
                 u64::from(r.offset) + u64::from(high) * stride + element_bytes
-                    <= u64::from(sizes[slot])
+                    > u64::from(sizes[slot])
             })
+            .fold(0u32, |mask, slot| mask | 1 << slot)
     };
     // The inclusive range of vertex indices read.
     let (low, high) = if layout.index_size == 0 {
@@ -524,7 +536,7 @@ pub(crate) unsafe fn resolve(
                 return Err(GL_INVALID_OPERATION);
             }
             let bound = unsafe { (*b).bounds[size.trailing_zeros() as usize] };
-            if fits(bound) {
+            if beyond(bound) == 0 {
                 resolved.element = unsafe { (*b).native };
                 return Ok(resolved);
             }
@@ -559,9 +571,7 @@ pub(crate) unsafe fn resolve(
     if vertices != 0 && (low < base || u64::from(high) >= u64::from(base) + u64::from(vertices)) {
         return Err(GL_INVALID_OPERATION);
     }
-    if !fits(high) {
-        return Err(GL_INVALID_OPERATION);
-    }
+    resolved.unread = beyond(high);
     Ok(resolved)
 }
 

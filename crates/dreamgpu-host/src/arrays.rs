@@ -115,8 +115,10 @@ unsafe fn draw(
 
 /// The buffer draw (ARB_vertex_buffer_object) and the BGRA buffer draw: `a`
 /// and `layout` are an admitted record with a nonzero count, `resolved` its
-/// bounded native buffers. Returns the native GL error like the other array
-/// draws.
+/// bounded native buffers. Its unread slots (buffers too small for the drawn
+/// vertices) stay disabled for the draw and keep their current values;
+/// without a position or generic attribute 0 left, nothing is drawn. Returns
+/// the native GL error like the other array draws.
 ///
 /// # Safety
 /// API belongs to the current native context, which binds no buffer; payload
@@ -129,12 +131,17 @@ pub(crate) unsafe fn buffer_draw(
     resolved: &crate::buffer::Resolved,
 ) -> Result<u32, u32> {
     let [mode, base, count, mask, generic, _, _, kind, element, element_offset] = *a;
+    let attributes = mask & !DG_GL_ARRAY_RAW & !(resolved.unread & DG_GL_ARRAY_EXT_MASK);
+    let generic = generic & !(resolved.unread >> DG_GL_ARRAY_EXT_SLOTS);
+    if attributes & DG_GL_ARRAY_POSITION == 0 && generic & 1 == 0 {
+        return Ok(0);
+    }
     unsafe {
         execute(
             api,
             &Spec {
                 mode,
-                attributes: mask & !DG_GL_ARRAY_RAW,
+                attributes,
                 generic,
                 units: true,
                 raw: Some(layout.slots),
