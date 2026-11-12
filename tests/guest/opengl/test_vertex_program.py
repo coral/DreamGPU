@@ -112,7 +112,13 @@ typedef struct {
 typedef struct {
     JGL_ARRAY Generic[DG_GL_MAX_VERTEX_ATTRIBS];
     JGL_BUFFER_BINDING ArrayBuffer;
+    ULONG EnabledArrays;
 } JGL_ARRAY_STATE;
+static inline void JglEnableArray(JGL_ARRAY_STATE *state, ULONG slot, BOOL enabled) {
+    state->Generic[slot - DG_GL_ARRAY_EXT_SLOTS].Enabled = enabled;
+    state->EnabledArrays = enabled ? state->EnabledArrays | 1UL << slot
+                                   : state->EnabledArrays & ~(1UL << slot);
+}
 #ifdef __cplusplus
 extern "C" {
 #endif

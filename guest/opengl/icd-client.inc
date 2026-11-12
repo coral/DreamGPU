@@ -52,6 +52,7 @@ static void APIENTRY AliasPopClientAttrib(void) {
     if (entry.Mask & 2) {
         CopyMemory(state->Attribute, entry.Attribute, sizeof(entry.Attribute));
         CopyMemory(state->Generic, entry.Generic, sizeof(entry.Generic));
+        state->EnabledArrays = JglCountEnabledArrays(state);
         state->ClientTexture = entry.ClientTexture;
         state->ArrayBuffer = entry.ArrayBuffer;
         state->ElementBuffer = entry.ElementBuffer;

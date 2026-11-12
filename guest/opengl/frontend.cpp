@@ -698,7 +698,9 @@ JGL_INLINE void Scalar(ULONG function, ULONG words, const void *arguments) {
 /* Vectors and ArrayElement submit the per-vertex functions at a run-time
  * function number. Dispatching each to its constant form folds the
  * admission checks it cannot need and unrolls its copy; the records and
- * their checks are exactly those of the generic path. */
+ * their checks are exactly those of the generic path. The ARB program
+ * parameters and generic attributes (WineD3D's per-draw shader constants)
+ * take the same constant forms. */
 void JglScalarVector(ULONG function, ULONG words, const void *arguments) {
     JGL_CONTEXT *c = CurrentContext();
 #define JGL_VERTEX_FUNCTION(name, count)                                                           \
@@ -719,6 +721,10 @@ void JglScalarVector(ULONG function, ULONG words, const void *arguments) {
         JGL_VERTEX_FUNCTION(glTexCoord4f, 4);
         JGL_VERTEX_FUNCTION(glMultiTexCoord4f, 5);
         JGL_VERTEX_FUNCTION(glSecondaryColor3f, 3);
+        JGL_VERTEX_FUNCTION(glVertexAttrib4fARB, 5);
+        JGL_VERTEX_FUNCTION(glProgramEnvParameter4fARB, 6);
+        JGL_VERTEX_FUNCTION(glProgramLocalParameter4fARB, 6);
+        JGL_VERTEX_FUNCTION(glBindProgramARB, 2);
         default:
             break;
     }
@@ -771,10 +777,15 @@ static BOOL ReleaseCurrent(JGL_CONTEXT *c) {
     }
     return TRUE;
 }
+/* Under Lock. Owner is read only under Lock, where an aligned store is
+ * published by LeaveCriticalSection: no locked exchange (DLL_THREAD_DETACH,
+ * outside Lock, keeps its own). A thread without a context, which TLS
+ * already says, writes nothing. */
 static void Unbind(JGL_CONTEXT *c) {
+    if (!c)
+        return;
     TlsSetValue(Current, NULL);
-    if (c)
-        InterlockedExchange(&c->Owner, 0);
+    c->Owner = 0;
 }
 static void CommandError(JGL_CONTEXT *c, GLenum error) {
     if (c && c->Arrays.ListMode && !c->Failed) {
@@ -1630,7 +1641,7 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
     /* Its released packet, if any, continues on this thread. */
     if (Released == c)
         Released = NULL;
-    InterlockedExchange(&c->Owner, thread);
+    c->Owner = thread;
     result = TRUE;
 done:
     /* WGL specifies that every failed MakeCurrent leaves this thread with

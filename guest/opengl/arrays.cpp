@@ -153,7 +153,7 @@ static void Enable(GLenum cap, BOOL enabled) {
         JglSetError(GL_INVALID_ENUM);
         return;
     }
-    JglArrays()->Attribute[index].Enabled = enabled;
+    JglEnableArray(JglArrays(), (ULONG)index, enabled);
 }
 void APIENTRY glEnableClientState(GLenum cap) {
     Enable(cap, TRUE);
@@ -404,15 +404,28 @@ static ULONG Index(const BYTE *indices, ULONG bytes, ULONG first, ULONG offset) 
         return v;
     }
 }
-/* The smallest and largest of `count` (nonzero) indices of `bytes` bytes. */
+/* The smallest and largest of `count` (nonzero) indices of `bytes` bytes.
+ * Pairs of indices go to two independent minimum/maximum chains. */
 static void IndexBounds(const BYTE *indices, ULONG bytes, ULONG count, ULONG *low, ULONG *high) {
-    ULONG l = 0xffffffffUL, h = 0;
+    ULONG l = 0xffffffffUL, h = 0, l2 = 0xffffffffUL, h2 = 0;
 #define JGL_BOUNDS(T)                                                                              \
-    for (ULONG i = 0; i < count; ++i) {                                                            \
-        T v;                                                                                       \
-        JGL_LOAD(&v, indices + i * sizeof(T), sizeof(T));                                          \
-        l = (ULONG)v < l ? (ULONG)v : l;                                                           \
-        h = (ULONG)v > h ? (ULONG)v : h;                                                           \
+    {                                                                                              \
+        ULONG i = 0;                                                                               \
+        for (; i + 1 < count; i += 2) {                                                            \
+            T v, w;                                                                                \
+            JGL_LOAD(&v, indices + i * sizeof(T), sizeof(T));                                      \
+            JGL_LOAD(&w, indices + (i + 1) * sizeof(T), sizeof(T));                                \
+            l = (ULONG)v < l ? (ULONG)v : l;                                                       \
+            h = (ULONG)v > h ? (ULONG)v : h;                                                       \
+            l2 = (ULONG)w < l2 ? (ULONG)w : l2;                                                    \
+            h2 = (ULONG)w > h2 ? (ULONG)w : h2;                                                    \
+        }                                                                                          \
+        if (i < count) {                                                                           \
+            T v;                                                                                   \
+            JGL_LOAD(&v, indices + i * sizeof(T), sizeof(T));                                      \
+            l = (ULONG)v < l ? (ULONG)v : l;                                                       \
+            h = (ULONG)v > h ? (ULONG)v : h;                                                       \
+        }                                                                                          \
     }
     if (bytes == 1) {
         JGL_BOUNDS(GLubyte)
@@ -422,8 +435,8 @@ static void IndexBounds(const BYTE *indices, ULONG bytes, ULONG count, ULONG *lo
         JGL_BOUNDS(GLuint)
     }
 #undef JGL_BOUNDS
-    *low = l;
-    *high = h;
+    *low = l < l2 ? l : l2;
+    *high = h > h2 ? h : h2;
 }
 GLfloat JglColorComponent(const BYTE *value, GLenum type) {
     return Component(value, type, 1);
@@ -730,6 +743,7 @@ void JglInterleavedArrays(GLenum format, GLsizei stride, const void *pointer) {
     // Secondary color and fog coordinates are independent EXT arrays, unchanged
     // by this GL1.1 call; enabled, they still accompany the following draws.
     CopyMemory(state->Attribute, next, sizeof(next));
+    state->EnabledArrays = JglCountEnabledArrays(state);
 }
 
 // GL1.1 Table2.6 signed normalization differs from modern SNORM zero.
@@ -771,10 +785,20 @@ static BOOL CaptureLayout(RawCapture *c, ULONG count) {
                                           : DgRawArrayLayoutSlots(c->mask, count, c->descriptors,
                                                                   c->offsets, &c->bytes, c->slots);
 }
+/* CaptureSlot's slots with an array as a mask, so that draws visit only
+ * those, in the same ascending order, instead of all c->slots. */
+static ULONG CaptureMask(const RawCapture *c) {
+    const ULONG conventional = c->slots < JGL_ARRAY_SLOTS ? c->slots : JGL_ARRAY_SLOTS;
+    ULONG slots = c->mask & ((1UL << conventional) - 1);
+    if (c->slots > DG_GL_ARRAY_EXT_SLOTS)
+        slots |= (c->generic & DG_GL_ATTRIB_MASK) << DG_GL_ARRAY_EXT_SLOTS;
+    return slots;
+}
 /* Each captured slot's section at its offset, zero gaps from `end` on. */
 static ULONG CaptureSections(const RawCapture *c, BYTE *out, ULONG end) {
-    for (ULONG i = 0; i < c->slots; ++i) {
-        const JGL_ARRAY *a = CaptureSlot(c, i);
+    for (ULONG slots = CaptureMask(c); slots; slots &= slots - 1) {
+        const ULONG i = (ULONG)__builtin_ctz(slots);
+        const JGL_ARRAY *a = c->arrays[i];
         if (!a)
             continue;
         ULONG unit = TypeBytes(a->Type);
@@ -784,7 +808,26 @@ static ULONG CaptureSections(const RawCapture *c, BYTE *out, ULONG end) {
         BYTE *destination = out + c->offsets[i];
         if (c->offsets[i] != end)
             ZeroMemory(out + end, c->offsets[i] - end);
-        if (a->Bgra) {
+        if (a->Bgra && !c->indices && !c->fan) {
+            /* BGRA bytes become the section's R, G, B (and A); a range of
+             * vertices (a buffer draw's client section) walks its source. */
+            const BYTE *source = (const BYTE *)a->Pointer + (ULONG_PTR)(c->first + c->at) * stride;
+            BYTE *vertex = destination;
+            if (bytes == 4) {
+                for (ULONG v = 0; v < c->count; ++v, source += stride, vertex += 4) {
+                    vertex[0] = source[2];
+                    vertex[1] = source[1];
+                    vertex[2] = source[0];
+                    vertex[3] = source[3];
+                }
+            } else {
+                for (ULONG v = 0; v < c->count; ++v, source += stride, vertex += 3) {
+                    vertex[0] = source[2];
+                    vertex[1] = source[1];
+                    vertex[2] = source[0];
+                }
+            }
+        } else if (a->Bgra) {
             /* BGRA bytes become the section's R, G, B (and A). */
             for (ULONG v = 0; v < c->count; ++v) {
                 ULONG offset = c->fan ? (v == 0   ? 0
@@ -845,10 +888,12 @@ static void CaptureVertices(void *opaque, BYTE *out) {
         ZeroMemory(out + end, c->bytes - end);
 }
 /* Client arrays (or buffer arrays resolved into their objects' copies):
- * every index or vertex expands into packed vertices, split to the packet. */
+ * every index or vertex expands into packed vertices, split to the packet.
+ * A caller that has scanned these same indices passes their largest as
+ * `scanned`, which the draw then does not scan again. */
 static void ClientDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size,
                        const BYTE *indices, BOOL elements, const JGL_ARRAY *const *arrays,
-                       ULONG generic) {
+                       ULONG generic, const ULONG *scanned = NULL) {
     ULONG i, max_index = 0, capacity, at = 0, mask = 0, vertex_bytes;
     if (elements &&
         (!indices || (ULONG)count * (unsigned long long)index_size > ~(ULONG_PTR)0 ||
@@ -856,7 +901,9 @@ static void ClientDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         JglCommandError(GL_INVALID_VALUE);
         return;
     }
-    if (elements) {
+    if (elements && scanned) {
+        max_index = *scanned;
+    } else if (elements) {
         ULONG low;
         IndexBounds(indices, index_size, (ULONG)count, &low, &max_index);
     } else {
@@ -1032,8 +1079,9 @@ static BOOL BufferRange(const JGL_ARRAY *a, const JGL_BUFFER *b, ULONG high) {
  * left to provoke vertices (without one the draw draws nothing, no error). */
 static BOOL LeaveUnread(const JGL_ARRAY **drawn, JGL_BUFFER *const *objects, ULONG *buffered,
                         ULONG *generic, ULONG high) {
-    for (ULONG i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
-        if (!((*buffered >> i) & 1) || BufferRange(drawn[i], objects[i], high))
+    for (ULONG slots = *buffered; slots; slots &= slots - 1) {
+        const ULONG i = (ULONG)__builtin_ctz(slots);
+        if (BufferRange(drawn[i], objects[i], high))
             continue;
         *buffered &= ~(1U << i);
         drawn[i] = NULL;
@@ -1042,26 +1090,105 @@ static BOOL LeaveUnread(const JGL_ARRAY **drawn, JGL_BUFFER *const *objects, ULO
     }
     return drawn[0] || (*generic & 1);
 }
+/* A buffer draw's capture before its arrays are described: no array, no
+ * client section, no inline index and every descriptor zero. Offsets are
+ * written by BufferLayout for every client section, the only ones
+ * CaptureSections reads, and references up to reference_words; the rest of
+ * the capture (over 700 bytes) is never read, so it is not cleared. */
+static void ResetBufferCapture(BufferCapture *b) {
+    RawCapture *c = &b->raw;
+    c->arrays = NULL;
+    c->indices = NULL;
+    c->index_size = c->first = c->at = c->count = c->mask = c->generic = c->slots = 0;
+    c->bytes = 0;
+    c->fan = FALSE;
+    __builtin_memset(c->descriptors, 0, sizeof(c->descriptors));
+    __builtin_memset(b->args, 0, sizeof(b->args));
+    b->reference_words = b->index_offset = 0;
+    b->indices = NULL;
+}
+/* DgRawBufferLayoutOf (gl-arrays.h: the NT validator's admission of the
+ * buffer draw) visiting only the enabled slots instead of all thirty-two
+ * twice: for descriptors that are zero outside the enabled slots, as the
+ * draws here build them, it returns the same result, index offset, length
+ * and client section offsets. Offsets of other slots are left unwritten, as
+ * CaptureSections never reads them. tests/guest/opengl/vertex-buffer-object.cpp
+ * compares the two. */
+static int BufferLayout(const unsigned *a, const unsigned *descriptors, const unsigned *references,
+                        unsigned *offsets, unsigned *indices, unsigned *length, int bgra) {
+    const unsigned mask = a[3], generic = a[4], buffered = a[5], vertices = a[6];
+    const unsigned enabled = (mask & DG_GL_ARRAY_EXT_MASK) | (generic << DG_GL_ARRAY_EXT_SLOTS);
+    const unsigned client = enabled & ~buffered, index = DgBufferIndexBytes(a[7]);
+    unsigned at = DG_GL_ATTRIB_DESCRIPTOR_BYTES, n = 0;
+    *indices = 0;
+    if (a[0] > 9 || mask != ((mask & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW) ||
+        (generic & ~(unsigned)DG_GL_ATTRIB_MASK) ||
+        !((mask & DG_GL_ARRAY_POSITION) || (generic & 1)) || (buffered & ~enabled) ||
+        index == (unsigned)-1 || a[2] > DG_GL_MAX_BUFFER_ELEMENTS)
+        return 0;
+    if (!index) {
+        if (a[8] || a[9] || vertices != (client ? a[2] : 0) || vertices > DG_GL_MAX_VERTICES ||
+            (a[2] && a[1] > 0xffffffffU - (a[2] - 1)))
+            return 0;
+    } else if (client ? !vertices || vertices > DG_GL_MAX_VERTICES ||
+                            a[1] > 0xffffffffU - (vertices - 1)
+                      : vertices || a[1]) {
+        return 0;
+    } else if (a[8] ? a[9] & (index - 1) : a[9]) {
+        return 0;
+    }
+    for (unsigned slots = enabled; slots; slots &= slots - 1) {
+        const unsigned slot = (unsigned)__builtin_ctz(slots), d = descriptors[slot];
+        if (!(slot >= DG_GL_ARRAY_EXT_SLOTS ? DgRawAttribDescriptor(d) : DgRawArraySlot(slot, d)) &&
+            !(bgra && ((buffered >> slot) & 1) && DgRawBgraDescriptor(slot, d)))
+            return 0;
+        if ((buffered >> slot) & 1) {
+            const unsigned unit = DgArrayComponentBytes(d & 65535), *r = references + 3 * n++;
+            if (!r[0] || r[2] > DG_GL_MAX_BUFFER_STRIDE || ((r[1] | r[2]) & (unit - 1)))
+                return 0;
+        }
+    }
+    at += n * DG_GL_BUFFER_REFERENCE_BYTES;
+    for (unsigned slots = client; slots; slots &= slots - 1) {
+        const unsigned slot = (unsigned)__builtin_ctz(slots), d = descriptors[slot];
+        const unsigned unit = DgArrayComponentBytes(d & 65535);
+        at = (at + unit - 1) & ~(unit - 1);
+        offsets[slot] = at;
+        at += vertices * ((d >> 16) & 255) * unit;
+    }
+    if (index && !a[8]) {
+        at = (at + index - 1) & ~(index - 1);
+        *indices = at;
+        if (a[2] > DG_GL_MAX_INDICES)
+            return 0;
+        at += a[2] * index;
+    }
+    *length = (at + 3) & ~3U;
+    return 1;
+}
 /* Draws reading buffer objects: every object exists and is unmapped (else
  * GL_INVALID_OPERATION), and buffer arrays too short for the drawn vertices
  * are left unread (LeaveUnread). The buffer draw carries references and only
  * the client arrays' bytes. Display list compilation, which dereferences
  * buffers at compile time, and anything the record cannot express resolve
- * buffer arrays into their objects' copies and draw them as client arrays. */
+ * buffer arrays into their objects' copies and draw them as client arrays.
+ * `present` holds the slots with an array (Draw's enabled arrays); every
+ * pass visits only its bits. */
 static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size,
                        const void *index_pointer, BOOL elements, const JGL_ARRAY *const *arrays,
-                       ULONG generic, ULONG buffered) {
+                       ULONG present, ULONG generic, ULONG buffered) {
     JGL_ARRAY_STATE *state = JglArrays();
     const JGL_BUFFER_BINDING element = elements ? state->ElementBuffer : JGL_BUFFER_BINDING{};
-    JGL_BUFFER *objects[DG_GL_ATTRIB_SLOTS] = {}, *index_object = NULL;
+    /* Read only at buffer slots, each written first. */
+    JGL_BUFFER *objects[DG_GL_ATTRIB_SLOTS], *index_object = NULL;
     JGL_ARRAY resolved[DG_GL_ATTRIB_SLOTS];
     /* The arrays the draw reads: unread buffer slots are left out. */
     const JGL_ARRAY *drawn[DG_GL_ATTRIB_SLOTS], *sources[DG_GL_ATTRIB_SLOTS];
     const BYTE *indices = (const BYTE *)index_pointer;
     const ULONG_PTR index_offset = (ULONG_PTR)index_pointer;
     BOOL record = !JglCompiling() && (ULONG)count <= DG_GL_MAX_BUFFER_ELEMENTS;
-    ULONG low = 0, high = 0, client = 0, i;
-    BOOL ranged = FALSE;
+    ULONG low = 0, high = 0, client = present & ~buffered, i, slots;
+    BOOL ranged = FALSE, scanned = FALSE;
     /* Inline indices are client memory, checked as in a client draw. */
     if (elements && !element.Name &&
         (!indices || (ULONG)count * (unsigned long long)index_size > ~(ULONG_PTR)0 ||
@@ -1070,10 +1197,9 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         return;
     }
     JglLockShared();
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
-        drawn[i] = arrays[i];
-        if (!(buffered & (1U << i)))
-            continue;
+    JGL_LOAD(drawn, arrays, sizeof(drawn));
+    for (slots = buffered; slots; slots &= slots - 1) {
+        i = (ULONG)__builtin_ctz(slots);
         objects[i] = JglBufferObject(arrays[i]->Buffer, arrays[i]->Serial);
         if (!objects[i] || objects[i]->Mapped)
             goto invalid;
@@ -1086,9 +1212,6 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         indices = index_object->Data + index_offset;
         record = record && !(index_offset % index_size);
     }
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i)
-        if (arrays[i] && !(buffered & (1U << i)))
-            client |= 1U << i;
     /* The vertex range: always known for array draws; indexed draws scan
      * their indices only when client arrays need it (else the host bounds
      * them) or when the buffers resolve locally. */
@@ -1104,19 +1227,15 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         (elements && !element.Name && (ULONG)count > DG_GL_MAX_INDICES))
         record = FALSE;
     if (elements && (client || !record)) {
-        low = 0xffffffffUL;
-        for (i = 0; i < (ULONG)count; ++i) {
-            const ULONG index = Index(indices, index_size, 0, i);
-            low = index < low ? index : low;
-            high = index > high ? index : high;
-        }
+        IndexBounds(indices, index_size, (ULONG)count, &low, &high);
+        scanned = TRUE;
         if (client && high - low >= DG_GL_MAX_VERTICES)
             record = FALSE;
     }
     /* Client arrays hold every drawn vertex, as in a client draw (a client
      * array means high is known). */
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i)
-        if (((client >> i) & 1) && !ArrayRange(arrays[i], high))
+    for (slots = client; slots; slots &= slots - 1)
+        if (!ArrayRange(arrays[__builtin_ctz(slots)], high))
             goto value;
     /* Without a scan the host bounds the record's reads (and leaves its
      * unread slots out); a local draw is bounded below before it reads any
@@ -1128,20 +1247,18 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
     }
     /* The record's references: bounded strides, aligned offsets. Without a
      * buffer slot left, an array draw is a client draw. */
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
-        if (!(buffered & (1U << i)))
-            continue;
-        const JGL_ARRAY *a = drawn[i];
+    for (slots = buffered; slots && record; slots &= slots - 1) {
+        const JGL_ARRAY *a = drawn[__builtin_ctz(slots)];
         const ULONG unit = TypeBytes(a->Type);
-        record = record && (ULONG_PTR)a->Pointer <= 0xffffffffUL &&
-                 a->Stride <= DG_GL_MAX_BUFFER_STRIDE && !((ULONG_PTR)a->Pointer % unit) &&
-                 !((ULONG)a->Stride % unit);
+        record = (ULONG_PTR)a->Pointer <= 0xffffffffUL && a->Stride <= DG_GL_MAX_BUFFER_STRIDE &&
+                 !((ULONG_PTR)a->Pointer % unit) && !((ULONG)a->Stride % unit);
     }
     if (!buffered && !element.Name)
         record = FALSE;
     if (record) {
-        BufferCapture b = {};
+        BufferCapture b;
         RawCapture *c = &b.raw;
+        ResetBufferCapture(&b);
         /* A BGRA buffer slot needs the BGRA buffer draw (ARB_vertex_array_bgra). */
         BOOL bgra = FALSE;
         c->arrays = drawn;
@@ -1152,7 +1269,9 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         c->count = client ? high - low + 1 : 0;
         c->index_size = index_size;
         ULONG references = 0;
-        for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
+        /* Each drawn slot in order; drawn arrays are client or buffer slots. */
+        for (slots = client | buffered; slots; slots &= slots - 1) {
+            i = (ULONG)__builtin_ctz(slots);
             const JGL_ARRAY *a = drawn[i];
             if (!a)
                 continue;
@@ -1190,8 +1309,8 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         unsigned words[10], length = 0;
         for (i = 0; i < 10; ++i)
             words[i] = b.args[i];
-        if (DgRawBufferLayoutOf(words, c->descriptors, b.references, c->offsets, &b.index_offset,
-                                &length, bgra) &&
+        if (BufferLayout(words, c->descriptors, b.references, c->offsets, &b.index_offset, &length,
+                         bgra) &&
             length <= JglMaxDataBytes(10)) {
             c->bytes = length;
             JglUnlockShared();
@@ -1201,10 +1320,9 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
         }
     }
     if (!ranged) {
-        for (i = 0; i < (ULONG)count; ++i) {
-            const ULONG index = Index(indices, index_size, 0, i);
-            high = index > high ? index : high;
-        }
+        ULONG ignored;
+        IndexBounds(indices, index_size, (ULONG)count, &ignored, &high);
+        scanned = TRUE;
         if (!LeaveUnread(drawn, objects, &buffered, &generic, high)) {
             JglUnlockShared();
             return;
@@ -1212,17 +1330,18 @@ static void BufferDraw(GLenum mode, GLint first, GLsizei count, ULONG index_size
     }
     /* Compiled or beyond the record: the copies are client arrays now, kept
      * alive by the shared lock while they are read (no transport path takes
-     * it). Every buffer slot left holds vertex high. */
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
-        sources[i] = drawn[i];
-        if (!(buffered & (1U << i)))
-            continue;
+     * it). Every buffer slot left holds vertex high, the largest index when
+     * the indices were scanned. */
+    JGL_LOAD(sources, drawn, sizeof(sources));
+    for (slots = buffered; slots; slots &= slots - 1) {
+        i = (ULONG)__builtin_ctz(slots);
         resolved[i] = *drawn[i];
         resolved[i].Pointer = objects[i]->Data + (ULONG_PTR)drawn[i]->Pointer;
         resolved[i].Buffer = 0;
         sources[i] = &resolved[i];
     }
-    ClientDraw(mode, first, count, index_size, indices, elements, sources, generic);
+    ClientDraw(mode, first, count, index_size, indices, elements, sources, generic,
+               elements && scanned ? &high : NULL);
     JglUnlockShared();
     return;
 invalid:
@@ -1241,44 +1360,46 @@ value:
  * inline index by them at admission, so only indices scanned here travel.
  * Display list compilation keeps the expansion: lists capture client draws,
  * never the buffer draw. Returns FALSE, having done nothing, when the draw
- * remains ClientDraw's (its GL errors included). */
+ * remains ClientDraw's (its GL errors included); once it has scanned the
+ * indices it sets *scanned and their largest, *high, for ClientDraw.
+ * `present` holds the slots with an array. */
 static BOOL RangedDraw(GLenum mode, GLsizei count, ULONG index_size, const BYTE *indices,
-                       const JGL_ARRAY *const *arrays, ULONG generic) {
-    ULONG low, high, client = 0, vertex_bytes = 0, i;
+                       const JGL_ARRAY *const *arrays, ULONG present, ULONG generic, BOOL *scanned,
+                       ULONG *high) {
+    ULONG low, vertex_bytes = 0, i, slots;
     if (!JglVertexBufferObjectAvailable() || JglCompiling() || !indices ||
         (ULONG)count > DG_GL_MAX_INDICES ||
         (ULONG_PTR)indices > ~(ULONG_PTR)0 - (ULONG)count * index_size)
         return FALSE;
-    IndexBounds(indices, index_size, (ULONG)count, &low, &high);
-    if (high - low >= DG_GL_MAX_VERTICES)
+    IndexBounds(indices, index_size, (ULONG)count, &low, high);
+    *scanned = TRUE;
+    if (*high - low >= DG_GL_MAX_VERTICES)
         return FALSE;
-    const ULONG vertices = high - low + 1;
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
+    const ULONG vertices = *high - low + 1;
+    for (slots = present; slots; slots &= slots - 1) {
+        i = (ULONG)__builtin_ctz(slots);
         const JGL_ARRAY *a = arrays[i];
-        if (!a)
-            continue;
-        if (!ArrayRange(a, high))
+        if (!ArrayRange(a, *high))
             return FALSE;
-        client |= 1U << i;
         vertex_bytes += TypeBytes(ArrayWireType(i, a)) * ArrayWireSize(i, a);
     }
     if ((unsigned long long)vertices * vertex_bytes +
             (unsigned long long)(ULONG)count * index_size >
         (unsigned long long)(ULONG)count * vertex_bytes)
         return FALSE;
-    BufferCapture b = {};
+    BufferCapture b;
     RawCapture *c = &b.raw;
+    ResetBufferCapture(&b);
     c->arrays = arrays;
-    c->mask = (client & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW;
+    c->mask = (present & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW;
     c->generic = generic;
     c->slots = DG_GL_ATTRIB_SLOTS;
     c->first = low;
     c->count = vertices;
     c->index_size = index_size;
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
+    for (slots = present; slots; slots &= slots - 1) {
+        i = (ULONG)__builtin_ctz(slots);
         const JGL_ARRAY *a = arrays[i];
-        if (!a)
-            continue;
         const GLenum type = ArrayWireType(i, a);
         c->descriptors[i] = type | ((ULONG)ArrayWireSize(i, a) << 16);
         /* GL ignores normalization of floating-point generic arrays. */
@@ -1299,8 +1420,8 @@ static BOOL RangedDraw(GLenum mode, GLsizei count, ULONG index_size, const BYTE 
     unsigned words[10], length = 0;
     for (i = 0; i < 10; ++i)
         words[i] = b.args[i];
-    if (!DgRawBufferLayoutOf(words, c->descriptors, b.references, c->offsets, &b.index_offset,
-                             &length, 0) ||
+    if (!BufferLayout(words, c->descriptors, b.references, c->offsets, &b.index_offset, &length,
+                      0) ||
         length > JglMaxDataBytes(10))
         return FALSE;
     c->bytes = length;
@@ -1310,7 +1431,7 @@ static BOOL RangedDraw(GLenum mode, GLsizei count, ULONG index_size, const BYTE 
 static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const void *index_pointer,
                  BOOL elements) {
     JGL_ARRAY_STATE *state;
-    ULONG i, index_size = 0;
+    ULONG index_size = 0;
     if (!JglCommandReady())
         return;
     if (mode > GL_POLYGON) {
@@ -1331,31 +1452,29 @@ static void Draw(GLenum mode, GLint first, GLsizei count, GLenum type, const voi
     if (!count)
         return;
     state = JglArrays();
-    ULONG generic = 0, buffered = 0;
+    /* The enabled arrays, by their mask: slot 15 never has one. */
+    const ULONG present = state->EnabledArrays & ~(1UL << JGL_ARRAY_SLOTS);
+    ULONG generic = present >> DG_GL_ARRAY_EXT_SLOTS, buffered = 0;
     const JGL_ARRAY *arrays[DG_GL_ATTRIB_SLOTS] = {};
-    for (i = 0; i < DG_GL_ATTRIB_SLOTS; ++i) {
-        const JGL_ARRAY *a = i < JGL_ARRAY_SLOTS ? &state->Attribute[i]
-                             : i >= DG_GL_ARRAY_EXT_SLOTS
-                                 ? &state->Generic[i - DG_GL_ARRAY_EXT_SLOTS]
-                                 : NULL;
-        if (!a || !a->Enabled)
-            continue;
+    for (ULONG slots = present; slots; slots &= slots - 1) {
+        const ULONG i = (ULONG)__builtin_ctz(slots);
+        const JGL_ARRAY *a = JglSlotArray(state, i);
         arrays[i] = a;
-        if (i >= DG_GL_ARRAY_EXT_SLOTS)
-            generic |= 1U << (i - DG_GL_ARRAY_EXT_SLOTS);
         if (a->Buffer)
             buffered |= 1U << i;
     }
     // The vertex array or generic attribute array 0 provokes drawing.
-    if (!state->Attribute[0].Enabled && !(generic & 1))
+    if (!(present & 1) && !(generic & 1))
         return;
+    BOOL scanned = FALSE;
+    ULONG high = 0;
     if (buffered || (elements && state->ElementBuffer.Name))
-        BufferDraw(mode, first, count, index_size, index_pointer, elements, arrays, generic,
-                   buffered);
-    else if (!elements ||
-             !RangedDraw(mode, count, index_size, (const BYTE *)index_pointer, arrays, generic))
+        BufferDraw(mode, first, count, index_size, index_pointer, elements, arrays, present,
+                   generic, buffered);
+    else if (!elements || !RangedDraw(mode, count, index_size, (const BYTE *)index_pointer, arrays,
+                                      present, generic, &scanned, &high))
         ClientDraw(mode, first, count, index_size, (const BYTE *)index_pointer, elements, arrays,
-                   generic);
+                   generic, scanned ? &high : NULL);
 }
 void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
     Draw(mode, first, count, 0, NULL, FALSE);

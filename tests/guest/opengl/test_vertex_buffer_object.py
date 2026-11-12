@@ -3,9 +3,13 @@
 """DG_CAP_GL_VERTEX_BUFFER_OBJECT: actual frontend contract under sanitizers
 (gating, BufferData/BufferSubData/DeleteBuffers records, local validation, the
 mapping shadow, buffer draws and their client-draw fallbacks admitted by the NT
-validator, ArrayElement, bindings as client state, share groups), the exported
-entry points of both the private frontend and the ICD, the generated export
-list, and the protocol constants shared with QEMU and the host."""
+validator, ArrayElement, bindings as client state, share groups, the
+enabled-array mask, the frontend's buffer draw layout against the shared
+admission, Far Cry's WineD3D draws), the exported entry points of both the
+private frontend and the ICD, the generated export list, and the protocol
+constants shared with QEMU and the host. Then prints the frontend time of a Far
+Cry-like D3D draw (an optimized build without sanitizers; the time is host CPU,
+indicative only)."""
 import os
 from pathlib import Path
 import re
@@ -73,12 +77,16 @@ with tempfile.TemporaryDirectory(prefix="dreamgpu-vertex-buffer-object-") as tem
     shutil.copyfile(HERE / "extension-names.h", root / "extension-names.h")
     shutil.copyfile(HERE / "frontend-gl.h", root / "GL/gl.h")
     shutil.copyfile(HERE / "vertex-buffer-object.cpp", root / "test.cpp")
-    subprocess.run([os.environ.get("CXX", "c++"), "-std=c++23", "-O1", "-Wall", "-Wextra", "-Werror",
-                    "-fno-exceptions", "-fno-rtti", "-fsanitize=address,undefined",
-                    "-fno-sanitize-recover=all", "-g",
-                    "-I" + str(root), "-I" + str(ROOT / "guest/include"),
-                    "-I" + str(ROOT / "guest/nt/include"), str(root / "test.cpp"),
-                    "-o", str(root / "test")], check=True)
+    common = [os.environ.get("CXX", "c++"), "-std=c++23", "-Wall", "-Wextra", "-Werror",
+              "-fno-exceptions", "-fno-rtti", "-I" + str(root), "-I" + str(ROOT / "guest/include"),
+              "-I" + str(ROOT / "guest/nt/include"), str(root / "test.cpp")]
+    subprocess.run(common + ["-O1", "-fsanitize=address,undefined", "-fno-sanitize-recover=all",
+                             "-g", "-o", str(root / "test")], check=True)
     subprocess.run([str(root / "test")], check=True)
-print("PASS vertex buffer object: gating, records, validation, mapping, buffer draws, "
-      "fallbacks, ArrayElement, client state and share groups")
+    print("PASS vertex buffer object: gating, records, validation, mapping, buffer draws, "
+          "fallbacks, ArrayElement, client state, share groups, the enabled-array mask, "
+          "the buffer draw layout and Far Cry's draws", flush=True)
+    # Frontend time of a Far Cry-like D3D draw. The guest builds without
+    # builtins: CopyMemory is a call there too.
+    subprocess.run(common + ["-O2", "-fno-builtin", "-o", str(root / "bench")], check=True)
+    subprocess.run([str(root / "bench"), "bench"], check=True)

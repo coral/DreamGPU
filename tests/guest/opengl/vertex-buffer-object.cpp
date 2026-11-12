@@ -8,9 +8,13 @@
  * (display list compilation, offsets, strides and sizes the record cannot
  * express), ArrayElement, buffer arrays too short for what is drawn left
  * unread in every path the frontend bounds (as the host does), buffer
- * bindings as client state and the share group's table. Every DATA record is
- * admitted by the NT validator. */
+ * bindings as client state and the share group's table, the enabled-array
+ * mask draws visit, the frontend's buffer draw layout against the shared
+ * admission and Far Cry's WineD3D draws. Every DATA record is admitted by the
+ * NT validator. With an argument "bench", prints the frontend time of a Far
+ * Cry-like D3D draw instead. */
 #include <array>
+#include <chrono>
 #include <string>
 #include <utility>
 #include <vector> /* before the Win32 fixture's min() macro */
@@ -75,6 +79,7 @@ static ULONG KernelWords(void *, ULONG function) {
         case FEnum_glVertexAttribPointerARB:
             return DG_GL_FUNCTION_INLINE_DATA | 5;
         case FEnum_glDrawRangeElements:
+        case FEnum_glDrawRangeElementsEXT: /* the BGRA buffer draw (FarCryDraws) */
             return DG_GL_FUNCTION_INLINE_DATA | 10;
         case FEnum_glBufferDataARB:
             return DG_GL_FUNCTION_INLINE_DATA | 3;
@@ -1884,7 +1889,384 @@ static void Sharing(void) {
     Log.clear();
 }
 
-int main() {
+/* EnabledArrays, which draws visit instead of every slot, mirrors each
+ * Enabled flag through every writer: client states of every slot and unit,
+ * generic attributes, rejected calls, InterleavedArrays and the client
+ * attribute stack. Draws follow the restored arrays. */
+static void EnabledMask(void) {
+    JGL_CONTEXT *c = Open(DRAWS, DG_ESCAPE_MAX_BYTES, TRUE);
+    const JGL_ARRAY_STATE *s = &c->Arrays;
+    auto same = [&](ULONG expected) {
+        assert(s->EnabledArrays == expected && JglCountEnabledArrays(s) == expected);
+        assert(!c->Error);
+    };
+    same(0);
+    glEnableClientState(GL_VERTEX_ARRAY);
+    same(1);
+    glEnableClientState(GL_COLOR_ARRAY);
+    glEnableClientState(GL_NORMAL_ARRAY);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    glEnableClientState(SECONDARY_ARRAY);
+    glEnableClientState(GL_INDEX_ARRAY);
+    glEnableClientState(GL_EDGE_FLAG_ARRAY);
+    glEnableClientState(FOG_ARRAY);
+    same(0x407f);
+    /* Texture coordinates of the client-active unit: slots 7-13. */
+    glClientActiveTextureARB(TEXTURE0 + 3);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    same(0x427f);
+    glClientActiveTextureARB(TEXTURE0 + 7);
+    glEnableClientState(GL_TEXTURE_COORD_ARRAY);
+    same(0x627f);
+    glClientActiveTextureARB(TEXTURE0 + 3);
+    glDisableClientState(GL_TEXTURE_COORD_ARRAY);
+    same(0x607f);
+    glClientActiveTextureARB(TEXTURE0);
+    glDisableClientState(GL_NORMAL_ARRAY);
+    same(0x607b);
+    /* Generic attributes 0-15 are slots 16-31; rejected calls change nothing. */
+    glEnableVertexAttribArrayARB(0);
+    glEnableVertexAttribArrayARB(15);
+    glEnableVertexAttribArrayARB(9);
+    same(0x8201607bUL);
+    glEnableVertexAttribArrayARB(16);
+    glDisableVertexAttribArrayARB(16);
+    assert(c->Error == GL_INVALID_VALUE);
+    c->Error = 0;
+    glEnableClientState(0x1234);
+    glDisableClientState(0x1234);
+    assert(c->Error == GL_INVALID_ENUM);
+    c->Error = 0;
+    same(0x8201607bUL);
+    glDisableVertexAttribArrayARB(9);
+    same(0x8001607bUL);
+    /* The client attribute stack restores the arrays and with them the mask;
+     * the pixel-store group alone leaves both. */
+    AliasPushClientAttrib(CLIENT_VERTEX_ARRAY_BIT);
+    glDisableClientState(GL_VERTEX_ARRAY);
+    glDisableVertexAttribArrayARB(15);
+    glEnableVertexAttribArrayARB(3);
+    same(0x0009607aUL);
+    AliasPushClientAttrib(CLIENT_PIXEL_STORE_BIT);
+    glEnableVertexAttribArrayARB(4);
+    AliasPopClientAttrib();
+    same(0x0019607aUL);
+    AliasPopClientAttrib();
+    same(0x8001607bUL);
+    /* InterleavedArrays sets the vertex, colour, normal and the active unit's
+     * coordinate arrays and clears index and edge flag; the rest stay. */
+    static const GLfloat interleaved[2 * 8] = {};
+    AliasInterleavedArrays(0x2a2c /* T2F_C4F_N3F_V3F */, 0, interleaved);
+    same(0x8001601fUL);
+    AliasInterleavedArrays(0x2a20 /* V2F */, 0, interleaved);
+    same(0x80016011UL);
+    /* A draw reads exactly the arrays the mask holds: position and generic 0
+     * from client memory (the attribute draw), the others disabled. */
+    for (ULONG slot : {4U, 13U, 14U, 31U})
+        JglEnableArray(&c->Arrays, slot, FALSE);
+    same(0x00010001);
+    glVertexAttribPointerARB(0, 3, GL_FLOAT, GL_FALSE, 0, Positions);
+    glDrawArrays(GL_POINTS, 0, 2);
+    Submit(c);
+    assert(Log.size() == 1 && Log[0][8] == FEnum_glVertexAttribPointerARB);
+    assert(Log[0][13] == (DG_GL_ARRAY_RAW | DG_GL_ARRAY_POSITION) && Log[0][14] == 1);
+    Close(c);
+}
+
+/* BufferLayout, which the draws use, against the shared admission it
+ * replaces (DgRawBufferLayoutOf): the same verdict and, when admitted, the
+ * same index offset, length and client section offsets, over random scalar
+ * words, descriptors (zero outside the enabled slots, as the draws build
+ * them; mostly ones their slots admit) and references (mostly aligned and
+ * bounded), BGRA buffer draws included. */
+static void LayoutEquivalence(void) {
+    unsigned state = 0x9e3779b9U;
+    auto next = [&](void) {
+        state ^= state << 13;
+        state ^= state >> 17;
+        state ^= state << 5;
+        return state;
+    };
+    auto pick = [&](std::initializer_list<unsigned> values) {
+        return values.begin()[next() % values.size()];
+    };
+    auto valid = [](unsigned slot, unsigned d, bool buffered) {
+        return (slot >= DG_GL_ARRAY_EXT_SLOTS ? DgRawAttribDescriptor(d)
+                                              : DgRawArraySlot(slot, d)) ||
+               (buffered && DgRawBgraDescriptor(slot, d));
+    };
+    ULONG admitted = 0, refused = 0, clients = 0, inline_indices = 0, bgra_only = 0;
+    for (ULONG round = 0; round < 300000; ++round) {
+        unsigned a[10], descriptors[DG_GL_ATTRIB_SLOTS] = {}, references[3 * DG_GL_ATTRIB_SLOTS];
+        unsigned mask = (next() & next() & DG_GL_ARRAY_EXT_MASK) | DG_GL_ARRAY_RAW;
+        unsigned generic = next() & next() & next() & DG_GL_ATTRIB_MASK;
+        if (!(next() % 4))
+            mask |= DG_GL_ARRAY_POSITION;
+        if (!(next() % 64))
+            mask ^= 1U << (next() % 32); /* reserved slot 15, or no RAW */
+        if (!(next() % 64))
+            generic |= 1U << (16 + next() % 16);
+        const unsigned enabled = (mask & DG_GL_ARRAY_EXT_MASK) | (generic << 16);
+        unsigned buffered = enabled & next();
+        if (!(next() % 64))
+            buffered |= 1U << (next() % 32);
+        const bool any_client = enabled & ~buffered;
+        const unsigned type = pick({0, 0, 0x1401, 0x1403, 0x1403, 0x1405, 0x1404});
+        a[0] = next() % 11;
+        a[2] = next() % 64 ? next() % (next() % 2 ? 300 : 70000)
+                           : pick({DG_GL_MAX_BUFFER_ELEMENTS, DG_GL_MAX_BUFFER_ELEMENTS + 1,
+                                   DG_GL_MAX_INDICES, DG_GL_MAX_INDICES + 1});
+        a[1] = next() % 2 ? 0 : next() % 16 ? next() % 1000 : 0xffffffffU - next() % 70000;
+        a[3] = mask;
+        a[4] = generic;
+        a[5] = buffered;
+        a[6] = !(next() % 16)       ? next() % 70000
+               : any_client && type ? 1 + next() % 1000
+               : any_client         ? a[2]
+                                    : 0;
+        a[7] = type;
+        a[8] = type && next() % 2 ? 1 + next() % 9 : 0;
+        a[9] = a[8] ? pick({0, 0, 2, 4, 8, 1, 6}) : next() % 16 ? 0 : 4;
+        unsigned n = 0;
+        for (unsigned slot = 0; slot < DG_GL_ATTRIB_SLOTS; ++slot) {
+            if (!((enabled >> slot) & 1))
+                continue;
+            const bool buffer = (buffered >> slot) & 1;
+            unsigned d = 0;
+            for (ULONG attempt = 0; attempt < 64; ++attempt) {
+                d = pick({0x1400, 0x1401, 0x1402, 0x1403, 0x1404, 0x1405, 0x1406, 0x140a}) |
+                    (1 + next() % 4) << 16;
+                if (!(next() % 4))
+                    d |= DG_GL_ATTRIB_NORMALIZED;
+                if (!(next() % 6))
+                    d = 0x1401 | 4U << 16 | DG_GL_ARRAY_BGRA |
+                        (slot >= DG_GL_ARRAY_EXT_SLOTS ? DG_GL_ATTRIB_NORMALIZED : 0);
+                if (valid(slot, d, buffer))
+                    break;
+            }
+            if (!(next() % 32))
+                d = pick({0, 0x1407 | 1U << 16, 0x1406 | 5U << 16, 0x1406}) ^
+                    (next() % 2 ? 1U << (next() % 32) : 0);
+            descriptors[slot] = d;
+            if (buffer) {
+                const unsigned unit =
+                    DgArrayComponentBytes(d & 65535) ? DgArrayComponentBytes(d & 65535) : 4;
+                references[n] = next() % 64 ? 1 + next() % 99 : 0;
+                references[n + 1] = next() % 16 ? unit * (next() % 4096) : 1 + next() % 7;
+                references[n + 2] =
+                    next() % 16 ? unit * (next() % (2049 / unit)) : pick({2052, 4096, 3, 2, 6});
+                n += 3;
+            }
+        }
+        for (unsigned i = n; i < 3 * DG_GL_ATTRIB_SLOTS; ++i)
+            references[i] = next();
+        for (int bgra = 0; bgra < 2; ++bgra) {
+            unsigned expected_offsets[DG_GL_ATTRIB_SLOTS], offsets[DG_GL_ATTRIB_SLOTS];
+            unsigned expected_index = 0x5a5a, expected_length = 0x5a5a;
+            unsigned index = 0xa5a5, length = 0xa5a5;
+            const int expected = DgRawBufferLayoutOf(a, descriptors, references, expected_offsets,
+                                                     &expected_index, &expected_length, bgra);
+            assert(BufferLayout(a, descriptors, references, offsets, &index, &length, bgra) ==
+                   expected);
+            if (!expected) {
+                ++refused;
+                continue;
+            }
+            ++admitted;
+            assert(index == expected_index && length == expected_length);
+            inline_indices += index != 0;
+            const unsigned client = enabled & ~buffered;
+            clients += client != 0;
+            for (unsigned slot = 0; slot < DG_GL_ATTRIB_SLOTS; ++slot)
+                if ((client >> slot) & 1)
+                    assert(offsets[slot] == expected_offsets[slot]);
+            bgra_only += bgra && !DgRawBufferLayoutOf(a, descriptors, references, offsets, &index,
+                                                      &length, 0);
+        }
+    }
+    printf("layout equivalence: %lu admitted (%lu with client sections, %lu with inline "
+           "indices, %lu only as BGRA draws), %lu refused\n",
+           (unsigned long)admitted, (unsigned long)clients, (unsigned long)inline_indices,
+           (unsigned long)bgra_only, (unsigned long)refused);
+    /* Both verdicts, client sections, inline indices and BGRA draws occur. */
+    assert(admitted > 10000 && refused > 10000 && clients > 1000 && inline_indices > 1000 &&
+           bgra_only > 1000);
+}
+
+/* Far Cry's draws through WineD3D: generic attributes from one buffer at two
+ * strides, a BGRA colour attribute, an element buffer, shader constants per
+ * draw and wglMakeCurrent(NULL) plus wglMakeCurrent(context) around each
+ * draw. Each draw is exactly its buffer draw, all in the one batch. */
+constexpr ULONG FAR_CRY = DRAWS | DG_CAP_GL_VERTEX_ARRAY_BGRA | DG_CAP_GL_FRAGMENT_PROGRAM;
+static void FarCryArrays(JGL_CONTEXT *c, ULONG base) {
+    glBindBufferARB(ARRAY_BUFFER, 77);
+    glVertexAttribPointerARB(0, 3, GL_FLOAT, GL_FALSE, 20, Offset(base));
+    glVertexAttribPointerARB(1, 3, GL_FLOAT, GL_FALSE, 36, Offset(base + 984));
+    glVertexAttribPointerARB(5, JGL_BGRA, GL_UNSIGNED_BYTE, GL_TRUE, 20, Offset(base + 12));
+    glVertexAttribPointerARB(7, 2, GL_FLOAT, GL_FALSE, 20, Offset(base + 12));
+    glVertexAttribPointerARB(9, 3, GL_FLOAT, GL_FALSE, 36, Offset(base + 960));
+    glVertexAttribPointerARB(10, 3, GL_FLOAT, GL_FALSE, 36, Offset(base + 972));
+    glBindBufferARB(ARRAY_BUFFER, 0);
+    for (GLuint index : {0U, 1U, 5U, 7U, 9U, 10U})
+        glEnableVertexAttribArrayARB(index);
+    Quiet(c);
+}
+static void FarCryConstants(void) {
+    glBindProgramARB(0x8620 /* VERTEX_PROGRAM_ARB */, 3);
+    glProgramEnvParameter4fARB(0x8620, 4, 1.0f, 2.0f, 3.0f, 4.0f);
+    glProgramEnvParameter4fARB(0x8620, 5, 0.5f, 0.25f, 0.125f, 1.0f);
+    for (GLuint i = 2; i < 6; ++i)
+        glVertexAttrib4fARB(i, 0.0f, 0.0f, 0.0f, 1.0f);
+}
+/* The queued transport, on which a release leaves the packet to continue. */
+static JGL_CONTEXT *OpenQueued(ULONG caps) {
+    Reset();
+    HostCaps = caps;
+    HostFeatures = DG_ESCAPE_FEATURE_QUEUE;
+    HostMaxBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+    SubmittedRecord = Capture;
+    AnswerQuery = Answer;
+    Queries.clear();
+    JGL_CONTEXT *c = Lookup(Create());
+    Clear(c);
+    return c;
+}
+static void FarCryDraws(void) {
+    JGL_CONTEXT *c = OpenQueued(FAR_CRY);
+    Upload(c, ARRAY_BUFFER, 77, std::vector<BYTE>(4096, 0));
+    std::vector<GLushort> elements(108);
+    for (ULONG i = 0; i < elements.size(); ++i)
+        elements[i] = (GLushort)(i % 36);
+    Upload(c, ELEMENT_BUFFER, 78,
+           std::vector<BYTE>((const BYTE *)elements.data(),
+                             (const BYTE *)(elements.data() + elements.size())));
+    FarCryArrays(c, 0);
+    const HGLRC context = (HGLRC)(ULONG_PTR)c->Id;
+    /* The released packet continues: nothing is submitted until Submit. */
+    for (ULONG i = 0; i < 3; ++i) {
+        assert(wglMakeCurrent(NULL, NULL) && wglMakeCurrent((HDC)1, context));
+        FarCryConstants();
+        glDrawElements(GL_TRIANGLES, 108, GL_UNSIGNED_SHORT, Offset(0));
+    }
+    assert(!c->Error && Log.empty());
+    Submit(c);
+    assert(Log.size() == 3 * 8);
+    const ULONG float3 = D(GL_FLOAT, 3), float2 = D(GL_FLOAT, 2);
+    const ULONG bgra = D(GL_UNSIGNED_BYTE, 4) | DG_GL_ARRAY_BGRA | DG_GL_ATTRIB_NORMALIZED;
+    const Words a = {GL_TRIANGLES,      0,  108, DG_GL_ARRAY_RAW, 0x6a3, 0x6a30000, 0,
+                     GL_UNSIGNED_SHORT, 78, 0};
+    const std::vector<Reference> refs = {{16, float3, 77, 0, 20},   {17, float3, 77, 984, 36},
+                                         {21, bgra, 77, 12, 20},    {23, float2, 77, 12, 20},
+                                         {25, float3, 77, 960, 36}, {26, float3, 77, 972, 36}};
+    /* The BGRA buffer draw's layout is the shared one's with BGRA admitted. */
+    unsigned words[10], descriptors[DG_GL_ATTRIB_SLOTS] = {}, references[18], offsets[32];
+    unsigned index_at = 1, length = 0, n = 0;
+    for (ULONG i = 0; i < 10; ++i)
+        words[i] = a[i];
+    for (const Reference &r : refs) {
+        descriptors[r.Slot] = r.Descriptor;
+        references[n++] = r.Buffer;
+        references[n++] = r.Offset;
+        references[n++] = r.Stride;
+    }
+    assert(DgRawBufferLayoutOf(words, descriptors, references, offsets, &index_at, &length, 1));
+    assert(!index_at && length == 128 + 6 * 12);
+    for (ULONG i = 0; i < 3; ++i) {
+        const std::vector<ULONG> *r = &Log[i * 8];
+        ExpectCall(r[0], FEnum_glBindProgramARB, {0x8620, 3});
+        ExpectCall(r[1], FEnum_glProgramEnvParameter4fARB,
+                   {0x8620, 4, Bits(1.0f), Bits(2.0f), Bits(3.0f), Bits(4.0f)});
+        ExpectCall(r[2], FEnum_glProgramEnvParameter4fARB,
+                   {0x8620, 5, Bits(0.5f), Bits(0.25f), Bits(0.125f), Bits(1.0f)});
+        for (ULONG k = 0; k < 4; ++k)
+            ExpectCall(r[3 + k], FEnum_glVertexAttrib4fARB, {2 + k, 0, 0, 0, Bits(1.0f)});
+        const std::vector<ULONG> &draw = r[7];
+        assert(draw[0] == DG_GL_DATA_CALL && draw[8] == FEnum_glDrawRangeElementsEXT);
+        assert(draw[9] == length && draw[1] == 20 * 4 + length);
+        for (ULONG k = 0; k < 10; ++k)
+            assert(draw[10 + k] == a[k]);
+        assert(!memcmp(draw.data() + 20, descriptors, sizeof(descriptors)));
+        assert(!memcmp(draw.data() + 52, references, sizeof(references)));
+    }
+    /* A client array beside them: its vertices low..high (the scanned
+     * indices' range) travel in a section after the references. */
+    static const GLfloat weights[36] = {0.5f, 1.5f};
+    glVertexAttribPointerARB(12, 1, GL_FLOAT, GL_FALSE, 0, weights);
+    glEnableVertexAttribArrayARB(12);
+    glDrawElements(GL_TRIANGLES, 108, GL_UNSIGNED_SHORT, Offset(0));
+    Submit(c);
+    assert(!c->Error && Log.size() == 3 * 8 + 1);
+    const std::vector<ULONG> &mixed = Log.back();
+    assert(mixed[8] == FEnum_glDrawRangeElementsEXT && mixed[10 + 6] == 36 &&
+           mixed[10 + 5] == 0x6a30000 && mixed[10 + 4] == 0x16a3);
+    assert(!memcmp(mixed.data() + 20 + 128 / 4 + 18, weights, sizeof(weights)));
+    Close(c);
+}
+
+/* Frontend time of Far Cry-like draws through the buffer draw: wglMakeCurrent
+ * release and reacquisition, shader constants and one buffer draw per D3D
+ * draw (an optimized build without sanitizers; the time is host CPU,
+ * indicative only). */
+static void Bench(void) {
+    JGL_CONTEXT *c = OpenQueued(FAR_CRY);
+    const HGLRC context = (HGLRC)(ULONG_PTR)c->Id;
+    Upload(c, ARRAY_BUFFER, 77, std::vector<BYTE>(4096, 0));
+    std::vector<GLushort> elements(108);
+    Upload(c, ELEMENT_BUFFER, 78,
+           std::vector<BYTE>((const BYTE *)elements.data(),
+                             (const BYTE *)(elements.data() + elements.size())));
+    FarCryArrays(c, 0);
+    SubmittedRecord = NULL;
+    struct Part {
+        const char *Name;
+        void (*Run)(JGL_CONTEXT *, HGLRC);
+    } parts[] = {
+        {"wglMakeCurrent(NULL) + wglMakeCurrent(context)",
+         [](JGL_CONTEXT *, HGLRC h) {
+             wglMakeCurrent(NULL, NULL);
+             wglMakeCurrent((HDC)1, h);
+         }},
+        {"BindProgram + 2 ProgramEnvParameter + 4 VertexAttrib",
+         [](JGL_CONTEXT *, HGLRC) { FarCryConstants(); }},
+        {"glDrawElements, six buffer attributes (BGRA)",
+         [](JGL_CONTEXT *, HGLRC) {
+             glDrawElements(GL_TRIANGLES, 108, GL_UNSIGNED_SHORT, Offset(0));
+         }},
+        {"all of the above (one D3D draw)",
+         [](JGL_CONTEXT *, HGLRC h) {
+             wglMakeCurrent(NULL, NULL);
+             wglMakeCurrent((HDC)1, h);
+             FarCryConstants();
+             glDrawElements(GL_TRIANGLES, 108, GL_UNSIGNED_SHORT, Offset(0));
+         }},
+    };
+    printf("Far Cry-like D3D draw through WineD3D (host CPU, ns per call)\n");
+    for (const Part &p : parts) {
+        const ULONG rounds = 200000;
+        double best = 1e30;
+        for (ULONG trial = 0; trial < 3; ++trial) {
+            const auto start = std::chrono::steady_clock::now();
+            for (ULONG i = 0; i < rounds; ++i) {
+                p.Run(c, context);
+                c->Used = c->Records = 0; /* the packet, not the transport */
+            }
+            const double ns =
+                std::chrono::duration<double, std::nano>(std::chrono::steady_clock::now() - start)
+                    .count() /
+                rounds;
+            best = ns < best ? ns : best;
+        }
+        assert(!c->Error);
+        printf("  %-52s %8.1f ns\n", p.Name, best);
+    }
+    Close(c);
+}
+
+int main(int argc, char **argv) {
+    if (argc > 1 && !strcmp(argv[1], "bench")) {
+        Bench();
+        return 0;
+    }
     Unnegotiated();
     Negotiation();
     Records_();
@@ -1895,6 +2277,9 @@ int main() {
     Elements();
     ClientState();
     Sharing();
+    EnabledMask();
+    LayoutEquivalence();
+    FarCryDraws();
     puts("PASS vertex buffer object frontend");
     return 0;
 }

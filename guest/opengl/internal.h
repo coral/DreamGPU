@@ -71,8 +71,37 @@ typedef struct {
     JGL_BUFFER_BINDING ArrayBuffer, ElementBuffer;
     /* EXT_compiled_vertex_array: the locked range (count zero: unlocked). */
     ULONG LockFirst, LockCount;
+    /* Every Enabled flag above as a bit in descriptor slot order: bit i is
+     * Attribute[i], bit DG_GL_ARRAY_EXT_SLOTS + i is Generic[i] (bit 15 has no
+     * array). Draws visit its set bits instead of every slot. JglEnableArray
+     * sets one flag; a copy of the arrays recounts it (JglCountEnabledArrays). */
+    ULONG EnabledArrays;
     BYTE Scratch[DG_GL_MAX_VERTICES < 1024 ? DG_GL_MAX_VERTICES * DG_GL_VERTEX_BYTES : 65536];
 } JGL_ARRAY_STATE;
+/* The descriptor slot's array: Attribute[slot] below DG_GL_ARRAY_EXT_SLOTS,
+ * Generic[slot - DG_GL_ARRAY_EXT_SLOTS] from there (slot 15 never has one). */
+static inline JGL_ARRAY *JglSlotArray(JGL_ARRAY_STATE *state, ULONG slot) {
+    return slot < DG_GL_ARRAY_EXT_SLOTS ? &state->Attribute[slot]
+                                        : &state->Generic[slot - DG_GL_ARRAY_EXT_SLOTS];
+}
+/* EnabledArrays as the Enabled flags define it. */
+static inline ULONG JglCountEnabledArrays(const JGL_ARRAY_STATE *state) {
+    ULONG enabled = 0;
+    for (ULONG i = 0; i < JGL_ARRAY_SLOTS; ++i)
+        if (state->Attribute[i].Enabled)
+            enabled |= 1UL << i;
+    for (ULONG i = 0; i < DG_GL_MAX_VERTEX_ATTRIBS; ++i)
+        if (state->Generic[i].Enabled)
+            enabled |= 1UL << (DG_GL_ARRAY_EXT_SLOTS + i);
+    return enabled;
+}
+static inline void JglEnableArray(JGL_ARRAY_STATE *state, ULONG slot, BOOL enabled) {
+    JglSlotArray(state, slot)->Enabled = enabled;
+    if (enabled)
+        state->EnabledArrays |= 1UL << slot;
+    else
+        state->EnabledArrays &= ~(1UL << slot);
+}
 #ifdef __cplusplus
 extern "C" {
 #endif

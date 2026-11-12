@@ -830,11 +830,17 @@ static void CurrentAgain(void) {
     assert(c->Owner == 1 && !o->Owner && Released == o && !c->Failed);
     /* The full release and acquisition (WineD3D's release pattern), for
      * comparison: also one lookup, and the release submits the older
-     * released batch, asynchronously, ahead of this context's. */
+     * released batch, asynchronously, ahead of this context's. Each call
+     * writes TLS once (acquiring without a current context does not clear
+     * it again) and ownership with plain stores under the lock, never a
+     * locked exchange. */
     lookups = WindowLookups;
-    for (i = 0; i < 100; ++i)
-        assert(wglMakeCurrent(NULL, NULL) && wglMakeCurrent((HDC)1, context));
-    assert(WindowLookups == lookups + 100 && TlsWrites == 300 && OwnerWrites == 200);
+    for (i = 0; i < 100; ++i) {
+        assert(wglMakeCurrent(NULL, NULL) && !wglGetCurrentContext() && !c->Owner);
+        assert(!Lock.Locked && wglMakeCurrent((HDC)1, context) && c->Owner == 1);
+        assert(wglGetCurrentContext() == context && !Lock.Locked);
+    }
+    assert(WindowLookups == lookups + 100 && TlsWrites == 200 && !OwnerWrites);
     assert(Calls == calls + 1 && Binds == binds && Logged == 1 && !Released);
     assert(LoggedContext[0] == o->Id && c->Records == records + 100);
     glFinish();

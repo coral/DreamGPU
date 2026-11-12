@@ -421,6 +421,16 @@ Without the capability the exports fail locally with `GL_INVALID_OPERATION`,
 are hidden from `wglGetProcAddress`, and the binding queries stay host queries.
 `tests/guest/opengl/test_vertex_buffer_object.py` covers the contract.
 
+Draws cost work per enabled array, not per descriptor slot: the array state
+keeps its enabled flags as a slot mask (`EnabledArrays`), and the draw, its
+buffer lookups, references, descriptors, client sections and layout visit only
+its set bits. The frontend's buffer draw layout (`BufferLayout`) is the shared
+`DgRawBufferLayoutOf` admission restricted to those slots; the test compares
+the two over random records. Index bounds are scanned at most once per draw.
+WineD3D's release and reacquisition around each D3D call write the context
+owner with plain stores under the frontend lock (no locked exchange), and its
+program parameters and generic attributes take the constant scalar paths.
+
 ### Indexed client-array draws and EXT_compiled_vertex_array
 
 With the same capability, `DrawElements` of client arrays alone (`arrays.cpp`,

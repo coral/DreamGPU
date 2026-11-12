@@ -193,14 +193,12 @@ void APIENTRY glVertexAttribPointerARB(GLuint index, GLint size, GLenum type, GL
     a->Serial = JglArrays()->ArrayBuffer.Serial;
 }
 void APIENTRY glEnableVertexAttribArrayARB(GLuint index) {
-    JGL_ARRAY *a = Array(index);
-    if (a)
-        a->Enabled = TRUE;
+    if (Array(index))
+        JglEnableArray(JglArrays(), DG_GL_ARRAY_EXT_SLOTS + index, TRUE);
 }
 void APIENTRY glDisableVertexAttribArrayARB(GLuint index) {
-    JGL_ARRAY *a = Array(index);
-    if (a)
-        a->Enabled = FALSE;
+    if (Array(index))
+        JglEnableArray(JglArrays(), DG_GL_ARRAY_EXT_SLOTS + index, FALSE);
 }
 void APIENTRY glGetVertexAttribPointervARB(GLuint index, GLenum pname, void **pointer) {
     JGL_ARRAY *a = Array(index);
