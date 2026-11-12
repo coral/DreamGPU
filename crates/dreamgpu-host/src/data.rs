@@ -175,6 +175,7 @@ unsafe fn buffer_draw(
     if let Err(e) = unsafe { crate::texture::border::prepare(m, state) } {
         return e;
     }
+    let held = unsafe { crate::lighting::hold(api) };
     let mut gl_error = 0;
     let e = match unsafe { crate::arrays::buffer_draw(api, a, data, &layout, &resolved) } {
         Ok(code) => {
@@ -188,6 +189,7 @@ unsafe fn buffer_draw(
         Err(e) => e,
     };
     unsafe {
+        crate::lighting::release(api, &held);
         crate::texture::border::finish(m, state);
         query::store(errors, gl_error)
     };
@@ -332,6 +334,7 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
         if let Err(e) = unsafe { crate::texture::border::prepare(m, state) } {
             return e;
         }
+        let held = unsafe { crate::lighting::hold(api) };
         let mut gl_error = 0;
         let e = unsafe {
             crate::arrays::dreamgpu_gl_arrays(
@@ -344,6 +347,7 @@ pub unsafe extern "C" fn dreamgpu_gl_data(
             )
         };
         unsafe {
+            crate::lighting::release(api, &held);
             crate::texture::border::finish(m, state);
             query::store(errors, gl_error)
         };

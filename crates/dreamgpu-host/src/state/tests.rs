@@ -412,7 +412,8 @@ fn context_state_c_abi_layout() {
             + pointer
             + (2 + 8 + 16 * 8) * pointer
             + 4
-            + (pointer - 4)
+            + 4
+            + 8 * 4
     );
     // Then the rectangle texture state, with the same shape as the cube map's.
     assert_eq!(
@@ -423,6 +424,12 @@ fn context_state_c_abi_layout() {
         core::mem::offset_of!(ContextState, proxy_rejected_rect),
         core::mem::offset_of!(ContextState, default_texture_rect) + (2 + 8 + 16 * 8) * pointer
     );
+    // Then the held spot cones: the light mask and eight cutoffs.
+    assert_eq!(
+        core::mem::offset_of!(ContextState, spot),
+        core::mem::offset_of!(ContextState, proxy_rejected_rect) + 4
+    );
+    assert_eq!(core::mem::size_of::<crate::lighting::Held>(), 4 + 8 * 4);
     // Then the query and fence state (ARB_occlusion_query, NV_fence): one
     // void * after the attribute framebuffer names.
     assert_eq!(

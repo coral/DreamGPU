@@ -119,6 +119,12 @@ typedef struct DreamGpuContextState {
     DreamGpuTexture *units_rect[8];
     DreamGpuTexture *attrib_rect[16][8];
     uint32_t proxy_rejected_rect;
+    /* Rust-owned directional lights whose spot cone is held open from Begin to
+     * End (a mask of LIGHT0..7), with their guest SPOT_CUTOFF values. */
+    struct {
+        uint32_t lights;
+        float cutoffs[8];
+    } spot;
 } DreamGpuContextState;
 size_t dreamgpu_context_state_size(void);
 /* The active unit's texture owning an image target (a cube face selects the

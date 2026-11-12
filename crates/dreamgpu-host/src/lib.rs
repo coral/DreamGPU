@@ -52,6 +52,7 @@ mod gl;
 mod gl_api;
 mod gl_validation;
 mod image;
+mod lighting;
 mod lists;
 mod occlusion;
 mod pixel_image;

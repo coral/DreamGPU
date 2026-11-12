@@ -136,6 +136,9 @@ pub struct ContextState {
     pub attrib_rect: [[*mut Texture; UNITS]; STACK],
     /// PROXY_TEXTURE_RECTANGLE (level zero) rejected by the virtual limits.
     pub proxy_rejected_rect: u32,
+    /// Rust-only: directional lights whose spot cone is held open from Begin
+    /// to End, with their guest cutoffs (`lighting`).
+    pub spot: crate::lighting::Held,
 }
 impl ContextState {
     /// Every unit's (2D, 1D, cube map, 3D, rectangle) binding, including the
@@ -225,6 +228,7 @@ impl ContextState {
         units_rect: [null_mut(); UNITS],
         attrib_rect: [[null_mut(); UNITS]; STACK],
         proxy_rejected_rect: 0,
+        spot: crate::lighting::Held::EMPTY,
     };
 }
 /// The active unit's binding that owns an image or binding target: a cube
@@ -983,9 +987,15 @@ unsafe fn scalar(
             unsafe {
                 prepare_textures(api, state, serial)?;
                 crate::texture::border::prepare(&*memory, state)?;
+                // The native Begin follows this hook, End precedes its own.
+                (*state).spot = crate::lighting::hold(api);
             }
         }
-        FEnum_glEnd => unsafe { crate::texture::border::finish(&*memory, state) },
+        FEnum_glEnd => unsafe {
+            crate::texture::border::finish(&*memory, state);
+            let held = core::mem::replace(&mut (*state).spot, crate::lighting::Held::EMPTY);
+            crate::lighting::release(api, &held);
+        },
         FEnum_glBindProgramARB => {
             return unsafe { crate::program::bind(&*memory, state, word(0), word(1)) };
         }
