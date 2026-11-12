@@ -162,7 +162,7 @@ static inline int DgRawBufferLayoutOf(const unsigned *a, const unsigned *descrip
                             a[1] > 0xffffffffU - (vertices - 1)
                       : vertices || a[1]) {
         return 0;
-    } else if (a[8] ? a[9] % index : a[9]) {
+    } else if (a[8] ? a[9] & (index - 1) : a[9]) { /* index is 1, 2 or 4 here */
         return 0;
     }
     for (unsigned slot = 0; slot < DG_GL_ATTRIB_SLOTS; ++slot) {
@@ -177,8 +177,10 @@ static inline int DgRawBufferLayoutOf(const unsigned *a, const unsigned *descrip
             !(bgra && ((buffered >> slot) & 1) && DgRawBgraDescriptor(slot, d)))
             return 0;
         if ((buffered >> slot) & 1) {
+            /* An admitted descriptor's unit is 1, 2, 4 or 8: alignment is a
+             * mask, not a division per buffered slot of every draw. */
             const unsigned unit = DgArrayComponentBytes(d & 65535), *r = references + 3 * n++;
-            if (!r[0] || r[2] > DG_GL_MAX_BUFFER_STRIDE || r[1] % unit || r[2] % unit)
+            if (!r[0] || r[2] > DG_GL_MAX_BUFFER_STRIDE || ((r[1] | r[2]) & (unit - 1)))
                 return 0;
         }
     }

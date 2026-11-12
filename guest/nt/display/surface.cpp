@@ -93,7 +93,8 @@ HSURF APIENTRY DrvEnableSurface(IN DHPDEV dhpdev) {
             ppdev->Kernel.Version != DG_KERNEL_VERSION ||
             ppdev->Kernel.Size != sizeof(ppdev->Kernel) || !ppdev->Kernel.Submit ||
             !ppdev->Kernel.Context || !ppdev->Kernel.Owner || !ppdev->Kernel.Present ||
-            !ppdev->Kernel.Cohere || !ppdev->Kernel.DesktopActive || !ppdev->Kernel.Cursor)
+            !ppdev->Kernel.Cohere || !ppdev->Kernel.DesktopActive || !ppdev->Kernel.Cursor ||
+            !ppdev->Kernel.Gl)
             return NULL;
     }
     EngDeviceIoControl(ppdev->hDriver, IOCTL_VIDEO_DG_CAPS, NULL, 0, &ppdev->NativeCaps,

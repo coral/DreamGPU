@@ -519,6 +519,13 @@ static ULONG NTAPI KernelPresent(PVOID, const DG_KERNEL_PRESENT_REQUEST *);
 static ULONG NTAPI KernelCohere(PVOID, ULONG);
 static ULONG NTAPI KernelCursor(PVOID, const DG_KERNEL_CURSOR_REQUEST *);
 
+/* DrvEscape's direct path. DgTransportGl checks the buffers, IRQL and readiness
+ * and takes GlMutex itself, exactly as under IOCTL_VIDEO_DG_GL. */
+static ULONG NTAPI KernelGl(PVOID transport, PVOID input, ULONG input_bytes, PVOID output,
+                            ULONG output_bytes) {
+    return DgTransportGl(transport, input, input_bytes, output, output_bytes);
+}
+
 static ULONG NTAPI DgKernelSubmit(PVOID transport, const DG_COMMAND *commands, ULONG count) {
     DG_TRANSPORT *t = (DG_TRANSPORT *)transport;
     BOOLEAN result;
@@ -548,6 +555,7 @@ BOOLEAN DgTransportKernel(PVOID transport, PVOID input, ULONG input_bytes, PVOID
     channel.Cohere = KernelCohere;
     channel.DesktopActive = &((DG_TRANSPORT *)transport)->DesktopActive;
     channel.Cursor = KernelCursor;
+    channel.Gl = KernelGl;
     channel.WindowCapabilities =
         ReadReg((DG_TRANSPORT *)transport, DG_REG_CAPS) & DG_CAP_GL_FRONT_BUFFERS
             ? DG_WINDOW_CAP_FRONT_ONLY

@@ -223,6 +223,10 @@ int main(void) {
         draw[53] = 8;
         draw[54] = DG_GL_MAX_BUFFER_STRIDE + 4; /* bounded strides */
         assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[54] = 14; /* strides are component aligned */
+        assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
+        draw[54] = 0; /* a tightly packed stride */
+        assert(DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
         draw[54] = 12;
         draw[15] = 1 | 1U << 2; /* a buffer slot that is not enabled */
         assert(!DgValidateUserGl(draw, 232, 42, 7, &limits, FunctionWords, NULL));
@@ -669,6 +673,27 @@ int main(void) {
     memcpy(words, valid, sizeof(valid));
     words[8] = 18; /* data call cannot masquerade as scalar */
     assert(!DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));
+    /* Scalar calls take the validator's direct path: a header-only call, an
+     * unanswered function and a size larger than its words still fail, and
+     * every record of a run of calls is checked and stamped. */
+    memcpy(words, valid, sizeof(valid));
+    words[1] = 32;
+    assert(!DgValidateUserGl(words, 32, 42, 7, &limits, FunctionWords, NULL));
+    memcpy(words, valid, sizeof(valid));
+    words[8] = 999;
+    assert(!DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));
+    memcpy(words, valid, sizeof(valid));
+    words[1] = 56;
+    assert(!DgValidateUserGl(words, 56, 42, 7, &limits, FunctionWords, NULL));
+    memcpy(words, valid, sizeof(valid));
+    memcpy(words + 13, valid, sizeof(valid));
+    memcpy(words + 26, valid, sizeof(valid));
+    words[2] = words[15] = words[28] = 0;
+    assert(DgValidateUserGl(words, 3 * 52, 42, 7, &limits, FunctionWords, NULL));
+    assert(words[2] == 42 && words[15] == 42 && words[28] == 42 && words[20] == 7 &&
+           words[33] == 7);
+    words[26 + 8] = 18; /* the last call of the run is a data function */
+    assert(!DgValidateUserGl(words, 3 * 52, 42, 7, &limits, FunctionWords, NULL));
     memcpy(words, valid, sizeof(valid));
     words[0] = DG_GL_DESKTOP;
     assert(!DgValidateUserGl(words, 52, 42, 7, &limits, FunctionWords, NULL));

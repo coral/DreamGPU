@@ -1,7 +1,9 @@
 /* SPDX-License-Identifier: GPL-2.0-or-later
  * Test actual DrvEscape output handling: ExtEscape exposes a capacity, not a
  * returned-length pointer, so unreturned bytes must never reveal stale data.
- * Bulk results (DG_ESCAPE_BULK_RESULT_BYTES) pass the same bounds. */
+ * Bulk results (DG_ESCAPE_BULK_RESULT_BYTES) pass the same bounds. GL
+ * escapes take the miniport's direct kernel entry (DG_KERNEL_VERSION 8), never
+ * an IRP; a PDEV without that entry fails them without reaching the miniport. */
 #include <assert.h>
 #include <stdint.h>
 #include <stdio.h>
@@ -9,33 +11,42 @@
 #include <string.h>
 #define _FRAMEBUF_PCH_
 #define APIENTRY
+#define DG_KERNEL_CALL
 #define FILE_DEVICE_VIDEO 0x23
 #define METHOD_BUFFERED 0
 #define FILE_ANY_ACCESS 0
 #define CTL_CODE(d, f, m, a) (((d) << 16) | ((f) << 2))
 #define QUERYESCSUPPORT 8
 #define WNDOBJ_SETUP 4354
-#define DG_DRAW_ESCAPE 0x4a524702
 typedef uint32_t ULONG;
+typedef int32_t LONG;
 typedef uint8_t BYTE;
 typedef uint16_t WCHAR;
 typedef void *PVOID;
 typedef struct {
     void *dhpdev;
 } SURFOBJ;
+#include "dg-kernel.h"
 typedef struct {
     void *hDriver;
+    DG_KERNEL_INTERFACE Kernel;
 } PDEV, *PPDEV;
-#include "dg-ioctl.h"
 static ULONG returned_bytes = 4, calls, io_error, last_output;
+static int context;
 static ULONG DgBindWindow(SURFOBJ *, ULONG, PVOID, ULONG, PVOID) {
     return 0;
 }
-static ULONG EngDeviceIoControl(void *driver, ULONG code, PVOID input, ULONG input_bytes,
-                                PVOID output, ULONG output_bytes, ULONG *returned) {
+/* Only the timing escape still issues an IOCTL. */
+static ULONG EngDeviceIoControl(void *, ULONG, PVOID, ULONG, PVOID, ULONG, ULONG *) {
+    assert(!"GL escape issued an IRP");
+    return 1;
+}
+/* The miniport's direct entry: the reply plus result bytes, zero on failure. */
+static ULONG KernelGl(void *kernel, PVOID input, ULONG input_bytes, PVOID output,
+                      ULONG output_bytes) {
     DG_ESCAPE_REQUEST request;
     DG_ESCAPE_REPLY reply = {};
-    assert(driver && code == IOCTL_VIDEO_DG_GL && input_bytes == sizeof(request));
+    assert(kernel == &context && input_bytes == sizeof(request));
     memcpy(&request, input, sizeof(request));
     assert(request.Version == DG_ESCAPE_VERSION);
     /* The miniport is handed exactly the reply and the requested capacity. */
@@ -49,8 +60,7 @@ static ULONG EngDeviceIoControl(void *driver, ULONG code, PVOID input, ULONG inp
     memcpy(output, &reply, sizeof(reply));
     if (returned_bytes)
         memset((BYTE *)output + sizeof(reply), 0x78, returned_bytes);
-    *returned = sizeof(reply) + returned_bytes;
-    return io_error;
+    return io_error ? 0 : sizeof(reply) + returned_bytes;
 }
 #include "../../../guest/nt/display/escape.cpp"
 static void Bulk(PDEV *device) {
@@ -92,13 +102,21 @@ static void Bulk(PDEV *device) {
     free(output);
 }
 int main(void) {
-    PDEV device = {(void *)1};
+    PDEV device = {(void *)1, {}};
     SURFOBJ surface = {&device};
     DG_ESCAPE_REQUEST request = {};
     static BYTE output[sizeof(DG_ESCAPE_REPLY) + DG_ESCAPE_MAX_RESULT_BYTES];
     ULONG i;
     request.Version = DG_ESCAPE_VERSION;
     request.ResultCapacity = 512;
+    /* Without the version 8 entry nothing reaches the miniport. */
+    memset(output, 0xa5, sizeof(output));
+    assert(!DrvEscape(&surface, DG_ESCAPE, sizeof(request), &request, sizeof(output), output));
+    for (i = 0; i < sizeof(output); ++i)
+        assert(!output[i]);
+    assert(!calls);
+    device.Kernel.Context = &context;
+    device.Kernel.Gl = KernelGl;
     memset(output, 0xa5, sizeof(output));
     assert(DrvEscape(&surface, DG_ESCAPE, sizeof(request), &request, sizeof(output), output));
     for (i = sizeof(DG_ESCAPE_REPLY); i < sizeof(DG_ESCAPE_REPLY) + 4; ++i)

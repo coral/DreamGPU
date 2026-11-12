@@ -8,7 +8,7 @@
 #include "cursor.h"
 #include "dg-window.h"
 #define IOCTL_VIDEO_DG_KERNEL CTL_CODE(FILE_DEVICE_VIDEO, 0x903, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define DG_KERNEL_VERSION 7
+#define DG_KERNEL_VERSION 8
 #ifndef DG_KERNEL_CALL
 #define DG_KERNEL_CALL __stdcall
 #endif
@@ -43,6 +43,13 @@ typedef struct {
     const ULONG *Pixels; /* kernel pointer, never exposed through user IOCTLs */
 } DG_KERNEL_CURSOR_REQUEST;
 typedef ULONG(DG_KERNEL_CALL *DG_KERNEL_CURSOR)(void *, const DG_KERNEL_CURSOR_REQUEST *);
+/* Version 8: the DG_ESCAPE request DrvEscape forwards, called directly in the
+ * escaping thread with the buffers GDI handed the display driver. It returns
+ * exactly what IOCTL_VIDEO_DG_GL would (the reply plus result bytes, zero for
+ * a malformed request) and takes the same GL mutex. A direct call needs no
+ * IRP: no METHOD_BUFFERED copy of the batch and no I/O-completion APC, which
+ * an APIC HAL delivers to the escaping thread as a self-IPI. */
+typedef ULONG(DG_KERNEL_CALL *DG_KERNEL_GL)(void *, void *, ULONG, void *, ULONG);
 typedef struct {
     ULONG Version, Size;
     DG_KERNEL_SUBMIT Submit;
@@ -53,5 +60,6 @@ typedef struct {
     const volatile ULONG *DesktopActive;
     DG_KERNEL_CURSOR Cursor;
     ULONG WindowCapabilities;
+    DG_KERNEL_GL Gl;
 } DG_KERNEL_INTERFACE;
 #endif

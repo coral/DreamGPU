@@ -48,11 +48,14 @@ ULONG APIENTRY DrvEscape(SURFOBJ *surface, ULONG escape, ULONG input_bytes, PVOI
     if (capacity > DG_ESCAPE_BULK_RESULT_BYTES || capacity > output_bytes - sizeof(DG_ESCAPE_REPLY))
         return 0;
     device = (PPDEV)surface->dhpdev;
-    /* GDI supplies kernel buffers for DrvEscape. EngDeviceIoControl preserves
-     * calling-process context; only the miniport allocates/verifies identity. */
-    if (EngDeviceIoControl(device->hDriver, IOCTL_VIDEO_DG_GL, input, input_bytes, output,
-                           sizeof(DG_ESCAPE_REPLY) + capacity, &returned) ||
-        returned < sizeof(DG_ESCAPE_REPLY) || returned > sizeof(DG_ESCAPE_REPLY) + capacity) {
+    /* GDI supplies kernel buffers for DrvEscape. The miniport's direct entry
+     * (DG_KERNEL_VERSION 8) runs in this thread and process, like the IOCTL it
+     * replaces, without an IRP: no buffered copy of the batch and no
+     * completion APC. Only the miniport allocates/verifies identity. */
+    returned = device->Kernel.Gl ? device->Kernel.Gl(device->Kernel.Context, input, input_bytes,
+                                                     output, sizeof(DG_ESCAPE_REPLY) + capacity)
+                                 : 0;
+    if (returned < sizeof(DG_ESCAPE_REPLY) || returned > sizeof(DG_ESCAPE_REPLY) + capacity) {
         memset(output, 0, output_bytes);
         return 0;
     }

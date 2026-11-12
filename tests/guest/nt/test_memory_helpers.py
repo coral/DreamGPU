@@ -26,6 +26,19 @@ int main() {
                 assert(dg_memcpy(output+out,source+in,length)==output+out);
                 assert(!std::memcmp(output,expected,sizeof(output)));
             }
+    /* Either side of the string-instruction threshold, every alignment. */
+    for (size_t length=496;length<=530;++length)
+        for (size_t in=0;in<16;++in)
+            for (size_t out=0;out<16;++out) {
+                std::memset(output,0xa7,sizeof(output));
+                std::memset(expected,0xa7,sizeof(expected));
+                std::memcpy(expected+out,source+in,length);
+                assert(dg_memcpy(output+out,source+in,length)==output+out);
+                assert(!std::memcmp(output,expected,sizeof(output)));
+                std::memset(expected+out,0x5c,length);
+                assert(dg_memset(output+out,0x15c,length)==output+out);
+                assert(!std::memcmp(output,expected,sizeof(output)));
+            }
     for (int value: {0,1,0x80,0xff,0x1234,-1})
         for (size_t length=0;length<=257;++length)
             for (size_t out=0;out<16;++out) {
@@ -71,7 +84,7 @@ def main():
         subprocess.run([compiler, *flags, str(test), str(base / 'memory.o'),
                         '-o', str(base / 'test')], check=True)
         subprocess.run([str(base / 'test')], check=True)
-    print('PASS: unaligned byte/word/chunk lengths, fill truncation, page boundaries and zero length')
+    print('PASS: unaligned byte/word/chunk and string lengths, fill truncation, page boundaries and zero length')
 
 if __name__ == '__main__':
     main()

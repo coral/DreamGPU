@@ -45,7 +45,16 @@ and the register cache alternating small and bulk destinations.
 
 `escape.cpp` compiles the real `DrvEscape` against a recording miniport: the
 exact result extent, a zeroed tail, buffered aliasing, and the 64 KiB and
-4 MiB capacity/output bounds (a 3 MiB result in one escape).
+4 MiB capacity/output bounds (a 3 MiB result in one escape). GL escapes call
+the miniport's direct kernel entry (`DG_KERNEL_VERSION` 8) and never issue an
+IOCTL, so no IRP, buffered copy or completion APC (an APIC HAL self-IPI) is
+spent per batch; without that entry nothing reaches the miniport.
+
+`gl-validate.c` also covers the validator's direct path for scalar calls (a
+header-only call, an unanswered function, an oversized record and a run of
+calls whose last is a data function) and the buffer draw's masked alignment
+checks (component-misaligned offsets and strides, a zero stride, element
+offsets aligned to the index size).
 
 Native QEMU tests separately verify that an oversized batch cannot execute its
 clear prefix and that a primitive remains ordered across a 1024-record boundary:

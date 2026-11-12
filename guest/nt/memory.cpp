@@ -16,9 +16,26 @@ struct __attribute__((packed, may_alias)) MemoryHalf {
 static_assert(sizeof(MemoryWord) == 4 && alignof(MemoryWord) == 1);
 static_assert(sizeof(MemoryHalf) == 2 && alignof(MemoryHalf) == 1);
 
+/* Long copies and fills (kernel command batches, query results, client
+ * arrays) use x86 string instructions, which processors with fast strings (P6
+ * onward) run a cache line at a time; the word loops below move four bytes per
+ * instruction. Their fixed startup cost makes short ranges cheaper in the
+ * loops, which also finish the string path's last bytes. Windows and the C
+ * ABI enter functions with the direction flag clear. */
+#if defined(__i386__) || defined(__x86_64__)
+#define DG_STRING_BYTES 512
+#endif
+
 void *memset(void *destination, int value, size_t length) {
     unsigned char *out = static_cast<unsigned char *>(destination);
     const unsigned int word = (unsigned char)value * 0x01010101u;
+#ifdef DG_STRING_BYTES
+    if (length >= DG_STRING_BYTES) {
+        size_t words = length / 4;
+        __asm__ __volatile__("rep stosl" : "+D"(out), "+c"(words) : "a"(word) : "memory");
+        length &= 3;
+    }
+#endif
     while (length >= 16) {
         reinterpret_cast<MemoryWord *>(out)->value = word;
         reinterpret_cast<MemoryWord *>(out + 4)->value = word;
@@ -48,6 +65,13 @@ void *memset(void *destination, int value, size_t length) {
 void *memcpy(void *destination, const void *source, size_t length) {
     unsigned char *out = static_cast<unsigned char *>(destination);
     const unsigned char *in = static_cast<const unsigned char *>(source);
+#ifdef DG_STRING_BYTES
+    if (length >= DG_STRING_BYTES) {
+        size_t words = length / 4;
+        __asm__ __volatile__("rep movsl" : "+D"(out), "+S"(in), "+c"(words) : : "memory");
+        length &= 3;
+    }
+#endif
     while (length >= 16) {
         reinterpret_cast<MemoryWord *>(out)->value =
             reinterpret_cast<const MemoryWord *>(in)->value;

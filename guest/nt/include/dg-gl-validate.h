@@ -23,6 +23,22 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
         if (size < DG_GL_HEADER_BYTES || (size & 3) || size > bytes - offset || record[6] ||
             record[5])
             return 0;
+        /* Scalar calls are most records. A direct, well-predicted test keeps
+         * them off the switch's indirect jump, the hottest validator
+         * instruction in guest profiles (hosts that flush branch prediction
+         * on VM exits leave it cold at the start of every batch). */
+        if (op == DG_GL_CALL) {
+            if (size < 36)
+                return 0;
+            expected = function_words(context, record[8]);
+            if (expected == (ULONG)-1 || (expected & DG_GL_FUNCTION_KIND_MASK) ||
+                expected > (DG_ESCAPE_QUEUE_MAX_BYTES - 36) / 4 || size != 36 + expected * 4)
+                return 0;
+            record[2] = token;
+            record[7] = generation;
+            offset += size;
+            continue;
+        }
         switch (op) {
             case DG_GL_CREATE_CONTEXT:
                 expected = 36;
@@ -35,15 +51,6 @@ static int DgValidateUserGl(ULONG *words, ULONG bytes, ULONG token, ULONG genera
             case DG_GL_MAKE_CURRENT:
             case DG_GL_PRESENT:
                 expected = 32;
-                break;
-            case DG_GL_CALL:
-                if (size < 36)
-                    return 0;
-                expected = function_words(context, record[8]);
-                if (expected == (ULONG)-1 || (expected & DG_GL_FUNCTION_KIND_MASK) ||
-                    expected > (DG_ESCAPE_QUEUE_MAX_BYTES - 36) / 4)
-                    return 0;
-                expected = 36 + expected * 4;
                 break;
             case DG_GL_DATA_CALL: {
                 ULONG args, data_bytes, payload, padding, i;
