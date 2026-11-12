@@ -10,6 +10,7 @@
 extern "C" {
 #endif
 typedef uint32_t ULONG, DWORD, UINT;
+typedef uint16_t WORD, ATOM;
 typedef int32_t LONG;
 typedef uintptr_t ULONG_PTR;
 typedef int BOOL;
@@ -58,6 +59,7 @@ typedef struct {
 #define ZeroMemory(p, n) memset((p), 0, (n))
 #define CopyMemory(d, s, n) memcpy((d), (s), (n))
 #define min(a, b) ((a) < (b) ? (a) : (b))
+#define MAKEINTATOM(i) ((LPSTR)(ULONG_PTR)(WORD)(i))
 void *TlsGetValue(DWORD);
 BOOL TlsSetValue(DWORD, void *);
 DWORD TlsAlloc(void);
@@ -67,6 +69,7 @@ void DeleteCriticalSection(CRITICAL_SECTION *);
 void EnterCriticalSection(CRITICAL_SECTION *);
 void LeaveCriticalSection(CRITICAL_SECTION *);
 LONG InterlockedExchange(volatile LONG *, LONG);
+LONG InterlockedCompareExchange(volatile LONG *, LONG, LONG);
 HANDLE GetProcessHeap(void);
 void *HeapAlloc(HANDLE, DWORD, size_t);
 BOOL HeapFree(HANDLE, DWORD, void *);
@@ -83,6 +86,8 @@ int ExtEscape(HDC, int, int, LPCSTR, int, LPSTR);
 int DrawEscape(HDC, int, int, LPCSTR);
 HANDLE GetPropA(HWND, LPCSTR);
 BOOL SetPropA(HWND, LPCSTR, HANDLE);
+ATOM GlobalAddAtomA(LPCSTR);
+ATOM GlobalDeleteAtom(ATOM);
 #ifdef __cplusplus
 }
 #endif

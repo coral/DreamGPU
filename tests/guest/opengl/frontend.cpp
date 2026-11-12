@@ -35,6 +35,18 @@ static ULONG HostFeatures, DeferStream, AsyncSubmits, SyncStreamSubmits, LastStr
  * function (TRUE when the observer filled the reply). Reset clears both. */
 static void (*SubmittedRecord)(const ULONG *record);
 static BOOL (*AnswerQuery)(const ULONG *record, DG_ESCAPE_REPLY *reply, ULONG capacity);
+/* Win32 work of the WGL entry points. On NT, WindowFromDC is a system call
+ * (NtUserCallOneParam), as is every property access by string name
+ * (GlobalFindAtom: NtFindAtom); TLS and ownership writes measure a full
+ * release and acquisition. DcWindows maps a DC to its current window: a DC
+ * can move to another window (GetDC cache, class DCs). */
+static ULONG WindowLookups, NamedProperties, TlsWrites, OwnerWrites;
+static HWND DcWindows[4] = {NULL, (HWND)1, (HWND)2, NULL};
+/* The global atom table's pixel-format atom: references held, attempts to add
+ * it, a full table, and another thread publishing it during an addition. */
+#define PIXEL_FORMAT_ATOM 0xc123
+static ULONG AtomReferences, AtomAdds;
+static BOOL FailAtom, RaceAtom;
 
 void *TlsGetValue(DWORD key) {
     assert(key == 0);
@@ -44,6 +56,7 @@ BOOL TlsSetValue(DWORD key, void *value) {
     assert(key == 0);
     if (value && FailTls)
         return FALSE;
+    ++TlsWrites;
     Tls[Thread] = value;
     return TRUE;
 }
@@ -74,7 +87,14 @@ void LeaveCriticalSection(CRITICAL_SECTION *lock) {
 }
 LONG InterlockedExchange(volatile LONG *p, LONG value) {
     LONG old = *p;
+    ++OwnerWrites;
     *p = value;
+    return old;
+}
+LONG InterlockedCompareExchange(volatile LONG *p, LONG value, LONG comparand) {
+    LONG old = *p;
+    if (old == comparand)
+        *p = value;
     return old;
 }
 HANDLE GetProcessHeap(void) {
@@ -106,17 +126,45 @@ static DWORD LastError;
 void SetLastError(DWORD error) {
     LastError = error;
 }
+ATOM GlobalAddAtomA(LPCSTR name) {
+    assert(!strcmp(name, "DreamGPU.WGL.PixelFormat.v1"));
+    ++AtomAdds;
+    if (FailAtom)
+        return 0;
+    if (RaceAtom) {
+        RaceAtom = FALSE;
+        ++AtomReferences;
+        PixelFormatAtom = PIXEL_FORMAT_ATOM;
+    }
+    ++AtomReferences;
+    return PIXEL_FORMAT_ATOM;
+}
+ATOM GlobalDeleteAtom(ATOM atom) {
+    assert(atom == PIXEL_FORMAT_ATOM && AtomReferences);
+    --AtomReferences;
+    return 0;
+}
+/* The name and its atom select the same property; only names cost a lookup. */
+static void PropertyKey(LPCSTR key) {
+    if ((ULONG_PTR)key >> 16) {
+        assert(!strcmp(key, "DreamGPU.WGL.PixelFormat.v1"));
+        ++NamedProperties;
+    } else {
+        assert((ULONG_PTR)key == PIXEL_FORMAT_ATOM && AtomReferences);
+    }
+}
 HANDLE GetPropA(HWND window, LPCSTR key) {
-    (void)key;
+    PropertyKey(key);
     return PixelFormats[(ULONG_PTR)window];
 }
 BOOL SetPropA(HWND window, LPCSTR key, HANDLE value) {
-    (void)key;
+    PropertyKey(key);
     PixelFormats[(ULONG_PTR)window] = value;
     return TRUE;
 }
 HWND WindowFromDC(HDC dc) {
-    return dc == (HDC)1 || dc == (HDC)2 ? (HWND)dc : NULL;
+    ++WindowLookups;
+    return (ULONG_PTR)dc < 4 ? DcWindows[(ULONG_PTR)dc] : NULL;
 }
 DWORD GetWindowThreadProcessId(HWND window, DWORD *process) {
     assert(window);
@@ -415,6 +463,14 @@ static void Reset(void) {
     HostFeatures = DeferStream = AsyncSubmits = SyncStreamSubmits = LastStream = 0;
     SubmittedRecord = NULL;
     AnswerQuery = NULL;
+    WindowLookups = NamedProperties = TlsWrites = OwnerWrites = 0;
+    DcWindows[0] = DcWindows[3] = NULL;
+    DcWindows[1] = (HWND)1;
+    DcWindows[2] = (HWND)2;
+    /* A new process: no atom added yet. */
+    PixelFormatAtom = 0;
+    AtomReferences = AtomAdds = 0;
+    FailAtom = RaceAtom = FALSE;
     assert(DllMain(NULL, DLL_PROCESS_ATTACH, NULL));
 }
 static HGLRC Create(void) {
@@ -687,6 +743,163 @@ static void NoClientArea(void) {
     assert(!wglMakeCurrent((HDC)1, context) && !wglGetCurrentContext());
     assert(!Lookup(context)->Drawable && Lookup(context)->Failed);
     assert(wglDeleteContext(context) && !Allocations);
+    Width = 320;
+    Height = 240;
+    BindCapabilities = 0;
+}
+/* The pixel-format property is read and written by its global atom: no
+ * string lookup (NtFindAtom on NT) per call. One atom reference serves the
+ * process, also after the module unloads; a racing first use keeps one; a
+ * full atom table keeps the string. WindowFromDC remains one per call. */
+static void PropertyAtom(void) {
+    ULONG i;
+    Reset();
+    assert(!wglGetPixelFormat((HDC)1));
+    assert(AtomAdds == 1 && AtomReferences == 1 && PixelFormatAtom == PIXEL_FORMAT_ATOM);
+    for (i = 0; i < 100; ++i)
+        assert(!wglGetPixelFormat((HDC)1));
+    assert(wglSetPixelFormat((HDC)1, 1, NULL) && !wglSetPixelFormat((HDC)1, 1, NULL));
+    for (i = 0; i < 100; ++i)
+        assert(wglGetPixelFormat((HDC)1) == 1 && !wglGetPixelFormat((HDC)2));
+    assert(!NamedProperties && AtomAdds == 1 && AtomReferences == 1);
+    assert(WindowLookups == 101 + 2 + 200);
+    /* The atom selects the property another module set by its name. */
+    assert(SetPropA((HWND)2, "DreamGPU.WGL.PixelFormat.v1", (HANDLE)1));
+    assert(wglGetPixelFormat((HDC)2) == 1 && !wglSetPixelFormat((HDC)2, 1, NULL));
+    assert(NamedProperties == 1 && AtomAdds == 1);
+    /* Unloading keeps the reference: windows may still carry the property. */
+    assert(DllMain(NULL, DLL_PROCESS_DETACH, NULL) && AtomReferences == 1);
+    assert(DllMain(NULL, DLL_PROCESS_ATTACH, NULL));
+    assert(wglGetPixelFormat((HDC)1) == 1 && AtomAdds == 1 && NamedProperties == 1);
+    /* Another thread publishes the same atom first: one reference remains. */
+    Reset();
+    RaceAtom = TRUE;
+    assert(!wglGetPixelFormat((HDC)1) && wglSetPixelFormat((HDC)1, 1, NULL));
+    assert(wglGetPixelFormat((HDC)1) == 1 && AtomAdds == 1 && AtomReferences == 1);
+    assert(PixelFormatAtom == PIXEL_FORMAT_ATOM && !NamedProperties);
+    /* A full atom table: the string, as before, until an atom is available. */
+    Reset();
+    FailAtom = TRUE;
+    assert(!wglGetPixelFormat((HDC)1) && wglSetPixelFormat((HDC)1, 1, NULL));
+    assert(!wglSetPixelFormat((HDC)1, 1, NULL) && wglGetPixelFormat((HDC)1) == 1);
+    assert(NamedProperties == 5 && AtomAdds == 4 && !AtomReferences && !PixelFormatAtom);
+    FailAtom = FALSE;
+    assert(wglGetPixelFormat((HDC)1) == 1 && !wglGetPixelFormat((HDC)2));
+    assert(NamedProperties == 5 && AtomAdds == 5 && AtomReferences == 1);
+    /* Invalid DCs and foreign formats never add the atom. */
+    Reset();
+    assert(!wglGetPixelFormat((HDC)3) && !wglSetPixelFormat((HDC)3, 1, NULL));
+    assert(!wglSetPixelFormat((HDC)1, 2, NULL) && !AtomAdds && !NamedProperties);
+    Reset();
+}
+/* wglMakeCurrent(dc, the current context) on its DC, as WineD3D re-applies
+ * its context, is a no-op when the full release and acquisition would change
+ * nothing: one window lookup and nothing else, no TLS or owner write, nothing
+ * sent, the packet continuing. Every condition that changes something still
+ * takes the full path, with its previous effects. */
+static void CurrentAgain(void) {
+    HGLRC context, other;
+    JGL_CONTEXT *c, *o;
+    ULONG calls, binds, lookups, records, presents, destroyed, sync, flushes, i;
+    Reset();
+    HostFeatures = DG_ESCAPE_FEATURE_QUEUE;
+    HostMaxBytes = DG_ESCAPE_QUEUE_MAX_BYTES;
+    BindCapabilities = DG_WINDOW_CAP_FRONT_ONLY;
+    context = Create();
+    other = wglCreateContext((HDC)2);
+    assert(other && wglMakeCurrent((HDC)2, other));
+    c = Lookup(context);
+    o = Lookup(other);
+    glColor4f(1, 0, 0, 1);
+    assert(wglMakeCurrent((HDC)1, context) && Released == o);
+    glColor4f(0, 1, 0, 1);
+    Logged = 0;
+    SubmittedRecord = LogRecord;
+    calls = Calls;
+    binds = Binds;
+    lookups = WindowLookups;
+    records = c->Records;
+    TlsWrites = OwnerWrites = 0;
+    for (i = 0; i < 100; ++i) {
+        assert(wglMakeCurrent((HDC)1, context) && wglGetCurrentContext() == context);
+        assert(wglGetCurrentDC() == (HDC)1 && !Lock.Locked);
+        glColor4f(0, 0, (float)i, 1);
+    }
+    assert(WindowLookups == lookups + 100 && !TlsWrites && !OwnerWrites);
+    assert(Calls == calls && Binds == binds && !Logged && c->Records == records + 100);
+    assert(c->Owner == 1 && !o->Owner && Released == o && !c->Failed);
+    /* The full release and acquisition (WineD3D's release pattern), for
+     * comparison: also one lookup, and the release submits the older
+     * released batch, asynchronously, ahead of this context's. */
+    lookups = WindowLookups;
+    for (i = 0; i < 100; ++i)
+        assert(wglMakeCurrent(NULL, NULL) && wglMakeCurrent((HDC)1, context));
+    assert(WindowLookups == lookups + 100 && TlsWrites == 300 && OwnerWrites == 200);
+    assert(Calls == calls + 1 && Binds == binds && Logged == 1 && !Released);
+    assert(LoggedContext[0] == o->Id && c->Records == records + 100);
+    glFinish();
+    assert(Logged == 103 && !Released && !c->Used);
+    for (i = 1; i < 103; ++i)
+        assert(LoggedContext[i] == c->Id);
+    assert(LoggedFunction[102] == FEnum_glFinish);
+    /* Another DC of the same window: the full path binds for it once. */
+    DcWindows[3] = (HWND)1;
+    binds = Binds;
+    destroyed = DestroyDrawables;
+    assert(wglMakeCurrent((HDC)3, context) && c->DC == (HDC)3 && Binds == binds + 1);
+    assert(wglMakeCurrent((HDC)3, context) && Binds == binds + 1);
+    assert(wglGetCurrentDC() == (HDC)3 && DestroyDrawables == destroyed);
+    /* That DC now belongs to another window: its own drawable and binding. */
+    DcWindows[3] = (HWND)2;
+    assert(wglMakeCurrent((HDC)3, context) && c->Window == (HWND)2);
+    assert(c->DrawableWindow == (HWND)2 && DestroyDrawables == destroyed + 1);
+    assert(Binds == binds + 2 && LoggedOperations(DG_GL_CREATE_DRAWABLE) == 1);
+    assert(wglMakeCurrent((HDC)1, context) && c->DrawableWindow == (HWND)1);
+    assert(DestroyDrawables == destroyed + 2 && Binds == binds + 3);
+    /* A resize: a new drawable and binding, as before. */
+    Width = 640;
+    assert(wglMakeCurrent((HDC)1, context) && c->Width == 640);
+    assert(DestroyDrawables == destroyed + 3 && Binds == binds + 4);
+    assert(wglMakeCurrent((HDC)1, context) && Binds == binds + 4);
+    /* No client area: the binding is dropped and renewed on restore. */
+    Width = Height = 0;
+    assert(wglMakeCurrent((HDC)1, context) && !c->Binding && c->Width == 640);
+    assert(wglMakeCurrent((HDC)1, context) && !c->Binding && Binds == binds + 4);
+    Width = 640;
+    Height = 240;
+    assert(wglMakeCurrent((HDC)1, context) && c->Binding && Binds == binds + 5);
+    assert(DestroyDrawables == destroyed + 3);
+    /* Pending front-buffer drawing is published, synchronously. */
+    glDrawBuffer(GL_FRONT);
+    glClear(GL_COLOR_BUFFER_BIT);
+    presents = Presents;
+    sync = SyncStreamSubmits;
+    assert(c->FrontDirty && wglMakeCurrent((HDC)1, context) && !c->FrontDirty);
+    assert(Presents == presents + 1 && SyncStreamSubmits == sync + 1);
+    glDrawBuffer(GL_BACK);
+    /* Inside Begin/End the call fails and releases the context. */
+    glBegin(GL_TRIANGLES);
+    assert(!wglMakeCurrent((HDC)1, context) && !wglGetCurrentContext() && !c->Owner);
+    assert(c->Error == GL_INVALID_OPERATION && !Lock.Locked);
+    assert(wglDeleteContext(context));
+    /* A failure reported by another request fails the call, as before. */
+    context = Create();
+    c = Lookup(context);
+    c->DeferredFault = 1;
+    assert(!wglMakeCurrent((HDC)1, context) && c->Failed && !c->DeferredFault);
+    assert(!wglGetCurrentContext() && !c->Owner);
+    SubmittedRecord = NULL;
+    assert(wglDeleteContext(context) && wglDeleteContext(other) && !Allocations);
+    /* Without the queue, releasing flushes synchronously: still done. */
+    Reset();
+    context = Create();
+    c = Lookup(context);
+    glColor4f(1, 1, 1, 1);
+    flushes = NativeFlushes;
+    TlsWrites = 0;
+    assert(wglMakeCurrent((HDC)1, context) && NativeFlushes == flushes + 1 && !c->Used);
+    assert(TlsWrites == 2 && wglGetCurrentContext() == context);
+    assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context) && !Allocations);
     Width = 320;
     Height = 240;
     BindCapabilities = 0;
@@ -1442,12 +1655,15 @@ int main(void) {
     assert(wglDeleteContext(other));
     assert(wglMakeCurrent(NULL, NULL) && wglDeleteContext(context));
     LazyRelease();
+    CurrentAgain();
+    PropertyAtom();
 
     Reset();
     assert(DllMain(NULL, DLL_PROCESS_DETACH, NULL));
     puts("PASS actual frontend: error drain, native flush, ownership, rejected allocation, "
          "independent teardown, uncertain completion, Begin batches, loader cleanup, queued "
-         "transport streams, asynchronous flushes, deferred failures and lazy release");
+         "transport streams, asynchronous flushes, deferred failures, lazy release, unchanged "
+         "current context and the pixel-format atom");
     return 0;
 }
 

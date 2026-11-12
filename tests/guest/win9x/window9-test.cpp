@@ -177,7 +177,54 @@ BOOL DeleteDC(HDC dc) {
     --live;
     return TRUE;
 }
-BOOL SetPropA(HWND window, LPCSTR name, HANDLE value) {
+/* The global atom table: names and reference counts. A property named by a
+ * string costs USER an atom lookup (named_props); one named by an atom must
+ * reference a live atom, whose name selects the same property. */
+static struct {
+    char name[48];
+    unsigned references;
+} atoms[4];
+static unsigned named_props, atom_adds;
+static bool fail_atoms;
+ATOM GlobalAddAtomA(LPCSTR name) {
+    ++atom_adds;
+    if (fail_atoms)
+        return 0;
+    for (unsigned i = 0; i < 4; ++i)
+        if (atoms[i].references && !std::strcmp(atoms[i].name, name)) {
+            ++atoms[i].references;
+            return (ATOM)(0xc000 + i);
+        }
+    for (unsigned i = 0; i < 4; ++i)
+        if (!atoms[i].references) {
+            std::snprintf(atoms[i].name, sizeof(atoms[i].name), "%s", name);
+            atoms[i].references = 1;
+            return (ATOM)(0xc000 + i);
+        }
+    return 0;
+}
+ATOM GlobalDeleteAtom(ATOM atom) {
+    assert(atom >= 0xc000 && atom < 0xc004 && atoms[atom - 0xc000].references);
+    --atoms[atom - 0xc000].references;
+    return 0;
+}
+static unsigned atom_references() {
+    unsigned total = 0;
+    for (auto &atom : atoms)
+        total += atom.references;
+    return total;
+}
+static LPCSTR property_name(LPCSTR key) {
+    const uintptr_t value = (uintptr_t)key;
+    if (value >> 16) {
+        ++named_props;
+        return key;
+    }
+    assert(value >= 0xc000 && value < 0xc004 && atoms[value - 0xc000].references);
+    return atoms[value - 0xc000].name;
+}
+BOOL SetPropA(HWND window, LPCSTR key, HANDLE value) {
+    LPCSTR name = property_name(key);
     for (auto &prop : window->props)
         if (!prop.name[0]) {
             std::snprintf(prop.name, sizeof(prop.name), "%s", name);
@@ -186,13 +233,15 @@ BOOL SetPropA(HWND window, LPCSTR name, HANDLE value) {
         }
     return FALSE;
 }
-HANDLE GetPropA(HWND window, LPCSTR name) {
+HANDLE GetPropA(HWND window, LPCSTR key) {
+    LPCSTR name = property_name(key);
     for (auto &prop : window->props)
         if (prop.name[0] && !std::strcmp(prop.name, name))
             return prop.value;
     return nullptr;
 }
-HANDLE RemovePropA(HWND window, LPCSTR name) {
+HANDLE RemovePropA(HWND window, LPCSTR key) {
+    LPCSTR name = property_name(key);
     for (auto &prop : window->props)
         if (prop.name[0] && !std::strcmp(prop.name, name)) {
             HANDLE value = prop.value;
@@ -339,6 +388,45 @@ static void refusal(HDC dc) {
     JglTransportUnbind(binding);
     assert(!live && !Bindings[0].Token && !Bindings[1].Token);
 }
+/* The binding's property is named by its atom: present looks up no string.
+ * The binding holds one atom reference until release; with no atom available
+ * the name still binds, presents and releases. */
+static void property_atom(HDC dc) {
+    set_desktop(32, kVram);
+    app.client = {0, 0, 64, 48};
+    reset();
+    named_props = atom_adds = 0;
+    ULONG binding = bind(dc);
+    assert(binding && atom_adds == 1 && atom_references() == 1 && Bindings[0].Atom);
+    assert(!std::strcmp(atoms[Bindings[0].Atom - 0xc000].name, Bindings[0].Property));
+    for (int i = 0; i < 10; ++i) {
+        reset();
+        assert(present(dc, binding) == 1 && bitblts == 1);
+    }
+    assert(!named_props);
+    assert(GetPropA(&app, Bindings[0].Property) == (HANDLE)(uintptr_t)binding);
+    named_props = 0;
+    JglTransportUnbind(binding);
+    assert(!named_props && !atom_references() && !app.props[0].name[0] && !live);
+    /* A window losing the property first still releases the reference. */
+    reset();
+    binding = bind(dc);
+    assert(binding && atom_references() == 1);
+    assert(RemovePropA(&app, MAKEINTATOM(Bindings[0].Atom)) == (HANDLE)(uintptr_t)binding);
+    assert(!present(dc, binding) && !bitblts);
+    JglTransportUnbind(binding);
+    assert(!atom_references() && !live && !app.props[0].name[0]);
+    /* No atom: the name, as before. */
+    reset();
+    fail_atoms = true;
+    named_props = 0;
+    binding = bind(dc);
+    assert(binding && !Bindings[0].Atom && named_props == 1);
+    assert(present(dc, binding) == 1 && named_props == 2);
+    JglTransportUnbind(binding);
+    assert(named_props == 4 && !atom_references() && !app.props[0].name[0] && !live);
+    fail_atoms = false;
+}
 int main() {
     MockDc window_dc{&app, false, nullptr};
     HDC dc = &window_dc;
@@ -362,7 +450,7 @@ int main() {
                    dg_test_extent == ((DWORD)width | (48u << 16)));
             JglTransportUnbind(binding);
             assert(ioctl_count == 4 && ioctl_log[3] == DG9_WINDOW_RELEASE && !live);
-            assert(!Bindings[0].Token && !app.props[0].name[0]);
+            assert(!Bindings[0].Token && !app.props[0].name[0] && !atom_references());
         }
     /* Palettized and other depths stay unsupported before any allocation. */
     for (int depth : {1, 4, 8, 15, 24, 64}) {
@@ -400,6 +488,7 @@ int main() {
         assert(!live && !Bindings[0].Token && !Bindings[1].Token);
     }
     refusal(dc);
+    property_atom(dc);
     /* Unknown bindings are refused; NT keeps its WNDOBJ/DrawEscape path. */
     set_desktop(32, kVram);
     reset();
@@ -412,6 +501,6 @@ int main() {
     assert(!ioctl_count && !live);
     std::puts("PASS actual Win98 GL window frontend: 16/32-bpp bind, tag round trip through the "
               "actual 16-bit classifier at widths 1..640, RGB565/non-565/mixed depths, "
-              "1/4/8/15/24-bpp refusal, one rebind after a depth change and bounded "
-              "ERROR_BUSY-only resend");
+              "1/4/8/15/24-bpp refusal, one rebind after a depth change, bounded "
+              "ERROR_BUSY-only resend and the binding property's atom");
 }

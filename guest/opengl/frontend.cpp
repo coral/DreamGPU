@@ -1161,6 +1161,35 @@ static BOOL MatchingGeometry(JGL_CONTEXT *c) {
            window == c->DrawableWindow && width && height && width == c->Width &&
            height == c->Height;
 }
+/* Under Lock, for wglMakeCurrent(dc, c) where c is already this thread's
+ * current context (WineD3D re-applies its current context, e.g. after a
+ * pixel-format check; SwapBuffers after a resize). The full release and
+ * acquisition then would:
+ *  - release c (ReleaseCurrent): with the queue, a healthy context without
+ *    front-buffer drawing to publish or a reported failure leaves its packet
+ *    as the Released one, and the acquisition takes it straight back. It also
+ *    submits an older Released context's batch, asynchronously; skipping
+ *    that is the deferred release's existing contract: that batch still goes
+ *    before any later submission, and c did not stop being current. Without
+ *    the queue it is a synchronous flush, so that path is kept.
+ *  - fail for a context in Begin/End, failed or being deleted;
+ *  - take a failure reported meanwhile (DeferredFault), failing this call;
+ *  - recreate the drawable after a resize or for another window, drop the
+ *    binding without a client area, rebind for another DC, renew a missing
+ *    binding or host association.
+ * When none applies, every field it would assign keeps its value and nothing
+ * is sent: the call is exactly a no-op. The window must still be looked up,
+ * since a DC can move to another window; GetClientRect detects a resize. */
+static BOOL CurrentUnchanged(JGL_CONTEXT *c, HDC dc) {
+    HWND window;
+    ULONG width, height;
+    if (c->DC != dc || !Stream(c) || c->InBegin || c->Failed || c->Deleting || c->DeferredFault ||
+        c->FrontDirty || !c->Created || !c->Drawable || !c->Attached || !c->Bound || !c->Binding ||
+        !c->Window || c->DrawableWindow != c->Window)
+        return FALSE;
+    return WindowGeometry(dc, &window, &width, &height) && window == c->Window && width && height &&
+           width == c->Width && height == c->Height;
+}
 static BOOL Bind(JGL_CONTEXT *c) {
     DG_WINDOW_BIND request;
     DG_WINDOW_REPLY reply;
@@ -1513,6 +1542,10 @@ BOOL WINAPI wglMakeCurrent(HDC dc, HGLRC handle) {
     HWND window;
     BOOL result = FALSE, visible;
     EnterCriticalSection(&Lock);
+    if (old && handle && old->Id == (ULONG)(ULONG_PTR)handle && CurrentUnchanged(old, dc)) {
+        LeaveCriticalSection(&Lock);
+        return TRUE;
+    }
     if (old && old->InBegin && !old->Failed) {
         Error(old, GL_INVALID_OPERATION);
         goto done;
@@ -1882,23 +1915,54 @@ int WINAPI wglDescribePixelFormat(HDC dc, int format, UINT bytes,
     }
     return 1;
 }
+/* The window property recording the pixel format. A string name costs NT a
+ * global atom lookup (GlobalFindAtom: NtFindAtom, a system call) in every
+ * GetProp/SetProp, and WineD3D asks for the format around every D3D call.
+ * Its atom names the same property for every module and process. It is added
+ * once, at first use, and never deleted: that reference keeps the atom naming
+ * this string for the life of the process, also across a FreeLibrary while
+ * windows still carry the property (SetPropA by name took one reference per
+ * window instead; by atom it takes none). A racing first use adds the same
+ * atom; the thread that loses the publication drops its extra reference.
+ * Without an atom (a full atom table) the string still works, as before. */
+static const char PixelFormatName[] = "DreamGPU.WGL.PixelFormat.v1";
+static volatile LONG PixelFormatAtom;
+static LPCSTR PixelFormatProperty(void) {
+    LONG atom = PixelFormatAtom; /* aligned 32-bit load */
+    ATOM added;
+    if (atom)
+        return (LPCSTR)MAKEINTATOM(atom);
+    added = GlobalAddAtomA(PixelFormatName);
+    if (!added)
+        return PixelFormatName;
+    if (InterlockedCompareExchange(&PixelFormatAtom, (LONG)added, 0))
+        GlobalDeleteAtom(added); /* the published atom is this one */
+    return (LPCSTR)MAKEINTATOM(added);
+}
+/* WindowFromDC (a system call on NT) stays per call. No cache keyed by the DC
+ * can be validated without it: a cache DC (GetDC/ReleaseDC) or a class DC
+ * moves to another window, also of another process, with no event visible to
+ * this module, so an unchanged HDC never proves an unchanged window. */
 int WINAPI wglGetPixelFormat(HDC dc) {
     HWND window;
     ULONG width, height;
     if (!WindowGeometry(dc, &window, &width, &height))
         return 0;
-    return GetPropA(window, "DreamGPU.WGL.PixelFormat.v1") == (HANDLE)(ULONG_PTR)1 ? 1 : 0;
+    return GetPropA(window, PixelFormatProperty()) == (HANDLE)(ULONG_PTR)1 ? 1 : 0;
 }
 BOOL WINAPI wglSetPixelFormat(HDC dc, int format, const PIXELFORMATDESCRIPTOR *description) {
     HWND window;
     ULONG width, height;
+    LPCSTR property;
     /* Selection uses the index. The descriptor is only for metafile recording
      * in GDI and must not re-interpret the caller's original preferences. */
     (void)description;
-    if (format != 1 || !WindowGeometry(dc, &window, &width, &height) ||
-        GetPropA(window, "DreamGPU.WGL.PixelFormat.v1"))
+    if (format != 1 || !WindowGeometry(dc, &window, &width, &height))
         return FALSE;
-    return SetPropA(window, "DreamGPU.WGL.PixelFormat.v1", (HANDLE)(ULONG_PTR)1);
+    property = PixelFormatProperty();
+    if (GetPropA(window, property))
+        return FALSE;
+    return SetPropA(window, property, (HANDLE)(ULONG_PTR)1);
 }
 void APIENTRY glPushAttrib(GLbitfield mask) {
     JGL_CONTEXT *c;

@@ -20,7 +20,18 @@ static struct JGL9_BINDING {
     HDC Memory;
     HBITMAP Bitmap, Previous;
     char Property[48];
+    /* Property's global atom, referenced by the binding; 0: use the name. */
+    ATOM Atom;
 } Bindings[DG9_WINDOW_SLOTS];
+/* The binding's window property. A string name costs USER a global atom
+ * lookup in every GetProp, and each present asks. The binding holds its own
+ * reference to the atom of its unique name from bind to release, so the atom
+ * names exactly that property for as long as it is used; SetProp/RemoveProp
+ * by atom take and drop no reference. Without an atom the name works as
+ * before (SetPropA by name fails the same way when the table is full). */
+static LPCSTR BindingProperty(const struct JGL9_BINDING *binding) {
+    return binding->Atom ? (LPCSTR)MAKEINTATOM(binding->Atom) : binding->Property;
+}
 /* The tag bitmap is at least 16 pixels wide, so its first scanline holds the
  * whole tag at 16 or 32 bpp and SetBitmapBits row padding cannot split it. */
 static_assert(sizeof(DG9_BITMAP_TAG) <= 16 * 2, "tag fits one 16-bpp scanline");
@@ -90,12 +101,13 @@ int JglTransportBind(HDC dc, const DG_WINDOW_BIND *request, DG_WINDOW_REPLY *rep
     binding->Height = rect.bottom;
     binding->Depth = (ULONG)depth;
     wsprintfA(binding->Property, "DreamGPU.%08lx.%08lx", GetCurrentProcessId(), binding->Token);
+    binding->Atom = GlobalAddAtomA(binding->Property);
     tag.Magic0 = DG9_BITMAP_MAGIC0;
     tag.Magic1 = DG9_BITMAP_MAGIC1;
     tag.Binding = binding->Token;
     tag.Reserved = 0;
     if (SetBitmapBits(binding->Bitmap, sizeof(tag), &tag) != sizeof(tag) ||
-        !SetPropA(window, binding->Property, (HANDLE)(ULONG_PTR)binding->Token))
+        !SetPropA(window, BindingProperty(binding), (HANDLE)(ULONG_PTR)binding->Token))
         goto failed;
     reply->Version = DG_WINDOW_VERSION;
     reply->Status = DG_ESCAPE_OK;
@@ -133,8 +145,10 @@ void JglTransportUnbind(ULONG token) {
         request.Binding = token;
         WindowRequest(&request, &reply); /* private client close is final rundown */
         if (binding->Window &&
-            GetPropA(binding->Window, binding->Property) == (HANDLE)(ULONG_PTR)token)
-            RemovePropA(binding->Window, binding->Property);
+            GetPropA(binding->Window, BindingProperty(binding)) == (HANDLE)(ULONG_PTR)token)
+            RemovePropA(binding->Window, BindingProperty(binding));
+        if (binding->Atom)
+            GlobalDeleteAtom(binding->Atom);
         if (binding->Previous && binding->Previous != (HBITMAP)HGDI_ERROR)
             SelectObject(binding->Memory, binding->Previous);
         DeleteObject(binding->Bitmap);
@@ -165,7 +179,7 @@ int JglTransportPresent(HDC dc, const DG_WINDOW_PRESENT *present) {
             break;
         }
     if (!binding || WindowFromDC(dc) != binding->Window ||
-        GetPropA(binding->Window, binding->Property) != (HANDLE)(ULONG_PTR)binding->Token ||
+        GetPropA(binding->Window, BindingProperty(binding)) != (HANDLE)(ULONG_PTR)binding->Token ||
         !GetClientRect(binding->Window, &rect) || rect.right != (LONG)binding->Width ||
         rect.bottom != (LONG)binding->Height || GetMapMode(dc) != MM_TEXT ||
         !GetViewportOrgEx(dc, &viewport) || !GetWindowOrgEx(dc, &origin) || viewport.x ||

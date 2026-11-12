@@ -14,7 +14,7 @@ header = r'''
 #define TEST_WINDOWS_H
 #include <stdint.h>
 #include <string.h>
-typedef uint16_t WORD;
+typedef uint16_t WORD, ATOM;
 typedef uint32_t DWORD, ULONG;
 typedef int32_t LONG;
 typedef int BOOL;
@@ -39,6 +39,7 @@ typedef struct { LONG x, y; } POINT;
 #define DCX_CLIPCHILDREN 0x8
 #define DCX_CLIPSIBLINGS 0x10
 #define ZeroMemory(p, n) memset((p), 0, (n))
+#define MAKEINTATOM(i) ((LPSTR)(ULONG_PTR)(WORD)(i))
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -59,6 +60,8 @@ BOOL DeleteDC(HDC);
 BOOL SetPropA(HWND, LPCSTR, HANDLE);
 HANDLE GetPropA(HWND, LPCSTR);
 HANDLE RemovePropA(HWND, LPCSTR);
+ATOM GlobalAddAtomA(LPCSTR);
+ATOM GlobalDeleteAtom(ATOM);
 int wsprintfA(LPSTR, LPCSTR, ...);
 HDC GetDCEx(HWND, HRGN, DWORD);
 int ReleaseDC(HWND, HDC);
