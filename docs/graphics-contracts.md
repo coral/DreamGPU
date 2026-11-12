@@ -602,6 +602,29 @@ and disposable-VM acceptance cycle:
   R5G6B5 colours use all 64 greens; without it Wine stores `GL_RGB5` (five
   green bits on Mesa) and the probe uses only greens that survive that. The probe has not yet passed on a
   guest; Win98/XP game runs and macOS CGL remain unverified.
+- Point sprites apply to points only (Wine patch 0058; no frontend or host
+  change). WineD3D kept `GL_POINT_SPRITE` enabled whenever
+  `D3DRS_POINTSPRITEENABLE` was set, with `COORD_REPLACE` on every unit, and
+  Mesa 26 (radeonsi and llvmpipe) then drops those coordinate sets from
+  fixed-function vertex processing for every primitive, not only points, so
+  fixed-function triangles and lines sample one texel (ARB vertex programs
+  are unaffected). The Halo: Combat Evolved PC trial (D3D9) enables sprites at
+  device creation and never disables them; its vertex-shader scene, bloom and
+  interface render into an 800x600 texture that one pretransformed
+  fixed-function fan copies to the back buffer, so every frame was a single
+  colour (the scene's corner texel), also with `-useff` and before Wine 0049.
+  0058 enables the GL state only for point lists and for triangles in point
+  fill mode, re-evaluated on primitive changes to or from points and on fill
+  mode changes; sprites off send nothing new. The source test drives the
+  prepared handlers through a model of Wine's invalidation and apply loop
+  (200000 random operations against the rule). The installed D3D8/9 probe
+  (`tools/d3d/point-sprite-probe.inc`) draws Halo's 28-byte pretransformed
+  indexed fan, a 16-pixel point and an untransformed strip with sprites on
+  and off and compares every pixel; it checks the sprite itself only when
+  dgpugl.dll reports `GL_ARB_point_sprite`. It has not yet run on a guest, and
+  Halo itself remains to be rerun. Native OpenGL guests that leave sprites
+  enabled while drawing textured fixed-function primitives still meet Mesa's
+  behaviour.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the

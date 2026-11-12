@@ -231,6 +231,10 @@
     {
       "file": "0057-rgb565-storage.patch",
       "sha256": "517511ce25f01ba3c127a5ca807333ac3d2b6b41fd0f83cce98063b4af2a3be0"
+    },
+    {
+      "file": "0058-point-sprite-primitives.patch",
+      "sha256": "d52523eb98518f4e674fd64e0a1721573110fe8400508d3fbaf65900cf5c6284"
     }
   ],
   "files": {
@@ -368,7 +372,7 @@
     },
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",
-      "after_sha256": "62ee1081505f55e3db371ab77633afde33a91330730370d894521754b89ad0ba"
+      "after_sha256": "3f99857eaa105e5725723818aad1573d3dd4e84c4846023f71a216beb81c9150"
     },
     "wined3d/volume.c": {
       "before_sha256": "1c0abf7585df1f8282b26226553aa3943ff13266ee4f34c535655e8095061c7e",

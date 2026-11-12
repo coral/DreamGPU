@@ -256,6 +256,14 @@ the pname word and one or three floats. None of them is legal inside Begin/End.
 (including constant colors), make the cached blend factors unknown.
 `tests/guest/opengl/test_fixed_state.py` covers the frontend contract.
 
+Point sprites are forwarded unchanged. Mesa 26 (radeonsi and llvmpipe) does
+not limit `COORD_REPLACE` to points: while `GL_POINT_SPRITE` is enabled, its
+fixed-function vertex processing drops the replaced coordinate sets for every
+primitive, so textured fixed-function triangles and lines sample one texel
+(ARB vertex programs are unaffected). WineD3D therefore enables the state only
+while it draws points (patch 0058); an OpenGL application that leaves it
+enabled across textured fixed-function triangles sees Mesa's result.
+
 Current build and evidence navigation: [guest runtime](../README.md),
 [guest tools](../../tools/README.md), and [execution evidence](../../docs/progress.md).
 Historical benchmark paths above belong to the original Juke evidence tree.

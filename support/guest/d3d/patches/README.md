@@ -1132,3 +1132,54 @@ GL that accepts or rejects `GL_RGB565`, and with `ARB_ES2_compatibility`
 format and type fields, that the 16-bit formats above keep their entries, and
 that the probe restores the 2D binding, deletes its texture and leaves no GL
 error; it fails without the patch.
+
+`0058-point-sprite-primitives.patch` enables `GL_POINT_SPRITE` only while
+points are rasterized. Direct3D's `D3DRS_POINTSPRITEENABLE` replaces the
+texture coordinates of point primitives only, and so does `GL_POINT_SPRITE`
+by its specification; Wine set the GL enable from the render state alone,
+with `COORD_REPLACE` on for every unit since context creation. Mesa 26
+(radeonsi and llvmpipe, Mesa 26.2.6 on the Linux host) does not keep to the
+specification there: while the enable is set, its fixed-function vertex
+processing drops every coordinate set with `COORD_REPLACE`, so fixed-function
+triangles and lines sample one texel (ARB vertex programs are unaffected;
+points and polygons in point mode get correct sprites). Halo: Combat Evolved
+(the PC trial, D3D9) enables point sprites once at device creation and never
+disables them. Its scene, bloom and interface draws use vertex shaders and
+render into an 800x600 render-target texture; the one fixed-function draw that
+copies that texture to the back buffer (a pretransformed, indexed four-vertex
+triangle fan, POINTSPRITEENABLE still set) then filled the screen with one
+texel's colour every frame, with or without `-useff` and before 0049 too.
+
+The fixed-function vertex pipe (`vp_ffp_states`, the ARB backend's) now
+handles `STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE)` with
+`state_pointsprite_draw`: it enables `GL_POINT_SPRITE` when the render state
+is set and the draw's primitive type is `GL_POINTS`, or when fill mode is
+`WINED3D_FILL_POINT` (GL rasterizes those polygons as points, which keep
+their sprites as before), and disables it otherwise. `STATE_POINT_ENABLE`,
+which upstream already invalidates whenever the primitive type changes to or
+from points (directly and through state blocks) and which this pipe handled
+with `state_nop`, now reapplies it through `state_pointsprite_primitive`
+when sprites are on and the render state is not pending; `state_fillmode`
+does the same. With sprites off nothing is sent for primitive or fill-mode
+changes (context creation, the render-state handler and `SetupForBlit`
+already leave the enable clear). Without `ARB_point_sprite` the FIXME and
+nop handlers are unchanged, and the GLSL vertex pipe keeps upstream's
+`state_pointsprite`. Native OpenGL guests that leave `GL_POINT_SPRITE`
+enabled while drawing textured fixed-function primitives still meet Mesa's
+behaviour; the host forwards the enable unchanged.
+
+`test_point_sprite_primitives.py` runs the prepared `state_pointsprite_draw`,
+`state_pointsprite_primitive` and `state_fillmode` under ASan/UBSan against a
+recording GL and a model of WineD3D's invalidation and apply loop (render
+state, primitive type, fill mode, `SetupForBlit`, context creation), checked
+against the prepared `device.c`, `context.c`, `cs.c` and `stateblock.c`:
+after every draw the enable equals the rule above over Halo's sequence,
+point/triangle switches, point fill mode, blits, new contexts and 200000
+random operations, and sprites off send nothing. It also checks the state
+template rows. It fails without the patch, and each mutation of the rule or
+of the two reapplications fails it. The installed D3D8/9 probe
+(`tools/d3d/point-sprite-probe.inc`) draws, with sprites on and then off, a
+quadrant-textured pretransformed quad in Halo's 28-byte layout as an indexed
+fan, a 16-pixel point and an untransformed quad after the point, and compares
+every pixel; the point shows upright quadrants when dgpugl.dll reports
+`GL_ARB_point_sprite`, and otherwise its own texel (logged as a skip).

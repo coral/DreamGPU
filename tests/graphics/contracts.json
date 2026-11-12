@@ -492,6 +492,14 @@
       "scope": "installed-api",
       "path": "tools/d3d/partial-lock-probe.inc"
     },
+    "d3d-point-sprite-primitives": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_point_sprite_primitives.py"
+    },
+    "guest-point-sprites": {
+      "scope": "installed-api",
+      "path": "tools/d3d/point-sprite-probe.inc"
+    },
     "d3d8-shader-validation": {
       "scope": "source",
       "path": "tests/guest/d3d/test_shader_validation.py"
@@ -665,6 +673,25 @@
         "guest-partial-locks"
       ],
       "remaining": "No frontend or host change. WineD3D downloaded the whole surface (GetTexImage of every texel, 30 synchronous 64 KiB DreamGPU QUERY round trips for 800x600) for any lock that found system memory stale; UT2003's ReduceMouseLag locks one backbuffer pixel read-only after every present (75 FPS with it, 669 without on a Win2000 guest). Wine patch 0056 reads only the locked rectangle with one ReadPixels from a read framebuffer holding the target's texture, into the system-memory copy at the rectangle's offset (pointer and pitch exactly as before), and keeps the texture authoritative: system memory is not marked current, a read-only unlock transfers nothing and a writable unlock uploads only the rectangle (TexSubImage). Full and DISCARD locks, NO_DIRTY_UPDATE writes, a current system-memory copy, depth/stencil, block, converted, color-keyed and other formats, multisampling, the front buffer, targets drawn other than into their texture (ORM_BACKBUFFER, onscreen drawables), DIB/user-memory/PBO/client storage, mipmap levels and cube faces keep the full transfer; an unusable context falls back to it without a transfer. Source tests run the prepared map/unmap state machine against a pixel-tracking GL. The installed D3D8/9 probe (read-only 1x1, 16x16 and last-pixel and writable 8x8 locks of the backbuffer and of lockable X8R8G8B8 and R5G6B5 400x300 render targets, each exact with the whole-lock pitch; only pixels inside each locked rectangle are read) has not yet passed on a guest. Transfer size is measured with transport counters: with 0056's wined3d.dll app-local in UT2003 on Win2000, DM-Antalus with ReduceMouseLag=True ran about 269 FPS (before 67-75) with one ReadPixels QUERY per frame instead of 3 GetTexLevelParameteriv and 30 GetTexImage QUERYs. R5G6B5 targets keep all six green bits with exact RGB565 storage (gl.rgb565-storage, Wine 0057), and the probe then uses all 64 greens; without it Wine stores GL_RGB5 and the probe uses only greens that survive five bits. Win98/XP game runs and macOS CGL remain unverified."
+    },
+    {
+      "id": "d3d.point-sprite-scope",
+      "area": 11,
+      "api": "D3D8/D3D9 (Wine fixed-function pipeline)",
+      "operation": "D3DRS_POINTSPRITEENABLE left set while fixed-function (pretransformed or untransformed) textured triangles and lines draw; point lists with sprites on and off",
+      "format": "any texture, one or more coordinate sets",
+      "resource": "draw",
+      "usage": "render to texture, then a pretransformed fixed-function quad copies it to the back buffer (Halo: Combat Evolved PC trial)",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-point-sprite-primitives",
+        "guest-point-sprites",
+        "gl-fixed-state"
+      ],
+      "remaining": "No frontend or host change. WineD3D enabled GL_POINT_SPRITE whenever the render state was set (COORD_REPLACE is on for every unit), and Mesa 26 (radeonsi and llvmpipe, 26.2.6 on the Linux host) then drops those coordinate sets from fixed-function vertex processing for every primitive, so fixed-function triangles and lines sampled one texel; ARB vertex programs are unaffected. The Halo PC trial sets sprites once and copies its vertex-shader-rendered 800x600 scene texture to the back buffer with one pretransformed indexed fan, so every frame was one colour (also with -useff and before Wine 0049). Wine patch 0058 enables GL_POINT_SPRITE only for point lists and for triangles in point fill mode, re-evaluated on primitive changes to or from points and on fill-mode changes; with sprites off nothing new is sent. Source tests drive the prepared handlers through a model of Wine's invalidation and apply loop. The installed D3D8/9 probe (Halo's 28-byte pretransformed indexed fan, a 16-pixel point and an untransformed strip, sprites on and off, every pixel compared; the sprite itself only when dgpugl.dll reports GL_ARB_point_sprite) has not yet run on a guest, and Halo remains to be rerun. Native OpenGL guests that leave GL_POINT_SPRITE enabled across textured fixed-function triangles still see Mesa's result; Win98/XP and macOS CGL remain unverified."
     },
     {
       "id": "ddraw.dc",

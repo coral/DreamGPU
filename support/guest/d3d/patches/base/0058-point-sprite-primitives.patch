@@ -1,0 +1,80 @@
+--- a/wined3d/state.c
++++ b/wined3d/state.c
+@@ -76,6 +76,12 @@
+         default:
+             FIXME("Unrecognized fill mode %#x.\n", mode);
+     }
++
++    /* DreamGPU: point fill mode rasterizes triangles as points, which take
++     * point sprites (see state_pointsprite_primitive). */
++    if (state->render_states[WINED3D_RS_POINTSPRITEENABLE]
++            && !isStateDirty(context, STATE_POINT_ENABLE))
++        context_apply_state(context, state, STATE_POINT_ENABLE);
+ }
+ 
+ static void state_lighting(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+@@ -1581,6 +1587,47 @@
+     }
+ }
+ 
++/* DreamGPU: Direct3D point sprites replace the texture coordinates of point
++ * primitives only, and so does GL_POINT_SPRITE by its specification. Mesa 26
++ * (radeonsi, llvmpipe) does not: while the enable is set, its fixed-function
++ * vertex processing drops every coordinate set with COORD_REPLACE, which Wine
++ * sets on every unit, so fixed-function triangles and lines sample one texel
++ * (ARB vertex programs are unaffected). Halo enables point sprites once and
++ * leaves them on; its final pretransformed quad, which copies the scene to
++ * the back buffer, then filled the screen with one colour. The enable is
++ * therefore set only while points are rasterized: point lists, and triangles
++ * under point fill mode (polygons rasterized as points take sprites in GL as
++ * before). Every other draw runs with it disabled, which is what both APIs
++ * define. */
++static void state_pointsprite_draw(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
++{
++    const struct wined3d_gl_info *gl_info = context->gl_info;
++
++    if (state->render_states[WINED3D_RS_POINTSPRITEENABLE]
++            && (state->gl_primitive_type == GL_POINTS
++            || state->render_states[WINED3D_RS_FILLMODE] == WINED3D_FILL_POINT))
++    {
++        gl_info->gl_ops.gl.p_glEnable(GL_POINT_SPRITE_ARB);
++        checkGLcall("glEnable(GL_POINT_SPRITE_ARB)");
++    }
++    else
++    {
++        gl_info->gl_ops.gl.p_glDisable(GL_POINT_SPRITE_ARB);
++        checkGLcall("glDisable(GL_POINT_SPRITE_ARB)");
++    }
++}
++
++/* STATE_POINT_ENABLE: the primitive type changed to or from points. With
++ * sprites off the enable is already clear (the render state handler, context
++ * creation and blits clear it), so nothing is sent. */
++static void state_pointsprite_primitive(struct wined3d_context *context,
++        const struct wined3d_state *state, DWORD state_id)
++{
++    if (state->render_states[WINED3D_RS_POINTSPRITEENABLE]
++            && !isStateDirty(context, STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE)))
++        state_pointsprite_draw(context, state, STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE));
++}
++
+ static void state_wrap(struct wined3d_context *context, const struct wined3d_state *state, DWORD state_id)
+ {
+     if (state->render_states[WINED3D_RS_WRAP0]
+@@ -5496,7 +5543,7 @@
+     { STATE_RENDER(WINED3D_RS_POINTSIZE_MIN),             { STATE_RENDER(WINED3D_RS_POINTSIZE_MIN),             state_psizemin_arb  }, ARB_POINT_PARAMETERS            },
+     { STATE_RENDER(WINED3D_RS_POINTSIZE_MIN),             { STATE_RENDER(WINED3D_RS_POINTSIZE_MIN),             state_psizemin_ext  }, EXT_POINT_PARAMETERS            },
+     { STATE_RENDER(WINED3D_RS_POINTSIZE_MIN),             { STATE_RENDER(WINED3D_RS_POINTSIZE_MIN),             state_psizemin_w    }, WINED3D_GL_EXT_NONE             },
+-    { STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE),         { STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE),         state_pointsprite   }, ARB_POINT_SPRITE                },
++    { STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE),         { STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE),         state_pointsprite_draw }, ARB_POINT_SPRITE             },
+     { STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE),         { STATE_RENDER(WINED3D_RS_POINTSPRITEENABLE),         state_pointsprite_w }, WINED3D_GL_EXT_NONE             },
+     { STATE_RENDER(WINED3D_RS_POINTSCALEENABLE),          { STATE_RENDER(WINED3D_RS_POINTSCALEENABLE),          state_pscale        }, WINED3D_GL_EXT_NONE             },
+     { STATE_RENDER(WINED3D_RS_POINTSCALE_A),              { STATE_RENDER(WINED3D_RS_POINTSCALEENABLE),          NULL                }, WINED3D_GL_EXT_NONE             },
+@@ -5536,6 +5583,7 @@
+     { STATE_SAMPLER(7),                                   { 0,                                                  NULL                }, ARB_TEXTURE_NON_POWER_OF_TWO    },
+     { STATE_SAMPLER(7),                                   { 0,                                                  NULL                }, WINED3D_GL_NORMALIZED_TEXRECT   },
+     { STATE_SAMPLER(7),                                   { STATE_SAMPLER(7),                                   sampler_texmatrix   }, WINED3D_GL_EXT_NONE             },
++    { STATE_POINT_ENABLE,                                 { STATE_POINT_ENABLE,                                 state_pointsprite_primitive }, ARB_POINT_SPRITE        },
+     { STATE_POINT_ENABLE,                                 { STATE_POINT_ENABLE,                                 state_nop           }, WINED3D_GL_EXT_NONE             },
+     {0 /* Terminate */,                                   { 0,                                                  0                   }, WINED3D_GL_EXT_NONE             },
+ };
