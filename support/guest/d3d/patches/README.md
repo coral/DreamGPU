@@ -1085,4 +1085,9 @@ and current-`SYSMEM` maps, depth/stencil and every other ineligible surface,
 and context failures at map and unmap. `test_map_dc_failures.py` stubs the
 helper (its surfaces never qualify). The installed D3D8/9 probe
 `tools/d3d/partial-lock-probe.inc` locks the backbuffer and lockable render
-targets.
+targets and reads only pixels inside each locked rectangle; it does not try
+to observe how much a lock transferred (the transport counters do: UT2003's
+DM-Antalus with `ReduceMouseLag=True` went from 67-75 to about 269 FPS on a
+Win2000 guest, one 1-pixel `ReadPixels` per frame instead of 33 queries).
+Its R5G6B5 colours use greens that survive Wine's `GL_RGB5` storage of that
+format (5-bit green without `ARB_ES2_compatibility`).

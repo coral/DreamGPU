@@ -564,10 +564,17 @@ and disposable-VM acceptance cycle:
   installed D3D8/9 probe (`tools/d3d/partial-lock-probe.inc`: read-only 1x1,
   16x16 and last-pixel and writable 8x8 locks of the backbuffer and of
   lockable X8R8G8B8 and R5G6B5 400x300 render targets, exact against cleared
-  pixels and the whole-lock pitch, and on 32-bit targets that a 1x1 lock left
-  the neighbouring pixel of Wine's copy unrefreshed) has not yet run on a
-  guest; UT2003's frame rate with `ReduceMouseLag=True`, Win98/XP guests and
-  macOS CGL remain unverified.
+  pixels and the whole-lock pitch) reads only pixels inside each locked
+  rectangle; how much a lock transfers is measured with the transport
+  counters instead. With `wined3d.dll` from 0056 app-local in UT2003 on a
+  Win2000 guest, DM-Antalus with `ReduceMouseLag=True` ran 806 presents in
+  3 s (about 269 FPS, before 67-75) with one `ReadPixels` QUERY per frame
+  instead of 3 `GetTexLevelParameteriv` and 30 `GetTexImage` QUERYs, and 14
+  batches per frame instead of 46. Wine stores R5G6B5 targets as `GL_RGB5`
+  (`ARB_ES2_compatibility`, which selects `GL_RGB565`, is not advertised), so
+  their green keeps 5 bits, unlike a GeForce FX; the probe's R5G6B5 colours
+  use only greens that survive that. The probe has not yet passed on a
+  guest; Win98/XP game runs and macOS CGL remain unverified.
 - Name-sized scalars (`TexParameter`, `TexEnv`, `Hint`) are pre-validated by the
   frontend against the same tables as their vector forms. An unknown,
   vector-only or unnegotiated name is a local `GL_INVALID_ENUM`; previously the
