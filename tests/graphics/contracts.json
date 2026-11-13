@@ -1524,7 +1524,7 @@
         "primary-loss",
         "d3d-fbo-blit-destinations"
       ],
-      "remaining": "Prepared-source checks cover GDI completion, primary read/write preservation, and persistent primary loss/restoration across exclusive focus and mode changes. Installed Win2000 Golf 1999 Quick Start/menus pass; its modal+Alt+Tab artifacts (black terrain until the modal closes, blank YES/NO, missing toolbar half) are identical on Microsoft DirectDraw and on stock Cirrus + Microsoft DirectDraw, so they are game behavior, not a DreamGPU defect. Broader installed GDI/GPU ordering remains unverified."
+      "remaining": "Prepared-source checks cover GDI completion, primary read/write preservation, and persistent primary loss/restoration across exclusive focus and mode changes. Installed Win2000 Golf 1999 Quick Start/menus pass; its modal+Alt+Tab artifacts (black terrain until the modal closes, blank YES/NO, missing toolbar half) are identical on Microsoft DirectDraw and on stock Cirrus + Microsoft DirectDraw, so they are game behavior, not a DreamGPU defect. 8-bit (P8) primaries with a GL swapchain are excluded from the desktop readback (Wine 0067): the device writes publications back only into 16/32-bit scanout, so every Lock replaced the application's indices with stale desktop pixels (StarCraft's once-drawn in-mission console was one flat colour; a guest probe read index 0 for all 307,200 pixels it had drawn). The primary's own storage is authoritative and each publication copies all of it; StarCraft's console renders on Windows 98 (m54 + 0067). GDI drawing onto an 8-bit swapchain desktop is not merged into the primary. Broader installed GDI/GPU ordering remains unverified."
     },
     {
       "id": "display.modes",

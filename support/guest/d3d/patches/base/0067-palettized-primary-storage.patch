@@ -1,0 +1,25 @@
+--- a/ddraw/surface.c
++++ b/ddraw/surface.c
+@@ -95,6 +95,22 @@
+     if (w <= 0 || h <= 0)
+         return DD_OK;
+ 
++    /* DreamGPU: an 8-bit desktop never receives the swapchain's publications
++     * (the device writes them back only into direct-colour scanout), and GDI
++     * maps any readback through its own colour matching. Reading it would
++     * replace the indices the application wrote with stale desktop pixels:
++     * StarCraft draws its console once, then locks the whole primary every
++     * frame to update dirty rectangles. A palettized primary's own storage is
++     * authoritative, so publish all of it and never read the desktop back. */
++    if (surface->ddraw->swapchain_window
++            && format_is_paletteindexed(&surface->surface_desc.u4.ddpfPixelFormat))
++    {
++        if (read)
++            return DD_OK;
++        return wined3d_surface_blt(surface->ddraw->wined3d_frontbuffer, NULL,
++                surface->wined3d_surface, NULL, 0, NULL, WINED3D_TEXF_POINT);
++    }
++
+     /* GDI can modify a primary even while a GL swapchain exists. The public
+      * primary's CPU contents must come from the completed desktop image. */
+     if (read || !surface->ddraw->swapchain_window)

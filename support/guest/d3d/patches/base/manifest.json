@@ -263,6 +263,10 @@
     {
       "file": "0065-buffer-create-without-error-queries.patch",
       "sha256": "f3df0e46939a4cac90613e3366eb635e6bb6b4ee91de7c4f69a4756793cbd191"
+    },
+    {
+      "file": "0067-palettized-primary-storage.patch",
+      "sha256": "109fe33c6dd27e9db49ce8c7b0c52d7800a99630cbe352927978c60d016f7560"
     }
   ],
   "files": {
@@ -272,7 +276,7 @@
     },
     "ddraw/surface.c": {
       "before_sha256": "2befc4bf776b67c5eb14918770e749e17d114359b970aecaa289745e67d84a1f",
-      "after_sha256": "16016e6292e7ab89f8f2d79f460e5bdaf34a98af9972e1096795609e95531267"
+      "after_sha256": "0762144cf70b4389e25ab41f7b05c879899bf2f236eaa54911883579253331a4"
     },
     "wined3d/directx.c": {
       "before_sha256": "3bb18ad8cf7805122c5d124cfc84707b7f495f4eec8dc36b928ee33ec2318a2e",

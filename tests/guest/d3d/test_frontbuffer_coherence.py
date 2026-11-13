@@ -37,9 +37,12 @@ typedef struct {int left,top,right,bottom;} RECT;
 struct wined3d_surface {uint32_t bits[48],native[48];int acquired;};
 typedef struct wined3d_surface *HDC;
 struct ddraw_palette {void *wineD3DPalette;};
+typedef struct {DWORD dwFlags;} DDPIXELFORMAT;
+#define DDPF_PALETTEINDEXED8 0x20
+static inline BOOL format_is_paletteindexed(const DDPIXELFORMAT *f){return !!(f->dwFlags&DDPF_PALETTEINDEXED8);}
 struct ddraw {void *swapchain_window;struct wined3d_surface *wined3d_frontbuffer;};
 struct ddraw_surface {struct ddraw *ddraw;struct wined3d_surface *wined3d_surface;
- struct ddraw_palette *palette;struct {int dwWidth,dwHeight;}surface_desc;};
+ struct ddraw_palette *palette;struct {int dwWidth,dwHeight;struct {DDPIXELFORMAT ddpfPixelFormat;}u4;}surface_desc;};
 static BOOL ddraw_surface_is_lost(const struct ddraw_surface*s){assert(s);return 0;}
 static struct wined3d_surface screen,logical,front;
 static int dc_gets,releases,copies,blits,fail_get,fail_release,fail_screen,fail_copy;
@@ -79,7 +82,7 @@ static void reset(void)
 }
 int main(void)
 {
- struct ddraw owner={(void*)1,&front};struct ddraw_surface s={&owner,&logical,NULL,{8,6}};
+ struct ddraw owner={(void*)1,&front};struct ddraw_surface s={&owner,&logical,NULL,{8,6,{{0}}}};
  RECT r={2,1,6,4};
  reset();assert(!ddraw_surface_update_frontbuffer(&s,&r,TRUE));
  assert(copies==1&&dc_gets==1&&releases==1&&!blits);
@@ -102,7 +105,19 @@ int main(void)
  for(int y=0;y<6;++y)for(int x=0;x<8;++x)
   assert(screen.bits[y*8+x]==(unsigned)((x>=2&&x<6&&y>=1&&y<4?0x340000:0x120000)+y*8+x));
  assert(ddraw_surface_update_frontbuffer(NULL,NULL,TRUE)==E_FAIL);
- puts("PASS actual primary update: GDI reads with live swapchain, partial publication preserves desktop, full fastpath, failure isolation");
+ // An 8-bit desktop never holds the swapchain's image (StarCraft's console):
+ // a palettized primary keeps its own indices and always publishes all of them.
+ owner.swapchain_window=(void*)1;s.surface_desc.u4.ddpfPixelFormat.dwFlags=DDPF_PALETTEINDEXED8;
+ reset();assert(!ddraw_surface_update_frontbuffer(&s,&r,TRUE)&&!copies&&!dc_gets&&!blits);
+ for(unsigned i=0;i<48;++i)assert(logical.bits[i]==0x340000+i);
+ reset();assert(!ddraw_surface_update_frontbuffer(&s,NULL,TRUE)&&!copies&&!dc_gets&&!blits);
+ reset();assert(!ddraw_surface_update_frontbuffer(&s,&r,FALSE)&&!copies&&!dc_gets&&blits==1);
+ assert(!memcmp(screen.bits,logical.bits,sizeof(screen.bits)));
+ // Without a swapchain the desktop is the primary's only display path.
+ reset();owner.swapchain_window=NULL;
+ assert(!ddraw_surface_update_frontbuffer(&s,&r,TRUE)&&copies==1&&!blits);
+ assert(logical.bits[1*8+2]==0x120000+1*8+2&&logical.bits[0]==0x340000);
+ puts("PASS actual primary update: GDI reads with live swapchain, partial publication preserves desktop, full fastpath, failure isolation, palettized primary authority");
 }
 '''
 FFP = r'''

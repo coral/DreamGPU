@@ -1564,3 +1564,22 @@ as on a native driver. Startup format probing still queries errors.
 `test_buffer_create_queries.py` checks the prepared `buffer.c` for
 `p_glGetError(` calls (four without the patch) and that the zero-name
 fallback still cleans up.
+
+`0067-palettized-primary-storage.patch` stops 0024's desktop readback for
+palettized (8-bit) primaries with a GL swapchain. The device writes swapchain
+publications back only into direct-colour (16/32-bit) scanout, so an 8-bit
+desktop never holds the primary's image, and GDI maps whatever it does hold
+through its own colour matching. Every Lock, GetDC, keyed Blt and partial
+publication of a P8 primary therefore replaced the application's indices with
+stale desktop pixels. StarCraft draws its in-mission console once and then
+updates only dirty rectangles inside a locked primary, so the console became
+one flat colour (4,4,4) while the map, minimap and portrait, which it redraws,
+looked right. A guest probe that draws a P8 pattern and locks it again read
+back index 0 for all 307,200 pixels. Upstream Wine likewise skips the read
+while it owns the frontbuffer. With the patch, a palettized primary's own
+storage is authoritative: reads keep it and every publication copies all of
+it (640x480 bytes) into the swapchain front. Without a swapchain the desktop
+is still the only display path and keeps 0024's behaviour.
+`test_frontbuffer_coherence.py` runs the prepared function with a P8 primary:
+reads touch neither the desktop nor the primary, and a partial write publishes
+the whole primary without seeding from the desktop.
