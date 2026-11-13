@@ -1583,3 +1583,18 @@ is still the only display path and keeps 0024's behaviour.
 `test_frontbuffer_coherence.py` runs the prepared function with a P8 primary:
 reads touch neither the desktop nor the primary, and a partial write publishes
 the whole primary without seeding from the desktop.
+
+`0068-p8-modes-from-32bit.patch` enumerates 8-bit palettized display modes
+from the 32-bit modes a P8 request sets. `wined3d_set_adapter_display_mode`
+never sets an 8-bit desktop: a one-byte format switches to 32 bits per pixel
+and the palette is converted on presentation. Enumeration still matched the
+format's own 8 bits against `EnumDisplaySettings`, and the Windows 2000/XP
+display driver lists only 16- and 32-bit modes, so DirectDraw's
+EnumDisplayModes returned no 8-bit mode although SetDisplayMode(w, h, 8)
+succeeded. Age of Empires II looks for its 800x600x8 mode before setting it
+and stopped with "Could not initialize graphics system". `wined3d_mode_enum_bits`
+maps a one-byte format to 32 bits in both `wined3d_get_adapter_mode_count`
+and `wined3d_enum_adapter_modes`; 16-bit and d3d8 (`WINED3DFMT_UNKNOWN`)
+enumeration are unchanged. `test_p8_mode_enumeration.py` runs both prepared
+functions under ASan/UBSan against an NT-style mode list (16/32 bpp only) and
+one that also lists 8 bpp natively, and fails without the patch.

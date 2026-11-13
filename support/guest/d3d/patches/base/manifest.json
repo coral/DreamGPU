@@ -267,6 +267,10 @@
     {
       "file": "0067-palettized-primary-storage.patch",
       "sha256": "109fe33c6dd27e9db49ce8c7b0c52d7800a99630cbe352927978c60d016f7560"
+    },
+    {
+      "file": "0068-p8-modes-from-32bit.patch",
+      "sha256": "66cf840519ac3f8b735ba70ea7906e371f7296a1d101a04b90974e7874139355"
     }
   ],
   "files": {
@@ -280,7 +284,7 @@
     },
     "wined3d/directx.c": {
       "before_sha256": "3bb18ad8cf7805122c5d124cfc84707b7f495f4eec8dc36b928ee33ec2318a2e",
-      "after_sha256": "e9f1963e5eea92975d1dfb3ef7c092bf82d736e39e89f7aba45dbd7cfde48e09"
+      "after_sha256": "b30bd389f06d6f1953933352f961b2169b688bf1d4ee9d8a6b559cd1f2fd5786"
     },
     "wined3d/resource.c": {
       "before_sha256": "bb5d96bd0ba31be8b24eaf172b5a927c6760b9e094b9ebb132d118f1447039d7",

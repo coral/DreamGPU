@@ -264,6 +264,10 @@
       "scope": "source",
       "path": "tests/guest/d3d/test_buffer_create_queries.py"
     },
+    "d3d-p8-mode-enumeration": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_p8_mode_enumeration.py"
+    },
     "guest-d3d-table-fog": {
       "scope": "installed-api",
       "path": "tools/d3d/table-fog-probe.inc"
@@ -1858,6 +1862,24 @@
         "guest-vbuffer"
       ],
       "remaining": "A DreamGPU glGetError is a synchronous query that the host answers only after executing everything queued before it. WineD3D brackets every buffer object creation with four of them (an error-clearing loop and checks after glGenBuffers, glBindBuffer and glBufferData); Thief: Deadly Shadows creates an 84-byte vertex buffer and a 6-byte index buffer each frame after its scene (host trace: 8 glGetError queries per frame), so the guest waited for the host to finish the frame so far once per frame. Wine patch 0065 drops the queries: names and bindings are guest-local in DreamGPU, so a zero name is the only synchronous failure, and a host GL_OUT_OF_MEMORY from glBufferData stays pending as on a native driver instead of steering WineD3D to its non-VBO fallback. Thief: Deadly Shadows gameplay on Windows 2000 went from about 103 to 114 FPS (42 instead of 54 transport batches per frame). Startup format probing still queries errors."
+    },
+    {
+      "id": "ddraw.p8-mode-enumeration",
+      "area": 11,
+      "api": "DirectDraw EnumDisplayModes / D3D adapter mode enumeration (WineD3D) for 8-bit palettized formats",
+      "operation": "enumerating P8 display modes: the 32-bit desktop modes that a P8 SetDisplayMode actually sets (8-bit desktops are emulated on 32 bpp)",
+      "format": "P8",
+      "resource": "display mode",
+      "usage": "enumeration",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-p8-mode-enumeration",
+        "patches"
+      ],
+      "remaining": "WineD3D never sets an 8-bit desktop mode: a P8 request switches to 32 bits per pixel and converts the palette on presentation. Mode enumeration still matched the 8-bit format against the driver list, and the Windows 2000/XP display driver lists only 16- and 32-bit modes, so DirectDraw reported no 8-bit mode while SetDisplayMode(w, h, 8) worked. Age of Empires II looks for its 8-bit mode first and stopped with \"Could not initialize graphics system\". Wine patch 0068 enumerates P8 modes from the 32-bit modes the setter uses (also on Windows 98, where the same resolutions result); 16-bit and d3d8 (UNKNOWN) enumeration are unchanged. With an app-local 0068 wined3d.dll Age of Empires II reaches its 800x600 8-bit main menu on Windows XP with correct colours."
     },
     {
       "id": "d3d.vertex-blend",
