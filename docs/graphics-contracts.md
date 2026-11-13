@@ -750,7 +750,8 @@ and disposable-VM acceptance cycle:
   pixel shaders (np2fixup) are unchanged. Source test: the prepared programs
   and loader interpreted (10 mutations rejected). The installed D3D8/9 NPOT
   probe (`tools/d3d/npot-probe.inc`) draws the 640x480 texture through vs_1_1
-  into stage 0 and requires every texel; it has not run on a guest.
+  into stage 0 and requires every texel; it passes on Windows 2000, XP and
+  Windows 98, and Thief: Deadly Shadows renders its world in gameplay.
 - Buffer object creation without GL error round trips. A glGetError waits
   for the host to execute everything queued before it, and WineD3D asked four
   times per buffer object it created. Thief: Deadly Shadows creates two small
@@ -758,7 +759,8 @@ and disposable-VM acceptance cycle:
   host's frame once per frame. Wine patch 0065 drops the queries; a zero
   buffer name still takes the non-VBO fallback and glBufferData errors stay
   pending as on a native driver. Source test: the prepared `buffer.c` has no
-  glGetError calls.
+  glGetError calls. Thief: Deadly Shadows gameplay went from about 103 to 114
+  FPS on Windows 2000 (42 instead of 54 transport batches per frame).
 - WineD3D context acquisition cost. Every D3D operation acquires and releases
   WineD3D's context, and with the native context owner released after each
   one (for cross-thread handoff), every acquisition activated the context
