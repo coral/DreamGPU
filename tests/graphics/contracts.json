@@ -260,6 +260,10 @@
       "scope": "source",
       "path": "tests/guest/d3d/test_ffp_np2_coordinates.py"
     },
+    "d3d-buffer-create-queries": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_buffer_create_queries.py"
+    },
     "guest-d3d-table-fog": {
       "scope": "installed-api",
       "path": "tools/d3d/table-fog-probe.inc"
@@ -1826,6 +1830,26 @@
         "guest-npot"
       ],
       "remaining": "Without ARB_texture_non_power_of_two WineD3D (GeForce FX quirk) creates NPOT textures, such as an 800x600 render-target texture, as rectangles, which take texel coordinates; get_texture_matrix() multiplies the application's normalized coordinates by the texture's pow2_matrix, but transform_texture() skips the texture matrix under a vertex shader. Thief: Deadly Shadows renders its scene into an 800x600 render-target texture and draws it to the back buffer with a vertex shader and fixed-function stage 0, so every pixel showed texel (0, 0) of the scene: a uniform near-black screen with only the HUD drawn after it (host trace: fixed-function program 40 sampling RECT texture 41 with no coordinate scale). Wine patch 0064 keys a fixed-function stage vs_np2_fixup exactly when the texture matrix would have scaled but is skipped (a vertex shader and a texture without WINED3D_TEXTURE_POW2_MAT_IDENT) and multiplies the coordinate by program.local[stage] = (pow2 width, pow2 height, 1, 1) before plain, projected (count3/count4) and bump-mapped lookups; the locals load when the program is bound and on sampler() reloads for another NPOT texture. A host Mesa replay of the generated programs on an 800x600 rectangle gives one colour before and the scene after. Source tests interpret the prepared programs and loader (10 mutations rejected). The installed D3D8/9 NPOT probe draws the 640x480 texture's quarters through vs_1_1 into stage 0 and requires every texel; it and Thief: Deadly Shadows have not run on a guest. Pixel shaders keep Wine's np2fixup; point sprites with rectangles are unchanged."
+    },
+    {
+      "id": "d3d.buffer-create-no-error-sync",
+      "area": 11,
+      "api": "D3D8/D3D9 vertex and index buffers (WineD3D buffer objects over DreamGPU ARB_vertex_buffer_object)",
+      "operation": "creating a buffer object (glGenBuffers, glBindBuffer, glBufferData) without glGetError queries, so mid-frame buffer creation does not wait for the host to drain the stream",
+      "format": "n/a",
+      "resource": "vertex buffer, index buffer",
+      "usage": "creation",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-buffer-create-queries",
+        "d3d-vbo-adaptations",
+        "patches",
+        "guest-vbuffer"
+      ],
+      "remaining": "A DreamGPU glGetError is a synchronous query that the host answers only after executing everything queued before it. WineD3D brackets every buffer object creation with four of them (an error-clearing loop and checks after glGenBuffers, glBindBuffer and glBufferData); Thief: Deadly Shadows creates an 84-byte vertex buffer and a 6-byte index buffer each frame after its scene (host trace: 8 glGetError queries per frame), so the guest waited for the host to finish the frame so far once per frame. Wine patch 0065 drops the queries: names and bindings are guest-local in DreamGPU, so a zero name is the only synchronous failure, and a host GL_OUT_OF_MEMORY from glBufferData stays pending as on a native driver instead of steering WineD3D to its non-VBO fallback. Startup format probing still queries errors."
     },
     {
       "id": "d3d.vertex-blend",

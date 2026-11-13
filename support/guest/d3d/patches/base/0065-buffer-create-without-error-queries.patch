@@ -1,0 +1,66 @@
+--- a/wined3d/buffer.c
++++ b/wined3d/buffer.c
+@@ -128,18 +128,17 @@
+ static void buffer_create_buffer_object(struct wined3d_buffer *This, struct wined3d_context *context)
+ {
+     GLenum gl_usage = GL_STATIC_DRAW_ARB;
+-    GLenum error;
+     const struct wined3d_gl_info *gl_info = context->gl_info;
+ 
+     TRACE("Creating an OpenGL vertex buffer object for wined3d_buffer %p with usage %s.\n",
+             This, debug_d3dusage(This->resource.usage));
+ 
+-    /* Make sure that the gl error is cleared. Do not use checkGLcall
+-    * here because checkGLcall just prints a fixme and continues. However,
+-    * if an error during VBO creation occurs we can fall back to non-vbo operation
+-    * with full functionality(but performance loss)
+-    */
+-    while (gl_info->gl_ops.gl.p_glGetError() != GL_NO_ERROR);
++    /* DreamGPU: no error round trips here (0065). glGetError on a remoted
++     * context waits for the host to execute everything queued so far, and
++     * games create small buffers mid-frame, which serialized guest and host
++     * once per frame. Buffer names and bindings are guest-local, so only
++     * glBufferData can fail on the host; like a native driver, its
++     * GL_OUT_OF_MEMORY stays pending instead of steering a fallback. */
+ 
+     /* Basically the FVF parameter passed to CreateVertexBuffer is no good.
+      * The vertex declaration from the device determines how the data in the
+@@ -148,22 +147,15 @@
+      * format. */
+ 
+     GL_EXTCALL(glGenBuffers(1, &This->buffer_object));
+-    error = gl_info->gl_ops.gl.p_glGetError();
+-    if (!This->buffer_object || error != GL_NO_ERROR)
++    if (!This->buffer_object)
+     {
+-        ERR("Failed to create a VBO with error %s (%#x)\n", debug_glerror(error), error);
++        ERR("Failed to create a VBO.\n");
+         goto fail;
+     }
+ 
+     if (This->buffer_type_hint == GL_ELEMENT_ARRAY_BUFFER_ARB)
+         context_invalidate_state(context, STATE_INDEXBUFFER);
+     GL_EXTCALL(glBindBuffer(This->buffer_type_hint, This->buffer_object));
+-    error = gl_info->gl_ops.gl.p_glGetError();
+-    if (error != GL_NO_ERROR)
+-    {
+-        ERR("Failed to bind the VBO with error %s (%#x)\n", debug_glerror(error), error);
+-        goto fail;
+-    }
+ 
+     if (This->resource.usage & WINED3DUSAGE_DYNAMIC)
+     {
+@@ -189,12 +181,7 @@
+      * we're not double buffering, so we can release the heap mem afterwards
+      */
+     GL_EXTCALL(glBufferData(This->buffer_type_hint, This->resource.size, This->resource.heap_memory, gl_usage));
+-    error = gl_info->gl_ops.gl.p_glGetError();
+-    if (error != GL_NO_ERROR)
+-    {
+-        ERR("glBufferData failed with error %s (%#x)\n", debug_glerror(error), error);
+-        goto fail;
+-    }
++    checkGLcall("glBufferData");
+ 
+     This->buffer_object_usage = gl_usage;
+ 

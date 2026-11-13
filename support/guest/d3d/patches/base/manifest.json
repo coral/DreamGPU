@@ -259,6 +259,10 @@
     {
       "file": "0064-ffp-np2-vertex-shader-coordinates.patch",
       "sha256": "f52beb35496c8eb075d781bac9191add95a4014cad9f4b8da149e04c74fd7b90"
+    },
+    {
+      "file": "0065-buffer-create-without-error-queries.patch",
+      "sha256": "f3df0e46939a4cac90613e3366eb635e6bb6b4ee91de7c4f69a4756793cbd191"
     }
   ],
   "files": {
@@ -388,7 +392,7 @@
     },
     "wined3d/buffer.c": {
       "before_sha256": "78911f46049e08dc8cb43c78309849afe1cc47abe03f7627e2b315decc0ab8c2",
-      "after_sha256": "375c6a62ae2badbcaa6f844bbba26d9d32d58caf0c94e3cd046600993da71c6d"
+      "after_sha256": "e53315b60af3a2d113f97b7acf4775ee7091533103ee2355eccf4090443b9dd1"
     },
     "wined3d/arb_program_shader.c": {
       "before_sha256": "e817b87102cc16f41454f5925a79e7c4002cabff018cb9c28220f50977b3ae6a",

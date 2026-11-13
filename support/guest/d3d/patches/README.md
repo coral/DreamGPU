@@ -1548,3 +1548,19 @@ normalized coordinate) into fixed-function stage 0 and requires every texel
 1:1, as the pretransformed views do. `test_depth_textures.py` follows the
 stage op's padding. The diagnostic stack is rebased onto 0064 with its
 `wined3d_private.h` hunk moved by four lines.
+
+`0065-buffer-create-without-error-queries.patch` removes the glGetError
+round trips from `buffer_create_buffer_object`. A DreamGPU glGetError is a
+synchronous query that the host answers after executing everything queued
+before it. WineD3D cleared pending errors and checked again after
+glGenBuffers, glBindBuffer and glBufferData, four queries per buffer object.
+Thief: Deadly Shadows creates an 84-byte vertex buffer and a 6-byte index
+buffer every frame after drawing its scene (host trace: eight glGetError
+queries per frame), so the guest waited once per frame for the host to finish
+the frame so far. Buffer names and bindings are guest-local in DreamGPU, so a
+zero name is the only failure WineD3D can see synchronously and still takes
+the non-VBO fallback; a host GL_OUT_OF_MEMORY from glBufferData stays pending,
+as on a native driver. Startup format probing still queries errors.
+`test_buffer_create_queries.py` checks the prepared `buffer.c` for
+`p_glGetError(` calls (four without the patch) and that the zero-name
+fallback still cleans up.
