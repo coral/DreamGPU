@@ -1488,3 +1488,63 @@ it at creation) fails it. `test_thread_pixel_format.py` gains the fields and
 change is not observable in rendered pixels, and the probe cannot count
 system calls. The diagnostic stack is rebased onto 0063 with its
 `context.c` call-site line number renumbered.
+
+`0064-ffp-np2-vertex-shader-coordinates.patch` scales the coordinates a
+vertex shader supplies to fixed-function texture stages that sample an NPOT
+texture. DreamGPU reports a GeForce FX without ARB_texture_non_power_of_two,
+so WineD3D creates NPOT textures as rectangles (texel coordinates; 0049) or
+padded 2D textures, and `get_texture_matrix()` multiplies the application's
+normalized coordinates by the texture's `pow2_matrix` (width and height, or
+the padding fraction). `transform_texture()` skips the texture matrix under a
+vertex shader, and Wine's np2fixup covers only pixel shaders, so a vertex
+shader feeding a fixed-function stage sampled a rectangle at texels 0..1.
+Thief: Deadly Shadows renders its scene into an 800x600 render-target
+texture (a rectangle), adds bloom, and draws it to the back buffer with a
+vertex shader and fixed-function stage 0 (a host trace shows arbfp program
+40 sampling RECT texture 41 with no coordinate scale): every pixel showed one
+texel of the scene, a uniform near-black frame (four distinct colours in a
+whole screenshot) with only the light gem drawn after it. The 3D menu
+backdrop, drawn without that pass, was fine.
+
+`gen_ffp_frag_op` now keys a stage `vs_np2_fixup` (one bit of the stage op's
+padding; the key stays 12 bytes per stage) exactly when the texture matrix
+would scale and is skipped: a vertex shader is in use and the stage's texture
+lacks `WINED3D_TEXTURE_POW2_MAT_IDENT`. The arbfp replacement program declares
+`np2coordN = program.local[N]` for such a stage and multiplies the coordinate
+by it before the lookup: `MUL ret, fragment.texcoord[N], np2coordN` for plain
+and count4-projected lookups, and `MUL ret.xy` after count3's divisor move and
+after a bump-mapped stage adds its displacement (which is then scaled too, as
+D3D's normalized displacement requires). Program locals, as 0029's np2fixup:
+environment parameters alias the application's c# constants.
+`arbfp_load_np2_fixup` loads (pow2 width, pow2 height, 1, 1) per stage when
+`fragment_prog_arbfp` binds the program, and `shader_arb_load_constants`
+reloads them when `sampler()` flags another NPOT texture of the same target
+(`WINED3D_SHADER_CONST_PS_NP2_FIXUP`) without a pixel shader. Switching
+between a vertex shader and fixed-function vertices already reselects the
+replacement program (`vertexdeclaration` applies FOGVERTEXMODE, whose arbfp
+handler regenerates the settings). Fixed-function vertices (the texture
+matrix scales) and pixel shaders are unchanged; point sprites on rectangles
+remain unscaled as before. Upstream Wine has the same gap but uses
+ARB_texture_non_power_of_two wherever a driver offers it.
+
+`test_ffp_np2_coordinates.py` builds the prepared `gen_arbfp_ffp_shader`
+(with its helpers) and `arbfp_load_np2_fixup` under ASan/UBSan and interprets
+seven generated programs with a texture that reports where it was sampled: a
+vertex shader's coordinate reaches the same image point on an 800x600
+rectangle and an 800x600 texture padded to 1024x1024, for plain, count4 and
+count3 projected lookups, after a bump-mapped stage and on a second stage
+with its own local; a stage without the bit (texture-matrix coordinates) stays
+unscaled and declares no local. The prepared `gen_ffp_frag_op` condition, the
+loading on bind and on sampler reload, and the VS toggle's reselection are
+checked in the source. Each of ten mutations (no scale, unscaled projected or
+bump lookups, the displacement unscaled, scaling every rectangle, a scaled w,
+the wrong texture dimension, local 0 for every stage, and keying the bit
+without a vertex shader or for rectangles only) fails it. Replayed on host
+Mesa, the generated program for the Thief post pass gives one colour on an
+800x600 rectangle without 0064 and the scene with it. The installed D3D8/9
+NPOT probe (`tools/d3d/npot-probe.inc`) gains a stage that draws the 640x480
+texture's four quarters through vs_1_1 (`vshader_probe::vs11`, oT0 the
+normalized coordinate) into fixed-function stage 0 and requires every texel
+1:1, as the pretransformed views do. `test_depth_textures.py` follows the
+stage op's padding. The diagnostic stack is rebased onto 0064 with its
+`wined3d_private.h` hunk moved by four lines.

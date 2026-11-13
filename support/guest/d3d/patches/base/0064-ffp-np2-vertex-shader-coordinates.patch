@@ -1,0 +1,147 @@
+--- a/wined3d/arb_program_shader.c
++++ b/wined3d/arb_program_shader.c
+@@ -309,6 +309,9 @@
+     const struct wined3d_vertex_pipe_ops *vertex_pipe;
+     const struct fragment_pipeline *fragment_pipe;
+     BOOL ffp_proj_control;
++    /* DreamGPU: stages of the bound fixed-function replacement program that
++     * scale vertex shader coordinates by program.local[stage] (0064). */
++    WORD ffp_np2_fixup;
+ };
+ 
+ /* Context activation for state handlers is done by the caller. */
+@@ -524,6 +527,31 @@
+     }
+ }
+ 
++/* DreamGPU: the coordinate scales of the fixed-function replacement program's
++ * vs_np2_fixup stages, the pow2_matrix factors the texture matrix applies
++ * without a vertex shader (0064). Program locals: environment parameters
++ * alias the application's c# constants. */
++static void arbfp_load_np2_fixup(const struct wined3d_gl_info *gl_info,
++        const struct wined3d_state *state, WORD stages)
++{
++    unsigned int stage;
++
++    for (stage = 0; stages; stages >>= 1, ++stage)
++    {
++        const struct wined3d_texture *texture = state->textures[stage];
++        GLfloat scale[4];
++
++        if (!(stages & 1) || !texture)
++            continue;
++        scale[0] = texture->pow2_matrix[0];
++        scale[1] = texture->pow2_matrix[5];
++        scale[2] = 1.0f;
++        scale[3] = 1.0f;
++        GL_EXTCALL(glProgramLocalParameter4fvARB(GL_FRAGMENT_PROGRAM_ARB, stage, scale));
++    }
++    checkGLcall("Load fixed-function NP2 coordinate scales");
++}
++
+ /* Context activation is done by the caller. */
+ static void shader_arb_ps_local_constants(const struct arb_ps_compiled_shader *gl_shader,
+         const struct wined3d_context *context, const struct wined3d_state *state, UINT rt_height)
+@@ -696,6 +724,12 @@
+         if (context->constant_update_mask & WINED3D_SHADER_CONST_PS_NP2_FIXUP)
+             shader_arb_load_np2fixup_constants(&gl_shader->np2fixup_info, gl_info, state);
+     }
++    else if (priv->ffp_np2_fixup && (context->constant_update_mask & WINED3D_SHADER_CONST_PS_NP2_FIXUP))
++    {
++        /* DreamGPU: sampler() binding another NP2 texture of the same target
++         * keeps the fixed-function program; reload its scales (0064). */
++        arbfp_load_np2_fixup(gl_info, state, priv->ffp_np2_fixup);
++    }
+ }
+ 
+ static void shader_arb_load_constants(void *shader_priv, struct wined3d_context *context,
+@@ -6496,6 +6530,9 @@
+     for(stage = 0; stage < MAX_TEXTURES; stage++) {
+         if(!tex_read[stage]) continue;
+         shader_addline(&buffer, "TEMP tex%u;\n", stage);
++        /* DreamGPU: see arbfp_load_np2_fixup() (0064). */
++        if (settings->op[stage].vs_np2_fixup)
++            shader_addline(&buffer, "PARAM np2coord%u = program.local[%u];\n", stage, stage);
+         if(!bump_used[stage]) continue;
+         shader_addline(&buffer, "PARAM bumpmat%u = program.env[%u];\n", stage, ARB_FFP_CONST_BUMPMAT(stage));
+         if(!luminance_used[stage]) continue;
+@@ -6569,6 +6606,8 @@
+             } else {
+                 shader_addline(&buffer, "ADD ret, ret, fragment.texcoord[%u];\n", stage);
+             }
++            if (settings->op[stage].vs_np2_fixup)
++                shader_addline(&buffer, "MUL ret.xy, ret, np2coord%u;\n", stage);
+ 
+             shader_addline(&buffer, "%s tex%u, ret, texture[%u], %s;\n",
+                     instr, stage, stage, textype);
+@@ -6581,6 +6620,12 @@
+         } else if(settings->op[stage].projected == proj_count3) {
+             shader_addline(&buffer, "MOV ret, fragment.texcoord[%u];\n", stage);
+             shader_addline(&buffer, "MOV ret.w, ret.z;\n");
++            if (settings->op[stage].vs_np2_fixup)
++                shader_addline(&buffer, "MUL ret.xy, ret, np2coord%u;\n", stage);
++            shader_addline(&buffer, "%s tex%u, ret, texture[%u], %s;\n",
++                            instr, stage, stage, textype);
++        } else if (settings->op[stage].vs_np2_fixup) {
++            shader_addline(&buffer, "MUL ret, fragment.texcoord[%u], np2coord%u;\n", stage, stage);
+             shader_addline(&buffer, "%s tex%u, ret, texture[%u], %s;\n",
+                             instr, stage, stage, textype);
+         } else {
+@@ -6744,6 +6789,17 @@
+         checkGLcall("glBindProgramARB(GL_FRAGMENT_PROGRAM_ARB, desc->shader)");
+         priv->current_fprogram_id = desc->shader;
+ 
++        /* DreamGPU: program locals belong to the program just bound (0064). */
++        priv->ffp_np2_fixup = 0;
++        for (i = 0; i < MAX_TEXTURES; ++i)
++        {
++            if (desc->parent.settings.op[i].cop == WINED3D_TOP_DISABLE)
++                break;
++            if (desc->parent.settings.op[i].vs_np2_fixup)
++                priv->ffp_np2_fixup |= 1u << i;
++        }
++        arbfp_load_np2_fixup(gl_info, state, priv->ffp_np2_fixup);
++
+         if (device->shader_backend == &arb_program_shader_backend && context->last_was_pshader)
+         {
+             /* Reload fixed function constants since they collide with the
+--- a/wined3d/utils.c
++++ b/wined3d/utils.c
+@@ -4467,6 +4467,7 @@
+             settings->op[i].tex_type = WINED3D_GL_RES_TYPE_TEX_1D;
+             settings->op[i].projected = proj_none;
+             settings->op[i].shadow = 0;
++            settings->op[i].vs_np2_fixup = 0;
+             i++;
+             break;
+         }
+@@ -4475,6 +4476,14 @@
+          * fragment program must name a SHADOW target for them. */
+         settings->op[i].shadow = (texture = state->textures[i]) && !ignore_textype
+                 && (texture->resource.format_flags & WINED3DFMT_FLAG_SHADOW);
++        /* DreamGPU: get_texture_matrix() scales the coordinates of a texture
++         * without WINED3D_TEXTURE_POW2_MAT_IDENT (a rectangle takes texel
++         * units, a padded NPOT texture a fraction) by its pow2_matrix, but
++         * transform_texture() skips the texture matrix under a vertex shader.
++         * A D3D vertex shader writes normalized coordinates, so the fixed-
++         * function fragment program scales them itself (0064). */
++        settings->op[i].vs_np2_fixup = texture && !ignore_textype && use_vs(state)
++                && !(texture->flags & WINED3D_TEXTURE_POW2_MAT_IDENT);
+         if ((texture = state->textures[i]))
+         {
+             settings->op[i].color_fixup = texture->resource.format->color_fixup;
+--- a/wined3d/wined3d_private.h
++++ b/wined3d/wined3d_private.h
+@@ -1901,7 +1901,11 @@
+     unsigned                projected : 2;
+     /* DreamGPU: the stage samples a shadow texture (WINED3DFMT_FLAG_SHADOW). */
+     unsigned                shadow : 1;
+-    unsigned                padding : 9;
++    /* DreamGPU: the stage samples a texture whose coordinates need its
++     * pow2_matrix (a rectangle or padded NPOT texture) and a vertex shader,
++     * not the texture matrix, supplies them (0064). */
++    unsigned                vs_np2_fixup : 1;
++    unsigned                padding : 8;
+ };
+ 
+ struct ffp_frag_settings

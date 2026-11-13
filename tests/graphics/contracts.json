@@ -256,6 +256,10 @@
       "scope": "source",
       "path": "tests/guest/d3d/test_window_dc_pixel_format.py"
     },
+    "d3d-ffp-np2-coordinates": {
+      "scope": "source",
+      "path": "tests/guest/d3d/test_ffp_np2_coordinates.py"
+    },
     "guest-d3d-table-fog": {
       "scope": "installed-api",
       "path": "tools/d3d/table-fog-probe.inc"
@@ -1803,6 +1807,25 @@
         "guest-d3d-table-fog"
       ],
       "remaining": "WineD3D wrote the vertex output z as the fog coordinate under table fog, as the reference rasterizer and later drivers do; Far Cry's NVIDIA path (DreamGPU reports a GeForce FX) writes oFog with FOGTABLEMODE LINEAR, start 0 and end 1 and relies on the period drivers' use of oFog, so its terrain, water and boat were drawn in the fog colour (Wine bug 25761; Prince of Persia: The Sands of Time, bug 17423, does the same). Wine patch 0062 passes the oFog of vs_1_x/vs_2_x shaders with built-in varyings to result.fogcoord unclamped (whether the period drivers clamped it is undocumented; Wine's proof-of-concept fix left it unclamped); vertex fog keeps the clamped oFog factor, and vs_3_0, declared varyings and shaders without oFog keep the vertex output z. Known divergence, unchanged: without oFog native table fog uses W under a perspective D3DTS_PROJECTION and z/w (AMD) or the vertex output z (NVIDIA) under an orthographic one; WineD3D always uses the vertex output z. Source tests interpret the prepared epilogue with the prepared fog source selection (7 mutations rejected). The installed D3D8/9 probe (table-fog-probe.inc: oFog 0, 1, 0.25 under LINEAR 0..1, oFog 2 under 0..4, vertex fog oFog 1 and 0, fixed-function and ps_1_1 fragments) has not run on a guest; Far Cry and Prince of Persia remain to be run. The GLSL backend is never selected (no ARB_fragment_shader/ARB_vertex_shader) and is unchanged."
+    },
+    {
+      "id": "d3d.ffp-np2-vertex-shader-coordinates",
+      "area": 11,
+      "api": "D3D8/D3D9 vertex shaders (WineD3D ARB backend) into fixed-function texture stages (arbfp fragment pipe) sampling conditional NPOT textures",
+      "operation": "fixed-function texture lookups of a rectangle (or padded NPOT 2D) texture with the normalized coordinates a vertex shader writes: scaled by the texture's pow2_matrix in the fragment program, as the texture matrix does for fixed-function vertices",
+      "format": "any rectangle-capable colour format, NPOT render-target textures included",
+      "resource": "texture stage",
+      "usage": "sampling",
+      "pool": "n/a",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "implemented",
+      "tests": [
+        "d3d-ffp-np2-coordinates",
+        "patches",
+        "guest-npot"
+      ],
+      "remaining": "Without ARB_texture_non_power_of_two WineD3D (GeForce FX quirk) creates NPOT textures, such as an 800x600 render-target texture, as rectangles, which take texel coordinates; get_texture_matrix() multiplies the application's normalized coordinates by the texture's pow2_matrix, but transform_texture() skips the texture matrix under a vertex shader. Thief: Deadly Shadows renders its scene into an 800x600 render-target texture and draws it to the back buffer with a vertex shader and fixed-function stage 0, so every pixel showed texel (0, 0) of the scene: a uniform near-black screen with only the HUD drawn after it (host trace: fixed-function program 40 sampling RECT texture 41 with no coordinate scale). Wine patch 0064 keys a fixed-function stage vs_np2_fixup exactly when the texture matrix would have scaled but is skipped (a vertex shader and a texture without WINED3D_TEXTURE_POW2_MAT_IDENT) and multiplies the coordinate by program.local[stage] = (pow2 width, pow2 height, 1, 1) before plain, projected (count3/count4) and bump-mapped lookups; the locals load when the program is bound and on sampler() reloads for another NPOT texture. A host Mesa replay of the generated programs on an 800x600 rectangle gives one colour before and the scene after. Source tests interpret the prepared programs and loader (10 mutations rejected). The installed D3D8/9 NPOT probe draws the 640x480 texture's quarters through vs_1_1 into stage 0 and requires every texel; it and Thief: Deadly Shadows have not run on a guest. Pixel shaders keep Wine's np2fixup; point sprites with rectangles are unchanged."
     },
     {
       "id": "d3d.vertex-blend",

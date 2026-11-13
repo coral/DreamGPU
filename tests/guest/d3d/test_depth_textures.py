@@ -388,7 +388,9 @@ with temporary:
     assert '{"GL_ARB_fragment_program_shadow",      ARB_FRAGMENT_PROGRAM_SHADOW   },' in directx
     op = private[private.index('struct texture_stage_op\n{'):]
     op = op[:op.index('};') + 2]
-    assert 'unsigned                shadow : 1;' in op and 'unsigned                padding : 9;' in op
+    # 0064 takes one more padding bit (vs_np2_fixup); the key stays 12 bytes.
+    assert 'unsigned                shadow : 1;' in op and 'unsigned                padding : 8;' in op
+    assert 'unsigned                vs_np2_fixup : 1;' in op
     target = function(arb, 'static const char *arbfp_texture_target(')
     shadow = function(arb, 'static BOOL arbfp_shadow(')
     # The key's size: three words of ops, the fixup, and one word of bits.

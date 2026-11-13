@@ -255,6 +255,10 @@
     {
       "file": "0063-window-dc-pixel-format.patch",
       "sha256": "b44830ac1d44e0cb4e7042fdbae9d340c2997e62bceb654d8342d6d8d41e08d1"
+    },
+    {
+      "file": "0064-ffp-np2-vertex-shader-coordinates.patch",
+      "sha256": "f52beb35496c8eb075d781bac9191add95a4014cad9f4b8da149e04c74fd7b90"
     }
   ],
   "files": {
@@ -280,7 +284,7 @@
     },
     "wined3d/utils.c": {
       "before_sha256": "f1fb3a597aeb95095faec99e8c8c03fff30ae42b1e752a15600fb32e2969583e",
-      "after_sha256": "305c1b8fffb679ae460f92ebcb44dad237bb3abeb2dca6817595cb6c4a047450"
+      "after_sha256": "f02ea7ce55b713532e595b55d7d2acbbae79a52e5ad8dba3f51e3633c6eb3891"
     },
     "switcher/switcher.c": {
       "before_sha256": "a820f660bdc88a06aa27b8c31b2b2871fbb84baa5ad93a5b6c4bcc767be0e123",
@@ -356,7 +360,7 @@
     },
     "wined3d/wined3d_private.h": {
       "before_sha256": "dd7ff932f2918ed3b8d422195aa0a6165e41884b00410e3d33f83f1a541098a8",
-      "after_sha256": "200a6c72d34f0d5b5bfb736c2e9fad2d0f728304962104278aa0530d75d038e1"
+      "after_sha256": "505b0624f79a745179eff85610a1a2ddb7cae80f2ff5b170566952e745e8cb6b"
     },
     "wined3d/texture.c": {
       "before_sha256": "733403da09ca96e80ec51f17f12b5d0ff1c846da97f14e0ef6e207ae4074bf55",
@@ -388,7 +392,7 @@
     },
     "wined3d/arb_program_shader.c": {
       "before_sha256": "e817b87102cc16f41454f5925a79e7c4002cabff018cb9c28220f50977b3ae6a",
-      "after_sha256": "1cceff39cf7208c65b3bc6f64e36730d24ce03802b6ebdc1da3676642d77fa91"
+      "after_sha256": "e7f9b94880d2f7aec6e12517c66be3fb84172dec17601792fb904c9554669ae8"
     },
     "wined3d/state.c": {
       "before_sha256": "67b80f57060fe792693af0d0e003175774fa2268381dec4217166ba0ae772c19",

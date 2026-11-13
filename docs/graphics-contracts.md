@@ -736,6 +736,21 @@ and disposable-VM acceptance cycle:
   vertex shader stage) requires oFog 0 clear, 1 fogged, 0.25 three quarters
   clear and 2 of 4 half fogged under table fog, and oFog 1 clear and 0 fogged
   under vertex fog; it has not run on a guest.
+- NPOT textures sampled by fixed-function stages with vertex shader
+  coordinates. Without ARB_texture_non_power_of_two WineD3D creates NPOT
+  textures (an 800x600 render-target texture, for one) as rectangles, which
+  take texel coordinates, and scales the application's normalized coordinates
+  with the texture matrix; transform_texture() skips the texture matrix under
+  a vertex shader. Thief: Deadly Shadows draws its 800x600 scene texture to
+  the back buffer with a vertex shader and fixed-function stage 0, so every
+  pixel showed texel (0, 0): a uniform near-black frame with only the HUD.
+  Wine patch 0064 scales such a stage's coordinate in the fixed-function
+  fragment program by the texture's pow2_matrix (a program local per stage)
+  for plain, projected and bump-mapped lookups; fixed-function vertices and
+  pixel shaders (np2fixup) are unchanged. Source test: the prepared programs
+  and loader interpreted (10 mutations rejected). The installed D3D8/9 NPOT
+  probe (`tools/d3d/npot-probe.inc`) draws the 640x480 texture through vs_1_1
+  into stage 0 and requires every texel; it has not run on a guest.
 - WineD3D context acquisition cost. Every D3D operation acquires and releases
   WineD3D's context, and with the native context owner released after each
   one (for cross-thread handoff), every acquisition activated the context

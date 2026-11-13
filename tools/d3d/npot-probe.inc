@@ -13,6 +13,13 @@
  *   filter. Four 320x240 1:1 views of its quarters cover every texel,
  *   including the last row and column, and a fifth view from (480, 360) runs
  *   160 columns and 120 rows past the edges, which CLAMP repeats.
+ * - vertex shader: the same texture and quarter views drawn by vs_1_1
+ *   (vshader_probe::vs11, oT0 = the normalized coordinate) into fixed-function
+ *   stage 0. WineD3D creates the texture as a rectangle, which takes texel
+ *   coordinates; the texture matrix that scales them is unused under a vertex
+ *   shader, so before Wine patch 0064 every pixel showed texel (0, 0) (Thief:
+ *   Deadly Shadows' 800x600 scene to back buffer pass). Skipped below
+ *   VertexShaderVersion 1.1.
  * - target: a DEFAULT 640x480 X8R8G8B8 render-target texture (an attachment of
  *   its own size, no longer a padded 1024x512 one) cleared with rectangles at
  *   its first texels, last eight rows and columns and last corner, plus a
@@ -177,6 +184,77 @@ static BOOL Quarters(Device *dev, Surface *backbuffer, StageTexture *texture, Mo
     return TRUE;
 }
 
+/* As View, through vs_1_1 and fixed-function stage 0: the quad's corners are
+ * the same half-pixel screen positions in clip space (rows c0-c3 identity),
+ * with the same normalized coordinates in oT0. */
+static BOOL ShaderView(Device *dev, Surface *backbuffer, StageTexture *texture, int sx, int sy,
+                       const char *name, Seen *seen) {
+    const float x0 = -1 - 1.f / ScreenWidth, x1 = 1 - 1.f / ScreenWidth;
+    const float y0 = 1 + 1.f / ScreenHeight, y1 = -1 + 1.f / ScreenHeight;
+    const float u0 = (float)sx / Width, u1 = (float)(sx + ScreenWidth) / Width;
+    const float v0 = (float)sy / Height, v1 = (float)(sy + ScreenHeight) / Height;
+    const vshader_probe::Vertex quad[4] = {{x0, y0, .5f, 0xffffffff, u0, v0},
+                                           {x1, y0, .5f, 0xffffffff, u1, v0},
+                                           {x0, y1, .5f, 0xffffffff, u0, v1},
+                                           {x1, y1, .5f, 0xffffffff, u1, v1}};
+    static const float identity[16] = {1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1};
+    D3DLOCKED_RECT locked;
+    if (!HR(VSHADER_CONSTANT(dev, 0, identity, 4), "FAIL NPOT vertex shader rows") ||
+        !HR(DEVICE(Clear, dev, 0, NULL, D3DCLEAR_TARGET, 0xff000000 | Background, 1, 0),
+            "FAIL NPOT vertex shader view clear") ||
+        !HR(STAGE_SET_TEXTURE(dev, 0, texture), "FAIL NPOT vertex shader texture bind") ||
+        !HR(DEVICE(SetTextureStageState, dev, 0, D3DTSS_COLOROP, D3DTOP_SELECTARG1),
+            "FAIL NPOT vertex shader color op") ||
+        !HR(DEVICE(SetTextureStageState, dev, 0, D3DTSS_COLORARG1, D3DTA_TEXTURE),
+            "FAIL NPOT vertex shader texture arg") ||
+        !HR(DEVICE(SetTextureStageState, dev, 0, D3DTSS_ALPHAOP, D3DTOP_SELECTARG1),
+            "FAIL NPOT vertex shader alpha op") ||
+        !HR(DEVICE(SetTextureStageState, dev, 0, D3DTSS_ALPHAARG1, D3DTA_TEXTURE),
+            "FAIL NPOT vertex shader texture alpha arg") ||
+        !HR(DEVICE(BeginScene, dev), "FAIL NPOT vertex shader view begin scene"))
+        return FALSE;
+    const BOOL drawn =
+        HR(DEVICE(DrawPrimitiveUP, dev, D3DPT_TRIANGLESTRIP, 2, quad, sizeof(quad[0])),
+           "FAIL NPOT vertex shader view draw");
+    if (!HR(DEVICE(EndScene, dev), "FAIL NPOT vertex shader view end scene") || !drawn)
+        return FALSE;
+    if (!HR(SURFACE(LockRect, backbuffer, &locked, NULL, D3DLOCK_READONLY),
+            "FAIL NPOT vertex shader backbuffer readback"))
+        return FALSE;
+    const BOOL ok = Compare(name, locked, ScreenWidth, ScreenHeight, sx, sy, Pattern, seen);
+    SURFACE(UnlockRect, backbuffer);
+    return ok;
+}
+
+/* The four quarters of the filled texture through vs_1_1. */
+static void ShaderCase(Device *dev, Surface *backbuffer, StageTexture *texture) {
+    StageCaps caps = {};
+    VertexShader shader = VSHADER_NONE;
+    void *layout = NULL;
+    Seen seen = {};
+    Log("STAGE NPOT texture through a vertex shader into fixed-function stage 0");
+    if (!HR(DEVICE(GetDeviceCaps, dev, &caps), "FAIL NPOT vertex shader device caps"))
+        return;
+    if ((caps.VertexShaderVersion & 0xffff) < (D3DVS_VERSION(1, 1) & 0xffff)) {
+        Log("SKIP NPOT vertex shader: VertexShaderVersion below 1.1");
+        return;
+    }
+    BOOL ok = vshader_probe::Bind(dev, vshader_probe::vs11, &shader, &layout);
+    for (int quarter = 0; ok && quarter < 4; ++quarter)
+        if (!ShaderView(dev, backbuffer, texture, quarter & 1 ? ScreenWidth : 0,
+                        quarter & 2 ? ScreenHeight : 0,
+                        "vertex shader: 640x480 quarters 1:1 from oT0", &seen)) {
+            Number("NPOT vertex shader view quarter", (DWORD)quarter);
+            ok = FALSE;
+        }
+    ok = ok && Check(seen.last_row == Width && seen.last_column == Height && seen.corner == 1,
+                     "FAIL NPOT vertex shader edges not covered", seen.last_row);
+    if (ok)
+        Log("PASS NPOT texture through vs_1_1: normalized oT0 reaches all 307200 texels 1:1 "
+            "with fixed-function stage 0");
+    vshader_probe::Unbind(dev, shader, layout);
+}
+
 /* Every texel, and CLAMP beyond the last row and column. */
 static void TextureCase(Device *dev, Surface *backbuffer) {
     StageTexture *texture = NULL;
@@ -213,6 +291,7 @@ static void TextureCase(Device *dev, Surface *backbuffer) {
         Number("NPOT clamped view pixels on the last row", clamped.last_row);
         Log("PASS NPOT texture: 640x480 X8R8G8B8 sampled 1:1, all 307200 texels exact including "
             "the last row and column; CLAMP repeats them past the edges");
+        ShaderCase(dev, backbuffer, texture);
     }
     STAGE_SET_TEXTURE(dev, 0, NULL);
     if (texture)
