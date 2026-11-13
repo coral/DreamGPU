@@ -2137,6 +2137,7 @@ pub const DG_GL_TEXTURE_READ_SHAPE: u32 = 4096;
 pub const DG_GL_TEXTURE_READ_UNITS: u32 = 8192;
 pub const DG_GL_TEXTURE_READ_UNIT: u32 = 64;
 pub const DG_GL_TEXTURE_SHAPE_WORDS: u32 = 5;
+pub const DG_CAP2_GL_CORE_1_2: u32 = 8;
 pub const DG_GL_OFF_OP: u32 = 0;
 pub const DG_GL_OFF_SIZE: u32 = 4;
 pub const DG_GL_OFF_CLIENT: u32 = 8;

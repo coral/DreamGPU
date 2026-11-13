@@ -297,6 +297,7 @@ EXPORTS
     glGetVertexAttribfvARB=glGetVertexAttribfvARB@12
     glGetVertexAttribivARB=glGetVertexAttribivARB@12
     glGetVertexAttribPointervARB=glGetVertexAttribPointervARB@12
+    glDrawRangeElements=glDrawRangeElements@24
     glTexImage3D=glTexImage3D@40
     glTexSubImage3D=glTexSubImage3D@44
     glTexImage3DEXT=glTexImage3DEXT@40

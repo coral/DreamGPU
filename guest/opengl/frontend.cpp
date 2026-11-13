@@ -161,6 +161,18 @@ BOOL JglDepthTextureAvailable(void) {
 BOOL JglRgb565Available(void) {
     return Client && (HostCapabilities2 & DG_CAP2_GL_RGB565);
 }
+/* The GL 1.2 core names (gl.h DG_CAP2_GL_CORE_1_2): LOD clamps, the
+ * RESCALE_NORMAL and draw-range queries. JglCore12 is all of GL 1.2: those,
+ * 3D textures, edge clamping (fixed state) and separate specular colour;
+ * BGRA and packed pixels need no negotiation, and DrawRangeElements is a
+ * DrawElements. Only then is GL_VERSION 1.2. */
+BOOL JglCore12Available(void) {
+    return Client && (HostCapabilities2 & DG_CAP2_GL_CORE_1_2);
+}
+BOOL JglCore12(void) {
+    return JglCore12Available() && JglTexture3DAvailable() && JglFixedStateAvailable() &&
+           SecondarySupported;
+}
 /* Bulk reads (gl.h DG_CAP2_GL_BULK_READ): the level-shape query, unit-counted
  * texture reads and large ReadPixels rectangles, up to the result size the
  * driver negotiated (4 MiB with its bulk buffer, else the contiguous limit).

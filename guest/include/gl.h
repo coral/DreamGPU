@@ -578,6 +578,19 @@
 #define DG_GL_TEXTURE_READ_UNITS 0x2000
 #define DG_GL_TEXTURE_READ_UNIT 64
 #define DG_GL_TEXTURE_SHAPE_WORDS 5
+/* GL 1.2 core names (CAPS2): the parts of GL 1.2 no other contract carries.
+ * TEXTURE_MIN_LOD and TEXTURE_MAX_LOD (SGIS_texture_lod) are TexParameter and
+ * GetTexParameter names of every texture target, values as native GL takes
+ * them; RESCALE_NORMAL (EXT_rescale_normal), which Enable and Disable always
+ * passed to the native GL, is an IsEnabled and Get name; MAX_ELEMENTS_VERTICES
+ * and MAX_ELEMENTS_INDICES (EXT_draw_range_elements) are Get names answering
+ * the native hints. Older hosts reject these names as malformed records (a
+ * TexParameter) or rejected queries. With this bit and DG_CAP_GL_TEXTURE_3D,
+ * DG_CAP_GL_FIXED_STATE and secondary colour (separate specular colour) the
+ * frontend completes GL 1.2 with DrawRangeElements, which needs no record of
+ * its own, and reports GL_VERSION 1.2: Homeworld 2's renderer refuses 1.1.
+ * Without them it reports 1.1 and keeps the LOD names a local GL error. */
+#define DG_CAP2_GL_CORE_1_2 0x8
 
 /* ADDR_LO/HI, BYTES, RESULT_ADDR_LO/HI, RESULT_CAPACITY and the programmed
  * GENERATION persist across submit and

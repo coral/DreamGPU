@@ -366,6 +366,13 @@ BOOL JglRgb565Available(void);
 static inline BOOL JglRgb565Format(GLint format) {
     return format == DG_GL_RGB565 && JglRgb565Available();
 }
+/* GL 1.2 core names (gl.h DG_CAP2_GL_CORE_1_2): TEXTURE_MIN_LOD/MAX_LOD
+ * parameters; without it they stay the local GL_INVALID_ENUM. JglCore12 is
+ * the whole of GL 1.2 (frontend.cpp), which GL_VERSION 1.2 claims. */
+BOOL JglCore12Available(void);
+BOOL JglCore12(void);
+#define JGL_TEXTURE_MIN_LOD 0x813a
+#define JGL_TEXTURE_MAX_LOD 0x813b
 #define JGL_TEXTURE_DEPTH_SIZE 0x884a
 #define JGL_DEPTH_TEXTURE_MODE 0x884b
 #define JGL_TEXTURE_COMPARE_MODE 0x884c
@@ -434,6 +441,9 @@ static inline ULONG JglTextureParameterCount(GLenum target, GLenum pname) {
             return 1;
         case 0x84fe: /* TEXTURE_MAX_ANISOTROPY_EXT */
             return JglFixedStateAvailable() ? 1 : 0;
+        case JGL_TEXTURE_MIN_LOD: /* SGIS_texture_lod, GL 1.2: every target */
+        case JGL_TEXTURE_MAX_LOD:
+            return JglCore12Available() ? 1 : 0;
         case 0x8191: /* GENERATE_MIPMAP_SGIS: a rectangle has one level */
             return JglTextureControlAvailable() && !rectangle ? 1 : 0;
         case JGL_TEXTURE_COMPARE_MODE: /* ARB_shadow, every target */

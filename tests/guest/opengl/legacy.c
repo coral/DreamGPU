@@ -94,6 +94,9 @@ BOOL JglVertexProgramAvailable(void) {
 BOOL JglTexture3DAvailable(void) {
     return FALSE;
 }
+BOOL JglCore12(void) {
+    return FALSE;
+}
 BOOL JglVertexBufferObjectAvailable(void) {
     return FALSE;
 }

@@ -5,7 +5,8 @@ in `support/guest/cmake/opengl.cmake`; the public probe source is in `tools/open
 The builder produces the frontend, the `dgpuicd.dll` Windows ICD and diagnostic
 programs. The ICD implements all 336 GL1.1 dispatch slots, including context/thread
 ownership, display lists, evaluators, selection, bounded texture/pixel transfers
-and typed queries. It reports `1.1 DreamGPU`. `icd-coverage.json` records the four
+and typed queries. It reports `1.1 DreamGPU`, or `1.2 DreamGPU` once every GL 1.2
+feature is negotiated (below). `icd-coverage.json` records the four
 known native-provider edge cases; dispatch coverage is not a formal conformance
 certification.
 
@@ -220,8 +221,8 @@ model and `test_compiled_vertex_array.py` checks that prefix.
 
 `DG_CAP_GL_MULTITEXTURE` enables `GL_ARB_multitexture` (eight units),
 `GL_ARB_texture_env_combine`, `GL_EXT_texture_env_combine` and
-`GL_ARB_texture_env_dot3`. The reported version stays `1.1 DreamGPU`, so callers
-do not assume promoted core features. Without the capability the extension
+`GL_ARB_texture_env_dot3`. The reported version stays `1.1 DreamGPU` (1.2 needs
+the GL 1.2 core names below), so callers do not assume promoted core features. Without the capability the extension
 string, submitted records and `wglGetProcAddress` results are unchanged; the new
 exports fail locally with `GL_INVALID_OPERATION`.
 
@@ -600,6 +601,27 @@ Without the capability `RGB565` is an unknown internal format: the local
 whose copy record the host would otherwise refuse) and `GL_INVALID_ENUM` of
 `RenderbufferStorage`. `tests/guest/opengl/test_rgb565.py` covers the
 contract, `test_icd_textures.py` the ICD's 1D copies.
+
+### GL 1.2 core names and GL_VERSION 1.2
+
+The fourth feature of the second capability word: with `DG_CAP2_GL_CORE_1_2`
+the host takes `TEXTURE_MIN_LOD` and `TEXTURE_MAX_LOD` (SGIS_texture_lod) as
+parameters of every binding target, `RESCALE_NORMAL` (whose `Enable` always
+reached native GL) as an `IsEnabled`/`Get` name, and `MAX_ELEMENTS_VERTICES`
+and `MAX_ELEMENTS_INDICES` as native hints. Those were the parts of GL 1.2 no
+other contract carried: BGRA and every packed pixel type were already
+accepted, edge clamping comes with fixed state, 3D textures and separate
+specular colour with their own contracts. With the bit, 3D textures, fixed
+state and secondary colour the frontend reports `1.2 DreamGPU` and
+`wglGetProcAddress` finds `glDrawRangeElements`, a `DrawElements` that only
+checks the range's order (every draw bounds its own indices); its extension
+name is not offered and the extension string is unchanged. Any of them
+missing keeps `1.1 DreamGPU`, the LOD names a local `GL_INVALID_ENUM` and the
+lookup empty. Homeworld 2's renderer refuses 1.1 outright: `GL.dll` parses
+the version as `major + minor / 10^digits` in x87 double precision and finds
+"1.1" below the float `1.1f`, then the game exits without a message. WineD3D's
+version promotions add only `EXT_texture3D` at 1.2, which the same capability
+already advertised. `tests/guest/opengl/test_core_1_2.py` covers the contract.
 
 ### No ARB_vertex_blend
 

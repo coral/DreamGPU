@@ -480,6 +480,14 @@
       "scope": "native-transport",
       "path": "tests/native_qemu/rgb565.rs"
     },
+    "gl-core-1-2": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_core_1_2.py"
+    },
+    "native-core-1-2": {
+      "scope": "native-transport",
+      "path": "tests/native_qemu/core_1_2.rs"
+    },
     "native-bulk-read": {
       "scope": "native-transport",
       "path": "tests/native_qemu/bulk_read.rs"
@@ -2155,6 +2163,25 @@
         "guest-partial-locks"
       ],
       "remaining": "Negotiated by DG_CAP2_GL_RGB565, the second bit of DG_GL_REG_CAPS2; without it RGB565 keeps the local error of any unknown internal format. No extension name and no ARB_ES2_compatibility entry point: WineD3D's GL_RGB565 entry for B5G6R5 needs ARB_ES2_compatibility, so Wine 0057 asks the frontend directly (a 1x1 RGB565 texture, then GetError) and otherwise keeps GL_RGB5, which Mesa stores in 5/5/5 bits (a 6-bit green 13 read back as 12). The host stores RGB565 natively where the native GL has it (GL 4.1 or ARB_ES2_compatibility; Mesa on Linux) and in RGB8 elsewhere (macOS legacy CGL, unverified), exact for every 5/6/5 value in either. Native pixel tests (Linux, Mesa on Radeon) round-trip all 65536 words and check clears, a texture sampled 1:1, DrawPixels, CopyTexImage/CopyTexSubImage and a renderbuffer exactly. X1R5G5B5 (RGB5), A1R5G5B5 (RGB5_A1) and A4R4G4B4 (RGBA4) were already exact on Mesa and are unchanged; color-keyed R5G6B5 textures are still converted to B5G5R5A1 by Wine (five green bits). The installed D3D8/9 probes (rtt-probe's R5G6B5 stage, the partial-lock probe's 64 greens), macOS CGL, Win98/XP guests and games remain to be run."
+    },
+    {
+      "id": "gl.core-1-2",
+      "area": 8,
+      "api": "OpenGL 1.2 core: GL_VERSION, SGIS_texture_lod LOD clamps, EXT_rescale_normal and EXT_draw_range_elements (Homeworld 2's GL renderer and other titles that gate on the version)",
+      "operation": "second capability word negotiation; GL_VERSION 1.2 only with every GL 1.2 feature negotiated; TEXTURE_MIN_LOD/MAX_LOD TexParameter and GetTexParameter; RESCALE_NORMAL IsEnabled/Get; MAX_ELEMENTS_VERTICES/INDICES; DrawRangeElements",
+      "format": "n/a",
+      "resource": "1D, 2D, cube map, 3D and rectangle texture parameters; client-array and buffer element draws",
+      "usage": "applications that require GL 1.2 by version",
+      "pool": "native",
+      "mandatory": false,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-core-1-2",
+        "native-core-1-2",
+        "native"
+      ],
+      "remaining": "Negotiated by DG_CAP2_GL_CORE_1_2, the fourth bit of DG_GL_REG_CAPS2. GL_VERSION is 1.2 only with it, DG_CAP_GL_TEXTURE_3D, DG_CAP_GL_FIXED_STATE (edge clamp) and secondary colour (separate specular colour); BGRA and every packed pixel type were already accepted. Without the bit the LOD names stay a local GL_INVALID_ENUM and the version 1.1. DrawRangeElements is a DrawElements (every draw bounds its own indices) under its core name only; no extension name changes, and WineD3D's version promotions add only EXT_texture3D, which the same capability already advertised. Homeworld 2 (demo 0.99) refuses 1.1 outright: GL.dll parses \"1.1\" with x87 double arithmetic and compares it below the float 1.1f, then exits with code 0 and no message; with 1.2 (Win2000, package m55 on Linux/Mesa) it shows a dismissable 'plays best with OpenGL 1.3' notice, then the menu (about 330 FPS) and the first mission (about 110-130 FPS). Native tests (Linux, Mesa) check the CAPS2 bit, MIN/MAX_LOD records and queries and the level a minified draw samples under each clamp, RESCALE_NORMAL through IsEnabled and the MAX_ELEMENTS hints. macOS CGL, Win98/XP guests and the imaging subset (not claimed: no ARB_imaging) remain."
     },
     {
       "id": "gl.bulk-read",

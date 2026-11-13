@@ -137,6 +137,8 @@ exports['glGetVertexAttribPointervARB']=12
 for suffix in ('','EXT'):
  exports['glTexImage3D'+suffix]=40
  exports['glTexSubImage3D'+suffix]=44
+# GL 1.2 DrawRangeElements under its core name only, written by hand (arrays.cpp).
+exports['glDrawRangeElements']=24
 # ARB_vertex_buffer_object under ARB names only, written by hand (buffer.cpp).
 for name,size in (('glGenBuffersARB',8),('glBindBufferARB',8),('glDeleteBuffersARB',8),
                   ('glIsBufferARB',4),('glBufferDataARB',16),('glBufferSubDataARB',16),

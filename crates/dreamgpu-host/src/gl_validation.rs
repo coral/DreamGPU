@@ -91,6 +91,8 @@ pub(crate) fn texture_params(target: u32, pname: u32) -> u32 {
         | GL_TEXTURE_PRIORITY
         | GL_TEXTURE_MAX_ANISOTROPY_EXT
         | GL_GENERATE_MIPMAP => 1,
+        // GL 1.2 LOD clamps (DG_CAP2_GL_CORE_1_2): every target, native values.
+        GL_TEXTURE_MIN_LOD | GL_TEXTURE_MAX_LOD => 1,
         // ARB_shadow and ARB_depth_texture (DG_CAP2_GL_DEPTH_TEXTURE): every
         // target; the frontend judges their values.
         GL_TEXTURE_COMPARE_MODE | GL_TEXTURE_COMPARE_FUNC | GL_DEPTH_TEXTURE_MODE => 1,
@@ -259,6 +261,9 @@ pub(crate) fn query_state_count(pname: u32) -> u32 {
         | GL_MAX_CUBE_MAP_TEXTURE_SIZE
         | GL_TEXTURE_BINDING_3D
         | GL_MAX_3D_TEXTURE_SIZE
+        // EXT_draw_range_elements hints, GL 1.2 (DG_CAP2_GL_CORE_1_2): native.
+        | GL_MAX_ELEMENTS_VERTICES
+        | GL_MAX_ELEMENTS_INDICES
         | GL_TEXTURE_BINDING_RECTANGLE_ARB
         | GL_MAX_RECTANGLE_TEXTURE_SIZE_ARB
         | GL_FRAMEBUFFER_BINDING
@@ -638,6 +643,8 @@ pub(crate) fn query_cap(pname: u32) -> bool {
             | GL_ALPHA_TEST
             | GL_DITHER
             | GL_NORMALIZE
+            // EXT_rescale_normal, GL 1.2 (DG_CAP2_GL_CORE_1_2).
+            | GL_RESCALE_NORMAL
             | GL_POLYGON_OFFSET_FILL
             | GL_POLYGON_OFFSET_LINE
             | GL_POLYGON_OFFSET_POINT

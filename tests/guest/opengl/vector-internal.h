@@ -43,6 +43,7 @@ BOOL JglFogCoordAvailable(void);
 BOOL JglFragmentProgramAvailable(void);
 BOOL JglVertexProgramAvailable(void);
 BOOL JglTexture3DAvailable(void);
+BOOL JglCore12(void);
 BOOL JglVertexBufferObjectAvailable(void);
 BOOL JglFramebufferObjectAvailable(void);
 BOOL JglOcclusionQueryAvailable(void);

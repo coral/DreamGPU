@@ -8,6 +8,8 @@ mod bulk_read;
 mod client_arrays;
 #[path = "native_qemu/compressed.rs"]
 mod compressed;
+#[path = "native_qemu/core_1_2.rs"]
+mod core_1_2;
 #[path = "native_qemu/cube_map.rs"]
 mod cube_map;
 #[path = "native_qemu/cursor.rs"]

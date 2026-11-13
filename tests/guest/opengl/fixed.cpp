@@ -34,6 +34,12 @@ BOOL JglVertexProgramAvailable(void) {
 BOOL JglTexture3DAvailable(void) {
     return FALSE;
 }
+BOOL JglCore12Available(void) {
+    return FALSE;
+}
+BOOL JglCore12(void) {
+    return FALSE;
+}
 BOOL JglTextureRectangleAvailable(void) {
     return FALSE;
 }

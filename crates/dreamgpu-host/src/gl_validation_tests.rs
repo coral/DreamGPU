@@ -1760,3 +1760,37 @@ fn rgb565_is_a_colour_internal_format_of_the_existing_records() {
         &storage
     ));
 }
+
+#[test]
+fn gl_1_2_core_names_are_texture_parameters_and_state_queries() {
+    // DG_CAP2_GL_CORE_1_2: the LOD clamps on every binding target (never a
+    // face or a proxy), in scalar and vector records and as GetTexParameter names.
+    for target in [
+        GL_TEXTURE_1D,
+        GL_TEXTURE_2D,
+        GL_TEXTURE_CUBE_MAP,
+        GL_TEXTURE_3D,
+        GL_TEXTURE_RECTANGLE_ARB,
+    ] {
+        for pname in [GL_TEXTURE_MIN_LOD, GL_TEXTURE_MAX_LOD] {
+            assert_eq!(texture_params(target, pname), 1, "{target:#x} {pname:#x}");
+        }
+    }
+    for target in [
+        GL_PROXY_TEXTURE_2D,
+        GL_PROXY_TEXTURE_3D,
+        GL_TEXTURE_CUBE_MAP_POSITIVE_X,
+    ] {
+        assert_eq!(texture_params(target, GL_TEXTURE_MIN_LOD), 0, "{target:#x}");
+    }
+    let mut v = [0u32; 8];
+    v[..2].copy_from_slice(&[GL_TEXTURE_2D, GL_TEXTURE_MAX_LOD]);
+    assert_eq!(data_validate(FEnum_glTexParameterfv, &v, &[0; 4]), 0);
+    // RESCALE_NORMAL, which Enable always passed natively, is a query name;
+    // the draw-range hints answer the native values.
+    assert!(query_cap(GL_RESCALE_NORMAL));
+    assert_eq!(query_state_count(GL_RESCALE_NORMAL), 1);
+    assert_eq!(query_state_count(GL_MAX_ELEMENTS_VERTICES), 1);
+    assert_eq!(query_state_count(GL_MAX_ELEMENTS_INDICES), 1);
+    assert_eq!(DG_CAP2_GL_CORE_1_2, 8);
+}

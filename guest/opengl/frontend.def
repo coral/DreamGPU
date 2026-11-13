@@ -290,6 +290,7 @@ EXPORTS
     glTexSubImage3D=glTexSubImage3D@44
     glTexImage3DEXT=glTexImage3DEXT@40
     glTexSubImage3DEXT=glTexSubImage3DEXT@44
+    glDrawRangeElements=glDrawRangeElements@24
     glGenBuffersARB=glGenBuffersARB@8
     glBindBufferARB=glBindBufferARB@8
     glDeleteBuffersARB=glDeleteBuffersARB@8

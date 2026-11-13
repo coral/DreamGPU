@@ -78,7 +78,7 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
              ((FEnum_##name == FEnum_glGetTexParameterfv ||                                        \
                FEnum_##name == FEnum_glGetTexParameteriv) &&                                       \
               (WrapRRejected(target, pname) || RectangleMipmapRejected(target, pname) ||           \
-               JglDepthTextureQueryRejected(pname))))) {                                           \
+               LodRejected(pname) || JglDepthTextureQueryRejected(pname))))) {                     \
             JglSetError(GL_INVALID_ENUM);                                                          \
             return;                                                                                \
         }                                                                                          \
@@ -90,6 +90,11 @@ STATE_QUERY(glGetDoublev, GLdouble, DG_GL_RESULT_DOUBLE)
 static BOOL WrapRRejected(GLenum target, GLenum pname) {
     return pname == JGL_TEXTURE_WRAP_R && !JglTexture3DAvailable() &&
            !(target == JGL_TEXTURE_CUBE_MAP && JglTextureCubeMapAvailable());
+}
+/* The GL 1.2 LOD clamps exist with DG_CAP2_GL_CORE_1_2 only. */
+static BOOL LodRejected(GLenum pname) {
+    return (pname == JGL_TEXTURE_MIN_LOD || pname == JGL_TEXTURE_MAX_LOD) &&
+           !JglCore12Available();
 }
 /* GENERATE_MIPMAP is no rectangle parameter: a rectangle has one level. */
 static BOOL RectangleMipmapRejected(GLenum target, GLenum pname) {
@@ -169,12 +174,15 @@ static const GLubyte *ProgramErrorString(void) {
 }
 /* The host supplies stable identity strings and no extension/version claim.
  * These public pointers stay valid across later queries and context switches.
- * Extensions name only negotiated host contracts; the version stays 1.1 so
- * callers do not assume promoted core features. */
+ * Extensions name only negotiated host contracts; the version is 1.1 unless
+ * every GL 1.2 feature is negotiated (JglCore12), so callers never assume
+ * promoted core features the host lacks. Homeworld 2 refuses a 1.1 renderer
+ * outright (its float comparison finds "1.1" below 1.1). */
 const GLubyte *APIENTRY glGetString(GLenum name) {
     static const GLubyte vendor[] = "DreamGPU";
     static const GLubyte renderer[] = "DreamGPU (native host OpenGL)";
     static const GLubyte version[] = "1.1 DreamGPU";
+    static const GLubyte version12[] = "1.2 DreamGPU";
     if (!JglReady())
         return NULL;
     switch (name) {
@@ -187,7 +195,7 @@ const GLubyte *APIENTRY glGetString(GLenum name) {
         /* A valid identity pointer for legacy diagnostic output, with no claim
          * that this evolving frontend implements a complete OpenGL version. */
         case GL_VERSION:
-            return version;
+            return JglCore12() ? version12 : version;
         case 0x8874: /* PROGRAM_ERROR_STRING_ARB, of either program extension */
             if (JglProgramsAvailable())
                 return ProgramErrorString();

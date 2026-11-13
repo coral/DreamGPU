@@ -482,6 +482,14 @@ and disposable-VM acceptance cycle:
   into a lockable R5G6B5 target plus clears of all 64 greens (rtt-probe) and
   lock all 64 greens (partial-lock probe), skipping both without the
   capability; they have not yet run on a guest.
+- GL 1.2 core names (`DG_CAP2_GL_CORE_1_2`, the fourth bit of the second
+  capability word): `TEXTURE_MIN_LOD`/`TEXTURE_MAX_LOD` parameters of every
+  binding target, `RESCALE_NORMAL` queries and the `MAX_ELEMENTS_*` hints.
+  With it, `DG_CAP_GL_TEXTURE_3D`, `DG_CAP_GL_FIXED_STATE` and secondary colour
+  the frontend reports GL_VERSION `1.2 DreamGPU` and exports
+  `glDrawRangeElements` (a DrawElements); otherwise `1.1 DreamGPU` and local
+  errors as before. No extension name changes. Homeworld 2 (demo 0.99) exits
+  silently on any 1.1 renderer: its x87 version parse puts "1.1" below `1.1f`.
 - Bulk reads (`DG_CAP2_GL_BULK_READ`, the third bit of the second capability
   word) make a whole-surface readback one synchronous QUERY instead of one per
   64 KiB. WineD3D downloads a whole surface for every full lock: Warcraft III

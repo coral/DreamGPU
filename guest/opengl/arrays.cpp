@@ -1482,6 +1482,19 @@ void APIENTRY glDrawArrays(GLenum mode, GLint first, GLsizei count) {
 void APIENTRY glDrawElements(GLenum mode, GLsizei count, GLenum type, const void *indices) {
     Draw(mode, 0, count, type, indices, TRUE);
 }
+/* GL 1.2 DrawRangeElements (EXT_draw_range_elements): a DrawElements whose
+ * indices the caller promises lie in [start, end]. Every draw bounds its own
+ * indices, so only the range's order is checked. Found by lookup only with
+ * GL_VERSION 1.2 (JglCore12); the extension name is not offered. */
+void APIENTRY glDrawRangeElements(GLenum mode, GLuint start, GLuint end, GLsizei count, GLenum type,
+                                  const void *indices) {
+    if (end < start) {
+        if (JglCommandReady())
+            JglCommandError(GL_INVALID_VALUE);
+        return;
+    }
+    Draw(mode, 0, count, type, indices, TRUE);
+}
 /* EXT_compiled_vertex_array, offered with the buffer draw that carries
  * indexed client-array draws in bulk. The lock is client-vertex-array state
  * only: draws still read the arrays as they are, which the extension permits

@@ -35,6 +35,7 @@ static BOOL Negotiated(LPCSTR name) {
                     {"glEnableVertexAttribArray", JglVertexProgramAvailable},
                     {"glDisableVertexAttribArray", JglVertexProgramAvailable},
                     {"glGetVertexAttrib", JglVertexProgramAvailable},
+                    {"glDrawRangeElements", JglCore12},
                     {"glTexImage3D", JglTexture3DAvailable},
                     {"glTexSubImage3D", JglTexture3DAvailable},
                     {"glCopyTexSubImage3D", JglTexture3DAvailable},
