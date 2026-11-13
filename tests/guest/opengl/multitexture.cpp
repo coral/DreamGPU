@@ -281,14 +281,25 @@ int main() {
     Expect(c, 9, FEnum_glEnable, {GL_TEXTURE_1D});
     Expect(c, 10, FEnum_glEnable, {GL_TEXTURE_2D});
     {
-        // The per-unit server state is answered by the host on every query;
-        // ACTIVE_TEXTURE/MAX_TEXTURE_UNITS too. CLIENT_ACTIVE_TEXTURE is local.
+        // The active unit's enables this context set are answered locally;
+        // another unit's (after ActiveTexture) by the host, as are
+        // ACTIVE_TEXTURE/MAX_TEXTURE_UNITS. CLIENT_ACTIVE_TEXTURE is local.
         ULONG queries = QueryCalls;
+        GLboolean known = 0;
+        HostEnabled = 0;
+        assert(glIsEnabled(GL_TEXTURE_2D) && glIsEnabled(GL_TEXTURE_1D) &&
+               glIsEnabled(TEXTURE_GEN_S) && glIsEnabled(BLEND) && QueryCalls == queries);
+        glGetBooleanv(GL_TEXTURE_2D, &known);
+        assert(known == 1 && QueryCalls == queries && c->Records == 11);
+        glActiveTextureARB(TEXTURE0);
         HostEnabled = 1;
         assert(glIsEnabled(GL_TEXTURE_2D) && LastQueryFunction == FEnum_glIsEnabled &&
                LastQueryArgument == GL_TEXTURE_2D);
         HostEnabled = 0;
         assert(!glIsEnabled(GL_TEXTURE_2D) && QueryCalls == queries + 2);
+        assert(!glIsEnabled(TEXTURE_GEN_S) && QueryCalls == queries + 3);
+        HostEnabled = 1;
+        assert(glIsEnabled(BLEND) && QueryCalls == queries + 3); /* global: still known */
         HostInteger = DG_GL_MAX_TEXTURE_UNITS;
         glGetIntegerv(0x84e2, &value);
         assert(value == DG_GL_MAX_TEXTURE_UNITS && LastQueryArgument == 0x84e2);
@@ -421,7 +432,7 @@ int main() {
     Reset();
     assert(!Allocations);
     puts("PASS multitexture actual frontend: unnegotiated hosts unchanged; unit range/Begin "
-         "errors; all 64 coordinate entry points exact; per-unit enable cache; host-only "
-         "unit state; per-unit client arrays/stack; exact DrawArraysEXT and ArrayElement");
+         "errors; all 64 coordinate entry points exact; per-unit enable cache; active-unit "
+         "enable queries local, other units' from the host; per-unit client arrays/stack; exact DrawArraysEXT and ArrayElement");
     return 0;
 }

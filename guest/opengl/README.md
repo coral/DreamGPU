@@ -289,6 +289,31 @@ Current build and evidence navigation: [guest runtime](../README.md),
 [guest tools](../../tools/README.md), and [execution evidence](../../docs/progress.md).
 Historical benchmark paths above belong to the original Juke evidence tree.
 
+### Local state queries
+
+The context's validated state shadow (`state.h`), which already dropped
+repeated `Enable`/`Disable`, `BlendFunc` and `PolygonOffset` calls, also
+answers `IsEnabled` and `GetBooleanv`/`GetIntegerv`/`GetFloatv`/`GetDoublev`
+for the capabilities it tracks (BLEND, DEPTH/STENCIL/SCISSOR/ALPHA tests, CULL_FACE,
+LIGHTING, LIGHT0-7, CLIP_PLANE0-5, FOG, DITHER, NORMALIZE, the polygon offset,
+smooth and stipple enables, COLOR_MATERIAL, COLOR_SUM with EXT_secondary_color,
+and the active unit's TEXTURE_1D/2D and TEXTURE_GEN_S..Q) and `VIEWPORT`,
+without a synchronous host query. Each known value is exactly the host's
+native state: a new context knows the GL defaults (every one disabled except
+DITHER; the host creates a fresh native context and enables none of them),
+and a setter executed outside display lists updates it. The viewport is unknown
+until the application sets it (the host sets the drawable size before the
+context's first record) and after a `Viewport` native GL would clamp or reject
+(outside +-`DG_GL_MAX_DIMENSION`, or a negative size). `PopAttrib`,
+`CallList(s)`, `NewList`/`EndList` forget everything, and nothing is learnt or
+answered while a list is open; `ActiveTexture` forgets the per-unit enables.
+Inside Begin/End, with a failure pending or for any other name the host
+answers, as before. Neverwinter Nights asked 52 such queries per frame
+(LIGHTING, VIEWPORT, FOG). `tests/guest/opengl/test_state_query.py` checks
+every answer against a native-GL model of the submitted records (random
+streams over two contexts, lists in both modes, the attribute stack) and
+that removing any one invalidation fails it.
+
 ### Texture control, compression, fog coordinates and cube maps
 
 `DG_CAP_GL_TEXTURE_CONTROL` adds `GL_ATI_texture_env_combine3`,

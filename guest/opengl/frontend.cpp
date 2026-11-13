@@ -873,6 +873,16 @@ BOOL JglFramebufferBinding(GLenum pname, GLint *value) {
             return FALSE;
     }
 }
+/* IsEnabled/Get* of state the context knows exactly (state.h), with no
+ * host round trip: the number of values, or zero to ask the host. Never while
+ * a list is compiled, nor with a failure another thread reported pending (the
+ * host query would fail the context). Callers have checked JglReady. */
+ULONG JglStateQuery(GLenum pname, LONG *values) {
+    JGL_CONTEXT *c = CurrentContext();
+    if (!c || c->Failed || c->InBegin || c->DeferredFault || c->Arrays.ListMode)
+        return 0;
+    return StateQuery(&c->State, pname, values);
+}
 BOOL JglReadFramebufferBound(void) {
     JGL_CONTEXT *c = CurrentContext();
     return c && c->Framebuffer.Read;
@@ -1373,6 +1383,7 @@ HGLRC WINAPI wglCreateContext(HDC dc) {
         goto done;
     }
     c->Created = TRUE;
+    StateInitial(&c->State, SecondarySupported);
     Contexts[i] = pending.release();
     result = (HGLRC)(ULONG_PTR)c->Id;
 done:

@@ -42,13 +42,21 @@ static BOOL LocalUnpack(GLenum name, GLint *value) {
             return FALSE;
     }
 }
+/* Known enables and the viewport (JglStateQuery) are integers converted as
+ * native GL converts them: booleans compare with zero, floats are exact. */
 #define STATE_QUERY(name, type, kind)                                                              \
     void APIENTRY name(GLenum pname, type *output) {                                               \
-        ULONG args[3] = {pname, 0, 0}, bytes;                                                      \
+        ULONG args[3] = {pname, 0, 0}, bytes, known;                                               \
         type result[DG_GL_MAX_RESULT_BYTES / sizeof(type)];                                        \
         GLint local;                                                                               \
+        LONG values[4];                                                                            \
         if (!output || !JglReady())                                                                \
             return;                                                                                \
+        if ((known = JglStateQuery(pname, values)) != 0) {                                         \
+            for (ULONG i = 0; i < known; ++i)                                                      \
+                output[i] = kind == DG_GL_RESULT_BOOL ? (type)(values[i] != 0) : (type)values[i];  \
+            return;                                                                                \
+        }                                                                                          \
         if (LocalUnpack(pname, &local) || JglArrayQuery(pname, &local) ||                          \
             JglFramebufferBinding(pname, &local)) {                                                \
             *output = kind == DG_GL_RESULT_BOOL ? (type)(local != 0) : (type)local;                \
@@ -146,12 +154,16 @@ GLboolean APIENTRY glIsEnabled(GLenum cap) {
     ULONG args[3] = {cap, 0, 0}, bytes;
     GLboolean result = GL_FALSE;
     GLint local;
+    LONG values[4];
     if (!JglReady())
         return GL_FALSE;
     if ((cap == GL_VERTEX_ARRAY || cap == GL_COLOR_ARRAY || cap == GL_NORMAL_ARRAY ||
          cap == GL_TEXTURE_COORD_ARRAY || cap == 0x845e || cap == 0x8457) &&
         JglArrayQuery(cap, &local))
         return local != 0;
+    /* A known enable; VIEWPORT is no capability (the host's GL_INVALID_ENUM). */
+    if (cap != 0x0ba2 /* VIEWPORT */ && JglStateQuery(cap, values) == 1)
+        return values[0] != 0;
     if (JglCubeMapQueryRejected(cap) || JglProgramQueryRejected(cap) ||
         JglTexture3DQueryRejected(cap) || JglRectangleQueryRejected(cap)) {
         JglSetError(GL_INVALID_ENUM);

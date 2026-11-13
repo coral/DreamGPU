@@ -55,6 +55,11 @@ BOOL JglFramebufferObjectAvailable(void) {
 BOOL JglFramebufferBinding(GLenum, GLint *) {
     return FALSE;
 }
+/* No context shadow here: every state query reaches this fake host. The
+ * shadow itself is covered by the state-query suite on the real frontend. */
+ULONG JglStateQuery(GLenum, LONG *) {
+    return 0;
+}
 GLubyte *JglProgramErrorBuffer(void) {
     return NULL;
 }
@@ -292,7 +297,7 @@ int main(void) {
             assert(!strcmp((const char *)glGetString(GL_VERSION), "1.1 DreamGPU"));
         }
         FixedState = FALSE;
-        /* Unit-dependent server state is never answered locally. */
+        /* Server state the context shadow does not know reaches the host. */
         ResultCount = 1;
         assert(glIsEnabled(GL_TEXTURE_2D) && Function == FEnum_glIsEnabled &&
                Arguments[0] == GL_TEXTURE_2D);

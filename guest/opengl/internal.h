@@ -321,6 +321,9 @@ void **JglSharedRenderbuffers(void);
 /* FRAMEBUFFER_BINDING (the draw binding), READ_FRAMEBUFFER_BINDING and
  * RENDERBUFFER_BINDING of the current context, once negotiated. */
 BOOL JglFramebufferBinding(GLenum pname, GLint *value);
+/* The enables and VIEWPORT the current context knows exactly (state.h): the
+ * number of values written (1 or 4), or zero when the host must answer. */
+ULONG JglStateQuery(GLenum pname, LONG *values);
 /* A framebuffer object is bound for reading: ReadPixels need not fit the
  * drawable. */
 BOOL JglReadFramebufferBound(void);

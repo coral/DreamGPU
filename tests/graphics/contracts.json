@@ -216,6 +216,10 @@
       "scope": "source",
       "path": "tests/guest/opengl/test_fixed_state.py"
     },
+    "gl-state-query": {
+      "scope": "source",
+      "path": "tests/guest/opengl/test_state_query.py"
+    },
     "d3d-ffp-stages": {
       "scope": "source",
       "path": "tests/guest/d3d/test_ffp_stages.py"
@@ -1762,6 +1766,24 @@
         "guest-stages"
       ],
       "remaining": "Reports 8 stages/8 simultaneous textures, TextureOpCaps 0x0280bbff. Installed D3D8/9 probes check every claimed two-stage op and a three-stage TFACTOR chain. Patch 0027 enables a target for active texture-less stages; frontend accepts every GL1.2 packed type used for Wine dummy textures. ADDSMOOTH, PREMODULATE, MODULATE*_ADD*, MULTIPLYADD, BUMPENVMAP, cube and volume stages are not claimed."
+    },
+    {
+      "id": "gl.state-query",
+      "area": 12,
+      "api": "OpenGL 1.1/WGL (also WineD3D through dgpugl)",
+      "operation": "IsEnabled and GetBooleanv/GetIntegerv/GetFloatv/GetDoublev of the tracked capabilities and VIEWPORT answered from the context's state shadow",
+      "format": "state",
+      "resource": "context",
+      "usage": "per-frame state queries",
+      "pool": "n/a",
+      "mandatory": true,
+      "advertised": true,
+      "implementation": "partial",
+      "tests": [
+        "gl-state-query",
+        "gl-multitexture"
+      ],
+      "remaining": "Known values: GL defaults at creation (every tracked capability disabled except DITHER) and setters executed outside display lists; the viewport only after an unclamped Viewport. PopAttrib, CallList(s), NewList/EndList forget everything, ActiveTexture the per-unit enables; nothing is answered inside Begin/End, while a list is open or with a reported failure pending. Source tests compare every answer with a native-GL model over random command streams and reject ten single-invalidation mutations. Other state (matrices, blend factors, bindings) still queries the host. Installed evidence: Neverwinter Nights on Win2000; Win98/XP and macOS CGL unverified."
     },
     {
       "id": "gl.texture-control",
